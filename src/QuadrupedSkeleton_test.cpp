@@ -141,26 +141,35 @@ TEST(QuadrupedSkeleton, SideSpellingVariantsResolve)
     EXPECT_EQ(jointName(indexForBone("FrontUpLeg.L")).toStdString(), "frontUpLeg.L");
     EXPECT_EQ(jointName(indexForBone("FrontUpLeg_L")).toStdString(), "frontUpLeg.L");
     EXPECT_EQ(jointName(indexForBone("LeftFrontUpLeg")).toStdString(), "frontUpLeg.L");
-    EXPECT_EQ(jointName(indexForBone("foreleg.r")).toStdString(), "frontLowLeg.R");
+    // A bare "foreleg" is the TOPMOST limb bone on the three-segment rigs
+    // (Leg -> UpLeg -> LowLeg), so it maps to the canonical UPPER leg.
+    EXPECT_EQ(jointName(indexForBone("foreleg.r")).toStdString(), "frontUpLeg.R");
 }
 
-TEST(QuadrupedSkeleton, ExplicitSegmentBeatsBareLegForTheSameRole)
+TEST(QuadrupedSkeleton, BareLegIsTheLimbROOT_NotTheLowerLeg)
 {
-    // The Quaternius rigs carry BOTH `FrontLeg.L` and `FrontLowLeg.L`, and
-    // `FrontLeg.L` -- which has no segment word, so indexForBone can only
-    // GUESS it is the lower leg -- is listed first in the skeleton. Taking
-    // the first bone that claims a role therefore gave the shin's rotation
-    // to the wrong bone and swung the hoof sideways, while the correctly
-    // named bone was dropped. Both still map to the role; specificity is
-    // what breaks the tie.
-    EXPECT_EQ(indexForBone("FrontLeg.L"), indexForBone("FrontLowLeg.L"));
-    EXPECT_GT(roleSpecificity("FrontLowLeg.L"), roleSpecificity("FrontLeg.L"));
-    EXPECT_GT(roleSpecificity("BackLowLeg.R"), roleSpecificity("BackLeg.R"));
+    // The Quaternius rigs are THREE-segment: FrontLeg -> FrontUpLeg ->
+    // FrontLowLeg, against the canonical UpLeg -> LowLeg -> Foot. The bare
+    // `FrontLeg.L` is therefore the limb ROOT (the shoulder/hip attachment),
+    // not the middle segment.
+    //
+    // It was previously mapped to the LOWER leg, where it lost the role to
+    // the explicitly-named `FrontLowLeg.L` and so received no animation at
+    // all, while the canonical upper-leg role drove `FrontUpLeg.L` -- the
+    // SECOND segment. The limb swung from the wrong joint, which renders as
+    // a cramped stride with the legs bunched under the body even though every
+    // per-joint angle still matches the source exactly. Measured as ~40 deg
+    // of world-orientation error on a SELF-retarget, which must be ~0.
+    EXPECT_EQ(jointName(indexForBone("FrontLeg.L")).toStdString(), "frontUpLeg.L");
+    EXPECT_EQ(jointName(indexForBone("BackLeg.R")).toStdString(), "backUpLeg.R");
 
-    // An explicitly named bone must not lose to another explicit one, and a
-    // segment word anywhere in the chain counts.
-    EXPECT_EQ(roleSpecificity("FrontUpLeg.L"), roleSpecificity("FrontLowLeg.L"));
-    EXPECT_GT(roleSpecificity("FrontFoot.L"), roleSpecificity("FrontLeg.L"));
+    // And it must BEAT the explicit `FrontUpLeg` for that role: hierarchy
+    // position is stronger evidence than a segment word here.
+    EXPECT_GT(roleSpecificity("FrontLeg.L"), roleSpecificity("FrontUpLeg.L"));
+    EXPECT_GT(roleSpecificity("BackLeg.R"), roleSpecificity("BackUpLeg.R"));
+
+    // An explicitly-named segment still beats a generic keyword match.
+    EXPECT_GT(roleSpecificity("FrontLowLeg.L"), roleSpecificity("Body"));
 }
 
 // ---- winged biped (dragon / bat) -------------------------------------------

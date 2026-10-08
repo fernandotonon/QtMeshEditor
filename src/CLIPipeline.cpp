@@ -3379,6 +3379,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             err() << "Error: mesh has no skeleton." << Qt::endl;
             return 1;
         }
+        std::vector<std::array<float, 4>> srcRestWorld;
+        for (const QJsonValue& rv : chosen.value("restWorld").toArray()) {
+            const QJsonArray r4 = rv.toArray();
+            if (r4.size() != 4) continue;
+            srcRestWorld.push_back({static_cast<float>(r4.at(0).toDouble()),
+                                    static_cast<float>(r4.at(1).toDouble()),
+                                    static_cast<float>(r4.at(2).toDouble()),
+                                    static_cast<float>(r4.at(3).toDouble())});
+        }
         // Root translation: parse the clip's channel and measure the TARGET's
         // hip height so the displacement scales to this creature.
         std::vector<std::array<float, 3>> rootOffset;
@@ -3396,7 +3405,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             CreatureMotionRetarget::apply(masterSkel.get(),
                                           newName.toStdString(), srcPlan,
                                           quats, jroot.value("fps").toInt(30),
-                                          rootOffset, targetHip);
+                                          srcRestWorld, rootOffset, targetHip);
         if (!rr.ok) {
             err() << "Error: " << rr.error << Qt::endl;
             return 1;

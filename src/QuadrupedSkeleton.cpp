@@ -108,10 +108,21 @@ int indexForBone(const QString& boneName)
             return base + 1;
         if (contains(n, {"upleg", "upperleg", "thigh", "femur", "humerus"}))
             return base;
-        // A bare "FrontLeg.L" with no segment word: the Quaternius rigs use
-        // it for the MIDDLE segment (they also carry FrontUpLeg + FrontLowLeg),
-        // so treat it as the lower leg rather than guessing the root.
-        return base + 1;
+        // A bare "FrontLeg.L" with no segment word. The Quaternius rigs are
+        // THREE-segment -- FrontLeg -> FrontUpLeg -> FrontLowLeg -- so this
+        // is the TOPMOST limb bone (the shoulder/hip attachment), NOT the
+        // middle one. It was mapped to the lower leg, where it lost the role
+        // to the explicitly-named FrontLowLeg and so received no animation at
+        // all; the canonical upper-leg role then drove FrontUpLeg, the SECOND
+        // segment. The limb therefore swung from the wrong joint, which reads
+        // as legs bunched under the body with a cramped stride even though
+        // the per-joint angles match the source exactly.
+        //
+        // Map it to the UPPER leg so the chain lines up with the canonical
+        // UpLeg -> LowLeg -> Foot; the explicit FrontUpLeg then loses that
+        // role on specificity, which is correct -- it is the middle segment
+        // and canonical LowLeg is where its motion belongs.
+        return base;
     }
 
     // ---- spine / head (after legs, so "BackUpLeg" cannot reach "back") ----
@@ -157,11 +168,22 @@ int roleSpecificity(const QString& boneName)
                      "chest", "withers", "spine"}))
         return 2;
     // A side+front/back leg bone with NO segment word ("FrontLeg.L") is the
-    // fallback guess in indexForBone -- it must lose to the explicit bone.
+    // TOPMOST limb bone on the three-segment Quaternius rigs
+    // (FrontLeg -> FrontUpLeg -> FrontLowLeg), and indexForBone maps it to
+    // the canonical UPPER leg. It must BEAT the explicitly-named
+    // "FrontUpLeg", which is really the middle segment: the canonical chain
+    // is UpLeg -> LowLeg -> Foot, so the limb has to swing from its true
+    // root or the stride comes out cramped (the legs bunch under the body
+    // while the per-joint angles still match the source exactly).
+    //
+    // 3 is deliberately above the "names its own segment" tier: hierarchy
+    // position is stronger evidence than a name here.
     const char side = sideOf(n);
     if (side && contains(n, {"front", "fore", "back", "hind", "rear"})
-             && contains(n, {"leg"}))
-        return 0;
+             && contains(n, {"leg"})
+             && !contains(n, {"upleg", "upperleg", "lowleg", "lowerleg",
+                              "thigh", "shin", "foot", "paw", "hoof"}))
+        return 3;
     return 1;
 }
 

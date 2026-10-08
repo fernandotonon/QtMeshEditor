@@ -181,39 +181,40 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
                                     static_cast<float>(off.z)});
         }
         // Trim a DEAD TAIL. Several source clips declare a length well past
-        // their last real keyframe -- Horse|Walk animates for 50.6% of its
-        // 3.33s and is frozen for the rest, which reads as "the walk stops
-        // halfway and the legs stick". Measured across the farm pack: most
-        // clips are 95-100% live, the stragglers 50-85%.
+        // their last real keyframe -- Horse|Walk animates for ~50% of its
+        // 3.33s and holds the final pose for the rest, which reads in-app as
+        // "the walk stops halfway and the legs stick".
         //
-        // Cut back to the last frame that actually differs from its
-        // predecessor (plus one, so the final pose is kept). A clip that is
-        // live to the end is untouched. Deliberately NOT applied to a clip
-        // that barely moves at all (idle breathing is legitimately subtle and
-        // would be trimmed to nothing).
+        // The test is distance from the FINAL pose, NOT frame-to-frame
+        // change. A held pose still jitters by tiny amounts, so a
+        // consecutive-frame test reports such a clip as ~99% live and trims
+        // nothing -- which is exactly how this shipped broken once already.
         {
-            const float kEps = 0.05f;   // degrees-ish, on the quat dot
-            auto differs = [&](size_t f) {
+            const size_t n = c.quats.size();
+            auto poseDist = [&](size_t f) {
+                float worst = 0.0f;
                 for (int j = 0; j < J; ++j) {
-                    const auto& a = c.quats[f - 1][static_cast<size_t>(j)];
-                    const auto& b = c.quats[f][static_cast<size_t>(j)];
+                    const auto& a = c.quats[f][static_cast<size_t>(j)];
+                    const auto& b = c.quats[n - 1][static_cast<size_t>(j)];
                     float d = std::fabs(a[0] * b[0] + a[1] * b[1]
                                         + a[2] * b[2] + a[3] * b[3]);
                     d = std::min(1.0f, d);
-                    if (Ogre::Math::RadiansToDegrees(2.0f * std::acos(d)) > kEps)
-                        return true;
+                    worst = std::max(worst,
+                        Ogre::Math::RadiansToDegrees(2.0f * std::acos(d)));
                 }
-                return false;
+                return worst;
             };
-            size_t last = 0;
-            for (size_t f = 1; f < c.quats.size(); ++f)
-                if (differs(f)) last = f;
-            // Only trim when there is a real tail AND the clip has real motion
-            // to begin with; keep at least 2 frames.
-            const size_t keep = last + 2;
-            if (last > 4 && keep < c.quats.size()) {
-                c.quats.resize(keep);
-                if (c.rootOffset.size() > keep) c.rootOffset.resize(keep);
+            float peak = 0.0f;
+            for (size_t f = 0; f < n; ++f) peak = std::max(peak, poseDist(f));
+            if (peak > 1.0f) {               // a clip that never moves is left alone
+                size_t last = 0;
+                for (size_t f = 0; f < n; ++f)
+                    if (poseDist(f) > 0.02f * peak) last = f;
+                const size_t keep = last + 2;   // keep the settle frame
+                if (keep < n && last > 4) {
+                    c.quats.resize(keep);
+                    if (c.rootOffset.size() > keep) c.rootOffset.resize(keep);
+                }
             }
         }
 

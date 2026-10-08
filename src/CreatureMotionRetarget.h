@@ -71,11 +71,19 @@ struct Result {
 /// disables translation rather than guessing a scale.
 float hipHeightOf(Ogre::Entity* entity, CreatureSkeleton::BodyPlan plan);
 
+/// `srcRestWorld` is the SOURCE rig's per-role BIND world orientation, which
+/// the clip's frames are deltas against. Supplying it matters: these clips do
+/// NOT start at rest -- Horse|Walk's frame 0 is 29 deg into the stride -- so
+/// deltaing against frame 0 re-centres the whole cycle on a mid-stride pose
+/// and the legs sit bunched under the body in "weird positions" while the
+/// measured range of motion still matches the source exactly. Empty falls
+/// back to the legacy frame-0 behaviour.
 Result apply(Ogre::Skeleton* skel,
              const std::string& animName,
              CreatureSkeleton::BodyPlan plan,
              const std::vector<std::vector<std::array<float, 4>>>& clipQuats,
              int fps,
+             const std::vector<std::array<float, 4>>& srcRestWorld = {},
              const std::vector<std::array<float, 3>>& rootOffset = {},
              float targetHipHeight = 0.0f);
 

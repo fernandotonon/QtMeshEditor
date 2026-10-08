@@ -2137,7 +2137,7 @@ QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
 
     const QString animName = QStringLiteral("creature_") + c.action;
     const CreatureMotionRetarget::Result rr = CreatureMotionRetarget::apply(
-        skel.get(), animName.toStdString(), plan, quats, fps,
+        skel.get(), animName.toStdString(), plan, quats, fps, c.restWorld,
         c.rootOffset, CreatureMotionRetarget::hipHeightOf(ent, plan));
     if (!rr.ok)
         return fail(rr.error);

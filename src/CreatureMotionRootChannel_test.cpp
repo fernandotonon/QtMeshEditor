@@ -56,7 +56,7 @@ TEST(CreatureRootChannel, TranslationIsRefusedWithoutAScaleOrAChannel)
     // No skeleton: apply() reports the error rather than crashing, which is
     // what every surface relies on.
     auto r = CreatureMotionRetarget::apply(nullptr, "x", BodyPlan::Quadruped,
-                                           quats, 30, offs, 1.0f);
+                                           quats, 30, {}, offs, 1.0f);
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.rootTranslation);
 }
