@@ -43,7 +43,7 @@ def _slerp(a, b, t):
     return (math.sin((1 - t) * th) / s) * a + (math.sin(t * th) / s) * b
 
 
-def _sample(times, values, t):
+def _sample(times, values, t, interp='LINEAR'):
     """Rotation at time t, interpolating like the player does.
 
     Channels in one clip can carry DIFFERENT keyframe counts (measured 2, 31
@@ -55,6 +55,8 @@ def _sample(times, values, t):
     if t >= times[-1]: return values[-1]
     i = int(np.searchsorted(times, t)) - 1
     i = max(0, min(i, len(times) - 2))
+    if interp == 'STEP':
+        return values[i]          # a held rotation must not be interpolated
     span = times[i + 1] - times[i]
     u = 0.0 if span <= 0 else (t - times[i]) / span
     return _slerp(values[i], values[i + 1], u)
@@ -77,7 +79,15 @@ def world_sequence(path, clip, bone, samples=24, tmax=None):
     for ch in anim['channels']:
         if ch['target']['path'] == 'rotation':
             s = anim['samplers'][ch['sampler']]
-            rot[ch['target']['node']] = (acc(s['input']).ravel(), acc(s['output']))
+            interp = s.get('interpolation', 'LINEAR')
+            if interp == 'CUBICSPLINE':
+                # Output holds in/value/out tangents per key, so reading it as
+                # plain rotations would compare tangents and report nonsense.
+                raise SystemExit(
+                    f"error: {path} clip '{clip}' uses CUBICSPLINE "
+                    "interpolation, which this script cannot sample")
+            rot[ch['target']['node']] = (acc(s['input']).ravel(),
+                                         acc(s['output']), interp)
     if not rot: return None
     t0 = min(v[0][0] for v in rot.values())
     t1 = max(v[0][-1] for v in rot.values())
@@ -92,8 +102,8 @@ def world_sequence(path, clip, bone, samples=24, tmax=None):
         w = np.array([0, 0, 0, 1.0])
         for nd in reversed(chain):
             if nd in rot:
-                times, vals = rot[nd]
-                q = _sample(times, vals, t)
+                times, vals, interp = rot[nd]
+                q = _sample(times, vals, t, interp)
             else:
                 q = np.array(nodes[nd].get('rotation', [0, 0, 0, 1]), dtype=float)
             w = qmul(w, q)
@@ -110,29 +120,44 @@ def main():
     nat, natclip, ret, retclip = sys.argv[1:5]
     bones = sys.argv[5:] or ['FrontLeg.L', 'FrontUpLeg.L', 'FrontLowLeg.L',
                              'BackLeg.L', 'BackUpLeg.L', 'BackLowLeg.L']
-    worst = 0.0
     # Duration of the RETARGETED clip bounds the comparison window.
     def duration(path, clip):
         j, acc = load(path)
         for a in j.get('animations', []):
-            if clip in a['name']:
-                s = a['samplers'][a['channels'][0]['sampler']]
-                return float(j['accessors'][s['input']]['max'][0])
+            if clip not in a['name']: continue
+            # The LONGEST channel, not the first: if the first channel ends
+            # early the window would be short while world_sequence still
+            # samples the full rotation range, turning a phase offset into a
+            # reported pose error.
+            end = 0.0
+            for ch in a['channels']:
+                s = a['samplers'][ch['sampler']]
+                end = max(end, float(j['accessors'][s['input']]['max'][0]))
+            return end or None
         return None
     win = duration(ret, retclip)
 
+    worst = 0.0
+    compared = 0
     for b in bones:
         a = world_sequence(nat, natclip, b, tmax=win)
         c = world_sequence(ret, retclip, b)
         if a is None or c is None:
             print(f"{b:16s} (absent)"); continue
+        compared += 1
         A, C = resample(a), resample(c)
         diffs = [math.degrees(2 * math.acos(min(1, abs(float(np.dot(A[i], C[i]))))))
                  for i in range(len(A))]
         mean = sum(diffs) / len(diffs)
         worst = max(worst, mean)
         print(f"{b:16s} mean {mean:6.1f} deg   max {max(diffs):6.1f}")
-    print(f"\nWORST MEAN: {worst:.1f} deg")
+    if compared == 0:
+        # Printing "WORST MEAN: 0.0" here would read as a PERFECT retarget when
+        # in fact the clip name was wrong or no requested bone exists.
+        print("\nERROR: no bone could be compared "
+              "(wrong clip name, or none of the requested bones exist)")
+        return 2
+    print(f"\nWORST MEAN: {worst:.1f} deg  ({compared} bones)")
     return 0
 
 if __name__ == '__main__':

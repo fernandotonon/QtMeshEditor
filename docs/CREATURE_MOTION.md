@@ -15,6 +15,13 @@ scripts/creature-retarget-error.py native.glb "Armature|Walk" \
                                    retarget.glb creature_Walk
 ```
 
+**It measures ORIENTATION only.** A retarget with correct rotations but a
+missing or mis-scaled `rootOffset` scores ~0 deg while a jump stays glued to
+the ground, so for any clip with real root travel (jump / death / attack) also
+compare root POSITION or check a render. `scripts/build-creature-library.py`
+reports each clip's root displacement, and a clip that should move but shows
+~0 is the tell.
+
 Two cheaper checks are actively misleading and both shipped a broken clip:
 
 - **Per-joint angle RANGE** matched the source to 0.1 deg while the limb was

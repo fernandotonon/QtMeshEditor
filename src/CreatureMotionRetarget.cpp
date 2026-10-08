@@ -272,6 +272,13 @@ Result apply(Ogre::Skeleton* skel,
             keys[static_cast<size_t>(j)] = key;
             tracks[static_cast<size_t>(j)]->createNodeKeyFrame(t)
                 ->setRotation(key);
+
+            // Apply it IMMEDIATELY so a child solved later in this same frame
+            // reads its parent's NEW pose. Roles are ordered parent-before-
+            // child, so without this each child is solved against the parent's
+            // PREVIOUS-frame orientation and the error grows down the chain.
+            bone->setOrientation(bindLocal * key);
+            skel->_updateTransforms();
         }
     }
     for (int j = 0; j < J; ++j)
@@ -296,8 +303,19 @@ Result apply(Ogre::Skeleton* skel,
             // top-level bone's parent frame is the (unanimated) skeleton
             // root, so a world offset applies directly here -- no transport
             // needed, unlike the per-bone rotations.
-            tt->createNodeKeyFrame(t)->setTranslate(
-                Ogre::Vector3(o[0], o[1], o[2]) * targetHipHeight);
+            // REUSE a keyframe already at this time rather than adding a
+            // second one. On a rig whose top-level bone also won a canonical
+            // role (a winged `Root`) the rotation pass has already keyed every
+            // timestamp; createNodeKeyFrame would append a duplicate whose
+            // rotation is identity while the original's translation is zero,
+            // so both channels flicker between the two.
+            Ogre::TransformKeyFrame* kf = nullptr;
+            for (unsigned short k = 0; k < tt->getNumKeyFrames(); ++k) {
+                Ogre::TransformKeyFrame* e = tt->getNodeKeyFrame(k);
+                if (std::fabs(e->getTime() - t) < 1e-4f) { kf = e; break; }
+            }
+            if (!kf) kf = tt->createNodeKeyFrame(t);
+            kf->setTranslate(Ogre::Vector3(o[0], o[1], o[2]) * targetHipHeight);
         }
         tt->_keyFrameDataChanged();
     }

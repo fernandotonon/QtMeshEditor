@@ -2119,26 +2119,39 @@ QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
 
     // Retime by resampling, matching the humanoid path's behaviour.
     std::vector<std::vector<std::array<float, 4>>> quats = c.quats;
+    std::vector<std::array<float, 3>> rootOffset = c.rootOffset;
     const int fps = 30;
     if (duration > 0.05 && quats.size() >= 2) {
         const int src = static_cast<int>(quats.size());
         const int want = std::max(2, static_cast<int>(duration * fps));
         std::vector<std::vector<std::array<float, 4>>> retimed(
             static_cast<size_t>(want));
+        // The root-translation channel MUST be resampled alongside the
+        // rotations. Passing the original through meant a lengthened clip
+        // silently lost its translation (the retarget requires
+        // rootOffset.size() >= clipQuats.size()), while a shortened one paired
+        // resampled rotations with unresampled offsets -- so a retimed jump
+        // either stopped leaving the ground or drifted out of sync.
+        std::vector<std::array<float, 3>> retimedOff;
+        const bool haveOff = rootOffset.size() == quats.size();
+        if (haveOff) retimedOff.resize(static_cast<size_t>(want));
         for (int f = 0; f < want; ++f) {
             const float sp = (src - 1) * (static_cast<float>(f)
                                           / static_cast<float>(want - 1));
-            retimed[static_cast<size_t>(f)] =
-                quats[static_cast<size_t>(std::min(src - 1,
-                                                   static_cast<int>(sp + 0.5f)))];
+            const size_t si = static_cast<size_t>(
+                std::min(src - 1, static_cast<int>(sp + 0.5f)));
+            retimed[static_cast<size_t>(f)] = quats[si];
+            if (haveOff) retimedOff[static_cast<size_t>(f)] = rootOffset[si];
         }
         quats.swap(retimed);
+        if (haveOff) rootOffset.swap(retimedOff);
+        else rootOffset.clear();   // unusable channel: disable rather than mispair
     }
 
     const QString animName = QStringLiteral("creature_") + c.action;
     const CreatureMotionRetarget::Result rr = CreatureMotionRetarget::apply(
         skel.get(), animName.toStdString(), plan, quats, fps, c.restWorld,
-        c.rootOffset, CreatureMotionRetarget::hipHeightOf(ent, plan));
+        rootOffset, CreatureMotionRetarget::hipHeightOf(ent, plan));
     if (!rr.ok)
         return fail(rr.error);
 
