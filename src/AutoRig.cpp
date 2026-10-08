@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -330,27 +331,59 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
     //     fitVehicle does its own front detection.
     bool flipLength = false;
     if (vertexCount > 0) {
-        std::vector<double> hv;
-        hv.reserve(static_cast<size_t>(vertexCount));
-        for (int i = 0; i < vertexCount; ++i)
-            hv.push_back(static_cast<double>(verts[3 * i + up]));
-        std::vector<double> sorted = hv;
-        std::sort(sorted.begin(), sorted.end());
-        const double hiCut =
-            sorted[static_cast<size_t>(0.95 * (sorted.size() - 1))];
-        double sumTall = 0, sumAll = 0;
-        long long nTall = 0;
+        // Work on OCCUPIED SPACE, not vertex counts: a percentile over
+        // vertices lets TESSELLATION decide which end reads as tall, so a
+        // sparsely-modelled head beside a densely-modelled back could put the
+        // cutoff at back height and leave the creature rigged backwards. The
+        // same reason fitVehicle deduplicates into cells (#1013).
+        //
+        // Bin the length axis into cells, record the HIGHEST point in each,
+        // and compare the mean length-coordinate of the top cells against all
+        // occupied cells. Every occupied cell counts once regardless of how
+        // many vertices landed in it.
+        constexpr int kBins = 64;
+        std::array<double, kBins> cellTop{};
+        std::array<bool, kBins> cellUsed{};
+        cellTop.fill(-std::numeric_limits<double>::max());
+        cellUsed.fill(false);
         for (int i = 0; i < vertexCount; ++i) {
             const double L = static_cast<double>(verts[3 * i + p1]);
-            sumAll += L;
-            if (hv[static_cast<size_t>(i)] >= hiCut) { sumTall += L; ++nTall; }
+            int b = static_cast<int>((L - mn[p1]) / ext[p1] * (kBins - 1));
+            b = std::clamp(b, 0, kBins - 1);
+            const double h = static_cast<double>(verts[3 * i + up]);
+            if (!cellUsed[static_cast<size_t>(b)]
+                || h > cellTop[static_cast<size_t>(b)]) {
+                cellTop[static_cast<size_t>(b)] = h;
+                cellUsed[static_cast<size_t>(b)] = true;
+            }
         }
-        if (nTall > 0) {
-            const double tallMean = sumTall / static_cast<double>(nTall);
-            const double bodyMean = sumAll / static_cast<double>(vertexCount);
-            // A clear margin only; a near-tie means the shape carries no
-            // reliable head signal and the template's own convention stands.
-            if (tallMean < bodyMean - 0.05 * ext[p1]) flipLength = true;
+        std::vector<std::pair<double, double>> cells;   // (height, length)
+        for (int b = 0; b < kBins; ++b)
+            if (cellUsed[static_cast<size_t>(b)])
+                cells.emplace_back(cellTop[static_cast<size_t>(b)],
+                                   mn[p1] + (static_cast<double>(b) + 0.5)
+                                                / kBins * ext[p1]);
+        if (cells.size() >= 4) {
+            std::vector<double> hs;
+            hs.reserve(cells.size());
+            for (const auto& c : cells) hs.push_back(c.first);
+            std::sort(hs.begin(), hs.end());
+            const double hiCut = hs[static_cast<size_t>(0.80 * (hs.size() - 1))];
+            double sumTall = 0, sumAll = 0;
+            long long nTall = 0;
+            for (const auto& c : cells) {
+                sumAll += c.second;
+                if (c.first >= hiCut) { sumTall += c.second; ++nTall; }
+            }
+            if (nTall > 0) {
+                const double tallMean = sumTall / static_cast<double>(nTall);
+                const double bodyMean =
+                    sumAll / static_cast<double>(cells.size());
+                // A clear margin only; a near-tie means the shape carries no
+                // reliable head signal and the template's own convention
+                // stands.
+                if (tallMean < bodyMean - 0.05 * ext[p1]) flipLength = true;
+            }
         }
     }
 
