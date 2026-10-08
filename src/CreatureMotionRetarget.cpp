@@ -195,66 +195,90 @@ Result apply(Ogre::Skeleton* skel,
     Ogre::Animation* anim = skel->createAnimation(animName, len);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
 
-    for (int j = 0; j < J; ++j) {
-        Ogre::Bone* bone = roleBone[static_cast<size_t>(j)];
-        if (!bone) continue;
+    // Per-FRAME pass. Each mapped bone's key is solved against the parent's
+    // orientation AT THAT FRAME, not against its bind orientation.
+    //
+    // Why that matters: these rigs carry more limb segments than the
+    // canonical skeleton (Leg -> UpLeg -> LowLeg -> Foot against
+    // UpLeg -> LowLeg -> Foot), so one bone per limb is unmapped and stays
+    // frozen at bind. A key computed against the BIND parent then never
+    // reaches its intended world orientation, because the real parent chain
+    // sits somewhere else -- measured as ~22 deg of residual error
+    // concentrated entirely in the LOWER LEGS while the limb roots were
+    // already correct to ~1 deg. Solving against the live parent absorbs the
+    // frozen bone's contribution.
+    std::vector<Ogre::Quaternion> keys(static_cast<size_t>(J),
+                                       Ogre::Quaternion::IDENTITY);
+    std::vector<Ogre::NodeAnimationTrack*> tracks(static_cast<size_t>(J), nullptr);
+    for (int j = 0; j < J; ++j)
+        if (roleBone[static_cast<size_t>(j)])
+            tracks[static_cast<size_t>(j)] = anim->createNodeTrack(
+                roleBone[static_cast<size_t>(j)]->getHandle(),
+                roleBone[static_cast<size_t>(j)]);
 
-        // Delta against the SOURCE BIND pose, not the clip's first frame.
-        // These clips start mid-stride (Horse|Walk frame 0 is 29 deg into the
-        // step), so frame-0 referencing re-centres the whole cycle on that
-        // pose -- the range of motion still matches the source exactly, which
-        // is why an angle-range check passes while the render looks wrong.
-        const bool haveSrcRest =
-            static_cast<int>(srcRestWorld.size()) == J;
-        const Ogre::Quaternion src0 =
-            haveSrcRest ? toQ(srcRestWorld[static_cast<size_t>(j)])
-                        : toQ(clipQuats.front()[static_cast<size_t>(j)]);
-        const Ogre::Quaternion pInv =
-            parentBindWorld[static_cast<size_t>(j)].Inverse();
+    const bool haveSrcRest = static_cast<int>(srcRestWorld.size()) == J;
 
-        Ogre::NodeAnimationTrack* track =
-            anim->createNodeTrack(bone->getHandle(), bone);
-        for (size_t f = 0; f < clipQuats.size(); ++f) {
-            const Ogre::Quaternion srcF = toQ(clipQuats[f][static_cast<size_t>(j)]);
-            // World delta from the source's reference pose.
-            Ogre::Quaternion dWorld = srcF * src0.Inverse();
+    for (size_t f = 0; f < clipQuats.size(); ++f) {
+        const float t = static_cast<float>(f) / static_cast<float>(fps);
+
+        // Pose the skeleton at this frame so `_getDerivedOrientation()` gives
+        // the LIVE parent chain, then read each mapped bone's required key.
+        skel->reset(true);
+        for (int j = 0; j < J; ++j)
+            if (Ogre::Bone* bn = roleBone[static_cast<size_t>(j)]) {
+                // setOrientation sets the LOCAL orientation outright, while a
+                // track key POST-multiplies onto the bind local pose. Pose
+                // with bindLocal * key so the evaluated chain matches what the
+                // player will produce (otherwise the solve converges on a
+                // mirrored result -- measured as a clean ~177 deg flip).
+                const Ogre::Quaternion bl =
+                    parentBindWorld[static_cast<size_t>(j)].Inverse()
+                    * bindWorld[static_cast<size_t>(j)];
+                bn->setManuallyControlled(true);
+                bn->setOrientation(bl * keys[static_cast<size_t>(j)]);
+            }
+        skel->_updateTransforms();
+
+        for (int j = 0; j < J; ++j) {
+            Ogre::Bone* bone = roleBone[static_cast<size_t>(j)];
+            if (!bone) continue;
+
+            const Ogre::Quaternion src0 =
+                haveSrcRest ? toQ(srcRestWorld[static_cast<size_t>(j)])
+                            : toQ(clipQuats.front()[static_cast<size_t>(j)]);
+            Ogre::Quaternion dWorld =
+                toQ(clipQuats[f][static_cast<size_t>(j)]) * src0.Inverse();
             dWorld.normalise();
 
-            // Target world orientation = that delta applied to the target's
-            // OWN bind orientation; then express it in the parent's frame,
-            // which is what an Ogre track stores.
-            //
-            //     Wtarget = dWorld * bindWorld
-            //     local   = parentBindWorld^-1 * Wtarget
-            //
-            // The previous form was `pInv * dWorld * parentBindWorld`, a
-            // SIMILARITY transform: it rotated the delta's AXIS into the
-            // parent frame but dropped the bone's own bind orientation, so
-            // the limb was driven from the wrong reference. It scored ~40 deg
-            // of world error on a SELF-retarget (which must be ~0) and read
-            // as legs swinging in weird, cramped positions.
-            // Ogre's NodeAnimationTrack POST-multiplies the key onto the
-            // bone's bind pose (`node->rotate(key)` on a node already reset
-            // to bind), so the key is not a parent-frame quantity:
-            //
-            //   final_local = bindLocal * key
-            //   key = bindLocal^-1 * (parentWorld^-1 * Wtarget)
-            //       = bindWorld^-1 * Wtarget
-            //   with Wtarget = dWorld * bindWorld:
-            //   key = bindWorld^-1 * dWorld * bindWorld
-            //
-            // i.e. the delta conjugated into the BONE's own bind frame. The
-            // shipped code conjugated by parentBindWorld instead -- the wrong
-            // frame -- which left a constant ~30 deg bias under every clip and
-            // read as legs swinging from the wrong place.
-            const Ogre::Quaternion& bw = bindWorld[static_cast<size_t>(j)];
-            Ogre::Quaternion local = bw.Inverse() * dWorld * bw;
-            local.normalise();
-            const float t = static_cast<float>(f) / static_cast<float>(fps);
-            track->createNodeKeyFrame(t)->setRotation(local);
+            // Intended world orientation for this bone at this frame.
+            Ogre::Quaternion wWant =
+                dWorld * bindWorld[static_cast<size_t>(j)];
+            wWant.normalise();
+
+            // Live parent world (reflects any frozen intermediate bone).
+            Ogre::Quaternion pWorld = Ogre::Quaternion::IDENTITY;
+            if (auto* p = dynamic_cast<Ogre::Bone*>(bone->getParent()))
+                pWorld = p->_getDerivedOrientation();
+
+            // Ogre POST-multiplies the key onto the bind LOCAL pose:
+            //   final_local = bindLocal * key,  world = pWorld * final_local
+            // so  key = bindLocal^-1 * pWorld^-1 * wWant.
+            const Ogre::Quaternion bindLocal =
+                parentBindWorld[static_cast<size_t>(j)].Inverse()
+                * bindWorld[static_cast<size_t>(j)];
+            Ogre::Quaternion key =
+                bindLocal.Inverse() * pWorld.Inverse() * wWant;
+            key.normalise();
+            keys[static_cast<size_t>(j)] = key;
+            tracks[static_cast<size_t>(j)]->createNodeKeyFrame(t)
+                ->setRotation(key);
         }
-        ++r.tracksWritten;
     }
+    for (int j = 0; j < J; ++j)
+        if (tracks[static_cast<size_t>(j)]) {
+            tracks[static_cast<size_t>(j)]->_keyFrameDataChanged();
+            ++r.tracksWritten;
+        }
 
     // Whole-rig displacement, on the top-level bone. Written after the
     // rotation pass so it can reuse that bone's track when it happens to also

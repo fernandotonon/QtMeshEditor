@@ -32,7 +32,35 @@ def qmul(a, b):
                      w1*z2 + x1*y2 - y1*x2 + z1*w2,
                      w1*w2 - x1*x2 - y1*y2 - z1*z2])
 
-def world_sequence(path, clip, bone):
+def _slerp(a, b, t):
+    d = float(np.dot(a, b))
+    if d < 0: b, d = -b, -d
+    if d > 0.9995:
+        q = a + t * (b - a)
+        return q / np.linalg.norm(q)
+    th = math.acos(max(-1.0, min(1.0, d)))
+    s = math.sin(th)
+    return (math.sin((1 - t) * th) / s) * a + (math.sin(t * th) / s) * b
+
+
+def _sample(times, values, t):
+    """Rotation at time t, interpolating like the player does.
+
+    Channels in one clip can carry DIFFERENT keyframe counts (measured 2, 31
+    and 34 in a single Quaternius walk), so sampling by INDEX compares
+    mismatched moments across bones and reports tens of degrees of error for a
+    clip that is actually correct. Always sample by TIME.
+    """
+    if t <= times[0]: return values[0]
+    if t >= times[-1]: return values[-1]
+    i = int(np.searchsorted(times, t)) - 1
+    i = max(0, min(i, len(times) - 2))
+    span = times[i + 1] - times[i]
+    u = 0.0 if span <= 0 else (t - times[i]) / span
+    return _slerp(values[i], values[i + 1], u)
+
+
+def world_sequence(path, clip, bone, samples=24, tmax=None):
     j, acc = load(path)
     nodes = {i: n for i, n in enumerate(j['nodes'])}
     par = {}
@@ -48,21 +76,33 @@ def world_sequence(path, clip, bone):
     rot = {}
     for ch in anim['channels']:
         if ch['target']['path'] == 'rotation':
-            rot[ch['target']['node']] = acc(anim['samplers'][ch['sampler']]['output'])
+            s = anim['samplers'][ch['sampler']]
+            rot[ch['target']['node']] = (acc(s['input']).ravel(), acc(s['output']))
     if not rot: return None
-    L = min(len(v) for v in rot.values())
+    t0 = min(v[0][0] for v in rot.values())
+    t1 = max(v[0][-1] for v in rot.values())
+    # Compare over a COMMON window. The dead-tail trim shortens a retargeted
+    # clip (2.667s native -> 1.333s trimmed), and normalising each to [0,1]
+    # would stretch one against the other and report a phase error as a pose
+    # error.
+    if tmax is not None: t1 = min(t1, t0 + tmax)
     seq = []
-    for f in range(L):
+    for k in range(samples):
+        t = t0 + (t1 - t0) * k / (samples - 1)
         w = np.array([0, 0, 0, 1.0])
         for nd in reversed(chain):
-            q = (rot[nd][f] if nd in rot and f < len(rot[nd])
-                 else np.array(nodes[nd].get('rotation', [0, 0, 0, 1]), dtype=float))
+            if nd in rot:
+                times, vals = rot[nd]
+                q = _sample(times, vals, t)
+            else:
+                q = np.array(nodes[nd].get('rotation', [0, 0, 0, 1]), dtype=float)
             w = qmul(w, q)
         seq.append(w)
     return seq
 
 def resample(s, n=24):
-    return [s[int(i * (len(s) - 1) / (n - 1))] for i in range(n)]
+    """No-op: world_sequence already returns `n` TIME-aligned samples."""
+    return s
 
 def main():
     if len(sys.argv) < 5:
@@ -71,8 +111,18 @@ def main():
     bones = sys.argv[5:] or ['FrontLeg.L', 'FrontUpLeg.L', 'FrontLowLeg.L',
                              'BackLeg.L', 'BackUpLeg.L', 'BackLowLeg.L']
     worst = 0.0
+    # Duration of the RETARGETED clip bounds the comparison window.
+    def duration(path, clip):
+        j, acc = load(path)
+        for a in j.get('animations', []):
+            if clip in a['name']:
+                s = a['samplers'][a['channels'][0]['sampler']]
+                return float(j['accessors'][s['input']]['max'][0])
+        return None
+    win = duration(ret, retclip)
+
     for b in bones:
-        a = world_sequence(nat, natclip, b)
+        a = world_sequence(nat, natclip, b, tmax=win)
         c = world_sequence(ret, retclip, b)
         if a is None or c is None:
             print(f"{b:16s} (absent)"); continue
