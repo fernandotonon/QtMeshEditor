@@ -83,16 +83,27 @@ const TJ kQuadruped[] = {
     {"Neck",         0, 0.50, 0.62, 0.82, true},
     {"Head",         3, 0.50, 0.66, 0.95, true},
     {"Tail",         2, 0.50, 0.55, 0.08, false},
+    // Legs are THREE segments (upper / lower / foot), matching the canonical
+    // creature skeleton. A two-bone leg cannot receive a template clip: the
+    // clip's lower-leg rotation has nowhere to go and the foot bone absorbs
+    // the whole knee-to-hoof rotation. Measured on Cow|Run, whose upper leg
+    // swings 128 deg with a further 93 deg at the knee, that tore the mesh
+    // into flat shards; a walk (44 deg upper) survived, which is why this only
+    // showed up on the faster gaits.
     // Front legs (high z).
-    {"FrontLeftUpLeg",  0, 0.62, 0.45, 0.72, true},
-    {"FrontLeftFoot",   6, 0.62, 0.04, 0.72, false},
-    {"FrontRightUpLeg", 0, 0.38, 0.45, 0.72, true},
-    {"FrontRightFoot",  8, 0.38, 0.04, 0.72, false},
+    {"FrontLeftUpLeg",   0, 0.62, 0.45, 0.72, true},
+    {"FrontLeftLowLeg",  6, 0.62, 0.24, 0.72, false},
+    {"FrontLeftFoot",    7, 0.62, 0.04, 0.72, false},
+    {"FrontRightUpLeg",  0, 0.38, 0.45, 0.72, true},
+    {"FrontRightLowLeg", 9, 0.38, 0.24, 0.72, false},
+    {"FrontRightFoot",  10, 0.38, 0.04, 0.72, false},
     // Back legs (low z).
-    {"BackLeftUpLeg",   2, 0.62, 0.45, 0.30, true},
-    {"BackLeftFoot",   10, 0.62, 0.04, 0.30, false},
-    {"BackRightUpLeg",  2, 0.38, 0.45, 0.30, true},
-    {"BackRightFoot",  12, 0.38, 0.04, 0.30, false},
+    {"BackLeftUpLeg",    2, 0.62, 0.45, 0.30, true},
+    {"BackLeftLowLeg",  12, 0.62, 0.24, 0.30, false},
+    {"BackLeftFoot",    13, 0.62, 0.04, 0.30, false},
+    {"BackRightUpLeg",   2, 0.38, 0.45, 0.30, true},
+    {"BackRightLowLeg", 15, 0.38, 0.24, 0.30, false},
+    {"BackRightFoot",   16, 0.38, 0.04, 0.30, false},
 };
 
 // #1013 Vehicle: chassis root, front/rear axle, four wheels. Template z is the
