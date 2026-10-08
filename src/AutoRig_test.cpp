@@ -722,3 +722,58 @@ TEST(AutoRigVehicle, StringsHintAndRigidity)
     const auto boxed = AutoRig::fitTemplate(AutoRig::templateJoints(AutoRig::Template::Vehicle), cloud.data(), n, o, nullptr);
     EXPECT_EQ(boxed.size(), 7u);
 }
+
+TEST(AutoRigFacing, BackwardsFacingMeshIsRiggedHeadFirst)
+{
+    // The quadruped template is authored with the front at HIGH z, but a
+    // generated mesh can face either way. Rigging one backwards produces a
+    // creature that walks, runs and jumps in REVERSE -- reported on an
+    // AI-generated horse whose head sat at z = -0.176 while the template put
+    // the head at +z.
+    //
+    // The head is the tall, NARROW end: head and neck rise above the back line
+    // while the rump is broad and lower. Build two bodies that differ only in
+    // which end carries the tall part.
+    auto body = [](bool headAtLowZ) {
+        std::vector<float> v;
+        auto add = [&](float x, float y, float z) {
+            v.push_back(x); v.push_back(y); v.push_back(z);
+        };
+        // Barrel along z, consistent width.
+        for (int i = 0; i <= 20; ++i) {
+            const float z = -1.0f + 0.1f * static_cast<float>(i);
+            for (float sx : {-0.3f, 0.3f})
+                for (float sy : {-0.3f, 0.3f}) add(sx, sy, z);
+        }
+        // A tall neck/head at one end.
+        const float hz = headAtLowZ ? -1.0f : 1.0f;
+        for (int i = 0; i <= 8; ++i) {
+            const float y = 0.3f + 0.1f * static_cast<float>(i);
+            add(-0.1f, y, hz); add(0.1f, y, hz);
+        }
+        return v;
+    };
+
+    AutoRig::Options opts;
+    opts.upAxis = 1;
+    auto headZof = [&](const std::vector<float>& verts) {
+        const auto placed = AutoRig::fitTemplate(
+            AutoRig::templateJoints(AutoRig::Template::Quadruped),
+            verts.data(), static_cast<int>(verts.size() / 3), opts, nullptr);
+        for (const auto& j : placed)
+            if (j.name == QLatin1String("Head")) return j.pos[2];
+        return 0.0;
+    };
+
+    const double headFwd  = headZof(body(false));  // head at HIGH z
+    const double headBack = headZof(body(true));   // head at LOW z
+
+    // The two must land on OPPOSITE sides of the body, and specifically the
+    // head must follow the mesh's tall end. Comparing against 0 is too weak:
+    // the recentring pass shifts both, so a broken detector can still leave
+    // both on the same sign and pass.
+    EXPECT_GT(headFwd, headBack + 0.5)
+        << "head must track the mesh's tall end; a backwards-facing mesh "
+           "rigged front-first plays every clip in reverse "
+        << "(fwd=" << headFwd << " back=" << headBack << ")";
+}

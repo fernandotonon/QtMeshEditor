@@ -314,12 +314,54 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
         return (tAxis == 0) ? p0 : p1;
     };
 
+    // 1b. Which way does the creature FACE? The template is authored with the
+    //     front at HIGH template-z, but a generated mesh can face either way,
+    //     and rigging it backwards produces a creature that walks, runs and
+    //     jumps in reverse (reported on an AI-generated horse whose head sat
+    //     at z = -0.176 while the template put the head at +z).
+    //
+    //     The head is the tall, NARROW end: a quadruped's head and neck rise
+    //     well above the back line, while the rump is broad and lower. So
+    //     compare the mean length-coordinate of the tallest slice against the
+    //     body centre; if it sits at the LOW end, the mesh faces backwards and
+    //     the template's length axis is flipped.
+    //
+    //     Only applies to body plans whose template has a front/back axis;
+    //     fitVehicle does its own front detection.
+    bool flipLength = false;
+    if (vertexCount > 0) {
+        std::vector<double> hv;
+        hv.reserve(static_cast<size_t>(vertexCount));
+        for (int i = 0; i < vertexCount; ++i)
+            hv.push_back(static_cast<double>(verts[3 * i + up]));
+        std::vector<double> sorted = hv;
+        std::sort(sorted.begin(), sorted.end());
+        const double hiCut =
+            sorted[static_cast<size_t>(0.95 * (sorted.size() - 1))];
+        double sumTall = 0, sumAll = 0;
+        long long nTall = 0;
+        for (int i = 0; i < vertexCount; ++i) {
+            const double L = static_cast<double>(verts[3 * i + p1]);
+            sumAll += L;
+            if (hv[static_cast<size_t>(i)] >= hiCut) { sumTall += L; ++nTall; }
+        }
+        if (nTall > 0) {
+            const double tallMean = sumTall / static_cast<double>(nTall);
+            const double bodyMean = sumAll / static_cast<double>(vertexCount);
+            // A clear margin only; a near-tie means the shape carries no
+            // reliable head signal and the template's own convention stands.
+            if (tallMean < bodyMean - 0.05 * ext[p1]) flipLength = true;
+        }
+    }
+
     // 2. Map each joint's normalised position into the AABB.
     for (auto& j : placed) {
         std::array<double, 3> world = {0, 0, 0};
         for (int tAxis = 0; tAxis < 3; ++tAxis) {
             const int w = tmplAxisToWorld(tAxis);
-            world[w] = mn[w] + j.pos[tAxis] * ext[w];
+            double t = j.pos[tAxis];
+            if (flipLength && w == p1) t = 1.0 - t;   // creature faces -length
+            world[w] = mn[w] + t * ext[w];
         }
         j.pos = world;
     }
