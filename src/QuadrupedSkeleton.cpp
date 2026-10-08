@@ -136,6 +136,18 @@ int indexForBone(const QString& boneName)
     if (contains(n, {"head", "skull"}))            return 4;
     if (contains(n, {"neck"}))                     return 3;
     if (contains(n, {"chest", "shoulders", "shoulder", "withers"})) return 2;
+
+    // AutoRig's own quadruped template names the spine SpineFront / SpineMid /
+    // SpineBack with no "root"/"hips"/"chest" anywhere, so a generated +
+    // auto-rigged creature resolved neither role 0 nor role 2 and was REFUSED
+    // by the plausibility gate -- i.e. the generate -> auto-rig -> animate
+    // path could never play a template clip. Map that triplet onto the
+    // canonical anchors: the FRONT of the spine carries the forelegs (chest)
+    // and the BACK carries the hind legs (root/pelvis).
+    if (contains(n, {"spinefront"}))               return 2;   // chest
+    if (contains(n, {"spineback"}))                return 0;   // root/pelvis
+    if (contains(n, {"spinemid"}))                 return 1;   // spine
+
     if (contains(n, {"spine", "body", "torso", "back", "abdomen"})) return 1;
     return -1;
 }

@@ -172,6 +172,31 @@ TEST(QuadrupedSkeleton, BareLegIsTheLimbROOT_NotTheLowerLeg)
     EXPECT_GT(roleSpecificity("FrontLowLeg.L"), roleSpecificity("Body"));
 }
 
+TEST(QuadrupedSkeleton, AutoRigQuadrupedTemplateResolvesTheSpineAnchors)
+{
+    // AutoRig's own quadruped template names the spine SpineFront / SpineMid /
+    // SpineBack, with no "root", "hips" or "chest" anywhere. The plausibility
+    // gate needs role 0 AND role 2, so a generated + auto-rigged creature was
+    // REFUSED outright -- the generate -> auto-rig -> animate path could never
+    // play a template clip, which is exactly the workflow the feature exists
+    // for.
+    //
+    // The FRONT of the spine carries the forelegs (chest) and the BACK carries
+    // the hind legs (root/pelvis).
+    EXPECT_EQ(jointName(indexForBone("SpineFront")).toStdString(), "chest");
+    EXPECT_EQ(jointName(indexForBone("SpineBack")).toStdString(), "root");
+    EXPECT_EQ(jointName(indexForBone("SpineMid")).toStdString(), "spine");
+
+    // The rest of that template must still map, so the gate's "3 of 4 legs"
+    // test passes.
+    EXPECT_EQ(jointName(indexForBone("FrontLeftUpLeg")).toStdString(), "frontUpLeg.L");
+    EXPECT_EQ(jointName(indexForBone("BackRightFoot")).toStdString(), "backFoot.R");
+
+    // A plain "Spine" is unchanged -- it must not steal the root anchor from a
+    // rig that names its pelvis properly.
+    EXPECT_EQ(jointName(indexForBone("Spine")).toStdString(), "spine");
+}
+
 // ---- winged biped (dragon / bat) -------------------------------------------
 namespace WB = CreatureSkeleton::WingedBiped;
 
