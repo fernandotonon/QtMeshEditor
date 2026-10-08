@@ -171,6 +171,9 @@ AudioToFace/LipsyncCLI.cpp
 LipsyncController.cpp
 MotionInbetween.cpp
 MotionLibrary.cpp
+QuadrupedSkeleton.cpp
+CreatureMotionExtract.cpp
+CreatureMotionRetarget.cpp
 MotionComposer.cpp
 MotionGenerator.cpp
 MeshSegmenter.cpp

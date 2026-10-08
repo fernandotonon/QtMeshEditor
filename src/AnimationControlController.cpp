@@ -19,6 +19,7 @@
 #include "MotionInbetween.h"
 #include "MotionComposer.h"
 #include "MotionLibrary.h"
+#include "CreatureMotionRetarget.h"
 #include "MotionGenerator.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
@@ -2072,6 +2073,146 @@ double AnimationControlController::currentArmSpace(const QString& animName,
     return 0.0;
 }
 
+// Creature clips are listed alongside humanoid ones in ONE picker list, so
+// their library index is offset to keep the two libraries distinguishable.
+// 100000 is far above any plausible humanoid clip count (the shipped library
+// has 122) and keeps the offset obvious when it shows up in a log.
+QVariantMap AnimationControlController::applyCreatureClip(int creatureIdx,
+                                                          double duration)
+{
+    QVariantMap out;
+    out["ok"] = false;
+    auto fail = [&](const QString& e) {
+        out["error"] = e;
+        emit generateMotionStatus(e, true);
+        return out;
+    };
+
+    // Same resolution idiom as generateMotion: the selected rigged entity,
+    // else the first skinned mesh in the scene.
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return fail(QStringLiteral("Scene not available."));
+    Ogre::Entity* ent = nullptr;
+    for (auto* e : mgr->getEntities()) {
+        if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton()) continue;
+        if (m_selectedEntityName.empty()
+            || e->getName() == m_selectedEntityName) { ent = e; break; }
+    }
+    if (!ent)
+        return fail(QStringLiteral("Select a rigged creature first."));
+    Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+    if (!skel)
+        return fail(QStringLiteral("Selected mesh has no skeleton."));
+
+    MotionLibrary clib;
+    if (!MotionLibrary::creatureLibraryPresent()
+        || !clib.loadFromFile(MotionLibrary::creatureLibraryPath()))
+        return fail(QStringLiteral("Creature library unavailable."));
+    if (creatureIdx < 0 || creatureIdx >= clib.clipCount())
+        return fail(QStringLiteral("Creature clip index out of range."));
+
+    const MotionLibrary::Clip& c = clib.clip(creatureIdx);
+    const CreatureSkeleton::BodyPlan plan =
+        c.skeleton.compare(QLatin1String("wingedBiped"), Qt::CaseInsensitive) == 0
+            ? CreatureSkeleton::BodyPlan::WingedBiped
+            : CreatureSkeleton::BodyPlan::Quadruped;
+
+    // Retime by resampling, matching the humanoid path's behaviour.
+    std::vector<std::vector<std::array<float, 4>>> quats = c.quats;
+    std::vector<std::array<float, 3>> rootOffset = c.rootOffset;
+    const int fps = 30;
+    if (duration > 0.05 && quats.size() >= 2) {
+        const int src = static_cast<int>(quats.size());
+        const int want = std::max(2, static_cast<int>(duration * fps));
+        std::vector<std::vector<std::array<float, 4>>> retimed(
+            static_cast<size_t>(want));
+        // The root-translation channel MUST be resampled alongside the
+        // rotations. Passing the original through meant a lengthened clip
+        // silently lost its translation (the retarget requires
+        // rootOffset.size() >= clipQuats.size()), while a shortened one paired
+        // resampled rotations with unresampled offsets -- so a retimed jump
+        // either stopped leaving the ground or drifted out of sync.
+        std::vector<std::array<float, 3>> retimedOff;
+        const bool haveOff = rootOffset.size() == quats.size();
+        if (haveOff) retimedOff.resize(static_cast<size_t>(want));
+        for (int f = 0; f < want; ++f) {
+            const float sp = (src - 1) * (static_cast<float>(f)
+                                          / static_cast<float>(want - 1));
+            const size_t si = static_cast<size_t>(
+                std::min(src - 1, static_cast<int>(sp + 0.5f)));
+            retimed[static_cast<size_t>(f)] = quats[si];
+            if (haveOff) retimedOff[static_cast<size_t>(f)] = rootOffset[si];
+        }
+        quats.swap(retimed);
+        if (haveOff) rootOffset.swap(retimedOff);
+        else rootOffset.clear();   // unusable channel: disable rather than mispair
+    }
+
+    const QString animName = QStringLiteral("creature_") + c.action;
+    const CreatureMotionRetarget::Result rr = CreatureMotionRetarget::apply(
+        skel.get(), animName.toStdString(), plan, quats, fps, c.restWorld,
+        rootOffset, CreatureMotionRetarget::hipHeightOf(ent, plan));
+    if (!rr.ok)
+        return fail(rr.error);
+
+    // The entity caches its own SkeletonInstance, so it must be rebuilt for
+    // the new master animation to be playable.
+    // _initialise(true) recreates the entity's SkeletonInstance so the new
+    // master animation becomes playable; refreshAvailableAnimationState then
+    // republishes the list the UI reads.
+    ent->_initialise(true);
+    ent->refreshAvailableAnimationState();
+    // ...but that DESTROYS the instance m_selectedSkeleton points at, and the
+    // next QML read of allBoneRows() then dereferences freed memory. Observed
+    // as a SIGSEGV in allBoneRows the moment the picker applied a clip. The
+    // morph path documents the same hazard and fixes it the same way.
+    if (m_selectedEntity == ent) {
+        rebindSelectedSkeleton();
+        refreshBoneList(QString::fromStdString(m_selectedBone));
+    }
+
+    // SELECT the clip we just applied, exactly as the humanoid path does.
+    // Ogre AVERAGES every enabled animation state, so leaving the import's
+    // auto-enabled clip on blends it with the new one into a shaking
+    // mid-pose — applying a walk must visibly walk. Enabling only the new
+    // clip is therefore both the selection and a correctness requirement.
+    if (auto* animSet = ent->getAllAnimationStates()) {
+        for (const auto& [key, state] : animSet->getAnimationStates())
+            state->setEnabled(false);
+        if (animSet->hasAnimationState(animName.toStdString())) {
+            auto* st = animSet->getAnimationState(animName.toStdString());
+            st->setEnabled(true);
+            st->setLoop(true);
+            st->setTimePosition(0.0f);
+        }
+    }
+    // Make it the controller's selected animation so the timeline, dope
+    // sheet and Inspector all point at the clip the user just applied.
+    m_selectedEntityName = ent->getName();
+    m_selectedAnimation  = animName.toStdString();
+    m_selectedTrack      = nullptr;
+    m_currentKeyframe    = nullptr;
+    // The Inspector's Animations checkboxes read enabled flags through
+    // PropertiesPanelController — without this it shows STALE state and the
+    // user's next toggle crosses the enables back into a blended pose.
+    if (auto* ppc = PropertiesPanelController::instance())
+        emit ppc->animationStateChanged();
+    updateAnimationTree();
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    emit keyframeTicksChanged();
+    emit animationTreeChanged();
+
+    out["ok"] = true;
+    out["animation"] = animName;
+    out["frames"] = rr.frames;
+    out["tracks"] = rr.tracksWritten;
+    emit generateMotionStatus(
+        QStringLiteral("Applied %1 (%2 tracks, %3 frames)")
+            .arg(animName).arg(rr.tracksWritten).arg(rr.frames), false);
+    return out;
+}
+
 QVariantList AnimationControlController::listMotionClips()
 {
     QVariantList out;
@@ -2107,40 +2248,98 @@ QVariantList AnimationControlController::listMotionClips()
         QVariantMap m;
         // NOT "index": a ListModel role named "index" SHADOWS the delegate's
         // built-in row index in QML (bare `index` and `model.index` both
-        // resolve to the role), which broke the picker — toggleApproved(row)
-        // received the library index and get(row) went out of range on any
-        // filtered list, so starring silently did nothing once "Only good ★"
-        // kicked in.
+        // resolve to the role), so the delegate would read the library index
+        // instead of its own row and any filtered list would misaddress.
         m["libIndex"] = i;
         m["action"] = c.action;
         m["name"] = name;
         m["source"] = c.source;
         m["quality"] = c.quality;
         m["frames"] = c.frames;
+        // Character category ("human"/"undead"/"creature") so the picker can
+        // filter: the corpus mixes styles under the same action names.
+        m["category"] = c.category;
+        m["skeleton"] = c.skeleton;
         out.append(m);
     }
-    // Curation (#838 ship-gate): mark the user-approved "good" clips so the
-    // picker can filter to them. Keyed by clip source — stable across rebuilds.
-    const QSet<QString> approved = MotionLibrary::loadCuration();
-    for (int i = 0; i < out.size(); ++i) {
-        QVariantMap m = out[i].toMap();
-        m["approved"] = approved.contains(m["source"].toString());
-        out[i] = m;
+
+    // Creature clips live in their OWN library on their own canonical
+    // skeletons (#1073). They are listed together with the humanoid ones so
+    // the picker is one list, but their libIndex is offset by
+    // kCreatureIndexBase so apply() can tell the two libraries apart — the
+    // indices would otherwise collide and silently select the wrong clip.
+    if (MotionLibrary::creatureLibraryPresent()) {
+        // Which creature plan does the CURRENT selection have? Clips of a
+        // different plan cannot retarget onto it (a winged clip drives wings
+        // a quadruped does not have), so mark them so the picker can show
+        // the user what will actually work instead of letting them pick a
+        // clip that only fails on Apply.
+        QString targetPlan;
+        if (Manager* mgr = Manager::getSingletonPtr()) {
+            for (auto* e : mgr->getEntities()) {
+                if (!e || e->getMovableType() != "Entity" || !e->hasSkeleton())
+                    continue;
+                if (!m_selectedEntityName.empty()
+                    && e->getName() != m_selectedEntityName)
+                    continue;
+                QStringList bones;
+                if (auto* sk = e->getSkeleton())
+                    for (auto* b : sk->getBones())
+                        bones << QString::fromStdString(b->getName());
+                bool planOk = false;
+                const auto plan = CreatureSkeleton::detectBodyPlan(bones, &planOk);
+                if (planOk)
+                    targetPlan = plan == CreatureSkeleton::BodyPlan::WingedBiped
+                                     ? QStringLiteral("wingedBiped")
+                                     : QStringLiteral("quadruped");
+                break;
+            }
+        }
+        MotionLibrary clib;
+        if (clib.loadFromFile(MotionLibrary::creatureLibraryPath())) {
+            for (int i = 0; i < clib.clipCount(); ++i) {
+                const MotionLibrary::Clip& c = clib.clip(i);
+                QVariantMap m;
+                m["libIndex"] = kCreatureIndexBase + i;
+                m["action"] = c.action;
+                QString actLabel = c.action;
+                if (!actLabel.isEmpty()) actLabel[0] = actLabel[0].toUpper();
+                // source is "Quaternius — <asset> — <sourceClipName>".
+                const QStringList segs = c.source.split(QStringLiteral("—"));
+                const QString asset = segs.value(1).trimmed().isEmpty()
+                                          ? segs.value(0).trimmed()
+                                          : segs.value(1).trimmed();
+                // Include the SOURCE clip name when it differs from the
+                // canonical action: a rig often ships several takes that
+                // canonicalise the same ("Walk" and "WalkSlow" both become
+                // "walk"), and without the variant they render as two
+                // identical rows the user cannot tell apart.
+                const QString variant = segs.value(2).trimmed();
+                QString label = asset.isEmpty()
+                                    ? actLabel
+                                    : QStringLiteral("%1 (%2)").arg(actLabel, asset);
+                if (!variant.isEmpty()
+                    && variant.compare(c.action, Qt::CaseInsensitive) != 0)
+                    label += QStringLiteral(" · %1").arg(variant);
+                m["name"] = label;
+                m["source"] = c.source;
+                m["quality"] = c.quality;
+                m["frames"] = c.frames;
+                m["category"] = c.category.isEmpty()
+                                    ? QStringLiteral("creature") : c.category;
+                m["skeleton"] = c.skeleton;
+                // Empty targetPlan (no creature selected, or a humanoid) →
+                // leave applicability UNSET rather than false: the user may
+                // simply not have selected the rig yet, and greying out the
+                // whole list would read as "creatures are broken".
+                if (!targetPlan.isEmpty())
+                    m["applicable"] =
+                        (c.skeleton.compare(targetPlan, Qt::CaseInsensitive) == 0);
+                out.append(m);
+            }
+        }
     }
     return out;
-}
-
-void AnimationControlController::setClipApproved(const QString& source,
-                                                 bool approved)
-{
-    QSet<QString> set = MotionLibrary::loadCuration();
-    if (approved) set.insert(source);
-    else set.remove(source);
-    MotionLibrary::saveCuration(set);
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("curation %1: %2")
-            .arg(approved ? QStringLiteral("approve")
-                          : QStringLiteral("unapprove"), source.left(60)));
 }
 
 QVariantMap AnimationControlController::generateMotion(const QString& prompt,
@@ -2251,6 +2450,13 @@ QVariantMap AnimationControlController::generateMotion(const QString& prompt,
         if (!lib.loadFromFile(libPath))
             return fail(lib.error());
         int idx;
+        if (variantIndex >= kCreatureIndexBase) {
+            // Creature clip: a different canonical skeleton, so it CANNOT go
+            // through the humanoid retarget (that is the four-legs-through-
+            // two-roles failure). Dispatch to the creature path and return.
+            return applyCreatureClip(variantIndex - kCreatureIndexBase,
+                                     duration);
+        }
         if (variantIndex >= 0) {
             if (variantIndex >= lib.clipCount())
                 return fail(QStringLiteral("Animation index out of range."));

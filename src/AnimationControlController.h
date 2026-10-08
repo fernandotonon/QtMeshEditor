@@ -368,16 +368,23 @@ public:
 
     /// List every clip in the template motion library for the animation
     /// PICKER (Mixamo-style browse). Each entry is a QVariantMap
-    /// { libIndex, action, name, source, quality, frames, approved } where
+    /// { libIndex, action, name, source, quality, frames, category } where
     /// `name` is a human-readable label like "Walk (Tired Character)".
     /// (`libIndex`, NOT `index` — a ListModel role named "index" shadows the
     /// QML delegate's row index.) Downloads the library on first use
     /// (blocking). Empty list if unavailable.
+    /// Creature clips share ONE picker list with humanoid ones, so their
+    /// library index is offset by this base to keep the two libraries
+    /// distinguishable. 100000 sits far above any plausible humanoid clip
+    /// count (the shipped library has 122) and stays obvious in a log.
+    static constexpr int kCreatureIndexBase = 100000;
+
     Q_INVOKABLE QVariantList listMotionClips();
-    /// Curation (#838 ship-gate): persist whether a library clip (keyed by its
-    /// stable `source` string) is user-approved ("good"). The picker's checkbox
-    /// writes this; the library builder ships --approved-only.
-    Q_INVOKABLE void setClipApproved(const QString& source, bool approved);
+    /// Apply a CREATURE clip (#1073) by its index within the creature
+    /// library. Called by generateMotion when the picker's libIndex is at or
+    /// above the creature offset — creature clips use a different canonical
+    /// skeleton and must not go through the humanoid retarget.
+    QVariantMap applyCreatureClip(int creatureIdx, double duration);
 
     /// #854: Mixamo-style arm-space post-process on an EXISTING animation of
     /// the selected entity. Positive `degrees` widens the arms away from the

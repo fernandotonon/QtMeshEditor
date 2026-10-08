@@ -5338,14 +5338,70 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         }
 
         if (!gotClip) {
-            const QString libPath = MotionLibrary::ensureLibraryBlocking();
-            if (libPath.isEmpty())
-                return makeErrorResult("Error: motion library unavailable (offline or download disabled)");
+            // #1073: an index at/above the creature base addresses the
+            // CREATURE library, which is a separate file with its own
+            // canonical skeleton. Fetching the HUMANOID library first would
+            // reject a perfectly valid creature clip whenever that library is
+            // unavailable (offline, or download disabled), so skip the load
+            // entirely for those indices -- the creature branch below never
+            // touches `lib`.
+            const bool creatureVariant =
+                hasVariant
+                && variantIndex >= AnimationControlController::kCreatureIndexBase;
+
+            QString libPath;
             MotionLibrary lib;
-            if (!lib.loadFromFile(libPath))
-                return makeErrorResult(QString("Error: %1").arg(lib.error()));
+            if (!creatureVariant) {
+                libPath = MotionLibrary::ensureLibraryBlocking();
+                if (libPath.isEmpty())
+                    return makeErrorResult("Error: motion library unavailable (offline or download disabled)");
+                if (!lib.loadFromFile(libPath))
+                    return makeErrorResult(QString("Error: %1").arg(lib.error()));
+            }
             int idx;
             if (hasVariant) {
+                // #1073: indices at/above the creature base address the
+                // CREATURE library, which uses a different canonical
+                // skeleton. Validating them against the humanoid clip count
+                // rejected every creature clip the picker can offer.
+                if (variantIndex >= AnimationControlController::kCreatureIndexBase) {
+                    auto* acc = AnimationControlController::instance();
+                    if (!acc)
+                        return makeErrorResult("Error: animation controller unavailable");
+                    const QVariantMap res = acc->applyCreatureClip(
+                        variantIndex - AnimationControlController::kCreatureIndexBase,
+                        duration);
+                    if (!res.value("ok").toBool())
+                        return makeErrorResult(
+                            QString("Error: %1").arg(res.value("error").toString()));
+                    // Honour `output_path` as the humanoid branch does: this
+                    // return is BEFORE the shared re-export below, so without
+                    // this a caller passing output_path got a success message
+                    // and no file.
+                    const QString creatureOut = args.value("output_path").toString();
+                    if (!creatureOut.isEmpty()) {
+                        Ogre::Entity* ce = acc->selectedEntity();
+                        Ogre::SceneNode* cn =
+                            ce ? ce->getParentSceneNode() : nullptr;
+                        if (!cn)
+                            return makeErrorResult(
+                                "Error: applied creature clip but no entity to export");
+                        if (MeshImporterExporter::exporter(
+                                cn, creatureOut,
+                                CLIPipeline::formatForExtension(creatureOut)) != 0)
+                            return makeErrorResult(
+                                QString("Error: applied creature clip but export "
+                                        "to %1 failed").arg(creatureOut));
+                    }
+                    return makeSuccessResult(
+                        QString("Applied creature clip '%1' (%2 tracks, %3 frames)%4")
+                            .arg(res.value("animation").toString())
+                            .arg(res.value("tracks").toInt())
+                            .arg(res.value("frames").toInt())
+                            .arg(creatureOut.isEmpty()
+                                     ? QString()
+                                     : QStringLiteral(" -> ") + creatureOut));
+                }
                 if (variantIndex >= lib.clipCount())
                     return makeErrorResult(QString("Error: variant_index %1 out of range (0..%2)")
                                                .arg(variantIndex).arg(lib.clipCount() - 1));

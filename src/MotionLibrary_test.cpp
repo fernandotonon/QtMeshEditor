@@ -651,3 +651,96 @@ TEST(MotionLibrary, UnknownCategoryValueFallsBackInsteadOfMatchingNothing)
         << "known values are case-insensitive";
     EXPECT_EQ(lib.takesForAction("walk", "human").size(), 1u);
 }
+
+// ---- skeleton gating (#1073) -----------------------------------------------
+namespace {
+
+// One humanoid walk and one quadruped walk under the SAME action name — the
+// situation a merged library creates.
+QByteArray mixedSkeletonLib()
+{
+    QByteArray pose = "[";
+    for (int j = 0; j < 22; ++j) pose += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+    pose += "]";
+    const QByteArray frames = "[" + pose + "," + pose + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-motion-library-v1\",\"fps\":30,";
+    json += "\"joints\":[";
+    const char* J[] = {"hip","abdomen","chest","neck","neck1","head","rcollar",
+        "rshoulder","relbow","rhand","lcollar","lshoulder","lelbow","lhand",
+        "rbuttock","rhip","rknee","rfoot","lbuttock","lhip","lknee","lfoot"};
+    for (int j = 0; j < 22; ++j) { if (j) json += ","; json += "\""; json += J[j]; json += "\""; }
+    json += "],\"clips\":[";
+    json += "{\"action\":\"walk\",\"source\":\"CMU 02_01\",\"quats\":" + frames + "},";
+    json += "{\"action\":\"walk\",\"skeleton\":\"quadruped\",\"category\":\"creature\","
+            "\"source\":\"Quaternius Horse\",\"quats\":" + frames + "}";
+    json += "]}";
+    return json;
+}
+
+} // namespace
+
+TEST(MotionLibrary, ClipsDefaultToTheHumanoidSkeleton)
+{
+    // Every library written before creature support holds 22-joint humanoid
+    // clips with no `skeleton` key. Treating those as creatures would be the
+    // exact mis-retarget the field exists to prevent.
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedSkeletonLib())) << lib.error().toStdString();
+    EXPECT_EQ(lib.clip(0).skeleton.toStdString(), "humanoid");
+    EXPECT_EQ(lib.clip(1).skeleton.toStdString(), "quadruped");
+}
+
+TEST(MotionLibrary, SkeletonFilterIsHardAndNeverFallsBack)
+{
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(mixedSkeletonLib()));
+    EXPECT_EQ(lib.takesForAction("walk", "", "humanoid").size(), 1u);
+    EXPECT_EQ(lib.takesForAction("walk", "", "quadruped").size(), 1u);
+    EXPECT_EQ(lib.takesForAction("walk", "", "humanoid").front(), 0);
+    EXPECT_EQ(lib.takesForAction("walk", "", "quadruped").front(), 1);
+
+    // The CATEGORY filter deliberately relaxes when nothing matches (several
+    // actions are undead-only). The SKELETON filter must NOT: a humanoid rig
+    // handed a quadruped clip does not degrade gracefully, it plays four
+    // legs through two roles.
+    const auto none = lib.takesForAction("walk", "undead", "quadruped");
+    for (int i : none)
+        EXPECT_EQ(lib.clip(i).skeleton.toStdString(), "quadruped")
+            << "category relaxation must not leak across skeletons";
+
+    EXPECT_TRUE(lib.takesForAction("walk", "", "wingedBiped").empty())
+        << "a skeleton with no clips must return nothing, not a fallback";
+}
+
+TEST(MotionLibrary, CreatureLibraryUsesPerClipJointCounts)
+{
+    // A creature library mixes body plans, so clip width varies (quadruped
+    // 18, wingedBiped 16) — unlike the humanoid schemas where it is fixed
+    // per library. Validating against a library-wide constant would reject
+    // every clip of the other plan.
+    auto pose = [](int n) {
+        QByteArray p = "[";
+        for (int j = 0; j < n; ++j) p += (j ? ",[0,0,0,1]" : "[0,0,0,1]");
+        return p + "]";
+    };
+    const QByteArray q18 = "[" + pose(18) + "," + pose(18) + "]";
+    const QByteArray q16 = "[" + pose(16) + "," + pose(16) + "]";
+    QByteArray json = "{\"schema\":\"qtmesh-creature-library-v1\",\"fps\":30,"
+                      "\"frame\":\"world\",\"clips\":[";
+    json += "{\"action\":\"walk\",\"skeleton\":\"quadruped\",\"category\":\"creature\","
+            "\"source\":\"Quaternius — Horse\",\"quats\":" + q18 + "},";
+    json += "{\"action\":\"fly\",\"skeleton\":\"wingedBiped\",\"category\":\"creature\","
+            "\"source\":\"Quaternius — Dragon\",\"quats\":" + q16 + "}";
+    json += "]}";
+
+    MotionLibrary lib;
+    ASSERT_TRUE(lib.loadFromJson(json)) << lib.error().toStdString();
+    ASSERT_EQ(lib.clipCount(), 2);
+    EXPECT_EQ(lib.clip(0).quats.front().size(), 18u);
+    EXPECT_EQ(lib.clip(1).quats.front().size(), 16u);
+    EXPECT_EQ(lib.clip(0).skeleton.toStdString(), "quadruped");
+    EXPECT_EQ(lib.clip(1).skeleton.toStdString(), "wingedBiped");
+    // And the hard skeleton filter still separates them.
+    EXPECT_EQ(lib.takesForAction("walk", "", "quadruped").size(), 1u);
+    EXPECT_TRUE(lib.takesForAction("walk", "", "wingedBiped").empty());
+}
