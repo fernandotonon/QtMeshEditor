@@ -190,28 +190,29 @@ Result extract(Ogre::Entity* entity, int fps, const QString& onlyAnimation)
         // consecutive-frame test reports such a clip as ~99% live and trims
         // nothing -- which is exactly how this shipped broken once already.
         {
-            const size_t n = c.quats.size();
+            const size_t frameCount = c.quats.size();
             auto poseDist = [&](size_t f) {
                 float worst = 0.0f;
                 for (int j = 0; j < J; ++j) {
-                    const auto& a = c.quats[f][static_cast<size_t>(j)];
-                    const auto& b = c.quats[n - 1][static_cast<size_t>(j)];
-                    float d = std::fabs(a[0] * b[0] + a[1] * b[1]
-                                        + a[2] * b[2] + a[3] * b[3]);
-                    d = std::min(1.0f, d);
+                    const auto& cur = c.quats[f][static_cast<size_t>(j)];
+                    const auto& fin = c.quats[frameCount - 1][static_cast<size_t>(j)];
+                    float dot = std::fabs(cur[0] * fin[0] + cur[1] * fin[1]
+                                          + cur[2] * fin[2] + cur[3] * fin[3]);
+                    dot = std::min(1.0f, dot);
                     worst = std::max(worst,
-                        Ogre::Math::RadiansToDegrees(2.0f * std::acos(d)));
+                        Ogre::Math::RadiansToDegrees(2.0f * std::acos(dot)));
                 }
                 return worst;
             };
             float peak = 0.0f;
-            for (size_t f = 0; f < n; ++f) peak = std::max(peak, poseDist(f));
+            for (size_t f = 0; f < frameCount; ++f)
+                peak = std::max(peak, poseDist(f));
             if (peak > 1.0f) {               // a clip that never moves is left alone
                 size_t last = 0;
-                for (size_t f = 0; f < n; ++f)
+                for (size_t f = 0; f < frameCount; ++f)
                     if (poseDist(f) > 0.02f * peak) last = f;
                 const size_t keep = last + 2;   // keep the settle frame
-                if (keep < n && last > 4) {
+                if (keep < frameCount && last > 4) {
                     c.quats.resize(keep);
                     if (c.rootOffset.size() > keep) c.rootOffset.resize(keep);
                 }

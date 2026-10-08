@@ -106,22 +106,24 @@ int indexForBone(const QString& boneName)
         if (contains(n, {"foot", "paw", "hoof", "ankle"})) return base + 2;
         if (contains(n, {"lowleg", "lowerleg", "shin", "cannon", "knee"}))
             return base + 1;
-        if (contains(n, {"upleg", "upperleg", "thigh", "femur", "humerus"}))
-            return base;
-        // A bare "FrontLeg.L" with no segment word. The Quaternius rigs are
-        // THREE-segment -- FrontLeg -> FrontUpLeg -> FrontLowLeg -- so this
-        // is the TOPMOST limb bone (the shoulder/hip attachment), NOT the
-        // middle one. It was mapped to the lower leg, where it lost the role
-        // to the explicitly-named FrontLowLeg and so received no animation at
-        // all; the canonical upper-leg role then drove FrontUpLeg, the SECOND
-        // segment. The limb therefore swung from the wrong joint, which reads
-        // as legs bunched under the body with a cramped stride even though
-        // the per-joint angles match the source exactly.
+        // Everything else on a limb maps to the UPPER leg -- both an explicit
+        // "upleg"/"thigh"/"femur"/"humerus" AND a bare "FrontLeg.L" with no
+        // segment word at all, which is why there is no separate branch for
+        // the explicit spelling (they would be identical).
         //
-        // Map it to the UPPER leg so the chain lines up with the canonical
-        // UpLeg -> LowLeg -> Foot; the explicit FrontUpLeg then loses that
-        // role on specificity, which is correct -- it is the middle segment
-        // and canonical LowLeg is where its motion belongs.
+        // The bare name is the interesting case. The Quaternius rigs are
+        // THREE-segment -- FrontLeg -> FrontUpLeg -> FrontLowLeg -- so it is
+        // the TOPMOST limb bone (the shoulder/hip attachment), NOT the middle
+        // one. It used to map to the lower leg, where it lost the role to the
+        // explicitly-named FrontLowLeg and received no animation at all, while
+        // the canonical upper-leg role drove FrontUpLeg -- the SECOND segment.
+        // The limb therefore swung from the wrong joint, which reads as legs
+        // bunched under the body with a cramped stride even though the
+        // per-joint angles match the source exactly.
+        //
+        // roleSpecificity() then makes the bare name BEAT the explicit
+        // "FrontUpLeg" for this role: hierarchy position is stronger evidence
+        // than a segment word.
         return base;
     }
 
