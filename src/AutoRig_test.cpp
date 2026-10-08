@@ -731,49 +731,63 @@ TEST(AutoRigFacing, BackwardsFacingMeshIsRiggedHeadFirst)
     // AI-generated horse whose head sat at z = -0.176 while the template put
     // the head at +z.
     //
-    // The head is the tall, NARROW end: head and neck rise above the back line
-    // while the rump is broad and lower. Build two bodies that differ only in
-    // which end carries the tall part.
-    auto body = [](bool headAtLowZ) {
+    // The body is built from the MEASURED height profile of the real
+    // Quaternius horse (24 bins along its length, normalised). Hand-invented
+    // shapes do not exercise the detector: a uniform barrel gives every cell
+    // the same height, so the percentile cutoff selects all of them and
+    // neither direction flips. A real creature's varied back is what lets the
+    // tall cells localise to the head.
+    static const double kHorseProfile[] = {
+        0.678, 0.725, 0.763, 0.692, 0.763, 0.562, 0.698, 0.694,
+        0.360, 0.390, 0.748, 0.810, 0.847, 0.884, 0.754, 0.962,
+        1.000, 0.996, 0.845, 0.761, 0.776
+    };
+    constexpr int kBins = static_cast<int>(std::size(kHorseProfile));
+
+    // `mirrored` reverses the profile along the length axis, which is exactly
+    // what a backwards-facing creature looks like.
+    auto build = [](bool mirrored) {
         std::vector<float> v;
         auto add = [&](float x, float y, float z) {
             v.push_back(x); v.push_back(y); v.push_back(z);
         };
-        // Barrel along z, consistent width.
-        for (int i = 0; i <= 20; ++i) {
-            const float z = -1.0f + 0.1f * static_cast<float>(i);
-            for (float sx : {-0.3f, 0.3f})
-                for (float sy : {-0.3f, 0.3f}) add(sx, sy, z);
-        }
-        // A tall neck/head at one end.
-        const float hz = headAtLowZ ? -1.0f : 1.0f;
-        for (int i = 0; i <= 8; ++i) {
-            const float y = 0.3f + 0.1f * static_cast<float>(i);
-            add(-0.1f, y, hz); add(0.1f, y, hz);
+        for (int i = 0; i < kBins; ++i) {
+            const double h = kHorseProfile[mirrored ? (kBins - 1 - i) : i];
+            const float z = -1.0f + 2.0f * static_cast<float>(i)
+                                        / static_cast<float>(kBins - 1);
+            for (float sx : {-0.3f, 0.3f}) {
+                add(sx, 0.0f, z);                       // belly
+                add(sx, static_cast<float>(h), z);      // back / head top
+            }
         }
         return v;
     };
 
     AutoRig::Options opts;
     opts.upAxis = 1;
-    auto headZof = [&](const std::vector<float>& verts) {
+    // `Tail` is the joint to read, NOT `Head`: Head carries recenter=true, so
+    // it is blended 75% toward the mesh mass at its own height, and on a thin
+    // profile shell there is almost none up there -- the recentre then swamps
+    // the facing signal. Tail has recenter=false, so it reports the template
+    // mapping (and therefore the flip) directly.
+    auto tailZ = [&](const std::vector<float>& verts) {
         const auto placed = AutoRig::fitTemplate(
             AutoRig::templateJoints(AutoRig::Template::Quadruped),
             verts.data(), static_cast<int>(verts.size() / 3), opts, nullptr);
         for (const auto& j : placed)
-            if (j.name == QLatin1String("Head")) return j.pos[2];
+            if (j.name == QLatin1String("Tail")) return j.pos[2];
         return 0.0;
     };
 
-    const double headFwd  = headZof(body(false));  // head at HIGH z
-    const double headBack = headZof(body(true));   // head at LOW z
+    const double forward  = tailZ(build(false));  // tall end (head) at HIGH z
+    const double backward = tailZ(build(true));   // tall end (head) at LOW z
 
-    // The two must land on OPPOSITE sides of the body, and specifically the
-    // head must follow the mesh's tall end. Comparing against 0 is too weak:
-    // the recentring pass shifts both, so a broken detector can still leave
-    // both on the same sign and pass.
-    EXPECT_GT(headFwd, headBack + 0.5)
-        << "head must track the mesh's tall end; a backwards-facing mesh "
-           "rigged front-first plays every clip in reverse "
-        << "(fwd=" << headFwd << " back=" << headBack << ")";
+    // The TAIL sits opposite the head, so it must move to the other end when
+    // the body is mirrored. Assert the RELATIVE effect rather than an absolute
+    // sign: the separation is exactly what the facing detection buys, and a
+    // dead detector collapses it to zero.
+    EXPECT_LT(forward, backward - 0.5)
+        << "the tail must sit opposite the mesh's TALL end; a backwards-facing "
+           "mesh rigged front-first plays every clip in reverse "
+           "(forward=" << forward << " backward=" << backward << ")";
 }
