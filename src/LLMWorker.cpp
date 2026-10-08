@@ -605,6 +605,12 @@ QString LLMWorker::formatChatPrompt(PromptFamily family, const QString &embedded
             p += QStringLiteral("<|turn>system\n") + systemPrompt.trimmed() + QStringLiteral("<turn|>\n");
         p += QStringLiteral("<|turn>user\n") + userPrompt + QStringLiteral("<turn|>\n");
         p += QStringLiteral("<|turn>model\n");
+        // The larger Gemma 4 models (12B, 26B-A4B, 31B) also open an EMPTY
+        // thought channel when thinking is off; E2B/E4B do not. Follow the
+        // template: the Jinja source spells the newline as a literal "\n".
+        if (embeddedTemplate.contains(QLatin1String("<|channel>thought\\n<channel|>"))
+            || embeddedTemplate.contains(QLatin1String("<|channel>thought\n<channel|>")))
+            p += QStringLiteral("<|channel>thought\n<channel|>");
         return p;
     case PromptFamily::Gemma: {
         // Gemma 2/3 have no system role: the template prepends it to the first user turn.
@@ -628,18 +634,26 @@ QString LLMWorker::formatChatPrompt(PromptFamily family, const QString &embedded
 
 QString LLMWorker::stripReasoning(const QString &text)
 {
+    // Reasoning comes BEFORE the answer, so only leading blocks are removed —
+    // a "<think>" inside the answer (e.g. a JSON string value) is content.
     QString out = text;
     const struct { const char *open; const char *close; } blocks[] = {
         {"<think>", "</think>"},
         {"<|channel>thought", "<channel|>"},
     };
-    for (const auto &b : blocks) {
-        const QString open = QString::fromLatin1(b.open), close = QString::fromLatin1(b.close);
-        int start;
-        while ((start = out.indexOf(open)) >= 0) {
-            const int end = out.indexOf(close, start + open.size());
-            if (end < 0) { out.truncate(start); break; }   // ran into the token limit mid-thought
-            out.remove(start, end + close.size() - start);
+    bool removed = true;
+    while (removed) {
+        removed = false;
+        int lead = 0;
+        while (lead < out.size() && out.at(lead).isSpace()) ++lead;
+        for (const auto &b : blocks) {
+            const QString open = QString::fromLatin1(b.open), close = QString::fromLatin1(b.close);
+            if (!QStringView(out).mid(lead).startsWith(open)) continue;
+            const int end = out.indexOf(close, lead + open.size());
+            if (end < 0) return QString();   // ran into the token limit mid-thought: no answer yet
+            out.remove(0, end + close.size());
+            removed = true;
+            break;
         }
     }
     return out;

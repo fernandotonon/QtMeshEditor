@@ -168,6 +168,16 @@ TEST(LLMWorkerPrompt, Gemma4UsesTurnMarkersAndNoThinkToken)
     const QString p = LLMWorker::formatChatPrompt(LLMWorker::PromptFamily::Gemma4, kGemma4Tmpl, "SYS", "USER");
     EXPECT_EQ(p, "<|turn>system\nSYS<turn|>\n<|turn>user\nUSER<turn|>\n<|turn>model\n");
     EXPECT_FALSE(p.contains("<|think|>"));
+    EXPECT_FALSE(p.contains("<|channel>")) << "E2B/E4B templates open no thought channel";
+}
+
+TEST(LLMWorkerPrompt, LargerGemma4OpensAnEmptyThoughtChannel)
+{
+    // 12B / 26B-A4B / 31B templates: "{%- if not enable_thinking -%}{{- '<|channel>thought\n<channel|>' -}}"
+    const QString tmpl = kGemma4Tmpl + "{{- '<|turn>model\\n' -}}{%- if not enable_thinking -%}"
+                                       "{{- '<|channel>thought\\n<channel|>' -}}{%- endif -%}";
+    const QString p = LLMWorker::formatChatPrompt(LLMWorker::PromptFamily::Gemma4, tmpl, "SYS", "USER");
+    EXPECT_TRUE(p.endsWith("<|turn>model\n<|channel>thought\n<channel|>")) << p.toStdString();
 }
 
 TEST(LLMWorkerPrompt, Gemma3FoldsSystemIntoTheUserTurn)
@@ -193,6 +203,10 @@ TEST(LLMWorkerPrompt, StripReasoningRemovesThoughtBlocks)
 {
     EXPECT_EQ(LLMWorker::stripReasoning("<think>\nplan\n</think>\n\n{\"a\":1}"), "\n\n{\"a\":1}");
     EXPECT_EQ(LLMWorker::stripReasoning("<|channel>thought\nhmm<channel|>{\"b\":2}"), "{\"b\":2}");
-    EXPECT_EQ(LLMWorker::stripReasoning("ok <think>still going"), "ok ") << "unterminated = cut off by the token limit";
+    EXPECT_EQ(LLMWorker::stripReasoning("<think>still going"), "") << "unterminated = cut off by the token limit";
     EXPECT_EQ(LLMWorker::stripReasoning("{\"plain\":true}"), "{\"plain\":true}");
+    EXPECT_EQ(LLMWorker::stripReasoning("<|channel>thought\n<channel|><think>x</think>{}"), "{}") << "consecutive leading blocks";
+    // markers INSIDE the answer are content, never reasoning
+    EXPECT_EQ(LLMWorker::stripReasoning("{\"tag\":\"<think>\"}"), "{\"tag\":\"<think>\"}");
+    EXPECT_EQ(LLMWorker::stripReasoning("{\"a\":\"<think>b</think>\"}"), "{\"a\":\"<think>b</think>\"}");
 }

@@ -79,6 +79,11 @@ TEST(AIChatPanelQml, PickerListsDownloadedModelsAndBannerExplainsState)
     auto* llm = LLMManager::instance();
     const QString originalDir = llm->modelsDirectory();
     const bool originalAuto = llm->autoLoadModel();
+    // Restore the shared singleton on every exit path, including a failed ASSERT.
+    struct Restore {
+        LLMManager* llm; QString dir; bool autoLoad;
+        ~Restore() { llm->setModelsDirectory(dir); llm->setAutoLoadModel(autoLoad); }
+    } restore{llm, originalDir, originalAuto};
     llm->setAutoLoadModel(false);   // the dummy file must not be handed to llama.cpp
 
     QTemporaryDir dir;
@@ -111,9 +116,6 @@ TEST(AIChatPanelQml, PickerListsDownloadedModelsAndBannerExplainsState)
 
     auto* picker = obj->findChild<QObject*>(QStringLiteral("modelPicker"));
     ASSERT_NE(picker, nullptr) << "the header model picker exists";
-
-    llm->setModelsDirectory(originalDir);
-    llm->setAutoLoadModel(originalAuto);
 }
 
 TEST(AIChatManagerAutoLoad, OpeningTheChatWithAutoLoadOffLoadsNothing)
