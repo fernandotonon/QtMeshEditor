@@ -661,7 +661,7 @@ TEST_F(LLMManagerTest, SaveAndLoadSettingsPersistence)
         settings.setValue("maxTokens", 512);
         settings.setValue("temperature", 0.9);
         settings.setValue("gpuLayers", 8);
-        settings.setValue("autoLoadModel", true);
+        settings.setValue("autoLoadOnChatOpen", true);
         settings.endGroup();
         settings.sync();
     }

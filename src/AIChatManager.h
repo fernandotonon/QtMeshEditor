@@ -24,6 +24,11 @@ class AIChatManager : public QObject
     // #1021: multi-step requests go through AIAgentManager (plan → execute →
     // observe → replan, one undo group, confirmations). Off = the v1 loop.
     Q_PROPERTY(bool agentMode READ agentMode WRITE setAgentMode NOTIFY agentModeChanged)
+    // Model picker in the chat header (Ollama-style): the downloaded GGUFs,
+    // whether one is loading, and the last load error to show inline.
+    Q_PROPERTY(QStringList availableModels READ availableModels NOTIFY availableModelsChanged)
+    Q_PROPERTY(bool modelLoading        READ modelLoading      NOTIFY modelLoadingChanged)
+    Q_PROPERTY(QString modelError       READ modelError        NOTIFY modelErrorChanged)
 
 public:
     static AIChatManager* instance();
@@ -35,6 +40,25 @@ public:
     bool modelAvailable()       const;
     QString streamingText()     const { return m_streamingText; }
     QString currentModelName()  const;
+    QStringList availableModels() const;
+    bool modelLoading()         const;
+    QString modelError()        const { return m_modelError; }
+
+    /// The chat dock was shown/hidden. Opening it loads a model (the last one
+    /// used, else a recommended agent model, else the first downloaded) when
+    /// LLMManager::autoLoadModel is on and none is loaded. Nothing is loaded
+    /// at app startup, so users who never open the chat pay no memory for it.
+    /// If no model is downloaded yet, the load happens as soon as one appears
+    /// while the chat is still open.
+    Q_INVOKABLE void setChatOpen(bool open);
+    /// Load `modelName` (a name from availableModels), replacing the current one.
+    Q_INVOKABLE void selectModel(const QString& modelName);
+    /// Free the model's memory; the picker can load it again.
+    Q_INVOKABLE void unloadModel();
+    /// Re-read the models directory (the picker calls this when it opens).
+    Q_INVOKABLE void refreshModels();
+    /// Which model opening the chat should load. Pure, public for tests.
+    static QString pickAutoLoadModel(const QStringList& available, const QString& lastUsed);
 
     Q_INVOKABLE void sendMessage(const QString& text);
     /// The header's model name/status is clickable: MainWindow opens the AI
@@ -58,6 +82,9 @@ signals:
     void currentModelNameChanged();
     void agentModeChanged();
     void modelSettingsRequested();
+    void availableModelsChanged();
+    void modelLoadingChanged();
+    void modelErrorChanged();
 
 private slots:
     void onGenerationProgress(const QString& partial, float progress);
@@ -93,6 +120,13 @@ private:
     bool m_agentMode    = true;
     bool m_agentDriving = false;   // the agent owns the LLM right now, so the v1 callbacks stay silent
     bool m_agentWired   = false;
+
+    // Load-on-open state.
+    bool m_chatOpen        = false;
+    bool m_autoLoadPending = false;   // opened, but nothing was downloaded yet
+    QString m_modelError;
+    void maybeAutoLoad();
+    void setModelError(const QString& error);
     void wireAgent();
     bool agentOwnsGeneration() const;
 };

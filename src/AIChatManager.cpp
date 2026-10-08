@@ -41,6 +41,13 @@ AIChatManager::AIChatManager(QObject* parent) : QObject(parent)
     connect(llm, &LLMManager::generationStopped,   this, &AIChatManager::onGenerationStopped);
     connect(llm, &LLMManager::modelLoadedChanged,      this, &AIChatManager::modelAvailableChanged);
     connect(llm, &LLMManager::currentModelNameChanged, this, &AIChatManager::currentModelNameChanged);
+    connect(llm, &LLMManager::isLoadingChanged,        this, &AIChatManager::modelLoadingChanged);
+    connect(llm, &LLMManager::availableModelsChanged,  this, [this]() {
+        emit availableModelsChanged();
+        maybeAutoLoad();   // a download finished while the chat was open
+    });
+    connect(llm, &LLMManager::modelLoadStarted, this, [this](const QString&) { setModelError(QString()); });
+    connect(llm, &LLMManager::modelLoadError,   this, [this](const QString& error) { setModelError(error); });
     QSettings settings;
     m_agentMode = settings.value("ai/agentMode", true).toBool();
 }
@@ -132,6 +139,93 @@ bool AIChatManager::modelAvailable() const
 QString AIChatManager::currentModelName() const
 {
     return LLMManager::instance()->currentModelName();
+}
+
+QStringList AIChatManager::availableModels() const
+{
+    return LLMManager::instance()->availableModels();
+}
+
+bool AIChatManager::modelLoading() const
+{
+    return LLMManager::instance()->isLoading();
+}
+
+void AIChatManager::setModelError(const QString& error)
+{
+    if (m_modelError == error) return;
+    m_modelError = error;
+    emit modelErrorChanged();
+}
+
+QString AIChatManager::pickAutoLoadModel(const QStringList& available, const QString& lastUsed)
+{
+    if (available.isEmpty()) return QString();
+    if (!lastUsed.isEmpty()) {
+        for (const QString& name : available)
+            if (name == lastUsed || QFileInfo(name).completeBaseName() == lastUsed)
+                return name;
+    }
+    for (const QString& name : available)
+        if (AIAgentManager::isRecommendedModelName(name))
+            return name;
+    return available.first();
+}
+
+void AIChatManager::setChatOpen(bool open)
+{
+    if (m_chatOpen == open) return;
+    m_chatOpen = open;
+    m_autoLoadPending = open;
+    if (open) maybeAutoLoad();
+}
+
+void AIChatManager::maybeAutoLoad()
+{
+    if (!m_chatOpen || !m_autoLoadPending) return;
+    auto* llm = LLMManager::instance();
+    if (!llm->autoLoadModel() || llm->isModelLoaded() || llm->isLoading()) {
+        m_autoLoadPending = false;
+        return;
+    }
+    const QString pick = pickAutoLoadModel(llm->availableModels(), llm->lastModelName());
+    if (pick.isEmpty()) return;   // stay pending until a model is downloaded
+    m_autoLoadPending = false;
+    SentryReporter::addBreadcrumb("ai.model", QStringLiteral("AI Chat opened: auto-loading %1").arg(pick));
+    llm->loadModel(pick);
+}
+
+void AIChatManager::selectModel(const QString& modelName)
+{
+    auto* llm = LLMManager::instance();
+    if (modelName.isEmpty() || llm->isLoading()) return;
+    if (llm->isModelLoaded() && llm->currentModelName() == modelName) return;
+    if (m_isGenerating || llm->isGenerating()) {
+        setModelError(tr("Stop the running task before switching models."));
+        return;
+    }
+    m_autoLoadPending = false;   // the user's choice wins over the auto pick
+    SentryReporter::addBreadcrumb("ui.action", QStringLiteral("AI Chat: select model %1").arg(modelName));
+    llm->loadModel(modelName);
+}
+
+void AIChatManager::unloadModel()
+{
+    auto* llm = LLMManager::instance();
+    if (!llm->isModelLoaded() || llm->isLoading()) return;
+    if (m_isGenerating || llm->isGenerating()) {
+        setModelError(tr("Stop the running task before unloading the model."));
+        return;
+    }
+    m_autoLoadPending = false;
+    setModelError(QString());
+    SentryReporter::addBreadcrumb("ui.action", "AI Chat: unload model");
+    llm->unloadModel();
+}
+
+void AIChatManager::refreshModels()
+{
+    LLMManager::instance()->scanForModels();
 }
 
 // ---- public slots ----

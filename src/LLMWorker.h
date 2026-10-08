@@ -43,6 +43,23 @@ public:
     void requestStop();
     bool isGenerating() const { return m_isGenerating.load(); }
 
+    /// Prompt families we format by hand, detected from the GGUF's embedded
+    /// chat template. llama.cpp's built-in llama_chat_apply_template does not
+    /// run Jinja, knows no Gemma 4, and cannot switch a hybrid model's
+    /// thinking off — so the families we ship are formatted here.
+    enum class PromptFamily { Unknown, ChatML, Gemma, Gemma4, Llama3 };
+    static PromptFamily detectPromptFamily(const QString &embeddedTemplate);
+    /// The model's own chat format for one system + user turn, ending at the
+    /// start of the assistant reply. Hybrid "thinking" models (Qwen 3.5/3.6)
+    /// get an empty <think></think> block so they answer directly — the
+    /// agent's token budget is for JSON, not reasoning. Empty for Unknown.
+    static QString formatChatPrompt(PromptFamily family, const QString &embeddedTemplate,
+                                    const QString &systemPrompt, const QString &userPrompt);
+    /// Remove reasoning a model emitted anyway (<think>…</think>, Gemma 4's
+    /// <|channel>thought…<channel|>), including an unterminated block that
+    /// ran into the token limit.
+    static QString stripReasoning(const QString &text);
+
 public slots:
     void generate(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride = 0);
 
@@ -78,6 +95,8 @@ private:
     int m_nCtx = 0;   // llama_n_ctx(m_ctx) after initialization
     const llama_vocab *m_vocab = nullptr;
     std::vector<llama_token> m_prevTokens; // cached input tokens for KV-prefix reuse
+    QString m_chatTemplate;                // the GGUF's tokenizer.chat_template (may be empty)
+    QString buildPrompt(const QString &systemPrompt, const QString &userPrompt) const;
 
     bool initializeContext();
     void cleanupContext();

@@ -209,7 +209,7 @@ private:
     // onWorkerModelUnloaded.
     QStringList m_pendingDeletions;
     int  m_effectiveContextSize = 0;
-    bool m_autoLoadModel = false;
+    bool m_autoLoadModel = true;   // load a model when the AI Chat opens (never at app startup)
     bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active
 
     // Retry logic for invalid scripts
