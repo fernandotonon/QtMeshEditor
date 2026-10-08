@@ -360,7 +360,13 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
         for (int tAxis = 0; tAxis < 3; ++tAxis) {
             const int w = tmplAxisToWorld(tAxis);
             double t = j.pos[tAxis];
-            if (flipLength && w == p1) t = 1.0 - t;   // creature faces -length
+            // Reversing the facing is a 180 deg turn about UP, so BOTH
+            // in-plane axes mirror. Flipping only the length axis would keep
+            // "Left" bones on the same side coordinate -- which for a
+            // creature facing the other way is its anatomical RIGHT, so every
+            // left/right label (and any clip that distinguishes them) comes
+            // out swapped.
+            if (flipLength && (w == p1 || w == p0)) t = 1.0 - t;
             world[w] = mn[w] + t * ext[w];
         }
         j.pos = world;

@@ -5338,12 +5338,26 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         }
 
         if (!gotClip) {
-            const QString libPath = MotionLibrary::ensureLibraryBlocking();
-            if (libPath.isEmpty())
-                return makeErrorResult("Error: motion library unavailable (offline or download disabled)");
+            // #1073: an index at/above the creature base addresses the
+            // CREATURE library, which is a separate file with its own
+            // canonical skeleton. Fetching the HUMANOID library first would
+            // reject a perfectly valid creature clip whenever that library is
+            // unavailable (offline, or download disabled), so skip the load
+            // entirely for those indices -- the creature branch below never
+            // touches `lib`.
+            const bool creatureVariant =
+                hasVariant
+                && variantIndex >= AnimationControlController::kCreatureIndexBase;
+
+            QString libPath;
             MotionLibrary lib;
-            if (!lib.loadFromFile(libPath))
-                return makeErrorResult(QString("Error: %1").arg(lib.error()));
+            if (!creatureVariant) {
+                libPath = MotionLibrary::ensureLibraryBlocking();
+                if (libPath.isEmpty())
+                    return makeErrorResult("Error: motion library unavailable (offline or download disabled)");
+                if (!lib.loadFromFile(libPath))
+                    return makeErrorResult(QString("Error: %1").arg(lib.error()));
+            }
             int idx;
             if (hasVariant) {
                 // #1073: indices at/above the creature base address the
