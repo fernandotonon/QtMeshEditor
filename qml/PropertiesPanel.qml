@@ -631,6 +631,35 @@ Rectangle {
                 Component.onCompleted: content = animationModeToolsComponent
             }
 
+            // ---- Retarget animation (#523) ----
+            CollapsibleSection {
+                title: "Retarget"
+                sectionVisible: root.modeToolSectionVisible(
+                    EditorModeController.AnimationMode,
+                    RetargetController.canRetarget)
+                expanded: false
+
+                Component.onCompleted: content = retargetToolsComponent
+            }
+
+            // ---- Procedural generators (#524) ----
+            CollapsibleSection {
+                title: "Generators"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = generatorsComponent
+            }
+
+            // ---- Animation constraints (#525) ----
+            CollapsibleSection {
+                title: "Constraints"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = constraintsComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -1207,8 +1236,14 @@ Rectangle {
             padding: 8
             spacing: 6
 
-            property var animList: VATBakerController.availableAnimations
+            // #522 mode family: the mode picker drives which clips the
+            // Anim picker offers (skeletal clips vs vertex/morph clips).
+            property var modeList: VATBakerController.availableModes
+            property string modeId: modeList.length > 0 ? modeList[0] : "skeletal"
+            property var animList: VATBakerController.animationsForMode(modeId)
             property string animName: animList.length > 0 ? animList[0] : ""
+            property string encoding: "rgba16"
+            property string target: "agnostic"
             property int fps: 30
             property string outputDir: ""
             property string lastResultText: ""
@@ -1225,20 +1260,66 @@ Rectangle {
             // Anim / FPS / Out rows align with each other.
             readonly property int labelWidth: 44
 
+            function refreshAnimList() {
+                animList = VATBakerController.animationsForMode(modeId)
+                if (animList.indexOf(animName) < 0)
+                    animName = animList.length > 0 ? animList[0] : ""
+            }
+            onModeIdChanged: refreshAnimList()
+
             Connections {
                 target: VATBakerController
                 function onAvailableAnimationsChanged() {
-                    animToolsCol.animList = VATBakerController.availableAnimations
-                    if (animToolsCol.animList.indexOf(animToolsCol.animName) < 0) {
-                        animToolsCol.animName = animToolsCol.animList.length > 0
-                            ? animToolsCol.animList[0]
-                            : ""
-                    }
+                    animToolsCol.modeList = VATBakerController.availableModes
+                    if (animToolsCol.modeList.indexOf(animToolsCol.modeId) < 0)
+                        animToolsCol.modeId = animToolsCol.modeList.length > 0
+                            ? animToolsCol.modeList[0] : "skeletal"
+                    animToolsCol.refreshAnimList()
                 }
                 function onBakeFinished(ok, posTex, err) {
                     animToolsCol.lastOk = ok
                     animToolsCol.lastResultText = ok ? "✓ " + posTex : "✗ " + err
                 }
+            }
+
+            // Mode picker (#522): skeletal / rigid / mesh-anim / morph.
+            // Only the modes the selection can actually bake are
+            // listed (a static mesh with morph targets never shows
+            // "Skeletal"), so an impossible combination cannot be
+            // requested from the panel.
+            Row {
+                spacing: 6; width: parent.width - 16
+                visible: animToolsCol.modeList.length > 0
+
+                Text {
+                    text: "Mode:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: vatModeCombo
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: animToolsCol.modeList.map(function(m) { return VATBakerController.modeLabel(m) })
+                    currentIndex: Math.max(0, animToolsCol.modeList.indexOf(animToolsCol.modeId))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < animToolsCol.modeList.length)
+                            animToolsCol.modeId = animToolsCol.modeList[index]
+                    }
+                    enabled: !VATBakerController.isBaking && animToolsCol.modeList.length > 0
+                }
+            }
+            Text {
+                visible: animToolsCol.modeList.length === 0
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Nothing bakeable selected: VAT needs a skeletal clip, a vertex "
+                    + "cache (Alembic) or keyed morph weights on the selected mesh."
             }
 
             // Animation picker — use ThemedComboBox so the dropdown
@@ -1464,6 +1545,53 @@ Rectangle {
                 }
             }
 
+            // Encoding (#522): rgba8 / rgba16 / exr.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Enc:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["RGBA8 PNG (smallest)", "RGBA16 PNG (default)", "EXR float32 (lossless)"]
+                    currentIndex: Math.max(0, VATBakerController.encodingIds.indexOf(animToolsCol.encoding))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.encodingIds.length)
+                            animToolsCol.encoding = VATBakerController.encodingIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
+            // Target engine (#522): recorded in the sidecar; a
+            // non-agnostic target also ships that engine's shader.
+            Row {
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Target:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    width: animToolsCol.labelWidth
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - animToolsCol.labelWidth - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Agnostic", "Unity", "Unreal", "Godot"]
+                    currentIndex: Math.max(0, VATBakerController.targetIds.indexOf(animToolsCol.target))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < VATBakerController.targetIds.length)
+                            animToolsCol.target = VATBakerController.targetIds[index]
+                    }
+                    enabled: !VATBakerController.isBaking
+                }
+            }
+
             // Include-shader master toggle. Off by default — the bake
             // produces all of the data files unconditionally, and the
             // shader templates are an opt-in convenience: copy
@@ -1670,7 +1798,10 @@ Rectangle {
                             animToolsCol.fps,
                             animToolsCol.outputDir,
                             "",
-                            engines)
+                            engines,
+                            animToolsCol.modeId,
+                            animToolsCol.encoding,
+                            animToolsCol.target)
                     }
                 }
             }
@@ -1683,6 +1814,69 @@ Rectangle {
                 font.pixelSize: 10
                 wrapMode: Text.Wrap
                 width: parent.width - 16
+            }
+            // Non-fatal note (e.g. a rigid bake asked for a Unity/Unreal
+            // template that does not exist yet).
+            Text {
+                visible: VATBakerController.lastWarning !== ""
+                text: "⚠ " + VATBakerController.lastWarning
+                color: "#e0c060"
+                font.pixelSize: 10
+                wrapMode: Text.Wrap
+                width: parent.width - 16
+            }
+        }
+    }
+
+    // ---- Retarget Tools (Animation mode, #523) ----
+    Component {
+        id: retargetToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                opacity: 0.8
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                text: "Map a clip from one skeleton onto another (e.g. a Mixamo "
+                    + "animation onto your character): auto bone mapping, manual "
+                    + "overrides, side-by-side preview."
+            }
+
+            Rectangle {
+                id: retargetBtn
+                width: Math.min(parent.width - 16, retargetLabel.implicitWidth + 16)
+                height: 26
+                radius: 3
+                color: retargetMa.containsMouse
+                    ? PropertiesPanelController.highlightColor
+                    : PropertiesPanelController.headerColor
+                border.color: retargetBtn.activeFocus ? PropertiesPanelController.highlightColor
+                                                      : PropertiesPanelController.borderColor
+                activeFocusOnTab: true
+                Accessible.role: Accessible.Button
+                Accessible.name: "Retarget Animation"
+                Keys.onSpacePressed: root.openRetargetDialog()
+                Keys.onReturnPressed: root.openRetargetDialog()
+                Text {
+                    id: retargetLabel
+                    anchors.centerIn: parent
+                    text: "Retarget Animation…"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                MouseArea {
+                    id: retargetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.openRetargetDialog()
+                }
             }
         }
     }
@@ -2357,14 +2551,39 @@ Rectangle {
                     // the simplifier cannot deliver, so it is deliberately
                     // absent — the floor depends on the asset's seams, not on
                     // the request.
-                    model: ["Maximum detail (auto cap)", "Prop Minimal (~500 tris)",
-                            "Prop Tiny (~1k tris)", "Prop Low (~5k tris)",
-                            "Game Low (~10k tris)", "Game Medium (~25k tris)",
-                            "Game High (~50k tris)"]
-                    currentIndex: 5
-                    readonly property var triValues: [0, 500, 1000, 5000, 10000, 25000, 50000]
-                    property int triValue: triValues[currentIndex]
+                    //
+                    // The entries come from GameReadyPresets.h (via the
+                    // controller) so this picker, `qtmesh generate3d
+                    // --list-game-presets` and MCP `game_preset` agree. The
+                    // Roblox entries are PLATFORM presets: a hard triangle
+                    // ceiling (4k accessory / 20k MeshPart — Roblox rejects
+                    // the upload past it, so the pass guarantees the count)
+                    // plus Roblox's 1024 px texture cap, which snaps the
+                    // Texture picker below.
+                    readonly property var presets: MeshGenController.gameReadyPresets()
+                    model: presets.map(function(p) { return p.label })
+                    currentIndex: MeshGenController.gameReadyDefaultIndex()
+                    readonly property var preset: presets[currentIndex]
+                    property string presetId: preset ? preset.id : ""
+                    property int triValue: preset ? preset.tris : 0
+                    property int maxTexture: preset ? preset.maxTexture : 0
+                    property string presetNote: preset ? preset.note : ""
+                    onCurrentIndexChanged: {
+                        // typeof guard: this can fire while the section is
+                        // still instantiating, before the Texture picker exists.
+                        if (maxTexture > 0 && typeof mgT2Tex !== "undefined")
+                            mgT2Tex.clampTo(maxTexture)
+                    }
                 }
+            }
+            Text {
+                // Platform-limit hint (Roblox presets only).
+                visible: mgT2Mesh.maxTexture > 0
+                text: "  " + mgT2Mesh.presetNote
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
             }
             Row {
                 spacing: 6
@@ -2391,6 +2610,18 @@ Rectangle {
                     currentIndex: 5
                     readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
                     property int sizeValue: sizeValues[currentIndex]
+                    // A platform preset (Roblox: 1024 px) caps the bake size:
+                    // snap to the largest entry within the cap, and keep it
+                    // there while the preset is active (the controller clamps
+                    // too, so this is feedback, not the only guard).
+                    function clampTo(maxPx) {
+                        if (sizeValue <= maxPx) return
+                        var best = 0
+                        for (var i = 0; i < sizeValues.length; ++i)
+                            if (sizeValues[i] <= maxPx) best = i
+                        currentIndex = best
+                    }
+                    onCurrentIndexChanged: if (mgT2Mesh.maxTexture > 0) clampTo(mgT2Mesh.maxTexture)
                 }
             }
             Row {
@@ -2630,7 +2861,11 @@ Rectangle {
                         "upscale_texture": mgUpscale.checked && buildBake,
                         "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
-                        "target_tris": mgT2Mesh.triValue
+                        // The preset id carries the strict-ceiling + texture
+                        // cap of the Roblox entries; target_tris stays for
+                        // the plain budgets (and older callers).
+                        "target_tris": mgT2Mesh.triValue,
+                        "game_preset": mgT2Mesh.presetId
                     }
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue
@@ -10622,6 +10857,27 @@ Rectangle {
                 console.warn("IsometricSpritesDialog failed to load")
         }
     }
+    Loader {
+        id: retargetLoader
+        active: false
+        anchors.centerIn: parent
+        source: "qrc:/MaterialEditorQML/RetargetAnimationDialog.qml"
+        onLoaded: if (item && item.open) item.open()
+        onStatusChanged: {
+            if (status === Loader.Error)
+                console.warn("RetargetAnimationDialog failed to load")
+        }
+    }
+    function openRetargetDialog() {
+        if (!retargetLoader.active) {
+            retargetLoader.active = true
+        } else if (retargetLoader.item) {
+            retargetLoader.item.open()
+        } else if (retargetLoader.status === Loader.Error) {
+            retargetLoader.active = false
+            retargetLoader.active = true
+        }
+    }
     function openIsometricSpritesDialog() {
         if (!isometricSpritesLoader.active) {
             isometricSpritesLoader.active = true
@@ -11264,6 +11520,26 @@ Rectangle {
         }
     }
 
+    // ---- Procedural generators content (#524) ----
+    Component {
+        id: generatorsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/GeneratorsPanel.qml"
+        }
+    }
+
+    // ---- Animation constraints content (#525) ----
+    Component {
+        id: constraintsComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/ConstraintsPanel.qml"
+        }
+    }
+
     // ---- Pose Library Content (#521, own group) ----
     Component {
         id: poseLibraryComponent
@@ -11337,6 +11613,13 @@ Rectangle {
                 target: NodeAnimationManager
                 function onClipsChanged() { refreshAnimData() }
                 function onEditingClipChanged() { refreshAnimData() }
+            }
+            // Procedural generators (#524) write into clips — a node clip they
+            // create (default "Generators") or the morph weight clip — so the
+            // list must follow every add / edit / bake / remove.
+            Connections {
+                target: AnimGeneratorManager
+                function onGeneratorsChanged() { refreshAnimData() }
             }
             // #838: the animation picker applied a clip. Handle it HERE (in the
             // animation component scope) so lastGeneratedAnim / setArmSpaceTarget

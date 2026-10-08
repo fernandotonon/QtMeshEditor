@@ -90,6 +90,10 @@ public:
     static int cmdFix(int argc, char* argv[]);
     static int cmdConvert(int argc, char* argv[]);
     static int cmdAnim(int argc, char* argv[]);
+    // #523: retarget clips from one skeleton onto an incompatible one.
+    static int cmdAnimRetarget(int argc, char* argv[]);
+    static int cmdAnimGenerators(int argc, char* argv[]);
+    static int cmdAnimConstraints(int argc, char* argv[]);
     // #411 text-to-motion (template-clip MVP): prompt → library clip → retarget.
     static int cmdAnimGenerate(const QString& filePath, const QString& prompt,
                                float duration, const QString& outputPath,

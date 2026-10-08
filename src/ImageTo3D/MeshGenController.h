@@ -106,6 +106,15 @@ public:
     Q_INVOKABLE bool trellis2Available() const;
     Q_INVOKABLE QString trellis2RuntimeHint() const;
 
+    // ── Game-ready presets (GameReadyPresets.h) ─────────────────────────────
+    // The Inspector "Mesh" picker is built from this list so it shows the
+    // SAME entries as `qtmesh generate3d --list-game-presets` and the MCP
+    // `game_preset` enum. Each entry: {id, label, tris, strict, maxTexture,
+    // note}. generateSelected() accepts the chosen id as options["game_preset"]
+    // and applies the budget + the platform texture cap itself.
+    Q_INVOKABLE QVariantList gameReadyPresets() const;
+    Q_INVOKABLE int gameReadyDefaultIndex() const;
+
     // ── Prompt-to-3D: generate the source image from a TEXT PROMPT instead
     // of importing one (FLUX.2-klein-4B via stable-diffusion.cpp; falls back
     // to whatever SD checkpoint the user has). generateSourceImage is async —

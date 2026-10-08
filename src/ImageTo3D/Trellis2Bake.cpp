@@ -974,6 +974,40 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
                 pos.size() / 3, sizeof(float) * 3, targetIndexCount,
                 std::numeric_limits<float>::max(), &resultError);
         }
+        // Platform presets (Roblox 4k / 20k) promise a CEILING, not a
+        // budget: a count anywhere above the target is an upload the
+        // platform rejects, so the 2x tolerance above does not apply. The
+        // sloppy simplifier does not lock border edges and reaches any
+        // target; the detail lost comes back through the normal bake.
+        if (opts.strictTriangleBudget && newCount > targetIndexCount) {
+            std::vector<uint32_t> strictIdx(idx.size());
+            float strictError = 0.0f;
+            const size_t strictCount = meshopt_simplifySloppy(
+                strictIdx.data(), idx.data(), idx.size(), pos.data(),
+                pos.size() / 3, sizeof(float) * 3, targetIndexCount,
+                std::numeric_limits<float>::max(), &strictError);
+            // The sloppy simplifier is a vertex-clustering grid whose count
+            // is not monotonic in grid size: on a mesh made of separate
+            // pieces it can jump from "over budget" straight to nothing.
+            // Neither outcome honours the ceiling — an empty mesh is no
+            // asset, and the over-budget QEM mesh is one the platform will
+            // reject — so a strict pass that cannot land under the target
+            // FAILS rather than returning ok with a count the preset
+            // promised not to exceed (review finding on #1075).
+            if (strictCount == 0 || strictCount > targetIndexCount) {
+                r.error = QStringLiteral(
+                    "strict triangle budget of %1 is unreachable: the "
+                    "topology-preserving simplifier stalled at %2 triangles "
+                    "and the clustering fallback collapsed the mesh entirely "
+                    "(disconnected pieces?) — choose a higher budget, or a "
+                    "non-strict tier and decimate the parts separately.")
+                    .arg(opts.targetTriangles).arg(newCount / 3);
+                return r;
+            }
+            simplified.swap(strictIdx);
+            newCount = strictCount;
+            resultError = strictError;
+        }
         simplified.resize(newCount);
         idx.swap(simplified);
         r.simplifyError = resultError;

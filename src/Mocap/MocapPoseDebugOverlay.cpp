@@ -200,20 +200,23 @@ void MocapPoseDebugOverlay::update(const BodyLiveFrame& body, float entityHeight
         (entityHeightLocal > 1e-3f ? entityHeightLocal : 1.8f) / skelH;
 
     auto visible = [&](int lm) {
-        return body.visibility[static_cast<size_t>(lm)] >= 0.2f;
+        const auto& p = canon[static_cast<size_t>(lm)];
+        return body.visibility[static_cast<size_t>(lm)] >= 0.3f
+            && std::isfinite(p[0]) && std::isfinite(p[1]) && std::isfinite(p[2]);
     };
 
     std::vector<std::pair<Vec3, Vec3>> lmLines;
     lmLines.reserve(std::size(kLmEdges));
     for (const auto& e : kLmEdges)
-        lmLines.emplace_back(canonLm(canon, e[0]), canonLm(canon, e[1]));
+        if (visible(e[0]) && visible(e[1]))
+            lmLines.emplace_back(canonLm(canon, e[0]), canonLm(canon, e[1]));
 
     std::array<Vec3, PoseIK::kCanonicalRoles> joints{};
     MocapPoseIkFk::fkPoseIkJoints(body.quats, body.resolvedMask, canon, joints);
 
     std::vector<std::pair<Vec3, Vec3>> ikLines;
     for (int role = 0; role < PoseIK::kCanonicalRoles; ++role) {
-        const int parent = MotionInbetween::canonicalParentOf(role);
+        const int parent = MocapPoseIkFk::effectiveParentRole(role, body.resolvedMask);
         if (parent < 0)
             continue;
         if (!(body.resolvedMask & (1u << static_cast<unsigned>(role)))

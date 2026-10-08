@@ -67,10 +67,15 @@ void writeAttr(QByteArray& buf,
 // Order matters: EXR reads back the channels in the order they appear, and
 // the convention for RGB is alphabetical (B, G, R). We write B then G then R
 // to match what every EXR-reading tool expects to find.
-QByteArray buildChannelListBGR_F32() {
+// Channel list in EXR's required alphabetical order. 3 channels → B,G,R;
+// 4 channels → A,B,G,R (alpha sorts first).
+QByteArray buildChannelListF32(int channels) {
     QByteArray out;
-    const char* names[3] = { "B", "G", "R" };
-    for (const char* n : names) {
+    const char* names3[3] = { "B", "G", "R" };
+    const char* names4[4] = { "A", "B", "G", "R" };
+    const char** names = (channels == 4) ? names4 : names3;
+    for (int ci = 0; ci < channels; ++ci) {
+        const char* n = names[ci];
         writeCStr(out, n);
         writeU32LE(out, 2u);   // FLOAT
         out.append('\0');      // pLinear = 0
@@ -119,14 +124,22 @@ QByteArray buildU8(uint8_t v) {
 
 } // namespace
 
-bool writeRGB32F(const QString& path,
-                 int width,
-                 int height,
-                 const std::vector<float>& rgbData)
+namespace {
+
+// Shared writer: `channels` is 3 (interleaved RGB) or 4 (interleaved
+// RGBA). Scanlines are emitted channel-planar in the declared
+// (alphabetical) channel order, as the EXR scanline format requires.
+bool writeF32Impl(const QString& path,
+                  int width,
+                  int height,
+                  int channels,
+                  const std::vector<float>& rgbData)
 {
     if (width <= 0 || height <= 0) return false;
+    if (channels != 3 && channels != 4) return false;
     const size_t expected = static_cast<size_t>(width)
-                          * static_cast<size_t>(height) * 3u;
+                          * static_cast<size_t>(height)
+                          * static_cast<size_t>(channels);
     if (rgbData.size() != expected) return false;
 
     // ── Header ────────────────────────────────────────────────────────
@@ -137,7 +150,7 @@ bool writeRGB32F(const QString& path,
 
     // Attributes — name\0 type\0 size payload, terminated by a single NUL.
     writeAttr(header, "channels",            "chlist",
-              buildChannelListBGR_F32());
+              buildChannelListF32(channels));
     writeAttr(header, "compression",         "compression",
               buildU8(0));                              // NO_COMPRESSION
     writeAttr(header, "dataWindow",          "box2i",
@@ -164,7 +177,7 @@ bool writeRGB32F(const QString& path,
     // Each scanline payload = 4 (y) + 4 (size) + (width × 3 channels ×
     // 4 bytes/float) = 8 + width × 12.
     const uint64_t scanlinePayloadSize = 8u
-        + static_cast<uint64_t>(width) * 3u * 4u;
+        + static_cast<uint64_t>(width) * static_cast<uint64_t>(channels) * 4u;
     const uint64_t offsetTableSize = static_cast<uint64_t>(height) * 8u;
     const uint64_t firstScanlineOffset =
         static_cast<uint64_t>(header.size()) + offsetTableSize;
@@ -185,20 +198,24 @@ bool writeRGB32F(const QString& path,
     pixels.reserve(static_cast<int>(
         static_cast<uint64_t>(height) * scanlinePayloadSize));
     const uint32_t pixelDataSize =
-        static_cast<uint32_t>(width) * 3u * 4u;
+        static_cast<uint32_t>(width) * static_cast<uint32_t>(channels) * 4u;
 
     for (int y = 0; y < height; ++y) {
         writeI32LE(pixels, y);
         writeU32LE(pixels, pixelDataSize);
-        // Row pointer into the caller's interleaved RGB buffer.
+        // Row pointer into the caller's interleaved RGB(A) buffer.
+        const size_t c = static_cast<size_t>(channels);
         const float* row = rgbData.data()
-            + static_cast<size_t>(y) * static_cast<size_t>(width) * 3u;
+            + static_cast<size_t>(y) * static_cast<size_t>(width) * c;
+        // A channel first (alphabetical order) when present.
+        if (channels == 4)
+            for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 3]);
         // B channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * 3 + 2]);
+        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 2]);
         // G channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * 3 + 1]);
+        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 1]);
         // R channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * 3 + 0]);
+        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 0]);
     }
 
     // ── Write to disk in one shot ────────────────────────────────────
@@ -209,6 +226,24 @@ bool writeRGB32F(const QString& path,
     if (out.write(pixels) != pixels.size()) return false;
     out.close();
     return out.error() == QFile::NoError;
+}
+
+} // namespace
+
+bool writeRGB32F(const QString& path,
+                 int width,
+                 int height,
+                 const std::vector<float>& rgbData)
+{
+    return writeF32Impl(path, width, height, 3, rgbData);
+}
+
+bool writeRGBA32F(const QString& path,
+                  int width,
+                  int height,
+                  const std::vector<float>& rgbaData)
+{
+    return writeF32Impl(path, width, height, 4, rgbaData);
 }
 
 } // namespace MinimalEXR

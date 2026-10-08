@@ -240,6 +240,7 @@ private:
     bool                                    mWeightPaintDragActive = false;
     /// Lattice deformer: a control-point drag owns the mouse (LatticeController).
     bool                                    mLatticeDragActive = false;
+    bool                                    mGeneratorPathDragActive = false;
     /// Lattice deformer: a press that missed every point is a rubber-band box select.
     bool                                    mLatticeBoxActive = false;
     bool                                    mTexturePaintDragActive = false;

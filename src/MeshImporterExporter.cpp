@@ -85,6 +85,8 @@ THE SOFTWARE.
 #include "Assimp/MaterialProcessor.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
@@ -2776,6 +2778,95 @@ static void loadScenePoseLibrarySidecar(
     lib->loadSceneLibraries(nodesToEntities, sidecarPath);
 }
 
+// Procedural animation generators (#524). The motion itself is already in the
+// exported tracks (generators are materialised into them); the sidecar keeps
+// the GENERATORS + their base snapshots so they stay editable / mutable after
+// a reload. Single-entity export keeps only the generators aimed at that
+// entity or its node and records both names, so a re-import under a new name
+// can rebind them.
+static void writeGeneratorSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty()) return;
+    AnimGeneratorManager* gm = AnimGeneratorManager::peek();
+    if (!gm) {
+        QFile::remove(AnimGeneratorManager::sidecarPath(meshPath));
+        return;
+    }
+    QStringList objects;
+    QJsonObject meta;
+    if (en) {
+        objects << QString::fromStdString(en->getName());
+        meta[QStringLiteral("entity")] = objects.front();
+        if (const Ogre::SceneNode* sn = en->getParentSceneNode()) {
+            objects << QString::fromStdString(sn->getName());
+            meta[QStringLiteral("node")] = objects.back();
+        }
+        // Lights/materials the entity uses travel with it.
+        for (unsigned i = 0; i < en->getNumSubEntities(); ++i)
+            objects << QString::fromStdString(en->getSubEntity(i)->getMaterialName());
+    }
+    gm->writeSidecar(meshPath, en ? objects : QStringList{}, meta);
+}
+
+static void loadGeneratorSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !QFileInfo::exists(AnimGeneratorManager::sidecarPath(meshPath))) return;
+    QHash<QString, QString> rename;
+    if (en) {
+        const QJsonObject meta = AnimGeneratorManager::sidecarMeta(meshPath);
+        const QString oldEntity = meta.value(QStringLiteral("entity")).toString();
+        const QString oldNode = meta.value(QStringLiteral("node")).toString();
+        if (!oldEntity.isEmpty()) rename.insert(oldEntity, QString::fromStdString(en->getName()));
+        if (!oldNode.isEmpty() && en->getParentSceneNode())
+            rename.insert(oldNode, QString::fromStdString(en->getParentSceneNode()->getName()));
+    }
+    QString err;
+    if (AnimGeneratorManager::instance()->loadSidecar(meshPath, rename, &err) < 0)
+        Ogre::LogManager::getSingleton().logWarning("Generator sidecar load failed: " + err.toStdString());
+}
+
+// Animation constraints (#525). glTF/FBX cannot store constraints, so they
+// live in a `<file>.constraints.json` sidecar (export offers to bake them
+// first). Single-entity export keeps the constraints OWNED by that entity or
+// its node and records both names so a renamed re-import can rebind them.
+static void writeConstraintSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty()) return;
+    ConstraintManager* cm = ConstraintManager::peek();
+    if (!cm) {
+        QFile::remove(ConstraintManager::sidecarPath(meshPath));
+        return;
+    }
+    QStringList objects;
+    QJsonObject meta;
+    if (en) {
+        objects << QString::fromStdString(en->getName());
+        meta[QStringLiteral("entity")] = objects.front();
+        if (const Ogre::SceneNode* sn = en->getParentSceneNode()) {
+            objects << QString::fromStdString(sn->getName());
+            meta[QStringLiteral("node")] = objects.back();
+        }
+    }
+    cm->writeSidecar(meshPath, en ? objects : QStringList{}, meta);
+}
+
+static void loadConstraintSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !QFileInfo::exists(ConstraintManager::sidecarPath(meshPath))) return;
+    QHash<QString, QString> rename;
+    if (en) {
+        const QJsonObject meta = ConstraintManager::sidecarMeta(meshPath);
+        const QString oldEntity = meta.value(QStringLiteral("entity")).toString();
+        const QString oldNode = meta.value(QStringLiteral("node")).toString();
+        if (!oldEntity.isEmpty()) rename.insert(oldEntity, QString::fromStdString(en->getName()));
+        if (!oldNode.isEmpty() && en->getParentSceneNode())
+            rename.insert(oldNode, QString::fromStdString(en->getParentSceneNode()->getName()));
+    }
+    QString err;
+    if (ConstraintManager::instance()->loadSidecar(meshPath, rename, &err) < 0)
+        Ogre::LogManager::getSingleton().logWarning("Constraint sidecar load failed: " + err.toStdString());
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -3364,6 +3455,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // applying a pose writes to the skeleton. Loading only stores
             // data against the pointer, but the API is shared.
             loadPoseLibrarySidecar(file.filePath(), const_cast<Ogre::Entity*>(en));
+            // Procedural generators (#524) — after the poses and node clips
+            // they may target exist.
+            loadGeneratorSidecar(file.filePath(), en);
+            loadConstraintSidecar(file.filePath(), en);
 
             // If a node-transform clip was reconstructed for this node, select
             // the entity so the Inspector Animations list + dope sheet populate
@@ -4009,6 +4104,8 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // Pose libraries have no representation in any mesh format —
         // persist them beside the asset so they survive save/reopen (#521).
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
         // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
@@ -4028,6 +4125,8 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // Pose libraries have no representation in any mesh format —
         // persist them beside the asset so they survive save/reopen (#521).
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4526,6 +4625,8 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // (#521). The .mesh / FBX branches above return before here and
         // write their own; this covers the Assimp-backed formats.
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeGeneratorSidecar(_uri, e);
+        writeConstraintSidecar(_uri, e);
     }
 
     return 0;
@@ -5227,6 +5328,8 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
                                            entityPair);
             }
             writeScenePoseLibrarySidecar(_uri, nodesToEntities);
+            writeGeneratorSidecar(_uri, nullptr);
+            writeConstraintSidecar(_uri, nullptr);
         }
 
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
@@ -5672,6 +5775,8 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
         // library, so this is what makes Save Scene / Open Scene keep
         // them. Missing sidecar returns -1 and is a silent no-op.
         loadScenePoseLibrarySidecar(_uri, sceneNodeEntities);
+        loadGeneratorSidecar(_uri, nullptr);
+        loadConstraintSidecar(_uri, nullptr);
 
         return true;
     } catch (Ogre::Exception& e) {

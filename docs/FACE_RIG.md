@@ -78,6 +78,21 @@ ArkitTemplate  (ICT-FaceKit neutral + 52 expression deltas, one topology)
 
 ## Quality & limits
 
+**Orientation is solved, not assumed.** The head can face any direction:
+the fit derives the template→head rotation from the landmark anchors
+(auto-detected or your markers) with a Horn similarity fit, fits in the
+template's frame, and rotates the resulting blendshape deltas back. A
+head that faces −Z (common for glTF exports), +X, or is pitched/rolled
+rigs the same as one facing +Z. When detection finds no anchors but still
+ranked a facing view, that face direction alone turns the head into place
+(yaw and pitch; a head ROLLED about the view axis needs anchors or markers).
+The CLI/MCP report says which path ran (`orientation_source`:
+`anchors` | `face_dir` | `none`, plus `orientation_angle_deg`).
+Only with no detector at all does the old "faces +Z" assumption remain —
+place markers in that case. (Earlier builds draped the template over the
+back of the skull for any head not facing +Z, markers included, because
+the anchor-quality gate and the left/right marker check ignored rotation.)
+
 - **Humanoid faces only.** The fit residual is a gate: a non-face mesh fits
   poorly and is **rejected** (`--max-residual`, default 8% of the mesh
   diagonal), rather than emitting garbage shapes. This mirrors the
@@ -86,8 +101,8 @@ ArkitTemplate  (ICT-FaceKit neutral + 52 expression deltas, one topology)
   fit **mean 0.008% / max 0.61%** of the diagonal; **51 shapes** attached;
   jawOpen drops the lower face while the forehead stays still; mouthSmile /
   eyeBlink / browInnerUp localise to their regions.
-- **Orientation:** the mesh should be roughly upright, +Y up, facing the
-  template's orientation. A wildly rotated head may fit poorly.
+- **Orientation:** solved from the anchors (see above); only a head with
+  neither a detectable face nor markers still relies on facing +Z, +Y up.
 - **glTF export** carries the morph-target geometry on the primitive; per-target
   *names* in glTF `extras.targetNames` are a follow-up (the in-editor targets
   and the mocap hand-off use the correct names regardless).

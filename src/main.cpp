@@ -45,6 +45,7 @@
 #include "updater/UpdaterController.h"
 #include "updater/UpdaterTelemetry.h"
 #endif
+#include "NativeMessageBoxGuard.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -300,6 +301,13 @@ int main(int argc, char *argv[])
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
 
     QApplication a(argc, argv);
+
+#ifdef Q_OS_MACOS
+    // A native QMessageBox (NSAlert) crashes on macOS 27 — see
+    // NativeMessageBoxGuard.h. Route every message box through Qt's widget
+    // implementation; native file/colour dialogs are unaffected.
+    NativeMessageBoxGuard::install(&a);
+#endif
 
     OnnxRuntimeSettings::prepareRuntimeEnvironment();
     (void)OnnxRuntimeSettings::instance();

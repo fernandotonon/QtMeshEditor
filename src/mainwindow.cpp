@@ -150,6 +150,9 @@
 #include "VATBakerController.h"
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
+#include "RetargetController.h"
+#include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
@@ -890,6 +893,9 @@ MainWindow::~MainWindow()
         LightGroupController::kill();
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
+        RetargetController::kill();
+        AnimGeneratorManager::kill();
+        ConstraintManager::kill();
         MeshGenController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
@@ -1257,6 +1263,18 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<VATBakerController>("PropertiesPanel", 1, 0, "VATBakerController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return VATBakerController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<RetargetController>("PropertiesPanel", 1, 0, "RetargetController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return RetargetController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AnimGeneratorManager>("PropertiesPanel", 1, 0, "AnimGeneratorManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AnimGeneratorManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<ConstraintManager>("PropertiesPanel", 1, 0, "ConstraintManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return ConstraintManager::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<IsometricSpritesController>("PropertiesPanel", 1, 0, "IsometricSpritesController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -5043,6 +5061,13 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     if (auto* poseLib = PoseLibrary::instance())
         poseLib->tickBlend(static_cast<float>(dt));
 
+    // Procedural generators (#524): advance the generator clock and drive the
+    // runtime targets (pose weight / light / material). Track-backed targets
+    // are materialised into their clips and play with them, so they need
+    // nothing here. Paused, the clock follows the timeline slider.
+    if (auto* gens = AnimGeneratorManager::peek())
+        gens->tick(scaledDt, isPlaying);
+
     // Advance SceneManager-level animation states — the NodeAnimationManager's
     // transform clips (animated props/doors, #517 slice C) live here. They now
     // play from the MAIN transport like skeletal/vertex clips: setPlaying()
@@ -5913,9 +5938,48 @@ void MainWindow::on_actionOpen_Scene_triggered()
 // LCOV_EXCL_STOP
 
 // LCOV_EXCL_START — opens QFileDialog
+// #525: glTF/FBX cannot store constraints. Before an export with live
+// constraints, offer to bake them into keyframes so the exported clip moves
+// the way the viewport does. Returns false when the user cancels the export.
+static bool offerConstraintBakeBeforeExport(QWidget* parent)
+{
+    ConstraintManager* cm = ConstraintManager::peek();
+    if (!cm || cm->activeCount() == 0) return true;
+    QMessageBox box(parent);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QObject::tr("Animation Constraints"));
+    box.setText(QObject::tr("%n active constraint(s) drive this scene. Exported files cannot store constraints.", "",
+                            cm->activeCount()));
+    box.setInformativeText(QObject::tr("Bake them into keyframes first? (Without baking, the motion they add is not "
+                                       "in the export; the constraints are kept in a .constraints.json sidecar.)"));
+    QPushButton* bake = box.addButton(QObject::tr("Bake && Export"), QMessageBox::AcceptRole);
+    QPushButton* skip = box.addButton(QObject::tr("Export without baking"), QMessageBox::DestructiveRole);
+    box.addButton(QMessageBox::Cancel);
+    box.setDefaultButton(bake);
+    box.exec();
+    if (box.clickedButton() == bake) {
+        SentryReporter::addBreadcrumb("ui.action", "Export: bake constraints");
+        const ConstraintManager::Result r = cm->bake(ConstraintManager::BakeOptions{});
+        if (!r.ok) {
+            // The user asked for the motion in the file; exporting without it
+            // would silently drop it.
+            QMessageBox::warning(parent, QObject::tr("Animation Constraints"),
+                                 QObject::tr("Could not bake the constraints, so the export was cancelled:\n%1").arg(r.error));
+            return false;
+        }
+        return true;
+    }
+    if (box.clickedButton() == skip) {
+        SentryReporter::addBreadcrumb("ui.action", "Export: keep constraints unbaked");
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::on_actionSave_Scene_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Save scene file");
+    if (!offerConstraintBakeBeforeExport(this)) return;
 
     QString fileName = QFileDialog::getSaveFileName(this, tr("Save Scene"),
                                                     "scene.scene.glb",
@@ -5975,6 +6039,7 @@ void MainWindow::on_actionSave_Scene_triggered()
 void MainWindow::on_actionExport_Selected_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
+    if (!offerConstraintBakeBeforeExport(this)) return;
     QElapsedTimer exportTimer;
     exportTimer.start();
     SentryReporter::captureFileWorkflowEvent(

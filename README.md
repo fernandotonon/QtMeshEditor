@@ -30,7 +30,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.43.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.48.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 
@@ -48,10 +48,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.43.0
+        uses: fernandotonon/QtMeshEditor@3.48.0
         with:
           command: scan
-          image-tag: "3.43.0"
+          image-tag: "3.48.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -76,37 +76,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.43.0
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.43.0"
+    image-tag: "3.48.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.43.0
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.43.0"
+    image-tag: "3.48.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.43.0
+- uses: fernandotonon/QtMeshEditor@3.48.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.43.0"
+    image-tag: "3.48.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.43.0
+- uses: fernandotonon/QtMeshEditor@3.48.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.43.0"
+    image-tag: "3.48.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 # The image is multi-arch (linux/amd64 + linux/arm64), so it runs natively on
@@ -202,6 +202,24 @@ qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / mac
 qtmesh lipsync take.wav --mesh head.glb -o spoken.glb        # audio -> ARKit weight animation
 qtmesh lipsync take.wav --mesh head.glb --fps 60 --clip Speech -o out.glb
 qtmesh lipsync take.wav --mesh head.glb --emotion joy=0.6 -o out.glb
+
+# Retarget a clip onto a different skeleton (auto bone map, or a bundled / .bonemap map)
+qtmesh anim mixamo_walk.fbx --retarget hero.glb --bonemap mixamo_to_unity --anim Walk -o hero_walking.glb
+
+# Procedural generators: drive a property from a formula, add it on top of the animation, bake when done
+qtmesh anim hero.fbx --generator sine --target "bone:*/mixamorig:Spine/rotation.z@Idle" --amplitude 8 --frequency 0.5 -o breathing.glb
+qtmesh anim drone.glb --generator follow-path --target "node:*/position" --points "0,2,0;4,2,0;4,2,4;0,2,4" --closed true --orient true \
+                      --generator noise --target "node:*/position.y" --amplitude 0.1 --noise-frequency 3 --bake -o patrol.glb
+# Constraints: IK a hand onto a prop, clamp the elbow, bake into the clip
+qtmesh anim hero.fbx --constraint ik --owner "bone:*/mixamorig:LeftHand" --target "node:Cup" \
+                     --constraint limit-rotation --owner "bone:*/mixamorig:LeftForeArm" --max-y 10 \
+                     --bake-constraints --animation Idle -o hero_cup.glb
+
+# Vertex Animation Textures (OpenVAT) — four modes, one baker
+qtmesh vat character.fbx --anim Walk --fps 30 -o walk_vat/            # skeletal: per-vertex positions + normals (Godot/Unity/Unreal shaders in tools/vat-shaders/)
+qtmesh vat pieces.fbx --anim Explode --mode rigid --target godot -o out/  # rigid-body: one quaternion + pivot per submesh chunk (destruction / mechanical), ships openvat_rigid.gdshader
+qtmesh vat cache.abc --mode mesh-anim --anim Cache -o out/              # vertex cache (Alembic / VAT_POSE clip)
+qtmesh vat face.glb --mode morph --encoding exr -o out/                # keyed morph weights (default clip "MorphAnim"), float32 EXR; --encoding rgba8|rgba16|exr
 ```
 
 ---

@@ -7288,3 +7288,73 @@ TEST_F(MCPServerTest, ApplyPoseMasked_NonStringBoneRejected)
     EXPECT_TRUE(isError(r));
     EXPECT_TRUE(getResultText(r).contains("bones"));
 }
+
+// ── generate_mesh_from_image: game_preset validation ────────────────────────
+// Argument validation runs BEFORE any model/runtime probe, so these cases
+// need no ONNX build, no downloaded model and no GPU — only a real PNG so
+// the image gate is satisfied first.
+
+TEST_F(MCPServerTest, GenerateMeshFromImage_GamePresetIsValidatedBeforeAnyRuntime)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString png = dir.filePath("subject.png");
+    QImage img(32, 32, QImage::Format_RGBA8888);
+    img.fill(Qt::red);
+    ASSERT_TRUE(img.save(png));
+
+    QJsonObject bad;
+    bad["image_path"] = png;
+    bad["game_preset"] = "ultra";
+    QJsonObject r1 = server->callTool("generate_mesh_from_image", bad);
+    EXPECT_TRUE(isError(r1));
+    EXPECT_TRUE(getResultText(r1).contains("game_preset")) << getResultText(r1).toStdString();
+    EXPECT_TRUE(getResultText(r1).contains("roblox-meshpart")) << "the listing names the valid ids";
+
+    // An unknown preset is rejected BEFORE the prompt-image phase, which can
+    // take minutes (review finding) — no image_path, prompt only.
+    QJsonObject promptOnly;
+    promptOnly["prompt"] = "a goblin";
+    promptOnly["game_preset"] = "ultra";
+    QJsonObject r2 = server->callTool("generate_mesh_from_image", promptOnly);
+    EXPECT_TRUE(isError(r2));
+    EXPECT_TRUE(getResultText(r2).contains("game_preset")) << getResultText(r2).toStdString();
+
+    // A preset plus explicit overrides is VALID (custom values in range win);
+    // whatever fails next is the runtime/model, never the argument check.
+    QJsonObject both;
+    both["image_path"] = png;
+    both["game_preset"] = "roblox-accessory";
+    both["target_tris"] = 5000;
+    both["texture_size"] = 2048;
+    QJsonObject r3 = server->callTool("generate_mesh_from_image", both);
+    EXPECT_FALSE(getResultText(r3).contains("game_preset")) << getResultText(r3).toStdString();
+    EXPECT_FALSE(getResultText(r3).contains("not both")) << getResultText(r3).toStdString();
+    // Out-of-range custom values are still rejected with a preset present.
+    both["texture_size"] = 32;
+    QJsonObject r4 = server->callTool("generate_mesh_from_image", both);
+    EXPECT_TRUE(isError(r4));
+    EXPECT_TRUE(getResultText(r4).contains("texture_size")) << getResultText(r4).toStdString();
+}
+
+TEST_F(MCPServerTest, GenerateMeshFromImage_SchemaAdvertisesGamePresetEnum)
+{
+    const QJsonArray tools = server->buildToolsList();
+    bool found = false;
+    for (const QJsonValue& t : tools) {
+        const QJsonObject tool = t.toObject();
+        if (tool["name"].toString() != "generate_mesh_from_image") continue;
+        found = true;
+        const QJsonObject props = tool["inputSchema"].toObject()["properties"].toObject();
+        ASSERT_TRUE(props.contains("game_preset"));
+        const QJsonArray e = props["game_preset"].toObject()["enum"].toArray();
+        QStringList ids;
+        for (const QJsonValue& v : e) ids << v.toString();
+        EXPECT_TRUE(ids.contains("roblox-accessory")) << ids.join(",").toStdString();
+        EXPECT_TRUE(ids.contains("roblox-meshpart")) << ids.join(",").toStdString();
+        EXPECT_TRUE(ids.contains("medium"));
+    }
+    // buildToolsList() registers the tool unconditionally (the TRELLIS
+    // backends need no ONNX), so a missing entry is a regression.
+    EXPECT_TRUE(found) << "generate_mesh_from_image is not advertised";
+}

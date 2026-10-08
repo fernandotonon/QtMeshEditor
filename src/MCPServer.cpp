@@ -6,6 +6,8 @@
 #include <QImageReader>
 #include "MeshWeldOps.h"
 #include "commands/WeldVerticesCommand.h"
+#include "commands/RetargetAnimationCommand.h"
+#include "AnimationRetargeter.h"
 #include "mainwindow.h"
 #include "GamificationManager.h"
 #include "Manager.h"
@@ -16,6 +18,7 @@
 #include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
 #include "VATBaker.h"
+#include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
 #ifdef ENABLE_MOCAP
@@ -25,12 +28,16 @@
 #include "Mocap/OneEuroFilter.h"
 #include "Mocap/PoseCapPredictor.h"
 #include "Mocap/PoseIKSolver.h"
+#include "Mocap/BodyPoseStream.h"
 #include "Mocap/VideoFrameSource.h"
 #include "commands/RecordMocapClipCommand.h"
 #include "Mocap/MocapController.h"
 #endif
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "AnimGeneratorManager.h"
+#include "ConstraintManager.h"
+#include "AnimGenerators.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -40,6 +47,7 @@
 #include "PaintChannel.h"
 #include "TexturePaintController.h"
 #include "AppStorage.h"
+#include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -778,6 +786,18 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("weld_vertices"), &MCPServer::toolWeldVertices},
         {QStringLiteral("generate_isometric_sprites"), &MCPServer::toolGenerateIsometricSprites},
         {QStringLiteral("bake_vat"), &MCPServer::toolBakeVat},
+        {QStringLiteral("retarget_animation"), &MCPServer::toolRetargetAnimation},
+        {QStringLiteral("list_generators"), &MCPServer::toolListGenerators},
+        {QStringLiteral("add_generator"), &MCPServer::toolAddGenerator},
+        {QStringLiteral("set_generator"), &MCPServer::toolSetGenerator},
+        {QStringLiteral("bake_generator"), &MCPServer::toolBakeGenerator},
+        {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
+        {QStringLiteral("list_constraints"), &MCPServer::toolListConstraints},
+        {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
+        {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
+        {QStringLiteral("move_constraint"), &MCPServer::toolMoveConstraint},
+        {QStringLiteral("remove_constraint"), &MCPServer::toolRemoveConstraint},
+        {QStringLiteral("bake_constraints"), &MCPServer::toolBakeConstraints},
         {QStringLiteral("list_morph_targets"), &MCPServer::toolListMorphTargets},
         {QStringLiteral("set_morph_weight"), &MCPServer::toolSetMorphWeight},
         {QStringLiteral("import_alembic"), &MCPServer::toolImportAlembic},
@@ -860,6 +880,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
+        QStringLiteral("retarget_animation"),
         QStringLiteral("list_morph_targets"),
         QStringLiteral("import_alembic"),
         QStringLiteral("capture_face_from_video"),
@@ -952,6 +973,12 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("apply_atlas"), QStringLiteral("texture_atlas")},
             {QStringLiteral("generate_isometric_sprites"), QStringLiteral("isometric_sprites")},
             {QStringLiteral("bake_vat"), QStringLiteral("vat_bake")},
+            {QStringLiteral("retarget_animation"), QStringLiteral("animation_blend")},
+            {QStringLiteral("add_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("set_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("bake_generator"), QStringLiteral("animation_blend")},
+            {QStringLiteral("add_constraint"), QStringLiteral("animation_blend")},
+            {QStringLiteral("bake_constraints"), QStringLiteral("animation_blend")},
             {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
             {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
             {QStringLiteral("apply_material_preset"), QStringLiteral("material_editor")},
@@ -981,7 +1008,9 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("delete_entity"), QStringLiteral("create_light"), QStringLiteral("delete_light"),
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
-        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"),
+        QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"), QStringLiteral("add_generator"), QStringLiteral("set_generator"), QStringLiteral("bake_generator"), QStringLiteral("remove_generator"),
+        QStringLiteral("add_constraint"), QStringLiteral("set_constraint"), QStringLiteral("move_constraint"),
+        QStringLiteral("remove_constraint"), QStringLiteral("bake_constraints"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
         QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
@@ -2840,6 +2869,8 @@ QJsonObject MCPServer::toolAddArkitBlendshapes(const QJsonObject &args)
     j["shapes_attached"] = rep.shapesAttached;
     j["user_vertex_count"] = rep.userVertexCount;
     j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+    j["orientation_source"] = rep.orientationSource;
+    j["orientation_angle_deg"] = rep.orientationAngleDeg;
     j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
     result["facerig"] = j;
     return result;
@@ -3042,6 +3073,18 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // builds — only the local TripoSR/TripoSG paths require the ONNX build.
     QString imagePath = args.value("image_path").toString();
     const QString genPrompt = args.value("prompt").toString().trimmed();
+    // Validate the named game-ready preset FIRST (review finding): the
+    // prompt-image phase below can take minutes, and an unknown preset must
+    // be rejected before that work starts. Applied to opts further down.
+    const GameReady::Preset* gamePreset = nullptr;
+    if (args.contains("game_preset")) {
+        const QString requested = args["game_preset"].toString();
+        gamePreset = GameReady::find(requested);
+        if (!gamePreset)
+            return makeErrorResult(QStringLiteral(
+                "'game_preset' must be one of: %1 (got '%2').")
+                .arg(GameReady::ids().join(", "), requested));
+    }
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
     if (!genPrompt.isEmpty()) {
@@ -3128,7 +3171,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (opts.textureSize < 64 || opts.textureSize > 8192)
             return makeErrorResult("'texture_size' must be between 64 and 8192.");
     }
-    const bool upscaleTex  = args.value("upscale_texture").toBool();
+    bool upscaleTex        = args.value("upscale_texture").toBool();
     const bool generatePbr = args.contains("generate_pbr")
         ? args["generate_pbr"].toBool(true) : true;
     // Default backend: TRELLIS.2 when its sidecar runtime is installed on
@@ -3170,6 +3213,47 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         opts.targetTriangles = args["target_tris"].toInt(0);
         if (opts.targetTriangles < 0 || opts.targetTriangles > 10000000)
             return makeErrorResult("'target_tris' must be in [0, 10000000] (0 = original).");
+    }
+    // Named game-ready budget (GameReadyPresets.h) — the same table the
+    // Inspector picker and `qtmesh generate3d --game-preset` read. A preset
+    // is a BASE: an explicit 'target_tris' / 'texture_size' in the same call
+    // overrides its value with any number in the supported range (the
+    // headless surfaces are for pipelines that know their numbers; the GUI
+    // keeps the preset-only picker). The Roblox presets make the target a
+    // hard ceiling and cap the FINAL images at 1024 px; an explicit
+    // texture_size past that limit is honoured and flagged, not clamped.
+    QString gamePresetId;
+    QString gamePresetNote;
+    if (gamePreset) {
+        const GameReady::Preset* gp = gamePreset;
+        gamePresetId = gp->id;
+        opts.targetTrianglesStrict = gp->strictTriangles;
+        if (args.contains("target_tris")) {
+            // explicit override — opts.targetTriangles already validated above
+            if (gp->strictTriangles && opts.targetTriangles > gp->targetTriangles)
+                gamePresetNote = QStringLiteral(
+                    "note: target_tris %1 exceeds the %2 preset's %3-triangle "
+                    "platform limit — honoured as requested (the count is "
+                    "still enforced as a ceiling at %1).")
+                    .arg(opts.targetTriangles).arg(gp->id).arg(gp->targetTriangles);
+        } else {
+            opts.targetTriangles = gp->targetTriangles;
+        }
+        if (args.contains("texture_size")) {
+            // explicit override — the cap follows the user's number
+            opts.maxTextureSize = opts.textureSize;
+            if (gp->maxTextureSize > 0 && opts.textureSize > gp->maxTextureSize) {
+                if (!gamePresetNote.isEmpty()) gamePresetNote += QStringLiteral(" ");
+                gamePresetNote += QStringLiteral(
+                    "note: texture_size %1 exceeds the %2 preset's %3 px "
+                    "platform limit — honoured as requested.")
+                    .arg(opts.textureSize).arg(gp->id).arg(gp->maxTextureSize);
+            }
+        } else {
+            opts.maxTextureSize = gp->maxTextureSize;   // enforced on the FINAL images
+            if (gp->maxTextureSize > 0 && opts.textureSize > gp->maxTextureSize)
+                opts.textureSize = gp->maxTextureSize;
+        }
     }
     // Baking a texture on a FULL-DENSITY generation produces an unusable
     // atlas. xatlas cuts a chart wherever it cannot flatten the surface, so an
@@ -3311,6 +3395,16 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Optional Real-ESRGAN 2x on the baked diffuse (best-effort; keeps the
     // un-upscaled texture on any failure — same policy as the CLI).
 #ifdef ENABLE_ONNX
+    // A platform preset caps the FINAL image; skip a 2x that would cross it.
+    if (upscaleTex && opts.maxTextureSize > 0 && !res.texture.isNull()
+        && (res.texture.width() * 2 > opts.maxTextureSize
+            || res.texture.height() * 2 > opts.maxTextureSize)) {
+        if (!gamePresetNote.isEmpty()) gamePresetNote += QStringLiteral(" ");
+        gamePresetNote += QStringLiteral(
+            "note: upscale_texture skipped — the '%1' preset caps textures at %2 px.")
+            .arg(gamePresetId).arg(opts.maxTextureSize);
+        upscaleTex = false;
+    }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
         const QString upModel = AIAssistManager::instance()->ensureUpscaleModel(2);
         if (!upModel.isEmpty()) {
@@ -3357,6 +3451,12 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["triangleCount"] = res.triangleCount;
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     result["backend"] = backendName;
+    if (!gamePresetId.isEmpty()) {
+        result["gamePreset"] = gamePresetId;
+        result["targetTriangles"] = opts.targetTriangles;
+        result["strictTriangleBudget"] = opts.targetTrianglesStrict;
+        result["textureSize"] = opts.textureSize;
+    }
     // Phase 9 (trellis2): the preserved full-resolution generation.
     if (!res.sourceInterchangePath.isEmpty())
         result["sourcePath"] = res.sourceInterchangePath;
@@ -3368,6 +3468,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Drop the note when nothing was actually textured (see above).
     if (res.texture.isNull())
         densityWarning.clear();
+    if (!gamePresetNote.isEmpty()) {
+        if (!warn.isEmpty()) warn += QStringLiteral(" ");
+        warn += gamePresetNote;
+    }
     if (!densityWarning.isEmpty()) {
         if (!warn.isEmpty()) warn += QStringLiteral(" ");
         warn += densityWarning;
@@ -8722,8 +8826,31 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     SentryReporter::addBreadcrumb("ai.tool_call", "bake_vat");
 
     const QString filePath  = args.value("file").toString();
-    const QString animName  = args.value("anim").toString();
+    QString animName        = args.value("anim").toString();
     const QString outputDir = args.value("output_dir").toString();
+
+    // #522: mode / encoding / target. Validate BEFORE the import so a
+    // typo never costs a mesh load.
+    const QString modeArg = args.value("mode").toString(QStringLiteral("skeletal"));
+    VATBaker::Mode mode = VATBaker::Mode::Skeletal;
+    if (!VATBaker::modeFromId(modeArg.isEmpty() ? QStringLiteral("skeletal") : modeArg, &mode))
+        return makeErrorResult(QString("Error: unknown mode '%1' (accepted: %2)")
+                                   .arg(modeArg, VATBaker::modeIds().join(", ")));
+    const QString encodingArg = args.value("encoding").toString(QStringLiteral("rgba16"));
+    int bitDepth = 16;
+    if (!VATBaker::bitDepthFromEncodingId(
+            encodingArg.isEmpty() ? QStringLiteral("rgba16") : encodingArg, &bitDepth))
+        return makeErrorResult(QString("Error: unknown encoding '%1' (accepted: %2)")
+                                   .arg(encodingArg, VATBaker::encodingIds().join(", ")));
+    QString target = args.value("target").toString(QStringLiteral("agnostic")).trimmed().toLower();
+    if (target.isEmpty()) target = QStringLiteral("agnostic");
+    if (!VATBaker::isValidTargetId(target))
+        return makeErrorResult(QString("Error: unknown target '%1' (accepted: %2)")
+                                   .arg(target, VATBaker::targetIds().join(", ")));
+    // Morph mode defaults to the editor's weight clip (the CLI does the same).
+    if (animName.isEmpty() && mode == VATBaker::Mode::Morph)
+        animName = QString::fromLatin1(MorphAnimationManager::kWeightClipName);
+
     if (filePath.isEmpty() || animName.isEmpty() || outputDir.isEmpty())
         return makeErrorResult(
             "Error: missing required 'file', 'anim', or 'output_dir' arguments");
@@ -8735,6 +8862,14 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
         return makeErrorResult("Error: fps must be > 0");
 
     const QString basename = args.value("basename").toString();
+    // Optional engine template list ("godot,unity" / "all"); a
+    // non-agnostic target implies its own.
+    QString includeShaders = args.value("include_shaders").toString();
+    if (target != QLatin1String("agnostic")) {
+        if (includeShaders.isEmpty()) includeShaders = target;
+        else if (!VATShaderEmitter::parseEngineList(includeShaders).contains(target))
+            includeShaders += QLatin1Char(',') + target;
+    }
 
     auto* mgr = Manager::getSingleton();
     SentryReporter::addBreadcrumb("file.import",
@@ -8746,37 +8881,114 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     if (imported.isEmpty())
         return makeErrorResult(QString("Error: failed to load mesh: %1").arg(filePath));
 
-    // Pick the bake target by skeleton presence rather than list
-    // order. Some mesh formats produce auxiliary unskinned entities
-    // alongside the skinned mesh (e.g. helper geometry).
+    // Pick the bake target by MODE rather than list order: skeletal
+    // wants the skinned entity (some formats produce auxiliary
+    // unskinned helper entities); every other mode wants the entity
+    // that carries the requested clip. Fall back to the first entity
+    // so the baker's own error names what is missing.
     Ogre::Entity* entity = nullptr;
+    const std::string animStd = animName.toStdString();
     for (Ogre::Entity* e : imported) {
-        if (e && e->hasSkeleton()) { entity = e; break; }
+        if (!e) continue;
+        if (mode == VATBaker::Mode::Skeletal) {
+            if (e->hasSkeleton()) { entity = e; break; }
+        } else if (auto* states = e->getAllAnimationStates();
+                   states && states->hasAnimationState(animStd)) {
+            entity = e; break;
+        }
     }
-    if (!entity)
-        return makeErrorResult("Error: mesh has no skeleton — cannot bake VAT");
+    if (!entity && mode == VATBaker::Mode::Skeletal)
+        return makeErrorResult("Error: mesh has no skeleton — cannot bake a skeletal VAT "
+                               "(try mode mesh-anim / morph for vertex clips)");
+    if (!entity) entity = imported.first();
 
     VATBaker::Options opts;
+    opts.mode          = mode;
     opts.animationName = animName;
     opts.fps           = fps;
     opts.outputDir     = outputDir;
-    opts.basename      = basename.isEmpty() ? animName : basename;
+    opts.basename      = basename.isEmpty()
+        ? ((mode == VATBaker::Mode::Morph
+            && animName == QLatin1String(MorphAnimationManager::kWeightClipName))
+               ? QFileInfo(filePath).completeBaseName() + QStringLiteral("_morph")
+               : animName)
+        : basename;
+    opts.bitDepth      = bitDepth;
+    opts.target        = target;
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing OpenVAT bake to %1 (anim=%2)").arg(outputDir, animName));
+        QString("Writing OpenVAT bake to %1 (vat_mode=%2 anim=%3 encoding=%4 target=%5)")
+            .arg(outputDir, VATBaker::modeId(mode), animName,
+                 VATBaker::encodingId(bitDepth), target));
 
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok)
         return makeErrorResult(QString("VAT bake failed: %1").arg(result.error));
 
+    QStringList shadersWritten;
+    QStringList shadersSkipped;
+    if (!includeShaders.isEmpty()) {
+        QStringList engines = VATShaderEmitter::parseEngineList(includeShaders);
+        if (mode == VATBaker::Mode::Rigid) {
+            // Only Godot has a rigid template; say so instead of
+            // silently returning ok with no shader file.
+            const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
+            QStringList kept;
+            for (const QString& e : engines) {
+                if (rigidCapable.contains(e)) kept << e; else shadersSkipped << e;
+            }
+            engines = kept;
+        }
+        if (!engines.isEmpty())
+            shadersWritten = VATShaderEmitter::writeShaders(
+                outputDir, engines, mode == VATBaker::Mode::Rigid);
+    }
+
     QJsonObject content;
     content["ok"]          = true;
+    content["mode"]        = VATBaker::modeId(mode);
+    content["encoding"]    = VATBaker::encodingId(bitDepth);
+    content["target"]      = target;
     content["texture"]     = result.posTexPath;
     content["sidecar"]     = result.jsonPath;
     content["frameCount"]  = result.frameCount;
     content["vertexCount"] = result.vertexCount;
     content["animation"]   = animName;
     content["fps"]         = fps;
+    if (mode == VATBaker::Mode::Rigid) {
+        content["chunkCount"]  = result.chunkCount;
+        content["maxResidual"] = static_cast<double>(result.maxRigidResidual);
+        QJsonArray chunks;
+        for (const auto& c : result.chunks) {
+            QJsonObject jc;
+            jc["name"]        = c.name;
+            jc["pivot"]       = QJsonArray{ static_cast<double>(c.pivot.x),
+                                            static_cast<double>(c.pivot.y),
+                                            static_cast<double>(c.pivot.z) };
+            jc["vertexStart"] = c.vertexStart;
+            jc["vertexCount"] = c.vertexCount;
+            jc["maxResidual"] = static_cast<double>(c.maxResidual);
+            chunks.append(jc);
+        }
+        content["chunks"] = chunks;
+    }
+    if (!result.trackId.isEmpty()) content["track"] = result.trackId;
+    if (!result.morphTargets.isEmpty()) {
+        QJsonArray t;
+        for (const auto& n : result.morphTargets) t.append(n);
+        content["morphTargets"] = t;
+    }
+    if (!shadersWritten.isEmpty()) {
+        QJsonArray sh;
+        for (const auto& pth : shadersWritten) sh.append(pth);
+        content["shaders"] = sh;
+    }
+    if (!shadersSkipped.isEmpty()) {
+        content["shaders_skipped"] = shadersSkipped.join(",");
+        content["shaders_skipped_reason"] = QStringLiteral(
+            "no rigid-body shader template for these engines yet - see "
+            "OpenVAT_README.md for the per-chunk math (Godot: openvat_rigid.gdshader)");
+    }
     QJsonObject bounds, lo, hi;
     lo["x"] = result.minBound.x; lo["y"] = result.minBound.y; lo["z"] = result.minBound.z;
     hi["x"] = result.maxBound.x; hi["y"] = result.maxBound.y; hi["z"] = result.maxBound.z;
@@ -8785,6 +8997,195 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 
     return makeSuccessResult(
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
+// #523 — retarget_animation
+// ---------------------------------------------------------------------------
+QJsonObject MCPServer::toolRetargetAnimation(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "retarget_animation");
+
+    Retarget::Options opts;
+    if (args.contains("translation")
+        && !Retarget::translationModeFromId(args.value("translation").toString(), &opts.translation))
+        return makeErrorResult("Error: translation must be none, root or all");
+    if (args.contains("source_rest")
+        && !Retarget::sourceRestFromId(args.value("source_rest").toString(), &opts.sourceRest))
+        return makeErrorResult("Error: source_rest must be bind or first-frame");
+    opts.alignDirections = args.value("align_directions").toBool(true);
+    const int fps = args.contains("fps") ? args.value("fps").toInt() : 30;
+    if (fps <= 0 || fps > 240) return makeErrorResult("Error: fps must be 1..240");
+    const bool dryRun = args.value("dry_run").toBool(false);
+
+    // Explicit map: inline pairs > bonemap (bundled name or .bonemap path) > auto.
+    Retarget::BoneMap map;
+    bool haveMap = false;
+    if (args.value("pairs").isArray()) {
+        for (const QJsonValue& v : args.value("pairs").toArray()) {
+            const QJsonObject o = v.toObject();
+            const QString s = o.value("source").toString(), t = o.value("target").toString();
+            if (s.isEmpty() || t.isEmpty())
+                return makeErrorResult("Error: every entry of 'pairs' needs 'source' and 'target'");
+            map.setPair(s.toStdString(), t.toStdString());
+        }
+        map.name = QStringLiteral("inline");
+        haveMap = true;
+    } else if (args.contains("bonemap")) {
+        const QString b = args.value("bonemap").toString();
+        QString e;
+        if (Retarget::bundledBoneMap(b, &map)) haveMap = true;
+        else if (QFileInfo::exists(b) && Retarget::BoneMap::load(b, &map, &e)) haveMap = true;
+        else
+            return makeErrorResult(QString("Error: bonemap '%1' is neither a bundled map (%2) nor a readable "
+                                           ".bonemap%3").arg(b, Retarget::bundledBoneMapNames().join(", "),
+                                                             e.isEmpty() ? QString() : ": " + e));
+    }
+
+    auto* mgr = Manager::getSingleton();
+    auto byName = [&](const QString& name) -> Ogre::Entity* {
+        for (Ogre::Entity* e : mgr->getEntities())
+            if (e && e->getMovableType() == "Entity" && QString::fromStdString(e->getName()) == name)
+                return e;
+        return nullptr;
+    };
+    auto firstSkeletal = [](const QList<Ogre::Entity*>& list) -> Ogre::Entity* {
+        for (Ogre::Entity* e : list) if (e && e->hasSkeleton()) return e;
+        return nullptr;
+    };
+
+    // Imports are transient: torn down when this call returns. The target
+    // session is created only AFTER the source import — a session claims
+    // every entity added after its construction, so building both up front
+    // made the target session own (and tear down) the source too: the clip
+    // landed on the source and the source node was destroyed twice.
+    TransientImportSession srcSession(mgr);
+    std::optional<TransientImportSession> tgtSession;
+    Ogre::Entity* src = nullptr;
+    Ogre::Entity* tgt = nullptr;
+    if (args.contains("source_entity")) {
+        src = byName(args.value("source_entity").toString());
+        if (!src) return makeErrorResult(QString("Error: no entity '%1'").arg(args.value("source_entity").toString()));
+    } else if (args.contains("source_file")) {
+        const QString f = args.value("source_file").toString();
+        if (!QFileInfo::exists(f)) return makeErrorResult(QString("Error: file not found: %1").arg(f));
+        if (QString e = srcSession.runImporter(f); !e.isEmpty()) return makeErrorResult(e);
+        src = firstSkeletal(srcSession.importedEntities());
+        if (!src) return makeErrorResult(QString("Error: %1 has no skinned mesh with a skeleton").arg(f));
+    } else {
+        return makeErrorResult("Error: give 'source_entity' or 'source_file'");
+    }
+    const bool targetInScene = args.contains("target_entity");
+    if (targetInScene) {
+        tgt = byName(args.value("target_entity").toString());
+        if (!tgt) return makeErrorResult(QString("Error: no entity '%1'").arg(args.value("target_entity").toString()));
+    } else if (args.contains("target_file")) {
+        const QString f = args.value("target_file").toString();
+        if (!QFileInfo::exists(f)) return makeErrorResult(QString("Error: file not found: %1").arg(f));
+        if (!dryRun && args.value("output_path").toString().isEmpty())
+            return makeErrorResult("Error: a 'target_file' retarget needs 'output_path' (the imported "
+                                   "target is not kept in the scene) - or use 'target_entity'");
+        tgtSession.emplace(mgr);
+        if (QString e = tgtSession->runImporter(f); !e.isEmpty()) return makeErrorResult(e);
+        tgt = firstSkeletal(tgtSession->importedEntities());
+        if (!tgt) return makeErrorResult(QString("Error: %1 has no skinned mesh with a skeleton").arg(f));
+    } else {
+        return makeErrorResult("Error: give 'target_entity' or 'target_file'");
+    }
+    if (!src->hasSkeleton() || !tgt->hasSkeleton())
+        return makeErrorResult("Error: both source and target need a skeleton");
+
+    const auto srcNames = Retarget::boneNames(src->getSkeleton());
+    const auto tgtNames = Retarget::boneNames(tgt->getSkeleton());
+    QStringList unresolved;
+    Retarget::AutoMapReport autoRep;
+    if (haveMap) map = Retarget::resolveMap(map, srcNames, tgtNames, &unresolved);
+    else { autoRep = Retarget::autoMap(srcNames, tgtNames); map = autoRep.map; }
+
+    QJsonObject content;
+    QJsonArray pairs;
+    for (const auto& p : map.pairs)
+        pairs.append(QJsonObject{{"source", QString::fromStdString(p.source)},
+                                 {"target", QString::fromStdString(p.target)}});
+    content["pairs"] = pairs;
+    content["bonemap"] = haveMap ? map.name : QStringLiteral("auto");
+    QJsonArray unmapped;
+    for (const auto& n : autoRep.unmappedSource) unmapped.append(QString::fromStdString(n));
+    content["unmapped_source"] = unmapped;
+    QJsonArray unres;
+    for (const QString& u : unresolved) unres.append(u);
+    content["unresolved_pairs"] = unres;
+    if (const QString save = args.value("save_bonemap").toString(); !save.isEmpty()) {
+        QString e;
+        if (!map.save(save, &e)) return makeErrorResult(QString("Error: %1").arg(e));
+        content["saved_bonemap"] = save;
+    }
+    if (dryRun) {
+        content["ok"] = true;
+        content["dry_run"] = true;
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+    }
+    if (map.pairs.empty()) return makeErrorResult("Error: no source bone maps onto the target");
+
+    const QString anim = args.value("animation").toString();
+    Ogre::SkeletonInstance* ss = src->getSkeleton();
+    if (anim.isEmpty() || !ss->hasAnimation(anim.toStdString())) {
+        QStringList have;
+        for (unsigned short i = 0; i < ss->getNumAnimations(); ++i)
+            have << QString::fromStdString(ss->getAnimation(i)->getName());
+        return makeErrorResult(QString("Error: %1 - the source's animations: %2")
+            .arg(anim.isEmpty() ? QStringLiteral("'animation' is required")
+                                : QStringLiteral("no animation '%1'").arg(anim),
+                 have.join(", ")));
+    }
+    const QString wantName = args.value("new_name").toString();
+    const std::string name = Retarget::uniqueAnimationName(
+        tgt->getSkeleton(), (wantName.isEmpty() ? anim + "_retargeted" : wantName).toStdString());
+    const Retarget::Result r = Retarget::retarget(ss, anim.toStdString(), tgt->getSkeleton(), name, map, opts, fps);
+    if (!r.ok) {
+        SentryReporter::addBreadcrumb("scene.anim.retarget.error", r.error);
+        return makeErrorResult(QString("Error: retarget failed: %1").arg(r.error));
+    }
+    tgt->refreshAvailableAnimationState();
+    SentryReporter::addBreadcrumb("scene.anim.retarget.apply",
+        QString("MCP %1 -> %2 (%3 bones, %4 frames)").arg(anim, QString::fromStdString(name))
+            .arg(r.report.mappedBones).arg(r.frames));
+    // Export BEFORE committing the undo step: a failed export must leave the
+    // scene as it was (the caller sees isError and assumes nothing changed;
+    // a retry would otherwise create "<name>_2").
+    const QString out = args.value("output_path").toString();
+    if (!out.isEmpty()) {
+        SentryReporter::addBreadcrumb("file.export", QString("Retarget export %1").arg(out));
+        Ogre::SceneNode* node = tgt->getParentSceneNode();
+        const bool exported = node
+            && MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                              CLIPipeline::formatForExtension(out)) == 0;
+        if (!exported) {
+            tgt->getSkeleton()->removeAnimation(name);
+            if (auto* st = tgt->getAllAnimationStates())
+                if (st->hasAnimationState(name)) st->removeAnimationState(name);
+            tgt->refreshAvailableAnimationState();
+            return makeErrorResult(node ? QString("Error: export to %1 failed").arg(out)
+                                        : QString("Error: the target has no scene node to export"));
+        }
+        content["output_path"] = QFileInfo(out).absoluteFilePath();
+    }
+    if (targetInScene)
+        UndoManager::getSingleton()->push(new RetargetAnimationCommand(tgt->getName(), name, true));
+    content["ok"] = true;
+    content["animation"] = QString::fromStdString(name);
+    content["target_entity"] = QString::fromStdString(tgt->getName());
+    content["target_kept_in_scene"] = targetInScene;
+    content["frames"] = r.frames;
+    content["length"] = r.length;
+    content["mapped_bones"] = r.report.mappedBones;
+    content["global_alignment"] = r.report.globalAlignment;
+    content["height_scale"] = r.report.heightScale;
+    content["root_bone"] = QString::fromStdString(r.report.rootTarget);
+    content["translation"] = Retarget::translationModeId(opts.translation);
+    content["source_rest"] = Retarget::sourceRestId(opts.sourceRest);
+    content["align_directions"] = opts.alignDirections;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
 // ---------------------------------------------------------------------------
@@ -9208,14 +9609,17 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     if (!source->open(&openError))
         return makeErrorResult(QString("Error: %1").arg(openError));
 
-    auto poseSamples = std::make_shared<std::vector<PoseSample>>();
+    auto poseSamples = std::make_shared<std::vector<BodyLiveFrame>>();
+    BodyPoseStream bodyStream;
+    bodyStream.setSmoothing(1.0, smooth);
     QEventLoop loop;
     bool finished = false;
     QString streamError;
     QObject::connect(source.get(), &VideoFrameSource::frameReady,
                      [&, posePredictor, poseSamples](const MocapFrame& frame) {
-                         poseSamples->push_back(
-                             posePredictor->predict(frame.image, frame.timeSec));
+                         poseSamples->push_back(bodyStream.process(
+                             posePredictor->predict(frame.image, frame.timeSec),
+                             frame.image.width(), frame.image.height()));
                      });
     QObject::connect(source.get(), &VideoFrameSource::finished, [&] {
         finished = true; loop.quit();
@@ -9231,35 +9635,23 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     if (!streamError.isEmpty())
         return makeErrorResult(QString("Error: %1").arg(streamError));
 
-    std::vector<std::vector<std::array<float, 4>>> clipQuats;
-    {
-        std::array<OneEuroQuatFilter, PoseIK::kCanonicalRoles> roleFilters;
-        PoseIK::Solver solver;
-        for (const PoseSample& s : *poseSamples) {
-            if (s.confidence <= 0.f)
-                continue;
-            PoseIK::FrameResult fr =
-                solver.solveFrame(s.world.data(), s.visibility.data());
-            if (smooth)
-                for (int r = 0; r < PoseIK::kCanonicalRoles; ++r)
-                    fr.quats[r] = roleFilters[r].filter(fr.quats[r], s.timeSec);
-            clipQuats.push_back(std::vector<std::array<float, 4>>(
-                fr.quats.begin(), fr.quats.end()));
-        }
-    }
-    if (clipQuats.size() < 2)
+    std::vector<BodyLiveFrame> bodyFrames;
+    for (const auto& sample : *poseSamples)
+        if (sample.valid) bodyFrames.push_back(sample);
+    if (bodyFrames.size() < 2)
         return makeErrorResult("Error: no person tracked in the video");
 
     MocapRecorder::BodyRecordOptions options;
     options.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
     options.algorithmUsed = QStringLiteral("pose-ik");
+    options.rootMotion = args.value("root_motion").toBool(true);
     options.fallbackReason = algo == QLatin1String("pose-ik")
         ? QString()
         : QStringLiteral("sam3dbody model not available (checkpoint access "
                          "pending — see THIRD_PARTY_AI_MODELS.md); used pose-ik");
 
     return runOgreOp([&]() -> QJsonObject {
-        auto* cmd = new RecordBodyClipCommand(entity->getName(), clipQuats,
+        auto* cmd = new RecordBodyClipCommand(entity->getName(), std::move(bodyFrames),
                                               static_cast<int>(fps), options);
         UndoManager::getSingleton()->push(cmd);
         MocapRecorder::BodyRecordReport report = cmd->report();
@@ -9941,6 +10333,297 @@ QJsonObject MCPServer::toolGetChannelValues(const QJsonObject &args)
 // `set_morph_weight` / `set_node_keyframe`. The agent is expected to
 // drive `load_mesh` / `save_scene` around them for persistence — the
 // `.poselib` sidecar arrives with D-Project.
+
+
+// ---------------------------------------------------------------------------
+// #524 — procedural animation generators
+// ---------------------------------------------------------------------------
+namespace {
+QJsonObject generatorJson(const AnimGen::Generator& g, bool bound)
+{
+    QJsonObject o = AnimGen::toJson(g);
+    o.remove(QStringLiteral("state"));
+    o[QStringLiteral("display_name")] = AnimGen::displayName(g);
+    o[QStringLiteral("bound")] = bound;
+    return o;
+}
+
+/// `params` as an object of key → number/string/bool/array-of-points.
+bool generatorParamsFromJson(const QJsonValue& v, QList<QPair<QString, QString>>* out, QString* error)
+{
+    if (v.isUndefined() || v.isNull()) return true;
+    if (!v.isObject()) { *error = QStringLiteral("'params' must be an object"); return false; }
+    const QJsonObject o = v.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonValue x = it.value();
+        QString s;
+        if (x.isDouble()) s = QString::number(x.toDouble(), 'g', 17);
+        else if (x.isBool()) s = x.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        else if (x.isString()) s = x.toString();
+        else if (x.isArray() && it.key() == QLatin1String("points")) {
+            QStringList pts;
+            for (const QJsonValue& p : x.toArray()) {
+                const QJsonArray a = p.toArray();
+                if (a.size() != 3 || !a[0].isDouble() || !a[1].isDouble() || !a[2].isDouble()) {
+                    *error = QStringLiteral("every path point must be [x, y, z] numbers");
+                    return false;
+                }
+                pts << QStringLiteral("%1,%2,%3").arg(a[0].toDouble(), 0, 'g', 17).arg(a[1].toDouble(), 0, 'g', 17).arg(a[2].toDouble(), 0, 'g', 17);
+            }
+            s = pts.join(QLatin1Char(';'));
+        } else {
+            *error = QStringLiteral("parameter '%1' has an unsupported type").arg(it.key());
+            return false;
+        }
+        out->append({it.key(), s});
+    }
+    return true;
+}
+} // namespace
+
+QJsonObject MCPServer::toolListGenerators(const QJsonObject& /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_generators");
+    auto* gm = AnimGeneratorManager::instance();
+    QJsonArray arr;
+    for (const auto& g : gm->generators())
+        arr.append(generatorJson(g, gm->isBound(g.id)));
+    QJsonObject content{{"count", int(gm->generators().size())}, {"generators", arr},
+                        {"types", QJsonArray::fromStringList(AnimGen::typeIds())},
+                        {"kinds", QJsonArray::fromStringList(AnimGen::kindIds())}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolAddGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "add_generator");
+    AnimGen::Generator g;
+    QString err;
+    if (!AnimGen::typeFromId(args.value("type").toString(), &g.type))
+        return makeErrorResult(QStringLiteral("Error: 'type' must be one of %1").arg(AnimGen::typeIds().join(", ")));
+    if (!AnimGen::parseTarget(args.value("target").toString(), &g.target, &err))
+        return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    QList<QPair<QString, QString>> params;
+    if (!generatorParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    for (const auto& p : params)
+        if (!AnimGen::applyParam(&g, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
+    if (args.contains("name")) g.name = args.value("name").toString();
+    if (args.contains("enabled")) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        g.enabled = args.value("enabled").toBool();
+    }
+    if (args.contains("bake") && !args.value("bake").isBool())
+        return makeErrorResult("Error: 'bake' must be a boolean");
+    auto* gm = AnimGeneratorManager::instance();
+    const auto r = gm->add(g);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"id", r.id}, {"generator", generatorJson(*gm->find(r.id), gm->isBound(r.id))}};
+    if (args.value("bake").toBool(false)) {
+        const auto b = gm->bake(r.id);
+        if (!b.ok) return makeErrorResult("Error: added but bake failed: " + b.error);
+        content["generator"] = generatorJson(*gm->find(r.id), gm->isBound(r.id));
+    }
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_generator");
+    const QString id = args.value("id").toString();
+    auto* gm = AnimGeneratorManager::instance();
+    if (!gm->find(id)) return makeErrorResult(QStringLiteral("Error: no generator '%1' (see list_generators)").arg(id));
+    QList<QPair<QString, QString>> params;
+    QString err;
+    if (!generatorParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    // One transaction: params + enabled are validated together and land as a
+    // single undo step (or not at all).
+    bool enabled = false;
+    const bool hasEnabled = args.contains("enabled");
+    if (hasEnabled) {
+        // toBool() reads "true" / 1 as false — refuse rather than silently mute.
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        enabled = args.value("enabled").toBool();
+    }
+    if (args.contains("show_path") && !args.value("show_path").isBool())
+        return makeErrorResult("Error: 'show_path' must be a boolean");
+    if (!params.isEmpty() || hasEnabled) {
+        const auto r = gm->update(id, params, hasEnabled ? &enabled : nullptr);
+        if (!r.ok) return makeErrorResult("Error: " + r.error);
+    }
+    if (args.contains("show_path")) {
+        if (args.value("show_path").toBool()) {
+            if (!gm->beginPathEdit(id)) return makeErrorResult("Error: " + gm->status());
+        } else {
+            gm->endPathEdit();
+        }
+    }
+    QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolBakeGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "bake_generator");
+    const QString id = args.value("id").toString();
+    auto* gm = AnimGeneratorManager::instance();
+    const auto r = gm->bake(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"generator", generatorJson(*gm->find(id), gm->isBound(id))},
+                        {"note", AnimGen::kindIsTrackBacked(gm->find(id)->target.kind)
+                                     ? QStringLiteral("baked into the target's animation track")
+                                     : QStringLiteral("baked into a keyed curve kept with the generators (lights, materials and pose weights have no native track)")}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolRemoveGenerator(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "remove_generator");
+    const QString id = args.value("id").toString();
+    const auto r = AnimGeneratorManager::instance()->remove(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"removed", id}}).toJson(QJsonDocument::Indented)));
+}
+
+// ---------------------------------------------------------------------------
+// #525 — animation constraints
+// ---------------------------------------------------------------------------
+namespace {
+QJsonObject constraintJson(const AnimCon::Constraint& c)
+{
+    QJsonObject o = AnimCon::toJson(c);
+    o[QStringLiteral("display_name")] = AnimCon::displayName(c);
+    return o;
+}
+
+/// `params` as an object of key → number/string/bool (the AnimCon::applyParam keys).
+bool constraintParamsFromJson(const QJsonValue& v, QList<QPair<QString, QString>>* out, QString* error)
+{
+    if (v.isUndefined() || v.isNull()) return true;
+    if (!v.isObject()) { *error = QStringLiteral("'params' must be an object"); return false; }
+    const QJsonObject o = v.toObject();
+    for (auto it = o.begin(); it != o.end(); ++it) {
+        const QJsonValue x = it.value();
+        QString s;
+        if (x.isDouble()) s = QString::number(x.toDouble(), 'g', 17);
+        else if (x.isBool()) s = x.toBool() ? QStringLiteral("true") : QStringLiteral("false");
+        else if (x.isString()) s = x.toString();
+        else { *error = QStringLiteral("parameter '%1' has an unsupported type").arg(it.key()); return false; }
+        out->append({it.key(), s});
+    }
+    return true;
+}
+
+QJsonObject constraintListJson()
+{
+    auto* cm = ConstraintManager::instance();
+    QJsonArray arr;
+    for (const auto& c : cm->constraints()) arr.append(constraintJson(c));
+    return QJsonObject{{"count", int(cm->constraints().size())}, {"active", cm->activeCount()}, {"constraints", arr}};
+}
+} // namespace
+
+QJsonObject MCPServer::toolListConstraints(const QJsonObject& /*args*/)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "list_constraints");
+    QJsonObject content = constraintListJson();
+    content["types"] = QJsonArray::fromStringList(AnimCon::typeIds());
+    content["note"] = QStringLiteral("Each owner's constraints are listed top first; the top-most is applied last and wins.");
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "add_constraint");
+    AnimCon::Constraint c;
+    QString err;
+    if (!AnimCon::typeFromId(args.value("type").toString(), &c.type))
+        return makeErrorResult(QStringLiteral("Error: 'type' must be one of %1").arg(AnimCon::typeIds().join(", ")));
+    if (!AnimCon::parseRef(args.value("owner").toString(), &c.owner, &err) || c.owner.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'owner' must be bone:<entity>/<bone> or node:<name>%1")
+                                   .arg(err.isEmpty() ? QString() : QStringLiteral(" (") + err + QLatin1Char(')')));
+    if (!AnimCon::parseRef(args.value("target").toString(), &c.target, &err)) return makeErrorResult("Error: " + err);
+    if (!AnimCon::parseRef(args.value("pole").toString(), &c.pole, &err)) return makeErrorResult("Error: " + err);
+    QList<QPair<QString, QString>> params;
+    if (!constraintParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    for (const auto& p : params)
+        if (!AnimCon::applyParam(&c, p.first, p.second, &err)) return makeErrorResult("Error: " + err);
+    if (args.contains("name")) c.name = args.value("name").toString();
+    if (args.contains("enabled")) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        c.enabled = args.value("enabled").toBool();
+    }
+    auto* cm = ConstraintManager::instance();
+    const auto r = cm->add(c);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"id", r.id}, {"constraint", constraintJson(*cm->find(r.id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_constraint");
+    const QString id = args.value("id").toString();
+    auto* cm = ConstraintManager::instance();
+    if (!cm->find(id)) return makeErrorResult(QStringLiteral("Error: no constraint '%1' (see list_constraints)").arg(id));
+    QList<QPair<QString, QString>> params;
+    QString err;
+    if (!constraintParamsFromJson(args.value("params"), &params, &err)) return makeErrorResult("Error: " + err);
+    bool enabled = false;
+    const bool hasEnabled = args.contains("enabled");
+    if (hasEnabled) {
+        if (!args.value("enabled").isBool()) return makeErrorResult("Error: 'enabled' must be a boolean");
+        enabled = args.value("enabled").toBool();
+    }
+    if (params.isEmpty() && !hasEnabled) return makeErrorResult("Error: give 'params' and/or 'enabled'");
+    const auto r = cm->setParams(id, params, hasEnabled ? &enabled : nullptr);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content{{"ok", true}, {"constraint", constraintJson(*cm->find(id))}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMoveConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "move_constraint");
+    const QString dir = args.value("direction").toString();
+    if (dir != QLatin1String("up") && dir != QLatin1String("down"))
+        return makeErrorResult("Error: 'direction' must be 'up' (toward the top — wins) or 'down'");
+    const auto r = ConstraintManager::instance()->move(args.value("id").toString(), dir == QLatin1String("up") ? -1 : 1);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(constraintListJson()).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolRemoveConstraint(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "remove_constraint");
+    const QString id = args.value("id").toString();
+    const auto r = ConstraintManager::instance()->remove(id);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"removed", id}}).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolBakeConstraints(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "bake_constraints");
+    ConstraintManager::BakeOptions o;
+    if (args.contains("ids")) {
+        if (!args.value("ids").isArray()) return makeErrorResult("Error: 'ids' must be an array of constraint ids");
+        for (const QJsonValue& v : args.value("ids").toArray()) o.ids << v.toString();
+    }
+    o.clip = args.value("clip").toString();
+    o.nodeClip = args.value("node_clip").toString();
+    if (args.contains("fps")) {
+        if (!args.value("fps").isDouble()) return makeErrorResult("Error: 'fps' must be a number");
+        o.fps = args.value("fps").toInt();
+        if (o.fps < 1 || o.fps > 240) return makeErrorResult("Error: 'fps' must be 1..240");
+    }
+    auto* cm = ConstraintManager::instance();
+    const auto r = cm->bake(o);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    QJsonObject content = constraintListJson();
+    content["ok"] = true;
+    content["status"] = cm->status();
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
 
 QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
 {
@@ -11641,7 +12324,7 @@ QJsonArray MCPServer::buildToolsList()
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
-        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution 64..8192 (default 1024)."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution, any value 64..8192 (default 1024; GUI default for TRELLIS.2 is 2048). xatlas treats it as a hint, so the atlas can land slightly larger. Overrides game_preset's texture cap when both are given (past a Roblox limit it is honoured and flagged). TRELLIS.2's texture VOLUME is a separate knob: tex_res 512|1024."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
@@ -11652,7 +12335,12 @@ QJsonArray MCPServer::buildToolsList()
         props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
         props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
         props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
-        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count — weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). STRONGLY recommended whenever a texture is baked: at native density xatlas fragments the atlas into thousands of charts and the bake shows black seam lines (a 300k-tri mesh gave 16,043 UV islands vs 1,195 at 25000). The GUI defaults to 25000. For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
+        {
+            QJsonArray presetEnum;
+            for (const QString& id : GameReady::ids()) presetEnum.append(id);
+            props["game_preset"] = QJsonObject{{"type", "string"}, {"enum", presetEnum}, {"description", "ALL backends: a NAMED game-ready budget. Optional: pass target_tris / texture_size alone for any custom value in range, or together with a preset to override that preset's number (a value past a Roblox limit is honoured and flagged in the result). max = keep density; prop-minimal ~500 / prop-tiny ~1k / prop-low ~5k; low ~10k / medium ~25k (the GUI default) / high ~50k; roblox-accessory = Roblox accessory/layered-clothing upload limit (HARD ceiling of 4,000 triangles + textures clamped to 1024 px); roblox-meshpart = Roblox MeshPart upload limit (HARD ceiling of 20,000 triangles + textures clamped to 1024 px). The Roblox presets guarantee the count (a sloppy simplify finishes the job when QEM stalls) because the platform rejects an upload over the limit."}};
+        }
+        props["target_tris"] = QJsonObject{{"type", "integer"}, {"description", "ALL backends: game-ready target triangle count, any value 1..10000000 (0 = keep the original density; below ~500 the simplifier's border locking sets the floor; TRELLIS.2 raw decodes are ~150k at res 512 / ~300k cascade / up to several million uncapped). Overrides game_preset's count when both are given. Runs weld + debris-cull + simplify, re-baking lost detail as diffuse + tangent-space normal maps (0 = keep the original density; suggested presets: 10000 low / 25000 medium / 50000 high). STRONGLY recommended whenever a texture is baked: at native density xatlas fragments the atlas into thousands of charts and the bake shows black seam lines (a 300k-tri mesh gave 16,043 UV islands vs 1,195 at 25000). The GUI defaults to 25000. For trellis2 the full-res source is preserved as a .qtm3d sidecar when 'output' is given."}};
         appendTool(
             "generate_mesh_from_image",
             "AI image-to-3D mesh generation (epic #764 + TRELLIS.2): reconstruct a "
@@ -13150,6 +13838,7 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Target skinned entity (default: first/selected)."}};
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional export path written after recording."}};
         props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "Skeletal clip name (default BodyCap)."}};
+        props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "Estimate root movement from the camera projection (default true); false records in place."}};
         props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
         props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (quality path; falls back while its checkpoints are gated) or pose-ik."}};
@@ -13158,7 +13847,7 @@ QJsonArray MCPServer::buildToolsList()
         appendTool(
             "capture_body_from_video",
             "Performance capture: track a person in a video and record the full-body pose as a "
-            "skeletal animation on the entity's humanoid rig (rotation-only, root locked, "
+            "skeletal animation on the entity's humanoid rig (body turns and estimated root movement, "
             "ONE undoable clip). Needs a skinned mesh resolving at least half of the 22 "
             "canonical roles. Requires a build with ENABLE_MOCAP=ON; models download on first use.",
             props,
@@ -13492,6 +14181,122 @@ QJsonArray MCPServer::buildToolsList()
             props, required);
     }
 
+    // #524 — procedural animation generators
+    {
+        QJsonObject props;
+        appendTool("list_generators",
+                   "List procedural animation generators (sine / noise / ramp / follow-path / spring) with "
+                   "their targets and parameters, plus the valid generator types and target kinds.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["type"] = QJsonObject{{"type", "string"},
+                                    {"enum", QJsonArray::fromStringList(AnimGen::typeIds())},
+                                    {"description", "Generator type. follow-path drives a node/bone 'position'; every other type a scalar channel."}};
+        props["target"] = QJsonObject{{"type", "string"},
+                                      {"description", "kind:object[/sub]/channel[@clip]. Examples: node:Hand/position.y, "
+                                                      "bone:Rumba/mixamorig:Spine/rotation.z@Dance, morph:Head/jawOpen/weight, "
+                                                      "pose:Rumba/Smile/weight, light:KeyLight/intensity, material:Body_MAT/diffuse.r, "
+                                                      "node:Drone/position (follow-path). Rotations are degrees about the local axis. "
+                                                      "Bone clip defaults to the selected/first clip; node clip to 'Generators' (created); morph to MorphAnim."}};
+        props["params"] = QJsonObject{{"type", "object"},
+                                      {"description", "Parameters: amplitude, frequency (Hz), phase (deg), offset, seed, noise_frequency, octaves, "
+                                                      "from, to, ease (linear|smooth), stiffness (rad/s), damping (ratio), start, duration (default 1 s; 0 = clip end), "
+                                                      "fps, loops, closed, constant_speed, orient, points ([[x,y,z],...] for follow-path)."}};
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};
+        props["bake"] = QJsonObject{{"type", "boolean"}, {"description", "Bake to keyframes right after adding."}};
+        appendTool("add_generator",
+                   "Add a procedural generator that ADDS its value to the target's animation (follow-path replaces the "
+                   "position). Bone/node/morph targets are written into the real animation track, so playback and "
+                   "export see the motion; pose/light/material targets are driven every frame. Undoable.",
+                   props, QJsonArray{"type", "target"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id (see list_generators)."}};
+        props["params"] = QJsonObject{{"type", "object"}, {"description", "Parameters to change (same keys as add_generator)."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the generator (the base track plays alone); true re-enables it. Re-enabling or editing a BAKED generator un-bakes it (the track goes back to how it was before the bake) so it can be changed and baked again."}};
+        props["show_path"] = QJsonObject{{"type", "boolean"}, {"description", "Follow-path only: show (true) or hide (false) the path and its draggable points in the viewport."}};
+        appendTool("set_generator", "Edit a generator's parameters and/or mute it (one undo step), or show its path in the viewport.",
+                   props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id."}};
+        appendTool("bake_generator",
+                   "Bake a generator to keyframes at its fps: the motion becomes ordinary keys and the generator stays "
+                   "attached but inactive. Editing it later (set_generator) un-bakes it so it can be changed and baked again. Undoable.",
+                   props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Generator id."}};
+        appendTool("remove_generator",
+                   "Remove a generator and restore the target's base animation. A baked generator's keys stay "
+                   "(track targets); for pose/light/material its baked curve is removed with it. Undoable.",
+                   props, QJsonArray{"id"});
+    }
+
+    // #525 — animation constraints
+    {
+        QJsonObject props;
+        appendTool("list_constraints",
+                   "List animation constraints (look-at, ik, parent-of, copy-rotation, copy-position, limit-rotation) "
+                   "with owners, targets and parameters. Each owner's stack is listed top first; the top-most wins.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["type"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray::fromStringList(AnimCon::typeIds())},
+                                    {"description", "Constraint type. ik = analytical 2-bone IK: the owner is the END bone (hand/foot) and its parent + grandparent bend."}};
+        props["owner"] = QJsonObject{{"type", "string"}, {"description", "Driven object: bone:<entity>/<bone> or node:<scene node>. IK needs a bone."}};
+        props["target"] = QJsonObject{{"type", "string"}, {"description", "Driving object (same syntax). Required for every type except limit-rotation."}};
+        props["pole"] = QJsonObject{{"type", "string"}, {"description", "IK only, optional: object whose position picks the bend direction (e.g. a node in front of the knee)."}};
+        props["params"] = QJsonObject{{"type", "object"},
+                                      {"description", "influence (0..1), aim / up (x|y|z|-x|-y|-z, look-at; default aim -z = Ogre forward, up y), x / y / z (booleans, copy-position axes), "
+                                                      "limit_x|y|z (booleans), min_x|y|z / max_x|y|z (degrees, limit-rotation)."}};
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Optional display name."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Start live (default true) or muted."}};
+        appendTool("add_constraint",
+                   "Add a constraint at the TOP of the owner's stack (so it wins). It drives the owner every frame on top of "
+                   "its animation; bake_constraints writes the result into keyframes. parent-of keeps the owner where it is "
+                   "now (offset captured). Undoable.",
+                   props, QJsonArray{"type", "owner"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id (see list_constraints)."}};
+        props["params"] = QJsonObject{{"type", "object"}, {"description", "Parameters to change (same keys as add_constraint, plus target / pole / name)."}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "false mutes the constraint, true re-enables it."}};
+        appendTool("set_constraint", "Edit a constraint's parameters and/or mute it (one undo step).", props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id."}};
+        props["direction"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"up", "down"}},
+                                         {"description", "up = toward the top of the owner's stack (applied later, wins)."}};
+        appendTool("move_constraint", "Reorder a constraint within its owner's stack. Undoable.", props, QJsonArray{"id", "direction"});
+    }
+    {
+        QJsonObject props;
+        props["id"] = QJsonObject{{"type", "string"}, {"description", "Constraint id."}};
+        appendTool("remove_constraint", "Remove a constraint; the owner goes back to its animation. Undoable.", props, QJsonArray{"id"});
+    }
+    {
+        QJsonObject props;
+        props["ids"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}},
+                                   {"description", "Constraints to bake (default: every enabled one)."}};
+        props["clip"] = QJsonObject{{"type", "string"}, {"description", "Skeletal clip bone owners are baked into (default: the playing / selected / first clip)."}};
+        props["node_clip"] = QJsonObject{{"type", "string"}, {"description", "Node clip for node owners (default: the clip already animating the node, else 'Constraints', created)."}};
+        props["fps"] = QJsonObject{{"type", "integer"}, {"description", "Samples per second (default 30)."}};
+        appendTool("bake_constraints",
+                   "Bake constraints into keyframes (bones into the skeletal clip, including the bones an IK bends; nodes into a "
+                   "node clip) and mute them. Do this before exporting: glTF/FBX cannot store constraints. One undo step.",
+                   props);
+    }
+
     // list_poses
     {
         QJsonObject props;
@@ -13654,25 +14459,62 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
+    // retarget_animation (#523)
+    {
+        QJsonObject props;
+        props["source_entity"] = QJsonObject{{"type", "string"}, {"description", "Scene entity carrying the clip to retarget (or use source_file)."}};
+        props["source_file"]   = QJsonObject{{"type", "string"}, {"description", "File to import the source clip from (imported transiently)."}};
+        props["target_entity"] = QJsonObject{{"type", "string"}, {"description", "Scene entity that receives the new clip (undoable). Or use target_file + output_path."}};
+        props["target_file"]   = QJsonObject{{"type", "string"}, {"description", "File whose skeleton receives the clip; the result is written to output_path."}};
+        props["animation"]     = QJsonObject{{"type", "string"}, {"description", "Source clip name (required unless dry_run)."}};
+        props["new_name"]      = QJsonObject{{"type", "string"}, {"description", "Name of the new clip. Default '<animation>_retargeted' (made unique)."}};
+        props["bonemap"]       = QJsonObject{{"type", "string"}, {"description", "Bundled map (mixamo_to_humanik, mixamo_to_unreal) or a .bonemap path. Omit to auto-map."}};
+        props["pairs"]         = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}}, {"description", "Inline map [{source, target}] — overrides bonemap."}};
+        props["translation"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"none", "root", "all"}}, {"description", "none = rotation only (keep bone lengths), root = scaled root motion (default), all = every bone's translation (faces/fingers)."}};
+        props["source_rest"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"bind", "first-frame"}}, {"description", "Source rest pose: its bind pose (default) or the clip's first frame."}};
+        props["align_directions"] = QJsonObject{{"type", "boolean"}, {"description", "Match rest bone directions (A-pose vs T-pose). Default true."}};
+        props["fps"]           = QJsonObject{{"type", "integer"}, {"description", "Sampling rate, default 30."}};
+        props["output_path"]   = QJsonObject{{"type", "string"}, {"description", "Export the target (with the new clip) here."}};
+        props["save_bonemap"]  = QJsonObject{{"type", "string"}, {"description", "Also write the resolved bone map as a .bonemap file."}};
+        props["dry_run"]       = QJsonObject{{"type", "boolean"}, {"description", "Only resolve/auto-map and return the bone map."}};
+        appendTool(
+            "retarget_animation",
+            "Retarget a skeletal clip from one skeleton onto an INCOMPATIBLE one (different bone names, axes, "
+            "proportions, Y/Z-up) through a bone map: auto-mapped by name / humanoid role / synonyms, or a bundled "
+            "or .bonemap map, or inline pairs. Creates a new ordinary skeletal clip on the target. Returns the map "
+            "used, unmapped bones, and per-run stats (mapped bones, humanoid alignment, height scale).",
+            props,
+            QJsonArray{}
+        );
+    }
+
     // bake_vat
     {
         QJsonObject props;
-        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, etc.). Mesh must expose per-vertex normals."}};
-        props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (use list_skeletal_animations to enumerate)."}};
+        props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, .abc, etc.). Mesh must expose per-vertex normals."}};
+        props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (skeletal: list_skeletal_animations; mesh-anim: the vertex clip; morph: the weight clip, defaults to \"MorphAnim\" when omitted)."}};
+        props["mode"]       = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"skeletal", "rigid", "mesh-anim", "morph"}},
+            {"description", "VAT variant (#522). skeletal (default): per-vertex post-skinning positions. rigid: one rotation+pivot per chunk (submesh) per frame, fitted to the animation - destruction / mechanical pieces. mesh-anim: a full-mesh vertex clip (Alembic cache / VAT_POSE stream). morph: a morph-weight clip resolved to vertex positions."}};
+        props["encoding"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"rgba8", "rgba16", "exr"}},
+            {"description", "Texture bit depth: rgba8 (8-bit PNG, smallest), rgba16 (16-bit PNG, default), exr (float32, lossless)."}};
+        props["target"]     = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"agnostic", "unity", "unreal", "godot"}},
+            {"description", "Target engine recorded in the sidecar (`_target`); a non-agnostic target also copies that engine's shader template next to the bake. Default agnostic."}};
+        props["include_shaders"] = QJsonObject{{"type", "string"}, {"description", "Comma-separated engine templates to copy next to the bake: godot, unity, unreal, or all."}};
         props["fps"]        = QJsonObject{{"type", "number"}, {"description", "Sample rate in frames per second. Default 30."}};
         props["output_dir"] = QJsonObject{{"type", "string"}, {"description", "Directory to write the OpenVAT texture + sidecar into. Created if missing."}};
         props["basename"]   = QJsonObject{{"type", "string"}, {"description", "Base filename (no extension) for the outputs. Defaults to `anim` when empty."}};
         QJsonArray required;
         required.append("file");
-        required.append("anim");
         required.append("output_dir");
         appendTool(
             "bake_vat",
-            "Bake a skeletal animation into a Vertex Animation Texture in OpenVAT format "
-            "(sharpen3d/openvat). Output: a single 16-bit RGB PNG (height = 2 × frames; top half "
-            "positions, bottom half normals) plus `<basename>-remap_info.json` with the canonical "
-            "`os-remap` sidecar shape. Off-the-shelf openvat reference shaders for Godot / Unity / "
-            "Unreal / Blender consume the output unmodified.",
+            "Bake an animation into a Vertex Animation Texture in OpenVAT format "
+            "(sharpen3d/openvat) - four modes: skeletal (per-vertex), rigid (per-chunk quaternion+pivot), "
+            "mesh-anim (vertex cache) and morph (blend-shape weights). Output: a packed PNG/EXR "
+            "(height = 2 × frames; top half positions, bottom half normals - rigid: pivots + quaternions) "
+            "plus `<basename>-remap_info.json` with the canonical `os-remap` sidecar shape and a `_mode` key. "
+            "Off-the-shelf openvat reference shaders for Godot / Unity / Unreal / Blender consume the "
+            "per-vertex output unmodified; rigid bakes ship openvat_rigid.gdshader.",
             props,
             required
         );

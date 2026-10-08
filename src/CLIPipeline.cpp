@@ -21,6 +21,10 @@
 #include "Mocap/MocapCameraHints.h"
 #endif
 #include "AnimationMerger.h"
+#include "AnimationRetargeter.h"
+#include "AnimGeneratorManager.h"
+#include "AnimGenerators.h"
+#include "ConstraintManager.h"
 #include "CreatureMotionExtract.h"
 #include "CreatureMotionRetarget.h"
 #include "MotionInbetween.h"
@@ -64,6 +68,7 @@
 #include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
 #include "FaceRig/FaceRigLandmarks.h"
+#include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -646,6 +651,16 @@ void CLIPipeline::printUsage()
         "  convert <file> -o <output>        Convert between 3D formats\n"
         "  convert <file> -o <output.glb> --compress draco   Convert + Draco-compress glTF\n"
         "  anim <file> --list [--json]       List animations\n"
+        "  anim <source> --retarget <target> [--bonemap <file|bundled>] [--anim <name>] [-o <output>]\n"
+        "                                    Retarget clips onto an incompatible skeleton (#523)\n"
+        "  anim <file> --generator <sine|noise|ramp|follow-path|spring> --target <kind:object/channel> [--<param> v] [--bake] -o <out>\n"
+        "                                    Procedural generator tracks (#524)\n"
+        "  anim <file> --list-generators [--json]\n"
+        "  anim <file> --list-constraints [--json]\n"
+        "  anim <file> [--constraint <look-at|ik|parent-of|copy-rotation|copy-position|limit-rotation> --owner <ref>\n"
+        "              --target <ref> ...] --bake-constraints [--animation <clip>] [--fps N] -o <out>\n"
+        "                                    Animation constraints (#525): list the .constraints.json sidecar,\n"
+        "                                    add constraints, bake them into keyframes\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
@@ -2557,8 +2572,590 @@ int CLIPipeline::cmdAnimGenerate(const QString& filePath, const QString& prompt,
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// #523 — anim <source> --retarget <target>
+// ---------------------------------------------------------------------------
+namespace {
+QList<Ogre::Entity*> skeletalEntitiesNow()
+{
+    QList<Ogre::Entity*> out;
+    for (Ogre::MovableObject* obj : Manager::getSingleton()->getEntities())
+        if (obj && obj->getMovableType() == "Entity" && static_cast<Ogre::Entity*>(obj)->hasSkeleton())
+            out.push_back(static_cast<Ogre::Entity*>(obj));
+    return out;
+}
+
+Ogre::Entity* importSkeletal(const QString& path, QString* why)
+{
+    const QList<Ogre::Entity*> before = skeletalEntitiesNow();
+    MeshImporterExporter::importer({QFileInfo(path).absoluteFilePath()});
+    for (Ogre::Entity* e : skeletalEntitiesNow())
+        if (!before.contains(e)) return e;
+    if (why) *why = QStringLiteral("%1 has no skinned mesh with a skeleton").arg(path);
+    return nullptr;
+}
+}  // namespace
+
+int CLIPipeline::cmdAnimRetarget(int argc, char* argv[])
+{
+    QString sourcePath, targetPath, bonemapArg, animArg, nameArg, outputPath, saveMapPath;
+    QString translationArg = QStringLiteral("root"), restArg = QStringLiteral("bind");
+    bool align = true, json = false, printMap = false;
+    int fps = 30;
+    auto usage = [&]() {
+        err() << "Usage: qtmesh anim <source> --retarget <target> [--bonemap <file.bonemap|"
+              << Retarget::bundledBoneMapNames().join('|') << ">]\n"
+                 "         [--anim <name>] [--name <new clip>] [--translation none|root|all]\n"
+                 "         [--source-rest bind|first-frame] [--no-align] [--fps N]\n"
+                 "         [--save-bonemap <out.bonemap>] [--print-bonemap] [--json] -o <output>"
+              << Qt::endl;
+    };
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
+        if (a == "anim" || a == "--cli") continue;
+        if (a == "--retarget") { targetPath = next(); continue; }
+        if (a == "--bonemap") { bonemapArg = next(); continue; }
+        if (a == "--anim" || a == "--animation") { animArg = next(); continue; }
+        if (a == "--name") { nameArg = next(); continue; }
+        if (a == "--translation") { translationArg = next(); continue; }
+        if (a == "--rotation-only") { translationArg = QStringLiteral("none"); continue; }
+        if (a == "--source-rest") { restArg = next(); continue; }
+        if (a == "--no-align") { align = false; continue; }
+        if (a == "--fps") { fps = next().toInt(); continue; }
+        if (a == "--save-bonemap") { saveMapPath = next(); continue; }
+        if (a == "--print-bonemap") { printMap = true; continue; }
+        if (a == "--json") { json = true; continue; }
+        if (a == "-o" || a == "--output") { outputPath = next(); continue; }
+        if (!a.startsWith('-') && sourcePath.isEmpty()) { sourcePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'." << Qt::endl;
+        usage();
+        return 2;
+    }
+
+    Retarget::Options opts;
+    opts.alignDirections = align;
+    if (!Retarget::translationModeFromId(translationArg, &opts.translation)) {
+        err() << "Error: --translation must be none, root or all." << Qt::endl; return 2;
+    }
+    if (!Retarget::sourceRestFromId(restArg, &opts.sourceRest)) {
+        err() << "Error: --source-rest must be bind or first-frame." << Qt::endl; return 2;
+    }
+    if (fps <= 0 || fps > 240) { err() << "Error: --fps must be 1..240." << Qt::endl; return 2; }
+    if (sourcePath.isEmpty() || targetPath.isEmpty()) {
+        err() << "Error: need a source file and --retarget <target file>." << Qt::endl;
+        usage();
+        return 2;
+    }
+    const bool dryRun = printMap && outputPath.isEmpty();
+    if (outputPath.isEmpty() && !dryRun && saveMapPath.isEmpty()) {
+        err() << "Error: -o <output> is required (or --print-bonemap / --save-bonemap only)." << Qt::endl;
+        return 2;
+    }
+    for (const QString& f : {sourcePath, targetPath})
+        if (!QFileInfo::exists(f)) { err() << "Error: File not found: " << f << Qt::endl; return 1; }
+
+    // Load an explicit map before importing anything, so a typo fails fast.
+    Retarget::BoneMap map;
+    bool haveMap = false;
+    if (!bonemapArg.isEmpty()) {
+        QString e;
+        if (Retarget::bundledBoneMap(bonemapArg, &map)) haveMap = true;
+        else if (QFileInfo::exists(bonemapArg) && Retarget::BoneMap::load(bonemapArg, &map, &e)) haveMap = true;
+        else {
+            err() << "Error: --bonemap '" << bonemapArg << "' is neither a bundled map ("
+                  << Retarget::bundledBoneMapNames().join(", ") << ") nor a readable .bonemap"
+                  << (e.isEmpty() ? QString() : QStringLiteral(": ") + e) << "." << Qt::endl;
+            return 2;
+        }
+    }
+
+    if (!initOgreHeadless()) return 1;
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.retarget.cli"),
+        QStringLiteral("CLI retarget %1 -> %2 (bonemap=%3)")
+            .arg(QFileInfo(sourcePath).fileName(), QFileInfo(targetPath).fileName(),
+                 bonemapArg.isEmpty() ? QStringLiteral("auto") : bonemapArg));
+
+    QString why;
+    Ogre::Entity* src = importSkeletal(sourcePath, &why);
+    if (!src) { err() << "Error: " << why << "." << Qt::endl; return 1; }
+    Ogre::Entity* tgt = importSkeletal(targetPath, &why);
+    if (!tgt) { err() << "Error: " << why << "." << Qt::endl; return 1; }
+
+    const auto srcNames = Retarget::boneNames(src->getSkeleton());
+    const auto tgtNames = Retarget::boneNames(tgt->getSkeleton());
+    QStringList unresolved;
+    Retarget::AutoMapReport autoRep;
+    if (haveMap) {
+        map = Retarget::resolveMap(map, srcNames, tgtNames, &unresolved);
+    } else {
+        autoRep = Retarget::autoMap(srcNames, tgtNames);
+        map = autoRep.map;
+    }
+    if (!saveMapPath.isEmpty()) {
+        QString e;
+        if (map.name.isEmpty() || map.name == QLatin1String("auto"))
+            map.name = QFileInfo(saveMapPath).completeBaseName();
+        if (!map.save(saveMapPath, &e)) { err() << "Error: " << e << Qt::endl; return 1; }
+        err() << "Saved bone map (" << map.pairs.size() << " pairs) to " << saveMapPath << Qt::endl;
+    }
+    if (printMap) {
+        // With -o the bone map rides inside the final JSON report, so stdout
+        // stays ONE document; a dry run prints the map alone.
+        if (json) { if (outputPath.isEmpty()) cliWrite(QString::fromUtf8(map.toJson())); }
+        else {
+            cliWrite(QStringLiteral("Bone map: %1 pairs\n").arg(map.pairs.size()));
+            for (const auto& p : map.pairs)
+                cliWrite(QStringLiteral("  %1 -> %2\n").arg(QString::fromStdString(p.source),
+                                                            QString::fromStdString(p.target)));
+            for (const auto& s : autoRep.unmappedSource)
+                cliWrite(QStringLiteral("  %1 -> (unmapped)\n").arg(QString::fromStdString(s)));
+        }
+    }
+    if (outputPath.isEmpty()) return map.pairs.empty() ? 1 : 0;
+    if (map.pairs.empty()) {
+        err() << "Error: no bone of the source maps onto the target"
+              << (haveMap ? " with that bone map" : "") << "." << Qt::endl;
+        return 1;
+    }
+
+    // Which clips: --anim, else every clip of the source.
+    std::vector<std::string> clips;
+    Ogre::SkeletonInstance* ss = src->getSkeleton();
+    if (!animArg.isEmpty()) {
+        if (!ss->hasAnimation(animArg.toStdString())) {
+            err() << "Error: the source has no animation '" << animArg << "'. Available:";
+            for (unsigned short i = 0; i < ss->getNumAnimations(); ++i)
+                err() << " '" << QString::fromStdString(ss->getAnimation(i)->getName()) << "'";
+            err() << Qt::endl;
+            return 1;
+        }
+        clips.push_back(animArg.toStdString());
+    } else {
+        for (unsigned short i = 0; i < ss->getNumAnimations(); ++i)
+            clips.push_back(ss->getAnimation(i)->getName());
+    }
+    if (clips.empty()) { err() << "Error: the source has no skeletal animation." << Qt::endl; return 1; }
+    if (!nameArg.isEmpty() && clips.size() > 1) {
+        err() << "Error: --name needs --anim (it names ONE clip)." << Qt::endl; return 2;
+    }
+
+    QJsonArray made;
+    for (const std::string& clip : clips) {
+        const std::string name = Retarget::uniqueAnimationName(
+            tgt->getSkeleton(), nameArg.isEmpty() ? clip : nameArg.toStdString());
+        const Retarget::Result r = Retarget::retarget(ss, clip, tgt->getSkeleton(), name, map, opts, fps);
+        if (!r.ok) { err() << "Error: retarget of '" << QString::fromStdString(clip) << "' failed: " << r.error << Qt::endl; return 1; }
+        SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.retarget.apply"),
+            QStringLiteral("CLI %1 -> %2 (%3 bones, %4 frames)").arg(QString::fromStdString(clip),
+                QString::fromStdString(name)).arg(r.report.mappedBones).arg(r.frames));
+        QJsonObject o;
+        o["source"] = QString::fromStdString(clip);
+        o["animation"] = QString::fromStdString(name);
+        o["frames"] = r.frames;
+        o["length"] = r.length;
+        o["mapped_bones"] = r.report.mappedBones;
+        o["global_alignment"] = r.report.globalAlignment;
+        o["height_scale"] = r.report.heightScale;
+        o["root_bone"] = QString::fromStdString(r.report.rootTarget);
+        made.append(o);
+        if (!json)
+            cliWrite(QStringLiteral("Retargeted '%1' -> '%2': %3 frames, %4 bones driven, height x%5%6\n")
+                         .arg(QString::fromStdString(clip), QString::fromStdString(name)).arg(r.frames)
+                         .arg(r.report.mappedBones).arg(r.report.heightScale, 0, 'f', 3)
+                         .arg(r.report.globalAlignment ? QString() : QStringLiteral(" (no humanoid frame found; axes used as-is)")));
+    }
+    tgt->refreshAvailableAnimationState();
+    const QString fmt = formatForExtension(outputPath);
+    if (MeshImporterExporter::exporter(tgt->getParentSceneNode(),
+                                       QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+    if (json) {
+        QJsonObject root;
+        root["ok"] = true;
+        root["output"] = QFileInfo(outputPath).absoluteFilePath();
+        root["bonemap"] = bonemapArg.isEmpty() ? QStringLiteral("auto") : bonemapArg;
+        root["pairs"] = int(map.pairs.size());
+        root["translation"] = Retarget::translationModeId(opts.translation);
+        root["source_rest"] = Retarget::sourceRestId(opts.sourceRest);
+        root["align_directions"] = opts.alignDirections;
+        root["animations"] = made;
+        if (printMap) root["bonemap_json"] = QJsonDocument::fromJson(map.toJson()).object();
+        QJsonArray un;
+        for (const QString& u : unresolved) un.append(u);
+        root["unresolved_pairs"] = un;
+        cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+    } else {
+        if (!unresolved.isEmpty())
+            cliWrite(QStringLiteral("  (%1 pairs of the bone map name bones these skeletons don't have)\n")
+                         .arg(unresolved.size()));
+        cliWrite(QStringLiteral("Wrote %1\n").arg(QFileInfo(outputPath).absoluteFilePath()));
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// #524 — anim <file> --generator <type> --target <kind:object/channel> [...]
+// ---------------------------------------------------------------------------
+int CLIPipeline::cmdAnimGenerators(int argc, char* argv[])
+{
+    struct Spec { QString type; QString target; QList<QPair<QString, QString>> params; };
+    QList<Spec> specs;
+    QString filePath, outputPath, animArg;
+    bool json = false, bake = false, listOnly = false;
+    auto usage = [&]() {
+        err() << "Usage: qtmesh anim <file> --generator <" << AnimGen::typeIds().join('|') << ">\n"
+                 "         --target <kind:object[/sub]/channel[@clip]> [--<param> <value> ...]\n"
+                 "         [--generator ... repeat] [--animation <clip>] [--bake] [--json] -o <output>\n"
+                 "       qtmesh anim <file> --list-generators [--json]\n"
+                 "  kinds: " << AnimGen::kindIds().join('|') << "   ('*' as the object = the imported mesh / its node)\n"
+                 "  params: amplitude frequency phase offset seed noise-frequency octaves from to ease\n"
+                 "          stiffness damping start duration fps loops closed constant-speed orient points name"
+              << Qt::endl;
+    };
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
+        // Global flags CLIPipeline::run already honoured — never generator params.
+        if (a == "anim" || a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (a == "--generator") { specs.append(Spec{next(), QString(), {}}); continue; }
+        if (a == "--list-generators") { listOnly = true; continue; }
+        if (a == "--target") {
+            if (specs.isEmpty()) { err() << "Error: --target must follow --generator." << Qt::endl; return 2; }
+            specs.last().target = next();
+            continue;
+        }
+        if (a == "--animation" || a == "--anim") { animArg = next(); continue; }
+        if (a == "--bake") { bake = true; continue; }
+        if (a == "--json") { json = true; continue; }
+        if (a == "-o" || a == "--output") { outputPath = next(); continue; }
+        if (a.startsWith("--") && !specs.isEmpty()) {
+            if (i + 1 >= argc) { err() << "Error: " << a << " needs a value." << Qt::endl; return 2; }
+            specs.last().params.append({a.mid(2), next()});
+            continue;
+        }
+        if (!a.startsWith('-') && filePath.isEmpty()) { filePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'." << Qt::endl;
+        usage();
+        return 2;
+    }
+    if (filePath.isEmpty()) { usage(); return 2; }
+    if (!QFileInfo::exists(filePath)) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+
+    if (listOnly) {
+        // Pure file read — no mesh load.
+        QFile f(AnimGeneratorManager::sidecarPath(filePath));
+        std::vector<AnimGen::Generator> gens;
+        if (f.open(QIODevice::ReadOnly)) {
+            QString e;
+            if (!AnimGen::fromDocument(QJsonDocument::fromJson(f.readAll()).object(), &gens, &e)) {
+                err() << "Error: " << f.fileName() << ": " << e << Qt::endl;
+                return 1;
+            }
+        }
+        if (json) {
+            QJsonArray arr;
+            for (const auto& g : gens) { QJsonObject o = AnimGen::toJson(g); o.remove("state"); arr.append(o); }
+            cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"file", filePath}, {"generators", arr}})
+                                           .toJson(QJsonDocument::Indented)));
+        } else if (gens.empty()) {
+            cliWrite(QStringLiteral("No generators (%1 not found or empty)\n").arg(f.fileName()));
+        } else {
+            for (const auto& g : gens)
+                cliWrite(QStringLiteral("%1  %2  %3%4\n").arg(g.id, AnimGen::typeId(g.type), AnimGen::formatTarget(g.target),
+                                                             g.baked ? QStringLiteral("  [baked]")
+                                                             : !g.enabled ? QStringLiteral("  [muted]") : QString()));
+        }
+        return 0;
+    }
+    if (specs.isEmpty()) { err() << "Error: give at least one --generator." << Qt::endl; usage(); return 2; }
+    if (outputPath.isEmpty()) { err() << "Error: -o <output> is required." << Qt::endl; return 2; }
+
+    // Validate everything that needs no scene before the (slow) import.
+    for (const Spec& sp : specs) {
+        AnimGen::Type t;
+        if (!AnimGen::typeFromId(sp.type, &t)) {
+            err() << "Error: unknown generator type '" << sp.type << "' (" << AnimGen::typeIds().join('|') << ")." << Qt::endl;
+            return 2;
+        }
+        if (sp.target.isEmpty()) { err() << "Error: --generator " << sp.type << " needs --target." << Qt::endl; return 2; }
+        AnimGen::Target tg;
+        QString e;
+        if (!AnimGen::parseTarget(sp.target, &tg, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+        AnimGen::Generator probe;
+        probe.type = t;
+        for (const auto& p : sp.params)
+            if (!AnimGen::applyParam(&probe, p.first, p.second, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+    }
+
+    if (!initOgreHeadless()) return 1;
+    auto entitiesNow = []() {
+        QList<Ogre::Entity*> out;
+        for (Ogre::MovableObject* obj : Manager::getSingleton()->getEntities())
+            if (obj && obj->getMovableType() == "Entity") out.push_back(static_cast<Ogre::Entity*>(obj));
+        return out;
+    };
+    const QList<Ogre::Entity*> before = entitiesNow();
+    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});
+    Ogre::Entity* ent = nullptr;
+    for (Ogre::Entity* e : entitiesNow()) if (!before.contains(e)) { ent = e; break; }
+    if (!ent) { err() << "Error: " << filePath << " has no mesh." << Qt::endl; return 1; }
+
+    auto* gm = AnimGeneratorManager::instance();
+    QJsonArray made;
+    bool sceneLevel = false;
+    for (const Spec& sp : specs) {
+        AnimGen::Generator g;
+        AnimGen::typeFromId(sp.type, &g.type);
+        AnimGen::parseTarget(sp.target, &g.target);
+        if (g.target.object == QLatin1String("*")) {
+            g.target.object = QString::fromStdString(g.target.kind == AnimGen::TargetKind::Node
+                ? ent->getParentSceneNode()->getName() : ent->getName());
+        }
+        if (g.target.clip.isEmpty() && !animArg.isEmpty() && g.target.kind == AnimGen::TargetKind::Bone)
+            g.target.clip = animArg;
+        for (const auto& p : sp.params) AnimGen::applyParam(&g, p.first, p.second);
+        const auto r = gm->add(g, false);
+        if (!r.ok) { err() << "Error: " << r.error << Qt::endl; return 1; }
+        if (bake) {
+            const auto b = gm->bake(r.id, false);
+            if (!b.ok) { err() << "Error: bake failed: " << b.error << Qt::endl; return 1; }
+        }
+        const AnimGen::Generator* added = gm->find(r.id);
+        if (added->target.kind == AnimGen::TargetKind::Node || added->target.kind == AnimGen::TargetKind::Light
+            || added->target.kind == AnimGen::TargetKind::Material)
+            sceneLevel = true;
+        QJsonObject o = AnimGen::toJson(*added);
+        o.remove("state");
+        made.append(o);
+        if (!json)
+            cliWrite(QStringLiteral("%1 %2 -> %3%4\n").arg(bake ? QStringLiteral("Baked") : QStringLiteral("Added"),
+                                                          AnimGen::typeLabel(added->type),
+                                                          AnimGen::formatTarget(added->target),
+                                                          added->target.kind == AnimGen::TargetKind::Light
+                                                              || added->target.kind == AnimGen::TargetKind::Material
+                                                              || added->target.kind == AnimGen::TargetKind::Pose
+                                                          ? QStringLiteral(" (runtime target: kept in the .generators.json sidecar)")
+                                                          : QString()));
+    }
+    ent->refreshAvailableAnimationState();
+    const QString outAbs = QFileInfo(outputPath).absoluteFilePath();
+    // Node / light / material targets live on the scene, so export the scene;
+    // a bone / morph / pose generator travels with the mesh alone.
+    const int rc = sceneLevel ? MeshImporterExporter::sceneExporter(outAbs)
+                              : MeshImporterExporter::exporter(ent->getParentSceneNode(), outAbs, formatForExtension(outputPath));
+    if (rc != 0) { err() << "Error: export failed." << Qt::endl; return 1; }
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.generator.cli"),
+                                  QStringLiteral("%1 generators%2").arg(specs.size()).arg(bake ? " baked" : ""));
+    if (json) {
+        cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"output", outAbs}, {"baked", bake},
+                                                             {"sidecar", AnimGeneratorManager::sidecarPath(outAbs)},
+                                                             {"generators", made}})
+                                       .toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QStringLiteral("Wrote %1 (+ %2)\n").arg(outAbs, QFileInfo(AnimGeneratorManager::sidecarPath(outAbs)).fileName()));
+    }
+    return 0;
+}
+
+int CLIPipeline::cmdAnimConstraints(int argc, char* argv[])
+{
+    struct Spec { QString type; QString owner; QString target; QString pole; QList<QPair<QString, QString>> params; };
+    QList<Spec> specs;
+    QString filePath, outputPath, animArg, nodeClip;
+    int fps = 30;
+    bool json = false, bake = false, listOnly = false;
+    auto usage = [&]() {
+        err() << "Usage: qtmesh anim <file> --list-constraints [--json]\n"
+                 "       qtmesh anim <file> [--constraint <" << AnimCon::typeIds().join('|') << ">\n"
+                 "         --owner <ref> [--target <ref>] [--pole <ref>] [--<param> <value> ...]] ...\n"
+                 "         [--bake-constraints [--animation <clip>] [--node-clip <name>] [--fps N]] [--json] -o <output>\n"
+                 "  ref: bone:<entity>/<bone> | node:<name>   ('*' as the entity/node = the imported mesh / its node)\n"
+                 "  params: influence aim up x y z limit-x|y|z min-x|y|z max-x|y|z name\n"
+                 "  Constraints already in <file>.constraints.json are loaded with the mesh."
+              << Qt::endl;
+    };
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        auto next = [&]() -> QString { return i + 1 < argc ? QString(argv[++i]) : QString(); };
+        if (a == "anim" || a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (a == "--list-constraints") { listOnly = true; continue; }
+        if (a == "--bake-constraints") { bake = true; continue; }
+        if (a == "--constraint") { specs.append(Spec{next(), {}, {}, {}, {}}); continue; }
+        if (a == "--owner" || a == "--target" || a == "--pole") {
+            if (specs.isEmpty()) { err() << "Error: " << a << " must follow --constraint." << Qt::endl; return 2; }
+            QString& slot = a == "--owner" ? specs.last().owner : a == "--target" ? specs.last().target : specs.last().pole;
+            slot = next();
+            continue;
+        }
+        if (a == "--animation" || a == "--anim") { animArg = next(); continue; }
+        if (a == "--node-clip") { nodeClip = next(); continue; }
+        if (a == "--fps") {
+            bool ok = false;
+            fps = next().toInt(&ok);
+            if (!ok || fps < 1 || fps > 240) { err() << "Error: --fps must be 1..240." << Qt::endl; return 2; }
+            continue;
+        }
+        if (a == "--json") { json = true; continue; }
+        if (a == "-o" || a == "--output") { outputPath = next(); continue; }
+        if (a.startsWith("--") && !specs.isEmpty()) {
+            if (i + 1 >= argc) { err() << "Error: " << a << " needs a value." << Qt::endl; return 2; }
+            specs.last().params.append({a.mid(2).replace('-', '_'), next()});
+            continue;
+        }
+        if (!a.startsWith('-') && filePath.isEmpty()) { filePath = a; continue; }
+        err() << "Error: unknown option '" << a << "'." << Qt::endl;
+        usage();
+        return 2;
+    }
+    if (filePath.isEmpty()) { usage(); return 2; }
+    if (!QFileInfo::exists(filePath)) { err() << "Error: File not found: " << filePath << Qt::endl; return 1; }
+
+    if (listOnly) {
+        // Pure file read — no mesh load.
+        QFile f(ConstraintManager::sidecarPath(filePath));
+        std::vector<AnimCon::Constraint> cons;
+        if (f.open(QIODevice::ReadOnly)) {
+            QString e;
+            if (!AnimCon::fromDocument(QJsonDocument::fromJson(f.readAll()).object(), &cons, &e)) {
+                err() << "Error: " << f.fileName() << ": " << e << Qt::endl;
+                return 1;
+            }
+        }
+        if (json) {
+            QJsonArray arr;
+            for (const auto& c : cons) arr.append(AnimCon::toJson(c));
+            cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"file", filePath}, {"constraints", arr}})
+                                           .toJson(QJsonDocument::Indented)));
+        } else if (cons.empty()) {
+            cliWrite(QStringLiteral("No constraints (%1 not found or empty)\n").arg(f.fileName()));
+        } else {
+            for (const auto& c : cons)
+                cliWrite(QStringLiteral("%1  %2  %3%4%5\n")
+                             .arg(c.id, AnimCon::typeId(c.type), AnimCon::formatRef(c.owner),
+                                  c.target.isEmpty() ? QString() : QStringLiteral(" <- ") + AnimCon::formatRef(c.target),
+                                  !c.enabled ? QStringLiteral("  [muted]")
+                                  : c.influence < 1.0 ? QStringLiteral("  [influence %1]").arg(c.influence) : QString()));
+        }
+        return 0;
+    }
+    if (specs.isEmpty() && !bake) { err() << "Error: give --constraint and/or --bake-constraints." << Qt::endl; usage(); return 2; }
+    if (outputPath.isEmpty()) { err() << "Error: -o <output> is required." << Qt::endl; return 2; }
+
+    // Validate everything that needs no scene before the (slow) import.
+    for (const Spec& sp : specs) {
+        AnimCon::Type t;
+        if (!AnimCon::typeFromId(sp.type, &t)) {
+            err() << "Error: unknown constraint type '" << sp.type << "' (" << AnimCon::typeIds().join('|') << ")." << Qt::endl;
+            return 2;
+        }
+        AnimCon::Ref r;
+        QString e;
+        if (sp.owner.isEmpty() || !AnimCon::parseRef(sp.owner, &r, &e)) {
+            err() << "Error: --constraint " << sp.type << " needs a valid --owner" << (e.isEmpty() ? "" : ": ") << e << Qt::endl;
+            return 2;
+        }
+        if (AnimCon::needsTarget(t) && sp.target.isEmpty()) {
+            err() << "Error: --constraint " << sp.type << " needs --target." << Qt::endl;
+            return 2;
+        }
+        if (!AnimCon::parseRef(sp.target, &r, &e) || !AnimCon::parseRef(sp.pole, &r, &e)) {
+            err() << "Error: " << e << Qt::endl;
+            return 2;
+        }
+        AnimCon::Constraint probe;
+        probe.type = t;
+        for (const auto& p : sp.params)
+            if (!AnimCon::applyParam(&probe, p.first, p.second, &e)) { err() << "Error: " << e << Qt::endl; return 2; }
+    }
+
+    if (!initOgreHeadless()) return 1;
+    auto entitiesNow = []() {
+        QList<Ogre::Entity*> out;
+        for (Ogre::MovableObject* obj : Manager::getSingleton()->getEntities())
+            if (obj && obj->getMovableType() == "Entity") out.push_back(static_cast<Ogre::Entity*>(obj));
+        return out;
+    };
+    const QList<Ogre::Entity*> before = entitiesNow();
+    MeshImporterExporter::importer({QFileInfo(filePath).absoluteFilePath()});  // also loads the .constraints.json sidecar
+    Ogre::Entity* ent = nullptr;
+    for (Ogre::Entity* e : entitiesNow()) if (!before.contains(e)) { ent = e; break; }
+    if (!ent) { err() << "Error: " << filePath << " has no mesh." << Qt::endl; return 1; }
+
+    auto* cm = ConstraintManager::instance();
+    const QString entName = QString::fromStdString(ent->getName());
+    const QString nodeName = QString::fromStdString(ent->getParentSceneNode()->getName());
+    auto resolveStar = [&](AnimCon::Ref r) {
+        if (r.object == QLatin1String("*")) r.object = r.isBone() ? entName : nodeName;
+        return r;
+    };
+    QJsonArray made;
+    for (const Spec& sp : specs) {
+        AnimCon::Constraint c;
+        AnimCon::typeFromId(sp.type, &c.type);
+        AnimCon::parseRef(sp.owner, &c.owner);
+        AnimCon::parseRef(sp.target, &c.target);
+        AnimCon::parseRef(sp.pole, &c.pole);
+        c.owner = resolveStar(c.owner);
+        c.target = resolveStar(c.target);
+        c.pole = resolveStar(c.pole);
+        for (const auto& p : sp.params) AnimCon::applyParam(&c, p.first, p.second);
+        const auto r = cm->add(c, false);
+        if (!r.ok) { err() << "Error: " << r.error << Qt::endl; return 1; }
+        made.append(AnimCon::toJson(*cm->find(r.id)));
+        if (!json) cliWrite(QStringLiteral("Added %1 on %2\n").arg(AnimCon::typeLabel(c.type), AnimCon::formatRef(c.owner)));
+    }
+    if (bake) {
+        if (cm->activeCount() == 0) { err() << "Error: no enabled constraints to bake." << Qt::endl; return 1; }
+        ConstraintManager::BakeOptions o;
+        o.clip = animArg;
+        o.nodeClip = nodeClip;
+        o.fps = fps;
+        const auto b = cm->bake(o, false);
+        if (!b.ok) { err() << "Error: bake failed: " << b.error << Qt::endl; return 1; }
+        if (!json) cliWrite(cm->status() + QLatin1Char('\n'));
+    }
+    bool sceneLevel = false;
+    for (const auto& c : cm->constraints()) if (!c.owner.isBone()) sceneLevel = true;
+    ent->refreshAvailableAnimationState();
+    const QString outAbs = QFileInfo(outputPath).absoluteFilePath();
+    // Node owners live on the scene (their baked clip is a scene clip), so
+    // export the scene; bone owners travel with the mesh alone.
+    const int rc = sceneLevel ? MeshImporterExporter::sceneExporter(outAbs)
+                              : MeshImporterExporter::exporter(ent->getParentSceneNode(), outAbs, formatForExtension(outputPath));
+    if (rc != 0) { err() << "Error: export failed." << Qt::endl; return 1; }
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.constraint.cli"),
+                                  QStringLiteral("%1 added%2").arg(specs.size()).arg(bake ? ", baked" : ""));
+    const bool hasSidecar = QFileInfo::exists(ConstraintManager::sidecarPath(outAbs));
+    if (json) {
+        QJsonArray all;
+        for (const auto& c : cm->constraints()) all.append(AnimCon::toJson(c));
+        cliWrite(QString::fromUtf8(QJsonDocument(QJsonObject{{"ok", true}, {"output", outAbs}, {"baked", bake},
+                                                             {"sidecar", hasSidecar ? ConstraintManager::sidecarPath(outAbs) : QString()},
+                                                             {"added", made}, {"constraints", all}})
+                                       .toJson(QJsonDocument::Indented)));
+    } else {
+        cliWrite(QStringLiteral("Wrote %1%2\n").arg(outAbs, hasSidecar ? QStringLiteral(" (+ ") +
+            QFileInfo(ConstraintManager::sidecarPath(outAbs)).fileName() + QLatin1Char(')') : QString()));
+    }
+    return 0;
+}
+
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; ++i)
+        if (QString(argv[i]) == QLatin1String("--retarget")) return cmdAnimRetarget(argc, argv);
+    for (int i = 1; i < argc; ++i) {
+        const QString a(argv[i]);
+        if (a == QLatin1String("--generator") || a == QLatin1String("--list-generators"))
+            return cmdAnimGenerators(argc, argv);
+        if (a == QLatin1String("--constraint") || a == QLatin1String("--list-constraints")
+            || a == QLatin1String("--bake-constraints"))
+            return cmdAnimConstraints(argc, argv);
+    }
+
     // Parse: anim <file> --list [--json]
     //    or: anim <file> --analyze [--json]
     //    or: anim <file> --rename <old> <new> [-o <output>]
@@ -9725,18 +10322,22 @@ std::vector<BakeVertex> readOgreBindVertices(Ogre::Entity* entity)
 // Read positions + normals + UV0 per primitive from a glTF file. `out`
 // is a flat list parallel to `readOgreBindVertices` — concatenated in
 // primitive-index order. Returns true on success.
+// `why` (optional) receives a one-line reason on failure so the CLI can
+// say WHICH gate refused the file instead of a bare "failed to read back".
 bool readGltfVertices(const QString& gltfPath,
-                      std::vector<BakeVertex>& out)
+                      std::vector<BakeVertex>& out,
+                      QString* why = nullptr)
 {
     out.clear();
+    auto fail = [&](const QString& reason) { if (why) *why = reason; return false; };
     QFile f(gltfPath);
-    if (!f.open(QIODevice::ReadOnly)) return false;
+    if (!f.open(QIODevice::ReadOnly)) return fail(QStringLiteral("cannot open %1").arg(gltfPath));
     const QByteArray jsonBytes = f.readAll();
     f.close();
     QJsonParseError perr;
     QJsonDocument doc = QJsonDocument::fromJson(jsonBytes, &perr);
     if (perr.error != QJsonParseError::NoError || !doc.isObject())
-        return false;
+        return fail(QStringLiteral("JSON parse: %1").arg(perr.errorString()));
     QJsonObject root = doc.object();
 
     QJsonArray buffers = root.value(QStringLiteral("buffers")).toArray();
@@ -9745,34 +10346,48 @@ bool readGltfVertices(const QString& gltfPath,
     for (int i = 0; i < buffers.size(); ++i) {
         QJsonObject b = buffers.at(i).toObject();
         QString uri = b.value(QStringLiteral("uri")).toString();
-        if (uri.isEmpty()) return false;
+        if (uri.isEmpty()) return fail(QStringLiteral("buffer %1 has no uri (GLB-embedded buffers unsupported)").arg(i));
+        // `data:` URIs: the exporter appends the morph-weights animation
+        // (and any other injected stream) as a base64 buffer AFTER the
+        // main `.bin`. Decode it instead of refusing the whole file —
+        // a morph bake used to lose its vertex alignment over this.
+        if (uri.startsWith(QLatin1String("data:"))) {
+            const int comma = uri.indexOf(QLatin1Char(','));
+            if (comma < 0 || !uri.left(comma).endsWith(QLatin1String(";base64")))
+                return fail(QStringLiteral("buffer %1: unsupported data URI encoding").arg(i));
+            bufData[i] = QByteArray::fromBase64(uri.mid(comma + 1).toLatin1());
+            continue;
+        }
         QFile bf(gi.absoluteDir().filePath(uri));
-        if (!bf.open(QIODevice::ReadOnly)) return false;
+        if (!bf.open(QIODevice::ReadOnly)) return fail(QStringLiteral("cannot open buffer %1").arg(uri.left(60)));
         bufData[i] = bf.readAll();
     }
 
     QJsonArray accessors    = root.value(QStringLiteral("accessors")).toArray();
     QJsonArray bufferViews  = root.value(QStringLiteral("bufferViews")).toArray();
     QJsonArray meshes       = root.value(QStringLiteral("meshes")).toArray();
-    if (meshes.isEmpty()) return false;
+    if (meshes.isEmpty()) return fail(QStringLiteral("no meshes"));
 
     // Per-accessor reader returning N×3 (or N×2) floats. Returns false on
     // any decoding error so the caller can short-circuit alignment.
     auto readVec = [&](int accIdx, int components, std::vector<float>& dst) -> bool {
-        if (accIdx < 0 || accIdx >= accessors.size()) return false;
+        if (accIdx < 0 || accIdx >= accessors.size()) return fail(QStringLiteral("accessor %1 out of range").arg(accIdx));
         QJsonObject acc = accessors.at(accIdx).toObject();
         int bvIdx = acc.value(QStringLiteral("bufferView")).toInt(-1);
-        if (bvIdx < 0 || bvIdx >= bufferViews.size()) return false;
+        if (bvIdx < 0 || bvIdx >= bufferViews.size()) return fail(QStringLiteral("accessor %1: bufferView out of range").arg(accIdx));
         int count = acc.value(QStringLiteral("count")).toInt(0);
         int byteOffsetAcc = acc.value(QStringLiteral("byteOffset")).toInt(0);
         QJsonObject bv = bufferViews.at(bvIdx).toObject();
         int bufferIdx = bv.value(QStringLiteral("buffer")).toInt(-1);
         int byteOffsetBv = bv.value(QStringLiteral("byteOffset")).toInt(0);
         int byteStride = bv.value(QStringLiteral("byteStride")).toInt(components * 4);
-        if (bufferIdx < 0 || bufferIdx >= bufData.size()) return false;
+        if (bufferIdx < 0 || bufferIdx >= bufData.size()) return fail(QStringLiteral("accessor %1: buffer out of range").arg(accIdx));
         const QByteArray& bd = bufData[bufferIdx];
         const int start = byteOffsetBv + byteOffsetAcc;
-        if (start + count * byteStride > bd.size()) return false;
+        if (count < 0 || byteStride <= 0 || start < 0
+            || static_cast<qint64>(start) + static_cast<qint64>(count) * byteStride > bd.size())
+            return fail(QStringLiteral("accessor %1: %2 x %3 B at %4 exceeds buffer (%5 B)")
+                            .arg(accIdx).arg(count).arg(byteStride).arg(start).arg(bd.size()));
         const auto* base = reinterpret_cast<const unsigned char*>(bd.constData() + start);
         dst.reserve(dst.size() + static_cast<size_t>(count) * components);
         for (int i = 0; i < count; ++i) {
@@ -9792,7 +10407,7 @@ bool readGltfVertices(const QString& gltfPath,
         const int uvIdx   = attrs.value(QStringLiteral("TEXCOORD_0")).toInt(-1);
 
         std::vector<float> posBuf, normBuf, uvBuf;
-        if (!readVec(posIdx, 3, posBuf)) return false;
+        if (!readVec(posIdx, 3, posBuf)) return fail(QStringLiteral("POSITION accessor %1 unreadable: %2").arg(posIdx).arg(why ? *why : QString()));
         const size_t n = posBuf.size() / 3;
         const bool hasNormal = (normIdx >= 0) && readVec(normIdx, 3, normBuf);
         const bool hasUV     = (uvIdx   >= 0) && readVec(uvIdx,   2, uvBuf);
@@ -9999,14 +10614,23 @@ static std::vector<uint32_t> buildVertexPermutationImpl(
 //
 // Returns true on success. On any failure the original glTF is left
 // untouched so the user still has a valid (if UV2-less) mesh.
+// `columnOverride` (optional): when non-null, the column written for
+// Ogre vertex `i` is `(*columnOverride)[i]` and the row is 0 - used by
+// the rigid-body bake, whose texture columns are CHUNKS, not vertices.
 bool emitGltfUv2(const QString& gltfPath,
                  const std::vector<uint32_t>& permutation,
                  const std::vector<size_t>& submeshStarts,
                  int texWidth,
                  int channel,
-                 QString& outError)
+                 QString& outError,
+                 const std::vector<uint32_t>* columnOverride = nullptr)
 {
     outError.clear();
+    if (columnOverride && columnOverride->size() != permutation.size()) {
+        outError = QStringLiteral("column override size (%1) != vertex count (%2)")
+            .arg(columnOverride->size()).arg(permutation.size());
+        return false;
+    }
     if (channel < 0 || channel > 7) {
         outError = QStringLiteral("invalid UV channel %1").arg(channel);
         return false;
@@ -10117,8 +10741,12 @@ bool emitGltfUv2(const QString& gltfPath,
             // *different* vertex's column — body parts visibly flew
             // apart on specific frames where the wrong-source motion
             // was large.
-            const uint32_t col = ogreIdx % static_cast<uint32_t>(texWidth);
-            const uint32_t row = ogreIdx / static_cast<uint32_t>(texWidth);
+            const uint32_t col = columnOverride
+                ? (*columnOverride)[i]
+                : ogreIdx % static_cast<uint32_t>(texWidth);
+            const uint32_t row = columnOverride
+                ? 0u
+                : ogreIdx / static_cast<uint32_t>(texWidth);
             // The destination is glTF index gltfIdx, which is offset
             // (gltfIdx - a) within this primitive.
             const size_t localDst = static_cast<size_t>(gltfIdx) - a;
@@ -10211,17 +10839,28 @@ bool emitGltfUv2(const QString& gltfPath,
 
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
-    // Parse: vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]
+    // Parse: vat <file> [--mode skeletal|rigid|mesh-anim|morph] --anim <name> [--fps N] [-o <dir>]
+    //            [--encoding rgba8|rgba16|exr] [--target agnostic|unity|unreal|godot]
+    //            [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]
     //
-    // Output is always OpenVAT (sharpen3d/openvat) — a single packed
-    // 16-bit RGB PNG (`<basename>_pos.png`, height = 2*frames, top half
-    // positions, bottom half normals) plus `<basename>-remap_info.json`
-    // with the canonical `os-remap` schema. Consumed unmodified by the
-    // openvat reference shaders for Godot / Unity / Unreal / Blender.
+    // Output is always OpenVAT (sharpen3d/openvat) - a single packed
+    // PNG/EXR (`<basename>_pos.png|exr`, height = 2*frames, top half
+    // positions, bottom half normals; rigid: pivots + quaternions per
+    // chunk) plus `<basename>-remap_info.json` with the canonical
+    // `os-remap` schema and the #522 `_mode`/`_target` extension keys.
+    // Consumed unmodified by the openvat reference shaders for Godot /
+    // Unity / Unreal / Blender.
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
     QString includeShadersArg;
+    // --mode (#522): which sampler drives the bake. Default skeletal -
+    // the pre-#522 behaviour (plus the last-frame loop-wrap fix).
+    VATBaker::Mode vatMode = VATBaker::Mode::Skeletal;
+    QString modeArg;
+    // --target (#522): engine id recorded in the sidecar; a non-agnostic
+    // target also ships that engine's shader template.
+    QString targetArg = QStringLiteral("agnostic");
     // --emit-uv2 <channel>: inject the per-vertex bake-column index
     // as TEXCOORD_<channel> into source.gltf. -1 (default) = off.
     // The bake itself doesn't care about UV2 — this exists so
@@ -10242,6 +10881,47 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         if (arg == "--json") { jsonOutput = true; continue; }
         if ((arg == "--anim" || arg == "--animation") && i + 1 < argc) {
             animName = QString(argv[++i]); continue;
+        }
+        if (arg == "--mode") {
+            if (i + 1 >= argc) {
+                err() << "Error: --mode requires a value (skeletal, rigid, mesh-anim, morph)." << Qt::endl;
+                return 2;
+            }
+            modeArg = QString(argv[++i]);
+            if (!VATBaker::modeFromId(modeArg, &vatMode)) {
+                err() << "Error: --mode \"" << modeArg
+                      << "\" is not one of: skeletal, rigid, mesh-anim, morph." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--encoding") {
+            if (i + 1 >= argc) {
+                err() << "Error: --encoding requires a value (rgba8, rgba16, exr)." << Qt::endl;
+                return 2;
+            }
+            int bd = 16;
+            if (!VATBaker::bitDepthFromEncodingId(QString(argv[++i]), &bd)) {
+                err() << "Error: --encoding \"" << argv[i]
+                      << "\" is not one of: rgba8, rgba16, exr." << Qt::endl;
+                return 2;
+            }
+            bakeBitDepth = bd;
+            continue;
+        }
+        if (arg == "--target") {
+            if (i + 1 >= argc) {
+                err() << "Error: --target requires a value (agnostic, unity, unreal, godot)." << Qt::endl;
+                return 2;
+            }
+            targetArg = QString(argv[++i]).trimmed().toLower();
+            if (!VATBaker::isValidTargetId(targetArg)) {
+                err() << "Error: --target \"" << argv[i]
+                      << "\" is not one of: agnostic, unity, unreal, godot." << Qt::endl;
+                return 2;
+            }
+            if (targetArg.isEmpty()) targetArg = QStringLiteral("agnostic");
+            continue;
         }
         if (arg == "--fps" && i + 1 < argc) {
             bool ok = false;
@@ -10335,13 +11015,22 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
 
     if (filePath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
-        err() << "Usage: qtmesh vat <file> --anim <name> [--fps N] [-o <dir>] [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]" << Qt::endl;
+        err() << "Usage: qtmesh vat <file> [--mode skeletal|rigid|mesh-anim|morph] --anim <name> [--fps N] [-o <dir>]\n"
+                 "                  [--encoding rgba8|rgba16|exr] [--target agnostic|unity|unreal|godot]\n"
+                 "                  [--include-shaders {godot,unity,unreal,all}] [--emit-uv2 [N]] [--bake-precision {16,32}] [--json]" << Qt::endl;
         return 2;
     }
+    // Morph mode defaults to the editor's weight clip - the clip every
+    // GUI key press writes into - so `qtmesh vat face.glb --mode morph`
+    // works without knowing the internal name.
+    if (animName.isEmpty() && vatMode == VATBaker::Mode::Morph)
+        animName = QString::fromLatin1(MorphAnimationManager::kWeightClipName);
     if (animName.isEmpty()) {
         err() << "Error: --anim <name> is required." << Qt::endl;
         return 2;
     }
+    const QString vatModeId = VATBaker::modeId(vatMode);
+    const bool rigidMode = (vatMode == VATBaker::Mode::Rigid);
     if (outDir.isEmpty()) {
         QFileInfo fi(filePath);
         outDir = fi.absoluteDir().filePath(fi.completeBaseName() + "_vat");
@@ -10356,28 +11045,44 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     SentryReporter::addBreadcrumb("cli.vat",
-        QString("VAT bake .%1 anim=%2 fps=%3").arg(fi.suffix(), animName).arg(fps));
+        QString("VAT bake .%1 vat_mode=%2 anim=%3 fps=%4 encoding=%5 target=%6")
+            .arg(fi.suffix(), vatModeId, animName).arg(fps)
+            .arg(VATBaker::encodingId(bakeBitDepth), targetArg));
     SentryReporter::addBreadcrumb("file.import",
         QString("Importing %1").arg(fi.absoluteFilePath()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
     auto& entities = Manager::getSingleton()->getEntities();
+    // Pick the bake target by MODE: skeletal wants the skinned entity;
+    // every other mode wants the entity that actually carries the
+    // requested clip (multi-entity files split face + body, and the
+    // morph clip lives on the face). Fall back to the first entity so
+    // the baker's own error names what is missing.
     Ogre::Entity* entity = nullptr;
+    Ogre::Entity* firstEntity = nullptr;
+    const std::string animStd = animName.toStdString();
     for (auto* obj : entities) {
-        if (obj && obj->getMovableType() == "Entity") {
-            entity = static_cast<Ogre::Entity*>(obj);
-            break;
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        auto* e = static_cast<Ogre::Entity*>(obj);
+        if (!firstEntity) firstEntity = e;
+        if (vatMode == VATBaker::Mode::Skeletal) {
+            if (e->hasSkeleton()) { entity = e; break; }
+        } else {
+            auto* states = e->getAllAnimationStates();
+            if (states && states->hasAnimationState(animStd)) { entity = e; break; }
         }
     }
+    if (!entity) entity = firstEntity;
     if (!entity) {
         SentryReporter::captureMessage(
             QString("CLI vat: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
-    if (!entity->hasSkeleton()) {
-        err() << "Error: File has no skeleton — cannot bake VAT." << Qt::endl;
+    if (vatMode == VATBaker::Mode::Skeletal && !entity->hasSkeleton()) {
+        err() << "Error: File has no skeleton - cannot bake a skeletal VAT "
+                 "(try --mode mesh-anim / morph for vertex clips)." << Qt::endl;
         return 1;
     }
 
@@ -10489,9 +11194,11 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (exportResult == 0) {
         std::vector<BakeVertex> ogreVerts = readOgreBindVertices(entity);
         std::vector<BakeVertex> gltfVerts;
-        if (!readGltfVertices(gltfPath, gltfVerts)) {
+        QString readbackWhy;
+        if (!readGltfVertices(gltfPath, gltfVerts, &readbackWhy)) {
             err() << "Warning: failed to read back source.gltf for VAT "
-                     "alignment — bake will use Ogre vertex-buffer order; "
+                     "alignment (" << readbackWhy << ") "
+                     " — bake will use Ogre vertex-buffer order; "
                      "the emitted mesh is NOT marked as matching the bake."
                   << Qt::endl;
         } else if (ogreVerts.size() != gltfVerts.size()) {
@@ -10533,25 +11240,49 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     }
 
     VATBaker::Options opts;
+    opts.mode              = vatMode;
     opts.animationName     = animName;
     opts.fps               = fps;
     opts.outputDir         = outDir;
-    opts.basename          = animName;
+    // The default basename is the clip name; the morph clip's internal
+    // name ("MorphAnim") is not what a user wants on disk.
+    opts.basename          = (vatMode == VATBaker::Mode::Morph
+                              && animName == QLatin1String(MorphAnimationManager::kWeightClipName))
+                             ? fi.completeBaseName() + QStringLiteral("_morph")
+                             : animName;
     opts.bitDepth          = bakeBitDepth;
+    opts.target            = targetArg;
     // Keep a copy for the UV2 post-pass (the move below sinks the
     // original into VATBaker::Options).
+    // Rigid bakes index columns by CHUNK, so the per-vertex permutation
+    // is not passed to the baker (it still drives the UV2 post-pass).
     std::vector<uint32_t> vertexPermCopy = vertexPerm;
-    opts.vertexPermutation = std::move(vertexPerm);
+    if (!rigidMode) opts.vertexPermutation = std::move(vertexPerm);
 
     SentryReporter::addBreadcrumb("file.export",
-        QString("Writing OpenVAT bake to %1 (anim=%2)")
-            .arg(QDir(outDir).absolutePath(), animName));
+        QString("Writing OpenVAT bake to %1 (vat_mode=%2 anim=%3)")
+            .arg(QDir(outDir).absolutePath(), vatModeId, animName));
     VATBaker::BakeResult result = VATBaker::bake(entity, opts);
     if (!result.ok) {
         SentryReporter::captureMessage(
-            QString("CLI vat: bake failed (%1)").arg(result.error), "error");
+            QString("CLI vat: bake failed (vat_mode=%1: %2)").arg(vatModeId, result.error), "error");
         err() << "Error: VAT bake failed: " << result.error << Qt::endl;
         return 1;
+    }
+    // Rigid UV2: column = chunk index of the vertex (its submesh in
+    // the bake walk), so a single material can address the chunk
+    // texture without per-surface uniforms.
+    std::vector<uint32_t> rigidColumnOfVertex;
+    if (rigidMode) {
+        rigidColumnOfVertex.assign(vertexPermCopy.size(), 0u);
+        for (size_t ci = 0; ci < result.chunks.size(); ++ci) {
+            const auto& c = result.chunks[ci];
+            for (int v = 0; v < c.vertexCount; ++v) {
+                const size_t idx = static_cast<size_t>(c.vertexStart) + static_cast<size_t>(v);
+                if (idx < rigidColumnOfVertex.size())
+                    rigidColumnOfVertex[idx] = static_cast<uint32_t>(ci);
+            }
+        }
     }
 
     if (exportResult != 0) {
@@ -10580,8 +11311,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         && sourceMeshMatchesBake && !vertexPermCopy.empty()) {
         QString uv2Err;
         uv2Emitted = emitGltfUv2(gltfPath, vertexPermCopy, submeshStarts,
-                                 result.vertexCount, emitUv2Channel,
-                                 uv2Err);
+                                 rigidMode ? static_cast<int>(vertexPermCopy.size())
+                                           : result.vertexCount,
+                                 emitUv2Channel, uv2Err,
+                                 rigidMode ? &rigidColumnOfVertex : nullptr);
         if (!uv2Emitted) {
             err() << "Warning: --emit-uv2 failed: " << uv2Err
                   << " — consumers will need the bind-sidecar matcher path."
@@ -10602,10 +11335,31 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // --include-shaders: drop the requested engine templates next to
     // the bake so a consumer has everything in one folder.
     QStringList shadersWritten;
+    // A non-agnostic --target implies its own engine template.
+    if (targetArg != QLatin1String("agnostic")) {
+        if (includeShadersArg.isEmpty()) includeShadersArg = targetArg;
+        else if (!VATShaderEmitter::parseEngineList(includeShadersArg).contains(targetArg))
+            includeShadersArg += QLatin1Char(',') + targetArg;
+    }
     if (!includeShadersArg.isEmpty()) {
         QStringList rejectedTokens;
-        const QStringList engines = VATShaderEmitter::parseEngineList(
+        QStringList engines = VATShaderEmitter::parseEngineList(
             includeShadersArg, &rejectedTokens);
+        bool allFilteredForRigid = false;
+        if (rigidMode) {
+            // Only engines with a rigid template ship one; the
+            // per-vertex shader would misread the chunk texture.
+            const QStringList rigidCapable = VATShaderEmitter::rigidEngines();
+            QStringList kept;
+            for (const QString& e : engines) {
+                if (rigidCapable.contains(e)) kept << e;
+                else err() << "Note: no rigid-body shader template for \"" << e
+                           << "\" yet - see OpenVAT_README.md for the per-chunk "
+                              "math (Godot template: openvat_rigid.gdshader)." << Qt::endl;
+            }
+            allFilteredForRigid = !engines.isEmpty() && kept.isEmpty();
+            engines = kept;
+        }
         // Surface invalid tokens even when SOME of the list was
         // recognised — otherwise `--include-shaders godot,blender`
         // silently drops "blender" and the user discovers the
@@ -10619,7 +11373,10 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 QStringLiteral("VAT shaders: rejected unknown engine(s): %1")
                     .arg(rejectedTokens.join(QStringLiteral(", "))));
         }
-        if (engines.isEmpty()) {
+        if (allFilteredForRigid) {
+            // Every requested engine lacks a rigid template - the
+            // per-engine notes above already said so.
+        } else if (engines.isEmpty()) {
             err() << "Warning: --include-shaders=\"" << includeShadersArg
                   << "\" did not match any known engine "
                      "(accepted: godot, unity, unreal, all)." << Qt::endl;
@@ -10627,7 +11384,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
                 QStringLiteral("VAT shaders: no valid engines parsed from '%1'")
                     .arg(includeShadersArg));
         } else {
-            shadersWritten = VATShaderEmitter::writeShaders(outDir, engines);
+            shadersWritten = VATShaderEmitter::writeShaders(outDir, engines, rigidMode);
             if (shadersWritten.isEmpty()) {
                 err() << "Warning: --include-shaders requested "
                       << engines.join(",") << " but no files could be written."
@@ -10646,10 +11403,38 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     if (jsonOutput) {
         QJsonObject obj;
         obj["ok"]          = true;
+        obj["mode"]        = vatModeId;
+        obj["encoding"]    = VATBaker::encodingId(bakeBitDepth);
+        obj["target"]      = targetArg;
         obj["texture"]     = result.posTexPath;
         obj["sidecar"]     = result.jsonPath;
-        if (sourceMeshMatchesBake)
+        if (rigidMode) {
+            obj["chunkCount"]  = result.chunkCount;
+            obj["maxResidual"] = static_cast<double>(result.maxRigidResidual);
+            QJsonArray chunks;
+            for (const auto& c : result.chunks) {
+                QJsonObject jc;
+                jc["name"] = c.name;
+                jc["pivot"] = QJsonArray{ static_cast<double>(c.pivot.x),
+                                          static_cast<double>(c.pivot.y),
+                                          static_cast<double>(c.pivot.z) };
+                jc["vertexStart"] = c.vertexStart;
+                jc["vertexCount"] = c.vertexCount;
+                jc["maxResidual"] = static_cast<double>(c.maxResidual);
+                chunks.append(jc);
+            }
+            obj["chunks"] = chunks;
+        }
+        if (!result.trackId.isEmpty()) obj["track"] = result.trackId;
+        if (!result.morphTargets.isEmpty()) {
+            QJsonArray t;
+            for (const auto& n : result.morphTargets) t.append(n);
+            obj["morphTargets"] = t;
+        }
+        if (sourceMeshMatchesBake) {
             obj["sourceMesh"] = gltfPath;
+            if (rigidMode) obj["chunkMapping"] = QStringLiteral("primitive index == chunk index");
+        }
         if (bindWritten)
             obj["bindSidecar"] = bindPath;
         if (!shadersWritten.isEmpty()) {
@@ -10671,22 +11456,48 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
         obj["bounds"] = bounds;
         cliWrite(QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Indented)));
     } else {
-        cliWrite(QStringLiteral("Baked OpenVAT for '%1' (%2 frames × %3 vertices)\n")
-                     .arg(animName).arg(result.frameCount).arg(result.vertexCount));
+        cliWrite(QStringLiteral("Baked OpenVAT [%1] for '%2' (%3 frames x %4 %5)\n")
+                     .arg(vatModeId, animName).arg(result.frameCount).arg(result.vertexCount)
+                     .arg(rigidMode ? QStringLiteral("chunks") : QStringLiteral("vertices")));
+        cliWrite(QStringLiteral("  mode:     %1  encoding: %2  target: %3\n")
+                     .arg(vatModeId, VATBaker::encodingId(bakeBitDepth), targetArg));
         cliWrite(QStringLiteral("  texture:  %1\n").arg(result.posTexPath));
         cliWrite(QStringLiteral("  sidecar:  %1\n").arg(result.jsonPath));
+        if (rigidMode) {
+            cliWrite(QStringLiteral("  chunks:   %1 (max rigid-fit residual %2; a large value means a "
+                                    "chunk is NOT moving rigidly - use --mode skeletal)\n")
+                         .arg(result.chunkCount).arg(result.maxRigidResidual, 0, 'g', 4));
+            for (size_t ci = 0; ci < result.chunks.size(); ++ci) {
+                const auto& c = result.chunks[ci];
+                cliWrite(QStringLiteral("            [%1] %2: %3 verts, pivot=(%4, %5, %6), residual %7\n")
+                             .arg(ci).arg(c.name).arg(c.vertexCount)
+                             .arg(c.pivot.x, 0, 'f', 3).arg(c.pivot.y, 0, 'f', 3).arg(c.pivot.z, 0, 'f', 3)
+                             .arg(c.maxResidual, 0, 'g', 4));
+            }
+        }
+        if (!result.morphTargets.isEmpty())
+            cliWrite(QStringLiteral("  targets:  %1\n").arg(result.morphTargets.join(QStringLiteral(", "))));
+        if (!result.trackId.isEmpty())
+            cliWrite(QStringLiteral("  track:    %1\n").arg(result.trackId));
         if (bindWritten)
             cliWrite(QStringLiteral("  bind:     %1 (per-vertex bind-pose signature; "
                                     "consumers use this to align UV2 to the bake's "
                                     "column order regardless of importer reordering)\n")
                 .arg(bindPath));
         if (sourceMeshMatchesBake)
-            cliWrite(QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
+            cliWrite(rigidMode
+                ? QStringLiteral("  mesh:     %1 (primitive i == chunk i; columns are CHUNKS, "
+                                 "not vertices - use openvat_rigid.gdshader)\n").arg(gltfPath)
+                : QStringLiteral("  mesh:     %1 (vertex order matches the bake)\n").arg(gltfPath));
         if (uv2Emitted)
-            cliWrite(QStringLiteral("  uv2:      injected as TEXCOORD_%1 — consumers can "
-                                    "drop the runtime bind-sidecar matcher and read "
-                                    "(col, row) from the mesh's UV%1 directly\n")
-                .arg(emitUv2Channel));
+            cliWrite(rigidMode
+                ? QStringLiteral("  uv2:      injected as TEXCOORD_%1 - UV%1.x is the vertex's "
+                                 "CHUNK column (set chunk_from_uv2 in openvat_rigid.gdshader)\n")
+                      .arg(emitUv2Channel)
+                : QStringLiteral("  uv2:      injected as TEXCOORD_%1 - consumers can "
+                                 "drop the runtime bind-sidecar matcher and read "
+                                 "(col, row) from the mesh's UV%1 directly\n")
+                      .arg(emitUv2Channel));
         cliWrite(QStringLiteral("  bounds:   min=(%1, %2, %3) max=(%4, %5, %6)\n")
                      .arg(result.minBound.x, 0, 'f', 3)
                      .arg(result.minBound.y, 0, 'f', 3)
@@ -11693,6 +12504,8 @@ int CLIPipeline::cmdFaceRig(int argc, char* argv[])
         j["shapes_attached"] = rep.shapesAttached;
         j["user_vertex_count"] = rep.userVertexCount;
         j["fit_mean_residual_pct"] = rep.fitMeanResidualPct;
+        j["orientation_source"] = rep.orientationSource;
+        j["orientation_angle_deg"] = rep.orientationAngleDeg;
         j["fit_max_residual_pct"] = rep.fitMaxResidualPct;
         j["output"] = QFileInfo(outputPath).fileName();
         cliWrite(QString::fromUtf8(
@@ -11860,7 +12673,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
     unsigned seed = 42;         // TRELLIS.2 generation seed
     QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
-    int targetTris = 0;         // TRELLIS.2 game-ready simplification target
+    int targetTris = 0;         // game-ready simplification target (all backends)
+    bool targetTrisSet = false; // explicit --target-tris (conflicts with --game-preset)
+    bool targetTrisStrict = false; // the target is a hard ceiling (platform presets)
+    int  textureMaxSize = 0;    // platform cap on the FINAL images (0 = none)
+    bool textureSizeSet = false; // explicit --texture-size (overrides a preset's)
+    QString gamePreset;         // --game-preset <id> (GameReadyPresets.h)
+    bool listGamePresets = false;
     int textureSupersample = 1; // 2 = 2x2 subsamples per texel (speckle fix)
     int texVolumeRes = 0;       // 0 = sidecar auto | 512 | 1024
     bool keepSource = true;     // write the .qtm3d full-res source sidecar
@@ -11975,6 +12794,30 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Error: --target-tris must be in [0, 10000000] (0 = original)." << Qt::endl;
                 return 2;
             }
+            targetTrisSet = true;
+            continue;
+        }
+        // Named game-ready budget — the same table as the Inspector "Mesh"
+        // picker and MCP `game_preset`. The Roblox presets turn the target
+        // into a hard ceiling and clamp the bake size to the platform's
+        // 1024 px texture limit (applied after the loop, once every flag
+        // has been read).
+        if (arg == "--list-game-presets") { listGamePresets = true; continue; }
+        if (arg == "--game-preset") {
+            if (i + 1 >= argc) {
+                err() << "Error: --game-preset requires one of: "
+                      << GameReady::ids().join(", ") << Qt::endl;
+                return 2;
+            }
+            const QString requested = QString::fromLocal8Bit(argv[++i]);
+            const GameReady::Preset* gp = GameReady::find(requested);
+            if (!gp) {
+                err() << "Error: unknown --game-preset '" << requested
+                      << "'. Use one of: " << GameReady::ids().join(", ")
+                      << " (see --list-game-presets)." << Qt::endl;
+                return 2;
+            }
+            gamePreset = gp->id;
             continue;
         }
         if (arg == "--flow-steps") {
@@ -12014,6 +12857,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 err() << "Error: --texture-size must be an integer in [64..8192]." << Qt::endl;
                 return 2;
             }
+            textureSizeSet = true;
             continue;
         }
         if (arg == "--quality") {
@@ -12073,6 +12917,66 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
     }
 
+    // --list-game-presets is a standalone op (no image needed): one line per
+    // preset — id, budget, and the platform limits it enforces.
+    if (listGamePresets) {
+        QString listing;
+        for (const GameReady::Preset& p : GameReady::presets()) {
+            QString line = p.id.leftJustified(18);
+            line += p.targetTriangles > 0
+                ? QStringLiteral("%1%2 tris")
+                      .arg(p.strictTriangles ? QStringLiteral("<= ") : QStringLiteral("~"))
+                      .arg(p.targetTriangles)
+                : QStringLiteral("original density");
+            if (p.maxTextureSize > 0)
+                line += QStringLiteral(", textures <= %1 px").arg(p.maxTextureSize);
+            if (p.id == GameReady::defaultId())
+                line += QStringLiteral(" (GUI default)");
+            if (!p.note.isEmpty())
+                line += QStringLiteral("  - ") + p.note;
+            listing += line + QLatin1Char('\n');
+        }
+        listing += QStringLiteral(
+            "\ncustom values (any number in range; alone, or with --game-preset to override its number):\n"
+            "  --target-tris N       0 = original density, else 1..10000000 "
+            "(border locking sets a floor around ~500; TRELLIS.2 raw decodes are "
+            "~150k at res 512 / ~300k cascade / up to several million uncapped)\n"
+            "  --texture-size N      64..8192 px for the baked maps (xatlas treats it as a hint)\n"
+            "  --tex-res 512|1024    TRELLIS.2 texture VOLUME resolution (separate from the bake size)\n"
+            "  a roblox-* preset with a custom value past its platform limit is honoured and warned about\n");
+        cliWrite(listing);
+        return 0;
+    }
+    if (!gamePreset.isEmpty()) {
+        // A preset is a BASE: explicit --target-tris / --texture-size override
+        // its numbers with any value in the supported range (headless
+        // pipelines know their numbers; the GUI keeps the preset-only
+        // picker). Roblox presets keep the strict ceiling; a custom value
+        // past a platform limit is honoured and warned about, not clamped.
+        const GameReady::Preset* gp = GameReady::find(gamePreset);
+        targetTrisStrict = gp->strictTriangles;
+        if (targetTrisSet) {
+            if (gp->strictTriangles && targetTris > gp->targetTriangles)
+                err() << "Warning: --target-tris " << targetTris << " exceeds the '"
+                      << gp->id << "' preset's " << gp->targetTriangles
+                      << "-triangle platform limit — honoured as requested (still "
+                         "enforced as a ceiling at " << targetTris << ")." << Qt::endl;
+        } else {
+            targetTris = gp->targetTriangles;
+        }
+        if (textureSizeSet) {
+            textureMaxSize = textureSize;   // the cap follows the user's number
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                err() << "Warning: --texture-size " << textureSize << " exceeds the '"
+                      << gp->id << "' preset's " << gp->maxTextureSize
+                      << " px platform limit — honoured as requested." << Qt::endl;
+        } else {
+            textureMaxSize = gp->maxTextureSize;
+            if (gp->maxTextureSize > 0 && textureSize > gp->maxTextureSize)
+                textureSize = gp->maxTextureSize;
+        }
+    }
+
     if (inputPath.isEmpty() && genPrompt.trimmed().isEmpty()) {
         err() << "Error: No input image (or --prompt) specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
@@ -12080,16 +12984,23 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] "
                  "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
-                 "[--seed 42] [--preset fast|balanced|high] [--target-tris N]"
+                 "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
+        err() << "       qtmesh generate3d --list-game-presets" << Qt::endl;
         err() << "  Default backend: trellis2 when its runtime is installed "
                  "(ai/trellis2/install.py), else triposr. --seed/--preset "
                  "apply to trellis2; --target-tris (game-ready simplify + "
-                 "detail-normal bake) applies to every backend. --prompt "
+                 "detail-normal bake) applies to every backend, as does "
+                 "--game-preset (" << GameReady::ids().join("|") << "; the "
+                 "roblox-* presets enforce Roblox's 4k / 20k triangle and "
+                 "1024 px texture upload limits). Custom values: --target-tris "
+                 "(0 = original, else any 1..10000000) and --texture-size "
+                 "(any 64..8192) work alone or override a preset's numbers; "
+                 "see --list-game-presets. --prompt "
                  "generates the source image first (FLUX.2-klein-4B via "
                  "stable-diffusion.cpp — download it in AI Model Settings, or "
                  "any SD checkpoint via --image-model)." << Qt::endl;
@@ -12250,6 +13161,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.seed            = seed;
     opts.trellis2Preset  = preset;
     opts.targetTriangles = targetTris;
+    opts.targetTrianglesStrict = targetTrisStrict;
+    opts.maxTextureSize  = textureMaxSize;
     opts.bakeNormalMap   = generatePbr && bake;
     opts.textureSupersample = textureSupersample;
     opts.texVolumeRes       = texVolumeRes;
@@ -12287,6 +13200,15 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         // (--no-bake-texture, --no-color, or the bake fell back).
         err() << "Warning: --upscale-texture ignored — no baked texture to "
                  "upscale (was the bake disabled or did it fall back?)." << Qt::endl;
+    }
+    // A platform preset caps the FINAL image (Roblox: 1024 px); a 2x that
+    // would cross it is skipped rather than upscaled and thrown away.
+    if (upscaleTex && textureMaxSize > 0 && !res.texture.isNull()
+        && (res.texture.width() * 2 > textureMaxSize
+            || res.texture.height() * 2 > textureMaxSize)) {
+        err() << "Note: --upscale-texture skipped — the '" << gamePreset
+              << "' preset caps textures at " << textureMaxSize << " px." << Qt::endl;
+        upscaleTex = false;
     }
     if (upscaleTex && !res.uvs.empty() && !res.texture.isNull()) {
 #ifdef ENABLE_ONNX

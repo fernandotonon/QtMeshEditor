@@ -275,3 +275,47 @@ TEST(CLIPipelineCmdGenerate3dCoverage, NoNafTakesNoValue)
     Gen3dArgv args({"generate3d", kMissingImage, "--no-naf"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
 }
+
+// ── Game-ready presets (--game-preset / --list-game-presets) ─────────────────
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetRequiresAKnownId)
+{
+    Gen3dArgv missing({"generate3d", kMissingImage, "--game-preset"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv unknown({"generate3d", kMissingImage, "--game-preset", "ultra"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(unknown.argc(), unknown.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAcceptsCustomOverridesInEitherOrder)
+{
+    // A preset is a base: explicit --target-tris / --texture-size override
+    // its numbers (any value in range), so the combination parses and the
+    // missing image is the first failure (exit 1, not the usage code 2).
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart",
+                 "--target-tris", "15000", "--texture-size", "512"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv b({"generate3d", kMissingImage, "--target-tris", "30000",
+                 "--texture-size", "2048", "--game-preset", "roblox-accessory"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(b.argc(), b.argv()), 1);   // warns, honours
+    // Out-of-range custom values are still usage errors with or without a preset.
+    Gen3dArgv c({"generate3d", kMissingImage, "--game-preset", "medium",
+                 "--texture-size", "32"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(c.argc(), c.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GamePresetAloneReachesTheImageCheck)
+{
+    // A valid preset (incl. the forgiving alias) parses; the missing image is
+    // then the FIRST failure — exit 1 (not the usage code 2).
+    Gen3dArgv a({"generate3d", kMissingImage, "--game-preset", "roblox-meshpart"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1);
+    Gen3dArgv alias({"generate3d", kMissingImage, "--game-preset", "ROBLOX_ACCESSORY",
+                     "--texture-size", "4096"});   // clamps to 1024 with a note
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(alias.argc(), alias.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, ListGamePresetsNeedsNoImage)
+{
+    Gen3dArgv a({"generate3d", "--list-game-presets"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 0);
+}

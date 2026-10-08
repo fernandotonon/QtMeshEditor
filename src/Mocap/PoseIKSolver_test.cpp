@@ -21,7 +21,7 @@ void set(Landmarks& l, int lm, float x, float y, float z)
 }
 
 // A rough T-pose in the MediaPipe world frame (x subject-left, y DOWN,
-// z toward camera), metres, hip-centred.
+// z away from camera), metres, hip-centred.
 Landmarks tPose()
 {
     Landmarks l{};
@@ -233,7 +233,7 @@ TEST(PoseIKSolver, LimbSegmentDirectionMatchesRaise)
     EXPECT_LT(rDir[1], refDir[1] + 0.05f);  // right arm stayed level
 }
 
-TEST(PoseIKSolver, OccludedFootIndexFallsBackToShin)
+TEST(PoseIKSolver, OccludedFootIndexDoesNotAimFootDownShin)
 {
     Landmarks pose = tPose();
     std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
@@ -242,14 +242,24 @@ TEST(PoseIKSolver, OccludedFootIndexFallsBackToShin)
     vis.fill(1.f);
     vis[32] = 0.05f;  // right foot index occluded
     std::array<float, 3> dir{};
-    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+    EXPECT_FALSE(PoseIK::Solver::limbSegmentDirection(
         PoseIK::RFoot, canon, vis.data(), 0.3f, dir));
-    // shin = knee(26) → ankle(28); after canonicalize, +Y is up so shin is -Y
-    EXPECT_LT(dir[1], -0.7f);
     vis[31] = 0.05f;
-    ASSERT_TRUE(PoseIK::Solver::limbSegmentDirection(
+    EXPECT_FALSE(PoseIK::Solver::limbSegmentDirection(
         PoseIK::LFoot, canon, vis.data(), 0.3f, dir));
-    EXPECT_LT(dir[1], -0.7f);
+}
+
+TEST(PoseIKSolver, ForwardDepthAndTorsoHaveCorrectHandedness)
+{
+    const auto landmarks = tPose();
+    std::array<std::array<float,3>,33> canonical{};
+    PoseIK::Solver::canonicalizeMediaPipeWorld(landmarks.data(), canonical);
+    EXPECT_GT(canonical[0][2], 0.f); // nose in front, not behind the skull
+    EXPECT_GT(canonical[31][2], 0.f); // toes point toward the camera
+    const auto solved = PoseIK::Solver{}.solveFrame(landmarks.data());
+    const auto& hip = solved.quats[PoseIK::Hip];
+    const Ogre::Quaternion orientation(hip[3],hip[0],hip[1],hip[2]);
+    EXPECT_GT((orientation * Ogre::Vector3::UNIT_Z).z, .999f);
 }
 
 TEST(PoseIKSolver, SwapScreenCropMirrorsLeftRight)

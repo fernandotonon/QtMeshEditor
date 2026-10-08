@@ -368,6 +368,7 @@ private:
     /// `qtmesh vat` CLI subcommand: file, anim, fps, encoding,
     /// target, normals, output_dir, basename.
     QJsonObject toolBakeVat(const QJsonObject &args);
+    QJsonObject toolRetargetAnimation(const QJsonObject &args);   // #523
 
     /// Morph A6: list named morph targets / blend shapes on a mesh
     /// file. Args: `file` (path). Heavy — does a full mesh import.
@@ -459,6 +460,18 @@ private:
     /// Pose-lib D-MCP: list saved pose names on the first selected
     /// entity. Light read; returns `{ count, poses: [name…] }`.
     QJsonObject toolListPoses(const QJsonObject &args);
+    // #524 procedural animation generators
+    QJsonObject toolListGenerators(const QJsonObject &args);
+    QJsonObject toolAddGenerator(const QJsonObject &args);
+    QJsonObject toolSetGenerator(const QJsonObject &args);
+    QJsonObject toolBakeGenerator(const QJsonObject &args);
+    QJsonObject toolRemoveGenerator(const QJsonObject &args);
+    QJsonObject toolListConstraints(const QJsonObject &args);
+    QJsonObject toolAddConstraint(const QJsonObject &args);
+    QJsonObject toolSetConstraint(const QJsonObject &args);
+    QJsonObject toolMoveConstraint(const QJsonObject &args);
+    QJsonObject toolRemoveConstraint(const QJsonObject &args);
+    QJsonObject toolBakeConstraints(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the

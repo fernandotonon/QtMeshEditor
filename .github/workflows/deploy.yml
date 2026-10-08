@@ -1620,7 +1620,11 @@ jobs:
                 echo "=== Running UnitTests suites in isolation ==="
                 # Get list of test suites
                 SUITES=$($UNIT_TEST_PATH --gtest_list_tests 2>/dev/null | grep -E '^\w' | sed 's/\.$//' | sort -u)
-                EXPECTED_UNIT_TESTS=$(count_listed_tests "$UNIT_TEST_PATH")
+                # Real-video inference is an opt-in local validation; CI has no
+                # capture frames or model assets, so exclude that one test rather
+                # than reporting its intentional GTEST_SKIP as a suite failure.
+                UNIT_TEST_FILTER='*-BodyRetargeterGeometryTest.ReplayVideoFrames'
+                EXPECTED_UNIT_TESTS=$(count_listed_tests "$UNIT_TEST_PATH" "$UNIT_TEST_FILTER")
                 ACTUAL_UNIT_TESTS=0
 
                 # Per-suite wall-clock cap. Most suites finish in <10s;
@@ -1650,9 +1654,13 @@ jobs:
                     # Run without sudo so signal exit codes (e.g. 139 for SIGSEGV) propagate correctly.
                     # sudo can mask crash exit codes, reporting 0 for segfaulted children.
                     suite_xml="test-results-${suite}.xml"
-                    expected_suite_tests=$(count_listed_tests "$UNIT_TEST_PATH" "${suite}.*")
+                    suite_filter="${suite}.*"
+                    if [ "$suite" = "BodyRetargeterGeometryTest" ]; then
+                        suite_filter="${suite}.*-BodyRetargeterGeometryTest.ReplayVideoFrames"
+                    fi
+                    expected_suite_tests=$(count_listed_tests "$UNIT_TEST_PATH" "$suite_filter")
                     timeout --foreground --signal=KILL "$PER_SUITE_TIMEOUT" \
-                        $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:${suite_xml} 2>&1
+                        $UNIT_TEST_PATH --gtest_filter="$suite_filter" --gtest_output=xml:${suite_xml} 2>&1
                     exit_code=$?
                     # timeout(1) reports 124 when the wall-clock cap expired.
                     # SIGKILL via --signal=KILL also raises 137 on the child;

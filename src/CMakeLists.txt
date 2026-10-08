@@ -68,6 +68,15 @@ SentryReporter.cpp
 BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
+AnimationRetargeter.cpp
+AnimGenerators.cpp
+AnimConstraints.cpp
+commands/RetargetAnimationCommand.cpp
+RetargetController.cpp
+AnimGeneratorManager.cpp
+commands/AnimGeneratorCommands.cpp
+ConstraintManager.cpp
+commands/ConstraintCommands.cpp
 FootContact.cpp
 CLIPipeline.cpp
 ConsoleLogSanitize.cpp
@@ -145,6 +154,7 @@ FaceRig/NonRigidICP.cpp
 FaceRig/SparseSolve.cpp
 FaceRig/DeformationTransfer.cpp
 FaceRig/FaceRigger.cpp
+FaceRig/FaceRigAlign.cpp
 FaceRig/FaceRigAttach.cpp
 FaceRig/FaceLandmarkDetector.cpp
 FaceRig/FaceRigLandmarks.cpp
@@ -233,6 +243,7 @@ ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
+ImageTo3D/GameReadyPresets.cpp
 ImageTo3D/TripoSGPredictor.cpp
 ImageTo3D/Trellis2Interchange.cpp
 ImageTo3D/Trellis2Bake.cpp
@@ -367,6 +378,15 @@ SentryReporter.h
 BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
+AnimationRetargeter.h
+AnimGenerators.h
+AnimConstraints.h
+commands/RetargetAnimationCommand.h
+RetargetController.h
+AnimGeneratorManager.h
+commands/AnimGeneratorCommands.h
+ConstraintManager.h
+commands/ConstraintCommands.h
 FootContact.h
 CLIPipeline.h
 MeshInfoOverlay.h
@@ -458,6 +478,7 @@ MeshValidator.h
 MeshWeldOps.h
 AIChatManager.h
 ClickFocusFilter.h
+NativeMessageBoxGuard.h
 AIAgentManager.h
 AIAgentTypes.h
 AICapabilityRegistry.h
