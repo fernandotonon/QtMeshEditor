@@ -1,4 +1,5 @@
 #include "LLMWorker.h"
+#include <array>
 #include <QFileInfo>
 #include <QDebug>
 #include <QThread>
@@ -484,9 +485,9 @@ void LLMWorker::cleanupContext()
 
 QString LLMWorker::buildPrompt(const QString &systemPrompt, const QString &userPrompt) const
 {
-    const PromptFamily family = detectPromptFamily(m_chatTemplate);
-    QString prompt = formatChatPrompt(family, m_chatTemplate, systemPrompt, userPrompt);
-    if (!prompt.isEmpty())
+    if (QString prompt = formatChatPrompt(detectPromptFamily(m_chatTemplate), m_chatTemplate,
+                                          systemPrompt, userPrompt);
+        !prompt.isEmpty())
         return prompt;
 
     // Another family: llama.cpp's built-in formatter recognises dozens of
@@ -637,19 +638,21 @@ QString LLMWorker::stripReasoning(const QString &text)
     // Reasoning comes BEFORE the answer, so only leading blocks are removed —
     // a "<think>" inside the answer (e.g. a JSON string value) is content.
     QString out = text;
-    const struct { const char *open; const char *close; } blocks[] = {
+    struct Block { const char *open; const char *close; };
+    static constexpr std::array<Block, 2> blocks{{
         {"<think>", "</think>"},
         {"<|channel>thought", "<channel|>"},
-    };
+    }};
     bool removed = true;
     while (removed) {
         removed = false;
-        int lead = 0;
+        qsizetype lead = 0;
         while (lead < out.size() && out.at(lead).isSpace()) ++lead;
         for (const auto &b : blocks) {
-            const QString open = QString::fromLatin1(b.open), close = QString::fromLatin1(b.close);
+            const QString open = QString::fromLatin1(b.open);
+            const QString close = QString::fromLatin1(b.close);
             if (!QStringView(out).mid(lead).startsWith(open)) continue;
-            const int end = out.indexOf(close, lead + open.size());
+            const qsizetype end = out.indexOf(close, lead + open.size());
             if (end < 0) return QString();   // ran into the token limit mid-thought: no answer yet
             out.remove(0, end + close.size());
             removed = true;

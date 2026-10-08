@@ -223,7 +223,7 @@ void AIChatManager::unloadModel()
     llm->unloadModel();
 }
 
-void AIChatManager::refreshModels()
+void AIChatManager::refreshModels() const
 {
     LLMManager::instance()->scanForModels();
 }

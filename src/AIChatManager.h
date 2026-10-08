@@ -56,7 +56,7 @@ public:
     /// Free the model's memory; the picker can load it again.
     Q_INVOKABLE void unloadModel();
     /// Re-read the models directory (the picker calls this when it opens).
-    Q_INVOKABLE void refreshModels();
+    Q_INVOKABLE void refreshModels() const;
     /// Which model opening the chat should load. Pure, public for tests.
     static QString pickAutoLoadModel(const QStringList& available, const QString& lastUsed);
 
