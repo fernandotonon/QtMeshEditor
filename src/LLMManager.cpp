@@ -5,7 +5,6 @@
 #include <QDebug>
 #include <QFileInfo>
 #include <QFileDialog>
-#include <QTimer>
 #include <QUrl>
 #include <QRegularExpression>
 #include "AppStorage.h"
@@ -35,9 +34,9 @@ LLMManager::LLMManager(QObject *parent)
     loadSettings();
     initializeWorkerThread();
     scanForModels();
-
-    // Auto-load model after event loop starts (delayed to allow UI initialization)
-    QTimer::singleShot(500, this, &LLMManager::tryAutoLoadModel);
+    // No model is loaded at startup: a GGUF can take gigabytes of RAM/VRAM and
+    // most sessions never touch the AI. The AI Chat panel loads one when it is
+    // opened (AIChatManager::notifyChatOpened, gated on autoLoadModel).
 }
 
 LLMManager::~LLMManager()
@@ -98,112 +97,77 @@ void LLMManager::populateRecommendedModels()
     m_recommendedModels.clear();
 
     // Recommended GGUF models from Hugging Face — ordered by size (smallest
-    // first). Every URL is a SINGLE-FILE quant that answered HTTP 200 when this
-    // list was last verified (2026-09-17); the official Qwen repos split their
-    // larger quants into -00001-of-00002 parts, which our downloader cannot
-    // reassemble, so those come from bartowski/unsloth mirrors instead.
-    // Qwen3 entries are the NON-thinking "Instruct-2507" variants: the worker
-    // feeds a generic chat template, which cannot switch thinking off, and
-    // the hybrid Qwen3 models would spend the token budget on <think> blocks
-    // instead of the agent's JSON.
+    // first). Every URL is a SINGLE-FILE Q4_K_M (our downloader cannot
+    // reassemble -00001-of-0000N splits) that resolved when this list was
+    // last verified (2026-10-08). Gemma 4 and Qwen 3.5/3.6 are hybrid
+    // "thinking" models: LLMWorker::formatChatPrompt formats them in their own
+    // chat template with thinking OFF, so the agent's token budget goes to
+    // its JSON. Superseded entries (Gemma 3 4B/12B/27B, Llama 3.2 3B,
+    // Qwen 2.5, Qwen3 2507) were dropped from the catalog; files users
+    // already downloaded are still listed by scanForModels and keep working.
 
     m_recommendedModels.append({
         "Gemma 3 1B Q4_K_M",
         "gemma-3-1b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 1B. Ultra-fast, great for quick single-step commands.",
-        806000000, // ~0.75GB
+        "Google's Gemma 3 1B. The smallest option: fast single-step commands on any machine, too small for multi-step agent tasks.",
+        806058496, // ~0.8GB
         false
     });
-
     m_recommendedModels.append({
-        "Llama 3.2 3B Q4_K_M",
-        "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-        "Meta's Llama 3.2 3B. Well-rounded performance.",
-        2020000000, // ~1.9GB
+        "Qwen 3.5 4B Q4_K_M",
+        "Qwen3.5-4B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+        "Qwen 3.5 4B. The best small model for the AI agent's multi-step tool calls; fits 8 GB machines. Apache-2.0.",
+        2740937888, // ~2.7GB
         false
     });
-
     m_recommendedModels.append({
-        "Qwen 2.5 3B Q4_K_M",
-        "qwen2.5-3b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-        "Alibaba's Qwen 2.5 3B. Great for structured output.",
-        2100000000, // ~2.0GB
+        "Gemma 4 E4B Q4_K_M",
+        "gemma-4-E4B-it-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf",
+        "Google's Gemma 4 E4B (4B effective; the file is larger because of per-layer embeddings). Good all-rounder for 8 GB machines. Apache-2.0.",
+        4977171584, // ~5.0GB
         false
     });
-
     m_recommendedModels.append({
-        "Gemma 3 4B Q4_K_M",
-        "gemma-3-4b-it-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/google_gemma-3-4b-it-GGUF/resolve/main/google_gemma-3-4b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 4B. Excellent balance of speed and quality.",
-        2490000000, // ~2.3GB
+        "Qwen 3.5 9B Q4_K_M",
+        "Qwen3.5-9B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
+        "Qwen 3.5 9B. Strong instruction following and tool use: the recommended AI-agent model on 16 GB machines. Apache-2.0.",
+        5680522464, // ~5.7GB
         false
     });
-
     m_recommendedModels.append({
-        "Qwen3 4B Instruct 2507 Q4_K_M",
-        "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-        "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/main/Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
-        "Qwen3 4B, non-thinking Instruct edition. Best small model for the AI agent's multi-step tool calls; fits 8 GB machines. Apache-2.0.",
-        2500000000, // ~2.3GB
+        "Gemma 4 12B Q4_K_M",
+        "gemma-4-12b-it-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf",
+        "Google's Gemma 4 12B. High quality, holds up well on long chains of tool calls; needs 16 GB RAM. Apache-2.0.",
+        7121861440, // ~7.1GB
         false
     });
-
-
     m_recommendedModels.append({
-        "Qwen 2.5 7B Q4_K_M",
-        "Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
-        "Qwen 2.5 7B. Strong instruction following and tool use — a reliable AI-agent model on 16 GB machines. Apache-2.0.",
-        4680000000, // ~4.4GB
+        "Qwen 3.6 27B Q4_K_M",
+        "Qwen3.6-27B-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.6-27B-GGUF/resolve/main/Qwen3.6-27B-Q4_K_M.gguf",
+        "Qwen 3.6 27B dense. Top-tier local tool caller and coder; needs 24 GB RAM. Apache-2.0.",
+        16817244384, // ~16.8GB
         false
     });
-
     m_recommendedModels.append({
-        "Gemma 3 12B Q4_K_M",
-        "gemma-3-12b-it-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 12B. High quality, needs 12GB+ RAM.",
-        7300000000, // ~6.8GB
+        "Gemma 4 26B-A4B Q4_K_M",
+        "gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-GGUF/resolve/main/gemma-4-26B-A4B-it-UD-Q4_K_M.gguf",
+        "Gemma 4 26B mixture-of-experts (4B active): near-27B quality at small-model speed. Needs 24 GB RAM. Apache-2.0.",
+        16947541728, // ~17GB
         false
     });
-
     m_recommendedModels.append({
-        "Qwen 2.5 14B Q4_K_M",
-        "Qwen2.5-14B-Instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Qwen2.5-14B-Instruct-GGUF/resolve/main/Qwen2.5-14B-Instruct-Q4_K_M.gguf",
-        "Qwen 2.5 14B. Very capable, excellent reasoning; needs ~12 GB RAM. Apache-2.0.",
-        8990000000, // ~8.4GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Gemma 3 27B Q4_K_M",
-        "gemma-3-27b-it-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 27B. Excellent quality, needs 20GB+ RAM.",
-        16546405002, // ~15.4GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen3 30B-A3B Instruct 2507 Q4_K_M",
-        "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
-        "https://huggingface.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF/resolve/main/Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
-        "Qwen3 30B mixture-of-experts (3B active): the strongest local tool caller, fast per token. Needs 32 GB RAM — on a 24 GB Mac the 17 GB weights load but the GPU budget cannot hold the KV cache (\"could not process the prompt\"). Apache-2.0.",
-        18550000000, // ~17.3GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen 2.5 32B Q4_K_M",
-        "Qwen2.5-32B-Instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Qwen2.5-32B-Instruct-GGUF/resolve/main/Qwen2.5-32B-Instruct-Q4_K_M.gguf",
-        "Qwen 2.5 32B. Near top-tier quality, needs 24GB+ RAM. Apache-2.0.",
-        19860000000, // ~18.5GB
+        "Qwen 3.6 35B-A3B Q4_K_M",
+        "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/main/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
+        "Qwen 3.6 35B mixture-of-experts (3B active): the strongest local model here, fast per token. Needs 32 GB RAM (the weights plus the KV cache). Apache-2.0.",
+        22134528992, // ~22GB
         false
     });
 }
@@ -384,7 +348,7 @@ void LLMManager::setAutoLoadModel(bool value)
 
 void LLMManager::tryAutoLoadModel()
 {
-    if (!m_autoLoadModel || m_lastModelName.isEmpty()) {
+    if (!m_autoLoadModel || m_lastModelName.isEmpty() || isModelLoaded() || m_isLoading) {
         return;
     }
 
@@ -655,7 +619,9 @@ void LLMManager::saveSettings()
     settings.setValue("topP", static_cast<double>(m_settings.topP));
     settings.setValue("topK", m_settings.topK);
     settings.setValue("repeatPenalty", static_cast<double>(m_settings.repeatPenalty));
-    settings.setValue("autoLoadModel", m_autoLoadModel);
+    // "autoLoadOnChatOpen" replaced the old "autoLoadModel" (load at app startup,
+    // default off): loading now happens when the AI Chat opens, default on.
+    settings.setValue("autoLoadOnChatOpen", m_autoLoadModel);
     // Save last model name when a model is loaded
     if (!m_currentModelName.isEmpty()) {
         settings.setValue("lastModel", m_currentModelName);
@@ -676,7 +642,7 @@ void LLMManager::loadSettings()
     m_settings.topP = settings.value("topP", 0.9).toFloat();
     m_settings.topK = settings.value("topK", 40).toInt();
     m_settings.repeatPenalty = settings.value("repeatPenalty", 1.1).toFloat();
-    m_autoLoadModel = settings.value("autoLoadModel", false).toBool();
+    m_autoLoadModel = settings.value("autoLoadOnChatOpen", true).toBool();
     m_lastModelName = settings.value("lastModel", "").toString();
     settings.endGroup();
 }
@@ -762,6 +728,10 @@ void LLMManager::onWorkerModelLoaded(const QString &modelPath)
     emit modelLoadedChanged();
     emit currentModelNameChanged();
     saveSettings(); // Save last loaded model
+    if (m_lastModelName != m_currentModelName) {
+        m_lastModelName = m_currentModelName;
+        emit lastModelNameChanged();
+    }
 }
 
 void LLMManager::onWorkerContextReady(int nCtx)

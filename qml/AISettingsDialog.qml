@@ -709,7 +709,7 @@ Dialog {
 
                         GroupBox {
                             Layout.fillWidth: true
-                            title: "Startup"
+                            title: "Loading"
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -717,7 +717,7 @@ Dialog {
 
                                 CheckBox {
                                     id: autoLoadCheckBox
-                                    text: "Auto-load last model on startup"
+                                    text: "Load the last model when the AI Chat opens"
                                     checked: LLMManager.autoLoadModel
                                     onCheckedChanged: LLMManager.autoLoadModel = checked
 
@@ -727,6 +727,14 @@ Dialog {
                                         leftPadding: autoLoadCheckBox.indicator.width + autoLoadCheckBox.spacing
                                         verticalAlignment: Text.AlignVCenter
                                     }
+                                }
+
+                                Text {
+                                    Layout.fillWidth: true
+                                    wrapMode: Text.Wrap
+                                    text: "No model is loaded when the app starts, so the AI uses no memory until you open the chat. Switch or unload models from the chat header."
+                                    font.pointSize: 9
+                                    color: Qt.darker(textColor, 1.3)
                                 }
 
                                 Text {

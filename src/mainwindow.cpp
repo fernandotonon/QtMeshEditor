@@ -1550,6 +1550,13 @@ void MainWindow::initToolBar()
         addDockWidget(Qt::RightDockWidgetArea, m_chatDock);
         resizeDocks({m_chatDock}, {400}, Qt::Vertical);
         m_chatDock->hide();
+        // The LLM is loaded when the chat is opened, never at app startup —
+        // a GGUF costs gigabytes and most sessions never use the AI. Connected
+        // after hide() so construction doesn't report a spurious close.
+        connect(m_chatDock, &QDockWidget::visibilityChanged, this, [this](bool visible) {
+            if (visible) ensureLazyDockQml(m_chatDock);
+            AIChatManager::instance()->setChatOpen(visible);
+        });
 
         // When focus lands on the dock container (not the QQuickWidget inside),
         // forward it to the QQuickWidget. This fixes the macOS issue where
