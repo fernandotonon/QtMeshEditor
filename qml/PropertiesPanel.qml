@@ -660,6 +660,15 @@ Rectangle {
                 Component.onCompleted: content = constraintsComponent
             }
 
+            // ---- Motion graph (#526) ----
+            CollapsibleSection {
+                title: "Motion Graph"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = motionGraphComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -11537,6 +11546,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/ConstraintsPanel.qml"
+        }
+    }
+
+    // ---- Motion graph content (#526) ----
+    Component {
+        id: motionGraphComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/MotionGraphPanel.qml"
         }
     }
 

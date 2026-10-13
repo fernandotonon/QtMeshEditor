@@ -58,6 +58,7 @@
     <file alias="PoseLibraryPanel.qml">../qml/PoseLibraryPanel.qml</file>
     <file alias="GeneratorsPanel.qml">../qml/GeneratorsPanel.qml</file>
     <file alias="ConstraintsPanel.qml">../qml/ConstraintsPanel.qml</file>
+    <file alias="MotionGraphPanel.qml">../qml/MotionGraphPanel.qml</file>
     <file alias="AnimationDopeSheet.qml">../qml/AnimationDopeSheet.qml</file>
     <file alias="AnimationCurveEditor.qml">../qml/AnimationCurveEditor.qml</file>
     <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
