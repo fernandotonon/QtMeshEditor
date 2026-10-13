@@ -243,6 +243,8 @@ TEST_F(MotionGraphSceneTest, AuthoringIsUndoable)
     EXPECT_EQ(mgr()->entry(), a) << "the first state becomes the entry";
     const QString t = mgr()->addTransition(a, b);
     ASSERT_FALSE(t.isEmpty());
+    EXPECT_DOUBLE_EQ(mgr()->graph(QStringLiteral("MG_Undo")).transitions[0].exitTime, 1.0)
+        << "a new transition waits for its source clip, or A → B → A ping-pongs every frame";
     ASSERT_TRUE(mgr()->addParam(QStringLiteral("speed"), QStringLiteral("float")));
     ASSERT_TRUE(mgr()->addCondition(t, QStringLiteral("speed"), QStringLiteral(">"), 1.0));
     EXPECT_FALSE(mgr()->removeParam(QStringLiteral("speed"))) << "in use by a condition";

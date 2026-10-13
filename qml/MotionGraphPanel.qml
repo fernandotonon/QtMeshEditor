@@ -591,20 +591,34 @@ Column {
                 currentIndex: Math.max(0, model.indexOf(mg.tDetails.curve || "linear"))
                 onActivated: function(i) { MotionGraphManager.setTransitionField(mg.selTransition, "curve", model[i]) }
             }
-            Label { height: 22; text: "Exit" }
+        }
+        Row {
+            id: exitRow
+            spacing: 4
+            readonly property bool waits: mg.tDetails.exitTime !== undefined && mg.tDetails.exitTime !== ""
+            InspectorCheckBox {
+                text: "Wait for source clip"
+                checked: exitRow.waits
+                ToolTip.visible: hovered
+                ToolTip.text: "Let the source clip play before this transition may fire (1 = one full play)"
+                onToggled: MotionGraphManager.setTransitionField(mg.selTransition, "exitTime", checked ? "1" : "")
+            }
             Field {
+                visible: exitRow.waits
                 width: 44
-                placeholder: "—"
-                text: mg.tDetails.exitTime !== undefined ? String(mg.tDetails.exitTime) : ""
+                text: exitRow.waits ? String(mg.tDetails.exitTime) : ""
                 onCommitted: function(v) { MotionGraphManager.setTransitionField(mg.selTransition, "exitTime", v) }
             }
+            Label { visible: exitRow.waits; height: 22; text: "of the clip (0–1)"; opacity: 0.7 }
         }
         Text {
             width: mg.width - 8; wrapMode: Text.Wrap
-            font.pixelSize: 10; opacity: 0.7; color: AnimationControlController.textColor
-            text: "Fires when ALL conditions hold" + (mg.tDetails.exitTime !== "" && mg.tDetails.exitTime !== undefined
-                                                         ? " and the source clip passed its exit time (0..1)" : "")
-                  + ". No conditions = as soon as possible."
+            font.pixelSize: 10; opacity: 0.7
+            color: !exitRow.waits && (mg.tDetails.conditions || []).length === 0 ? "#e0a050" : AnimationControlController.textColor
+            text: !exitRow.waits && (mg.tDetails.conditions || []).length === 0
+                  ? "⚠ No conditions and no wait: this fires on the very next frame, so the source clip never gets to play."
+                  : "Fires when " + ((mg.tDetails.conditions || []).length > 0 ? "ALL conditions hold" : "the source clip finishes")
+                    + (exitRow.waits && (mg.tDetails.conditions || []).length > 0 ? " AND the source clip passed the wait point" : "") + "."
         }
         Repeater {
             model: mg.tDetails.conditions || []

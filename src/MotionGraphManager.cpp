@@ -334,6 +334,10 @@ QString MotionGraphManager::addTransition(const QString& from, const QString& to
         t.id = uniqueTransitionId(*g);
         t.from = from;
         t.to = to;
+        // Wait for the source clip to finish by default (Mecanim's "Has Exit
+        // Time"): a transition with no conditions and no exit time fires on
+        // the next frame, so A → B → A ping-pongs without either clip playing.
+        t.exitTime = 1.0;
         g->transitions.push_back(t);
         id = t.id;
         return true;
@@ -855,7 +859,7 @@ QVariantList MotionGraphManager::transitionRows() const
         m[QStringLiteral("from")] = t.from;
         m[QStringLiteral("to")] = t.to;
         m[QStringLiteral("label")] = displayName(t);
-        m[QStringLiteral("summary")] = conds.isEmpty() ? QStringLiteral("always") : conds.join(QStringLiteral(" and "));
+        m[QStringLiteral("summary")] = conds.isEmpty() ? QStringLiteral("immediately (no conditions, no exit time)") : conds.join(QStringLiteral(" and "));
         m[QStringLiteral("duration")] = t.duration;
         m[QStringLiteral("curve")] = curveId(t.curve);
         m[QStringLiteral("masked")] = !t.mask.isEmpty();
