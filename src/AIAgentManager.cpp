@@ -19,7 +19,7 @@ using namespace AIAgent;
 
 namespace {
 constexpr const char* kTrustedModeKey = "ai/agentTrustedMode";
-constexpr const char* kRecommendedModel = "Qwen3 4B Instruct 2507 Q4_K_M";
+constexpr const char* kRecommendedModel = "Qwen 3.5 4B Q4_K_M";
 
 /// LLMManager-backed planner. Forwards LLMManager's generation signals only
 /// while it has an outstanding request, so a material-generation run by
@@ -285,15 +285,20 @@ QString AIAgentManager::repairMissingImageInput(AIAgent::Step& step, const QStri
 bool AIAgentManager::isRecommendedModelName(const QString& modelName)
 {
     // Models known to hold a multi-step JSON tool protocol together: the
-    // Qwen Instruct line at 4B+ and anything 7B+/MoE. Substring match on the
-    // file/name the user loaded (case-insensitive).
+    // Qwen Instruct line at 4B+ (Qwen3 2507, Qwen 3.5/3.6) and anything
+    // 7B+/MoE. Substring match on the file/name the user loaded
+    // (case-insensitive). Gemma 4 E2B/E4B are deliberately absent: small
+    // edge models, not yet measured on the agent's protocol.
     static const QStringList markers = {
         "qwen3-4b-instruct", "qwen3-30b", "qwen2.5-7b", "qwen 2.5 7b", "qwen3 4b", "qwen3 30b",
-        "7b", "8b", "12b", "14b", "27b", "30b", "32b", "70b",
+        "qwen3.5-4b", "qwen 3.5 4b", "qwen3.5-9b", "qwen 3.5 9b", "qwen3.6", "qwen 3.6",
     };
     const QString n = modelName.toLower();
     for (const QString& m : markers) if (n.contains(m)) return true;
-    return false;
+    // Size class 7B+: a whole number of billions, so "0.8b" is not "8b".
+    static const QRegularExpression sizeRe(
+        QStringLiteral("(?<![\\d.])(7|8|9|12|14|26|27|30|32|35|70)b(?![a-z])"));
+    return sizeRe.match(n).hasMatch();
 }
 
 QVariantList AIAgentManager::planModel() const

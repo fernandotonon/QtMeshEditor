@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -83,16 +84,27 @@ const TJ kQuadruped[] = {
     {"Neck",         0, 0.50, 0.62, 0.82, true},
     {"Head",         3, 0.50, 0.66, 0.95, true},
     {"Tail",         2, 0.50, 0.55, 0.08, false},
+    // Legs are THREE segments (upper / lower / foot), matching the canonical
+    // creature skeleton. A two-bone leg cannot receive a template clip: the
+    // clip's lower-leg rotation has nowhere to go and the foot bone absorbs
+    // the whole knee-to-hoof rotation. Measured on Cow|Run, whose upper leg
+    // swings 128 deg with a further 93 deg at the knee, that tore the mesh
+    // into flat shards; a walk (44 deg upper) survived, which is why this only
+    // showed up on the faster gaits.
     // Front legs (high z).
-    {"FrontLeftUpLeg",  0, 0.62, 0.45, 0.72, true},
-    {"FrontLeftFoot",   6, 0.62, 0.04, 0.72, false},
-    {"FrontRightUpLeg", 0, 0.38, 0.45, 0.72, true},
-    {"FrontRightFoot",  8, 0.38, 0.04, 0.72, false},
+    {"FrontLeftUpLeg",   0, 0.62, 0.45, 0.72, true},
+    {"FrontLeftLowLeg",  6, 0.62, 0.24, 0.72, false},
+    {"FrontLeftFoot",    7, 0.62, 0.04, 0.72, false},
+    {"FrontRightUpLeg",  0, 0.38, 0.45, 0.72, true},
+    {"FrontRightLowLeg", 9, 0.38, 0.24, 0.72, false},
+    {"FrontRightFoot",  10, 0.38, 0.04, 0.72, false},
     // Back legs (low z).
-    {"BackLeftUpLeg",   2, 0.62, 0.45, 0.30, true},
-    {"BackLeftFoot",   10, 0.62, 0.04, 0.30, false},
-    {"BackRightUpLeg",  2, 0.38, 0.45, 0.30, true},
-    {"BackRightFoot",  12, 0.38, 0.04, 0.30, false},
+    {"BackLeftUpLeg",    2, 0.62, 0.45, 0.30, true},
+    {"BackLeftLowLeg",  12, 0.62, 0.24, 0.30, false},
+    {"BackLeftFoot",    13, 0.62, 0.04, 0.30, false},
+    {"BackRightUpLeg",   2, 0.38, 0.45, 0.30, true},
+    {"BackRightLowLeg", 15, 0.38, 0.24, 0.30, false},
+    {"BackRightFoot",   16, 0.38, 0.04, 0.30, false},
 };
 
 // #1013 Vehicle: chassis root, front/rear axle, four wheels. Template z is the
@@ -303,12 +315,92 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
         return (tAxis == 0) ? p0 : p1;
     };
 
+    // 1b. Which way does the creature FACE? The template is authored with the
+    //     front at HIGH template-z, but a generated mesh can face either way,
+    //     and rigging it backwards produces a creature that walks, runs and
+    //     jumps in reverse (reported on an AI-generated horse whose head sat
+    //     at z = -0.176 while the template put the head at +z).
+    //
+    //     The head is the tall, NARROW end: a quadruped's head and neck rise
+    //     well above the back line, while the rump is broad and lower. So
+    //     compare the mean length-coordinate of the tallest slice against the
+    //     body centre; if it sits at the LOW end, the mesh faces backwards and
+    //     the template's length axis is flipped.
+    //
+    //     Only applies to body plans whose template has a front/back axis;
+    //     fitVehicle does its own front detection.
+    bool flipLength = false;
+    if (vertexCount > 0) {
+        // Work on OCCUPIED SPACE, not vertex counts: a percentile over
+        // vertices lets TESSELLATION decide which end reads as tall, so a
+        // sparsely-modelled head beside a densely-modelled back could put the
+        // cutoff at back height and leave the creature rigged backwards. The
+        // same reason fitVehicle deduplicates into cells (#1013).
+        //
+        // Bin the length axis into cells, record the HIGHEST point in each,
+        // and compare the mean length-coordinate of the top cells against all
+        // occupied cells. Every occupied cell counts once regardless of how
+        // many vertices landed in it.
+        constexpr int kBins = 64;
+        std::array<double, kBins> cellTop{};
+        std::array<bool, kBins> cellUsed{};
+        cellTop.fill(-std::numeric_limits<double>::max());
+        cellUsed.fill(false);
+        for (int i = 0; i < vertexCount; ++i) {
+            const double L = static_cast<double>(verts[3 * i + p1]);
+            int b = static_cast<int>((L - mn[p1]) / ext[p1] * (kBins - 1));
+            b = std::clamp(b, 0, kBins - 1);
+            const double h = static_cast<double>(verts[3 * i + up]);
+            if (!cellUsed[static_cast<size_t>(b)]
+                || h > cellTop[static_cast<size_t>(b)]) {
+                cellTop[static_cast<size_t>(b)] = h;
+                cellUsed[static_cast<size_t>(b)] = true;
+            }
+        }
+        std::vector<std::pair<double, double>> cells;   // (height, length)
+        for (int b = 0; b < kBins; ++b)
+            if (cellUsed[static_cast<size_t>(b)])
+                cells.emplace_back(cellTop[static_cast<size_t>(b)],
+                                   mn[p1] + (static_cast<double>(b) + 0.5)
+                                                / kBins * ext[p1]);
+        if (cells.size() >= 4) {
+            std::vector<double> hs;
+            hs.reserve(cells.size());
+            for (const auto& c : cells) hs.push_back(c.first);
+            std::sort(hs.begin(), hs.end());
+            const double hiCut = hs[static_cast<size_t>(0.80 * (hs.size() - 1))];
+            double sumTall = 0, sumAll = 0;
+            long long nTall = 0;
+            for (const auto& c : cells) {
+                sumAll += c.second;
+                if (c.first >= hiCut) { sumTall += c.second; ++nTall; }
+            }
+            if (nTall > 0) {
+                const double tallMean = sumTall / static_cast<double>(nTall);
+                const double bodyMean =
+                    sumAll / static_cast<double>(cells.size());
+                // A clear margin only; a near-tie means the shape carries no
+                // reliable head signal and the template's own convention
+                // stands.
+                if (tallMean < bodyMean - 0.05 * ext[p1]) flipLength = true;
+            }
+        }
+    }
+
     // 2. Map each joint's normalised position into the AABB.
     for (auto& j : placed) {
         std::array<double, 3> world = {0, 0, 0};
         for (int tAxis = 0; tAxis < 3; ++tAxis) {
             const int w = tmplAxisToWorld(tAxis);
-            world[w] = mn[w] + j.pos[tAxis] * ext[w];
+            double t = j.pos[tAxis];
+            // Reversing the facing is a 180 deg turn about UP, so BOTH
+            // in-plane axes mirror. Flipping only the length axis would keep
+            // "Left" bones on the same side coordinate -- which for a
+            // creature facing the other way is its anatomical RIGHT, so every
+            // left/right label (and any clip that distinguishes them) comes
+            // out swapped.
+            if (flipLength && (w == p1 || w == p0)) t = 1.0 - t;
+            world[w] = mn[w] + t * ext[w];
         }
         j.pos = world;
     }

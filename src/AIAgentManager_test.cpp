@@ -583,6 +583,14 @@ TEST(AIAgentManagerModels, RecommendedModelCheckIsCaseInsensitiveAndSizeAware)
     EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen2.5-7B-Instruct-Q4_K_M.gguf"));
     EXPECT_TRUE(AIAgentManager::isRecommendedModelName("google_gemma-3-12b-it-Q4_K_M.gguf"));
     EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf"));
+    // the current catalog (2026-10)
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3.5-4B-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen 3.5 9B Q4_K_M"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("gemma-4-12b-it-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("gemma-4-26B-A4B-it-UD-Q4_K_M.gguf"));
+    EXPECT_TRUE(AIAgentManager::isRecommendedModelName("Qwen3.6-35B-A3B-UD-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("gemma-4-E4B-it-Q4_K_M.gguf"));
+    EXPECT_FALSE(AIAgentManager::isRecommendedModelName("Qwen3.5-0.8B-Q4_K_M.gguf"));
     EXPECT_FALSE(AIAgentManager::isRecommendedModelName("gemma-3-1b-it-Q4_K_M.gguf"));
     EXPECT_FALSE(AIAgentManager::isRecommendedModelName("qwen2.5-3b-instruct-q4_k_m.gguf"));
     EXPECT_FALSE(AIAgentManager::isRecommendedModelName(""));

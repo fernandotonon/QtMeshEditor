@@ -26,12 +26,18 @@ struct HandsLiveFrame {
 struct BodyLiveFrame {
     bool valid = false;
     double timeSec = 0.0;
+    int imageWidth = 0;
+    int imageHeight = 0;
     std::array<std::array<float, 4>, PoseIK::kCanonicalRoles> quats;
     uint32_t resolvedMask = 0;
     std::array<float, PoseIK::kLandmarkCount * 3> world{};
     std::array<float, PoseIK::kLandmarkCount * 3> screenCrop{};
     std::array<float, PoseIK::kLandmarkCount * 2> imageXy{};
     std::array<float, PoseIK::kLandmarkCount> visibility{};
+    // Optional FaceCap camera-relative orientation transported onto the rig.
+    // Baking this with the body avoids applying body yaw twice at the head.
+    bool headWorldValid = false;
+    std::array<float, 4> headWorldRotation{0.f, 0.f, 0.f, 1.f};
     HandsLiveFrame hands;
 };
 

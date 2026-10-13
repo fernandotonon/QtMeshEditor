@@ -1364,7 +1364,7 @@ TEST_F(AnimationMergerTest, BodyRetargeterLandmarkDirectionMovesArm)
     EXPECT_GT(raisedMotion, 25.0f);
 }
 
-TEST_F(AnimationMergerTest, BodyRetargeterHighKneeDoesNotFlipThigh)
+TEST_F(AnimationMergerTest, BodyRetargeterHighKneeFollowsCapturedDirection)
 {
     // High knee: MediaPipe thigh can aim antiparallel to the standing neutral
     // (knee above the hip in world-up). Landmark getRotationTo then flips the
@@ -1467,24 +1467,20 @@ TEST_F(AnimationMergerTest, BodyRetargeterHighKneeDoesNotFlipThigh)
     const Ogre::Vector3 standThigh = thighDir();
     EXPECT_LT(standThigh.y, -0.5f);  // standing thigh points down
 
-    // Extreme high left knee: knee nearly straight above the hip (image-y up)
-    // with a tiny forward offset. After canonicalize the live thigh is nearly
-    // antiparallel to the standing-down neutral — landmark getRotationTo then
-    // picks an arbitrary 180° axis and folds the Mixamo thigh up the back.
+    // Extreme high left knee: nearly antiparallel to standing. The model must
+    // reproduce this direction without an arbitrary swing cap or wrong roll.
     Landmarks highKnee = standLm();
-    setLm(highKnee, 25, 0.10f, -0.35f, 0.05f);  // knee almost above hip
-    setLm(highKnee, 27, 0.10f, -0.10f, 0.10f);  // ankle still above hip line
+    setLm(highKnee, 25, 0.10f, -0.35f, -0.05f);  // knee almost above hip
+    setLm(highKnee, 27, 0.10f, -0.10f, -0.10f);  // ankle still above hip line
     const auto highFr = solver.solveFrame(highKnee.data(), vis.data());
     ASSERT_TRUE(highFr.resolved(PoseIK::LHip));
     applyLocals(rt.evaluateFrame(highFr.quats, highFr.resolvedMask, 0,
                                  highKnee.data(), vis.data()));
     const Ogre::Vector3 lifted = thighDir();
 
-    // The upside-down bug is a ~180° flip: thigh ≈ -standThigh (straight up
-    // the spine / shoe behind the head). Clamped landmark aim must not.
-    EXPECT_LT(lifted.dotProduct(-standThigh), 0.85f)
-        << "thigh flipped antiparallel to standing: lifted=" << lifted
-        << " stand=" << standThigh;
+    // Aim must match the source, including its small forward component.
+    EXPECT_GT(lifted.dotProduct(Ogre::Vector3(0, .35f, .05f).normalisedCopy()), .999f)
+        << "thigh must reproduce the captured high knee: " << lifted;
     // Still a real high-knee: leave the standing-down pose.
     EXPECT_GT(degBetween(standThigh, lifted), 20.0f) << lifted;
 }
@@ -1493,8 +1489,8 @@ TEST_F(AnimationMergerTest, BodyRetargeterSeatedNeutralDoesNotSnapToStanding)
 {
     // Calibrate while seated (thighs forward). Replaying the same pose used to
     // hit the near-neutral quat path with identity delta on bind `base`, which
-    // snapped the legs back to standing. Landmark-aligned articBase must keep
-    // the calibrated seated aim.
+    // snapped the legs back to standing. Anatomical frames must keep the
+    // calibrated seated aim.
     auto skel = Ogre::SkeletonManager::getSingleton().create(
         "body_rt_seat_skel",
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
@@ -1548,10 +1544,10 @@ TEST_F(AnimationMergerTest, BodyRetargeterSeatedNeutralDoesNotSnapToStanding)
         setLm(l, 23, 0.10f, 0.f, 0.f);
         setLm(l, 24, -0.10f, 0.f, 0.f);
         // Knees forward of the hips (seated), not below (standing).
-        setLm(l, 25, 0.10f, 0.05f, 0.40f);
-        setLm(l, 26, -0.10f, 0.05f, 0.40f);
-        setLm(l, 27, 0.10f, 0.40f, 0.45f);
-        setLm(l, 28, -0.10f, 0.40f, 0.45f);
+        setLm(l, 25, 0.10f, 0.05f, -0.40f);
+        setLm(l, 26, -0.10f, 0.05f, -0.40f);
+        setLm(l, 27, 0.10f, 0.40f, -0.45f);
+        setLm(l, 28, -0.10f, 0.40f, -0.45f);
         setLm(l, 0, 0.f, -0.65f, -0.10f);
         setLm(l, 7, 0.08f, -0.62f, 0.02f);
         setLm(l, 8, -0.08f, -0.62f, 0.02f);

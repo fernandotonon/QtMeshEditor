@@ -128,7 +128,9 @@ void Material::on_buttonExport_clicked()
     QString fileName = QFileDialog::getSaveFileName(this, tr("Export material"),
                                                      "",
                                                      tr("Ogre Mesh (*.material)"),
-                                                    nullptr, QFileDialog::DontUseNativeDialog);
+                                                    nullptr,
+                                                    QFileDialog::DontUseNativeDialog
+                                                    | QFileDialog::DontUseCustomDirectoryIcons);
     if(fileName.size())
     {
 
@@ -204,7 +206,9 @@ void Material::on_pushButton_clicked()
     QStringList filePaths = QFileDialog::getOpenFileNames(this, tr("Select the materials"),
                                                      "",
                                                      tr("Ogre Material (*.material)"),
-                                                     nullptr, QFileDialog::DontUseNativeDialog);
+                                                     nullptr,
+                                                     QFileDialog::DontUseNativeDialog
+                                                     | QFileDialog::DontUseCustomDirectoryIcons);
 
     foreach(const QString &filePath, filePaths)
     {

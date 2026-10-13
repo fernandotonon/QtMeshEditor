@@ -22,6 +22,7 @@
 #ifdef ENABLE_MOCAP
 #include "Mocap/PoseIKSolver.h"
 #include "Mocap/MocapPoseIkFk.h"
+#include "Mocap/BodyPoseGeometry.h"
 #endif
 
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
@@ -2456,88 +2457,20 @@ struct BodyRetargeter::Impl {
     bool haveNeutral = false;
     bool neutralHadTorso = false;
     bool yaw180 = false;
+    float metresToRig = 1.f;
+    Ogre::Quaternion rootParentRotation = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3 rootParentScale = Ogre::Vector3::UNIT_SCALE;
 #ifdef ENABLE_MOCAP
-    // Landmark direction retarget (live mocap): neutral ref dirs in skeleton
-    // world + per-bone Qbase (bind aligned to neutral), same as applyMotionClip.
-    std::vector<Ogre::Vector3> neutralDref;       // per canonical role
-    std::vector<Ogre::Quaternion> dirQbase;       // per bone
+    Ogre::Quaternion sourceToRig = Ogre::Quaternion::IDENTITY;
+    std::vector<Ogre::Quaternion> geometryToBone;
+    mutable std::vector<Ogre::Quaternion> heldLocal;
+    mutable BodyPoseGeometry::Pose previousGeometry;
     bool haveNeutralDir = false;
 #endif
 };
 
 #ifdef ENABLE_MOCAP
 namespace {
-void collectCanonicalLiveDirections(
-    const float* world33, const float* visibility33, int Jc,
-    std::vector<Ogre::Vector3>& outCanonDir)
-{
-    std::array<std::array<float, 3>, PoseIK::kLandmarkCount> canon{};
-    PoseIK::Solver::canonicalizeMediaPipeWorld(world33, canon);
-    outCanonDir.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
-    for (int c = 0; c < Jc; ++c) {
-        std::array<float, 3> dir{};
-        const float minVis =
-            (c >= PoseIK::RHip && c <= PoseIK::LFoot) ? 0.2f : 0.3f;
-        if (PoseIK::Solver::canonicalLiveDirection(
-                c, canon, visibility33, minVis, dir)) {
-            Ogre::Vector3 v(dir[0], dir[1], dir[2]);
-            if (v.squaredLength() > 1e-12f) {
-                v.normalise();
-                outCanonDir[static_cast<size_t>(c)] = v;
-            }
-        }
-    }
-}
-
-bool legLandmarksReliable(int role, const float* visibility33)
-{
-    if (!visibility33)
-        return false;
-    auto vis = [&](int lm) { return visibility33[lm] >= 0.2f; };
-    switch (role) {
-    case PoseIK::RHip:
-        return vis(24) && vis(26);
-    case PoseIK::RKnee:
-        return vis(26) && vis(28);
-    case PoseIK::RFoot:
-        return vis(28);
-    case PoseIK::LHip:
-        return vis(23) && vis(25);
-    case PoseIK::LKnee:
-        return vis(25) && vis(27);
-    case PoseIK::LFoot:
-        return vis(27);
-    default:
-        return false;
-    }
-}
-
-// Clamp an aim direction to a max swing from `from` (radians). When `to` is
-// nearly antiparallel, getRotationTo's axis is arbitrary and Mixamo thighs
-// fold up the back — prefer swinging toward `fallbackAxis` (torso forward).
-Ogre::Vector3 clampAimSwing(const Ogre::Vector3& from,
-                            const Ogre::Vector3& to,
-                            float maxAngleRad,
-                            const Ogre::Vector3& fallbackAxis)
-{
-    if (from.squaredLength() < 1e-12f || to.squaredLength() < 1e-12f)
-        return from;
-    Ogre::Vector3 a = from.normalisedCopy();
-    Ogre::Vector3 b = to.normalisedCopy();
-    float cosA = a.dotProduct(b);
-    cosA = std::max(-1.f, std::min(1.f, cosA));
-    const float angle = std::acos(cosA);
-    if (angle <= maxAngleRad + 1e-4f)
-        return b;
-    Ogre::Vector3 axis = a.crossProduct(b);
-    if (axis.squaredLength() < 1e-10f) {
-        axis = a.crossProduct(fallbackAxis);
-        if (axis.squaredLength() < 1e-10f)
-            axis = a.perpendicular();
-    }
-    axis.normalise();
-    return Ogre::Quaternion(Ogre::Radian(maxAngleRad), axis) * a;
-}
 
 void collectFingerDirsFromPoseLandmarks(
     const float* world33, const float* visibility33,
@@ -2649,6 +2582,50 @@ BodyRetargeter::BodyRetargeter(Ogre::Skeleton* skel, bool yaw180)
     // Pose-ik mocap: anatomical name→role only (NO CMU handedness swap — that
     // swap is for BVH/library clips and would mirror live limb motion).
     d->tb = readTargetBindFrame(skel, d->boneToCanon);
+    const int hipIndex = d->tb.roleBoneIdx[0];
+    if (hipIndex >= 0) {
+        const int parent = d->tb.parentIdx[hipIndex];
+        if (parent >= 0) {
+            d->rootParentRotation = d->tb.bindWorld[parent];
+            d->rootParentScale = skel->getBone(static_cast<unsigned short>(parent))->_getDerivedScale();
+        }
+    }
+#ifdef ENABLE_MOCAP
+    const auto& tb = d->tb;
+    const Ogre::Quaternion rigBasis = tb.Ct.Inverse();
+    const Ogre::Vector3 rigLeft = rigBasis * Ogre::Vector3::UNIT_X;
+    const Ogre::Vector3 rigForward = rigBasis * Ogre::Vector3::UNIT_Z;
+    d->heldLocal = tb.bindLocal;
+    d->geometryToBone.assign(static_cast<size_t>(d->nBones), Ogre::Quaternion::IDENTITY);
+    for (int i : tb.order) {
+        const int c = d->boneToCanon[static_cast<size_t>(i)];
+        if (c < 0 || c >= d->Jc)
+            continue;
+        Ogre::Quaternion geometry = rigBasis;
+        if (c >= PoseIK::RShoulder && c != PoseIK::LCollar
+            && c != PoseIK::RButtock && c != PoseIK::LButtock) {
+            Ogre::Vector3 direction = tb.tgtBindDir[static_cast<size_t>(c)];
+            if (c == PoseIK::LFoot || c == PoseIK::RFoot) {
+                // Feet aim at toes, never along the incoming shin. Leaf
+                // ankles use a virtual forward axis if the rig has no toes.
+                direction = rigForward;
+                auto* bone = skel->getBone(static_cast<unsigned short>(i));
+                for (auto* child : bone->getChildren()) {
+                    const Ogre::Vector3 candidate = child->_getDerivedPosition() - tb.bindPos[i];
+                    if (candidate.squaredLength() > 1e-10f) {
+                        direction = candidate;
+                        break;
+                    }
+                }
+            }
+            const bool arm = c == PoseIK::RShoulder || c == PoseIK::RElbow
+                             || c == PoseIK::LShoulder || c == PoseIK::LElbow;
+            if (!BodyPoseGeometry::frame(direction, arm ? rigForward : rigLeft, geometry))
+                BodyPoseGeometry::frame(direction, arm ? rigLeft : rigForward, geometry);
+        }
+        d->geometryToBone[i] = geometry.Inverse() * tb.bindWorld[i];
+    }
+#endif
 
     d->canonDup.assign(static_cast<size_t>(d->Jc), 0);
     for (int i = 0; i < d->nBones; ++i)
@@ -2737,6 +2714,29 @@ bool BodyRetargeter::hasNeutralReference() const
     return m_valid && d && d->haveNeutral;
 }
 
+int BodyRetargeter::rootBoneHandle() const
+{
+    return m_valid && d ? d->tb.roleBoneIdx[0] : -1;
+}
+
+Ogre::Vector3 BodyRetargeter::rootOffset(const Ogre::Vector3& cameraMetres) const
+{
+#ifdef ENABLE_MOCAP
+    if (m_valid && d && d->haveNeutralDir) {
+        Ogre::Vector3 offset = d->rootParentRotation.Inverse()
+                              * (d->sourceToRig * cameraMetres * d->metresToRig);
+        for (int axis = 0; axis < 3; ++axis) {
+            const float scale = d->rootParentScale[axis];
+            offset[axis] = std::abs(scale) > 1e-6f ? offset[axis] / scale : 0.f;
+        }
+        return offset;
+    }
+#else
+    (void)cameraMetres;
+#endif
+    return Ogre::Vector3::ZERO;
+}
+
 void BodyRetargeter::setNeutralReference(
     const std::array<std::array<float, 4>, 22>& canonicalQuats,
     uint32_t resolvedMask,
@@ -2745,6 +2745,16 @@ void BodyRetargeter::setNeutralReference(
 {
     if (!m_valid || !d)
         return;
+#ifdef ENABLE_MOCAP
+    BodyPoseGeometry::Pose calibrationPose;
+    Ogre::Quaternion calibratedHeading;
+    if (mediaPipeWorld33) {
+        calibrationPose = BodyPoseGeometry::solve(mediaPipeWorld33, mediaPipeVisibility33);
+        if (!calibrationPose.resolved(PoseIK::Hip)
+            || !BodyPoseGeometry::cameraHeading(mediaPipeWorld33, calibratedHeading))
+            return;
+    }
+#endif
     const TargetBindFrame& tb = d->tb;
     const int Jc = d->Jc;
     auto clipQ = [&](const std::array<std::array<float, 4>, 22>& src, int joint)
@@ -2783,40 +2793,38 @@ void BodyRetargeter::setNeutralReference(
 #ifdef ENABLE_MOCAP
     d->haveNeutralDir = false;
     if (mediaPipeWorld33) {
-        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
-        std::vector<Ogre::Vector3> neutralCanon(
-            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
-        collectCanonicalLiveDirections(
-            mediaPipeWorld33, mediaPipeVisibility33, Jc, neutralCanon);
-        d->neutralDref.assign(static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
-        d->dirQbase.assign(static_cast<size_t>(d->nBones),
-                           Ogre::Quaternion::IDENTITY);
-        for (int c = 0; c < Jc; ++c) {
-            const Ogre::Vector3& nc = neutralCanon[static_cast<size_t>(c)];
-            if (nc.squaredLength() < 1e-12f)
-                continue;
-            Ogre::Vector3 ref = CtInv * nc;
-            if (ref.squaredLength() < 1e-12f)
-                continue;
-            ref.normalise();
-            d->neutralDref[static_cast<size_t>(c)] = ref;
+        const auto& pose = calibrationPose;
+        if (pose.resolved(PoseIK::Hip)) {
+            // Calibrate camera heading once; motion after calibration keeps all
+            // three axes, including yaw. Anatomical names never change sides.
+            d->sourceToRig = tb.Ct.Inverse() * calibratedHeading.Inverse();
             d->haveNeutralDir = true;
-        }
-        if (d->haveNeutralDir) {
-            for (int i = 0; i < d->nBones; ++i) {
-                const int c = d->boneToCanon[static_cast<size_t>(i)];
-                if (c < 0 || c >= Jc || c == 0)
-                    continue;
-                if (d->neutralDref[static_cast<size_t>(c)].squaredLength()
-                    < 1e-12f)
-                    continue;
-                if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
-                    < 1e-12f)
-                    continue;
-                d->dirQbase[static_cast<size_t>(i)] =
-                    tb.tgtBindDir[static_cast<size_t>(c)].getRotationTo(
-                        d->neutralDref[static_cast<size_t>(c)])
-                    * tb.bindWorld[static_cast<size_t>(i)];
+            float sourceLength = 0.f, rigLength = 0.f;
+            for (const auto& leg : {std::array<int, 6>{PoseIK::LHip, PoseIK::LKnee, PoseIK::LFoot, 23, 25, 27},
+                                    std::array<int, 6>{PoseIK::RHip, PoseIK::RKnee, PoseIK::RFoot, 24, 26, 28}}) {
+                if (!pose.resolved(leg[0]) || !pose.resolved(leg[1])) continue;
+                const int a = tb.roleBoneIdx[leg[0]], b = tb.roleBoneIdx[leg[1]], c = tb.roleBoneIdx[leg[2]];
+                if (a < 0 || b < 0 || c < 0) continue;
+                auto point = [&](int lm) {
+                    return Ogre::Vector3(mediaPipeWorld33[lm * 3], mediaPipeWorld33[lm * 3 + 1], mediaPipeWorld33[lm * 3 + 2]);
+                };
+                sourceLength += (point(leg[3]) - point(leg[4])).length()
+                                + (point(leg[4]) - point(leg[5])).length();
+                rigLength += (tb.bindPos[a] - tb.bindPos[b]).length()
+                             + (tb.bindPos[b] - tb.bindPos[c]).length();
+            }
+            if (sourceLength > 1e-4f && rigLength > 1e-4f)
+                d->metresToRig = rigLength / sourceLength;
+            else {
+                const int hip = tb.roleBoneIdx[PoseIK::Hip], chest = tb.roleBoneIdx[PoseIK::Chest];
+                const auto mid = [&](int a, int b) {
+                    return Ogre::Vector3(mediaPipeWorld33[a*3] + mediaPipeWorld33[b*3],
+                        mediaPipeWorld33[a*3+1] + mediaPipeWorld33[b*3+1],
+                        mediaPipeWorld33[a*3+2] + mediaPipeWorld33[b*3+2]) * .5f;
+                };
+                const float torso = (mid(11,12) - mid(23,24)).length();
+                if (hip >= 0 && chest >= 0 && torso > 1e-4f)
+                    d->metresToRig = (tb.bindPos[chest] - tb.bindPos[hip]).length() / torso;
             }
         }
     }
@@ -2854,208 +2862,43 @@ BodyRetargeter::evaluateFrame(
     const bool haveNeutral = d->haveNeutral;
 
 #ifdef ENABLE_MOCAP
-    // Live mocap: aim bind bones at landmark segment directions (same math as
-    // applyMotionClip direction retarget) — matches the PoseIK debug overlay.
-    if (mediaPipeWorld33 && haveNeutral && d->haveNeutralDir) {
-        std::vector<Ogre::Vector3> liveCanon(
-            static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
-        collectCanonicalLiveDirections(
-            mediaPipeWorld33, mediaPipeVisibility33, Jc, liveCanon);
-        const Ogre::Quaternion CtInv = tb.Ct.Inverse();
-        auto quatDeltaArtic = [&](int boneIdx, int role,
-                                  const Ogre::Quaternion& basePose)
-            -> Ogre::Quaternion {
-            if (role < 0 || !haveNeutral)
-                return basePose;
-            if (!(resolvedMask & (1u << static_cast<unsigned>(role))))
-                return basePose;
-            const Ogre::Quaternion localCur =
-                parentRelativeLocal(canonicalQuats, role, resolvedMask);
-            const Ogre::Quaternion localRef =
-                parentRelativeLocal(d->neutral, role, d->neutralResolvedMask);
-            Ogre::Quaternion delta = localRef.Inverse() * localCur;
-            Ogre::Quaternion artic = delta;
-            if (d->haveAnyStand && d->restsAreIdentity && d->neutralHadTorso) {
-                artic = d->McInv[static_cast<size_t>(boneIdx)] * delta
-                        * d->Mc[static_cast<size_t>(boneIdx)];
-            } else if (d->yaw180 && !d->haveAnyStand && role > 0) {
-                static const Ogre::Quaternion kYawPi(0.0f, 0.0f, 1.0f, 0.0f);
-                artic = kYawPi.Inverse() * delta * kYawPi;
-            }
-            const int dup = std::max(1, d->canonDup[static_cast<size_t>(role)]);
-            if (dup > 1)
-                artic = Ogre::Quaternion::Slerp(
-                    1.0f / static_cast<float>(dup), Ogre::Quaternion::IDENTITY,
-                    artic, true);
-            return basePose * artic;
-        };
+    if (mediaPipeWorld33) {
+        const auto pose = BodyPoseGeometry::solve(mediaPipeWorld33, mediaPipeVisibility33, &d->previousGeometry);
         std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
         for (int i : tb.order) {
-            const Ogre::Quaternion base =
-                (d->haveStand[static_cast<size_t>(i)]
-                    ? d->standLocal[static_cast<size_t>(i)]
-                    : tb.bindLocal[static_cast<size_t>(i)]);
-            const int pi = tb.parentIdx[static_cast<size_t>(i)];
-            const Ogre::Quaternion Wp =
-                (pi >= 0) ? W[static_cast<size_t>(pi)]
-                          : Ogre::Quaternion::IDENTITY;
             const int c = d->boneToCanon[static_cast<size_t>(i)];
-            if (c < 0 || c >= Jc
-                || (skipRolesMask & (1u << static_cast<unsigned>(c)))) {
-                W[static_cast<size_t>(i)] = Wp * base;
-                continue;
+            const int pi = tb.parentIdx[static_cast<size_t>(i)];
+            const Ogre::Quaternion parent = pi >= 0 ? W[static_cast<size_t>(pi)]
+                                                    : Ogre::Quaternion::IDENTITY;
+            Ogre::Quaternion local = d->heldLocal[static_cast<size_t>(i)];
+            if (c >= 0 && c < Jc
+                && !(skipRolesMask & (1u << static_cast<unsigned>(c)))) {
+                if (haveNeutral && d->haveNeutralDir && pose.resolved(c)) {
+                    // The bone's own bind axis (not a world direction mistaken
+                    // for a local axis) fixes rolled FBX and imported rigs.
+                    const Ogre::Quaternion world = d->sourceToRig * pose.orientations[c]
+                                                   * d->geometryToBone[static_cast<size_t>(i)];
+                    local = parent.Inverse() * world;
+                    local.normalise();
+                    d->heldLocal[static_cast<size_t>(i)] = local;
+                }
+                out.emplace_back(static_cast<unsigned short>(i), local);
             }
-            Ogre::Quaternion local;
-            // Legs: clamp landmark aims (avoids 180° thigh flips on high knee)
-            // and fall back to PoseIK quats when landmarks look stuck at
-            // neutral. Hip stays on bind/direction — quat hip breaks W.
-            const bool isLegRole =
-                (c >= PoseIK::RButtock && c <= PoseIK::LFoot);
-            const bool isHandRole =
-                (c == PoseIK::RHand || c == PoseIK::LHand);
-            const bool legQuatResolved =
-                isLegRole
-                && (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
-            const bool legDirOk =
-                isLegRole
-                && legLandmarksReliable(c, mediaPipeVisibility33)
-                && liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
-                && d->neutralDref[static_cast<size_t>(c)].squaredLength()
-                       > 1e-12f
-                && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
-                       > 1e-12f;
-            if (c == 0) {
-                // Torso/arm direction retarget reads W[hip] — keep hip on the
-                // landmark-direction path. Full PoseIK hip quats use a torso
-                // basis that does not match Mixamo bind and can flip the mesh
-                // 180° while the debug overlay (raw PoseIK FK) still looks fine.
-                Ogre::Quaternion localDir = base;
-                if (liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
-                    && d->neutralDref[static_cast<size_t>(c)].squaredLength()
-                           > 1e-12f
-                    && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
-                           > 1e-12f) {
-                    Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
-                    ds.normalise();
-                    const Ogre::Quaternion R =
-                        d->neutralDref[static_cast<size_t>(c)].getRotationTo(ds);
-                    const Ogre::Quaternion Wt =
-                        R * d->dirQbase[static_cast<size_t>(i)];
-                    localDir = Wp.Inverse() * Wt;
-                    W[static_cast<size_t>(i)] = Wt;
-                } else {
-                    W[static_cast<size_t>(i)] = Wp * base;
-                }
-                local = localDir;
-            } else if (isLegRole) {
-                // High-knee / occlusion: raw landmark getRotationTo can swing
-                // ~180° and fold Mixamo thighs up the back. Prefer clamped
-                // landmark aims for real leg motion; when the landmark looks
-                // stuck at neutral (seated occlusion), use PoseIK quats — but
-                // refuse a quat that would invert the thigh.
-                const Ogre::Vector3& dref =
-                    d->neutralDref[static_cast<size_t>(c)];
-                Ogre::Vector3 dsLeg = Ogre::Vector3::ZERO;
-                bool haveLmAim = false;
-                if (legDirOk) {
-                    dsLeg = CtInv * liveCanon[static_cast<size_t>(c)];
-                    if (dsLeg.squaredLength() > 1e-12f) {
-                        dsLeg.normalise();
-                        haveLmAim = true;
-                    }
-                }
-                const bool dirNearNeutral =
-                    haveLmAim && dref.dotProduct(dsLeg) > 0.9995f;
-                const Ogre::Vector3 torsoFwd =
-                    (CtInv * Ogre::Vector3::UNIT_Z).normalisedCopy();
-                constexpr float kMaxLegSwing = 115.f * (Ogre::Math::PI / 180.f);
-
-                auto applyClampedDir = [&](const Ogre::Vector3& aim) {
-                    const Ogre::Vector3 clamped =
-                        clampAimSwing(dref, aim, kMaxLegSwing, torsoFwd);
-                    const Ogre::Quaternion R = dref.getRotationTo(clamped);
-                    const Ogre::Quaternion Wt =
-                        R * d->dirQbase[static_cast<size_t>(i)];
-                    local = Wp.Inverse() * Wt;
-                    W[static_cast<size_t>(i)] = Wt;
-                };
-
-                if (haveLmAim && !dirNearNeutral) {
-                    applyClampedDir(dsLeg);
-                } else if (legQuatResolved) {
-                    // Near-neutral landmarks: compose the PoseIK delta onto the
-                    // calibrated landmark aim, not bind `base`. Otherwise a
-                    // seated/raised-leg calibration (live ≈ dref → identity
-                    // delta) snaps the leg back to standing bind.
-                    Ogre::Quaternion articBase = base;
-                    if (haveLmAim) {
-                        const Ogre::Vector3 clamped = clampAimSwing(
-                            dref, dsLeg, kMaxLegSwing, torsoFwd);
-                        const Ogre::Quaternion R =
-                            dref.getRotationTo(clamped);
-                        const Ogre::Quaternion Wt =
-                            R * d->dirQbase[static_cast<size_t>(i)];
-                        articBase = Wp.Inverse() * Wt;
-                    }
-                    local = quatDeltaArtic(i, c, articBase);
-                    W[static_cast<size_t>(i)] = Wp * local;
-                    if (tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
-                        > 1e-12f) {
-                        const Ogre::Vector3 thigh =
-                            (W[static_cast<size_t>(i)]
-                             * tb.tgtBindDir[static_cast<size_t>(c)])
-                                .normalisedCopy();
-                        if (dref.dotProduct(thigh) < -0.15f) {
-                            if (haveLmAim)
-                                applyClampedDir(dsLeg);
-                            else {
-                                local = base;
-                                W[static_cast<size_t>(i)] = Wp * local;
-                            }
-                        }
-                    }
-                } else if (haveLmAim) {
-                    applyClampedDir(dsLeg);
-                } else {
-                    local = base;
-                    W[static_cast<size_t>(i)] = Wp * local;
-                }
-            } else if (isHandRole
-                       && (resolvedMask & (1u << static_cast<unsigned>(c)))
-                       != 0u) {
-                local = quatDeltaArtic(i, c, base);
-                W[static_cast<size_t>(i)] = Wp * local;
-            } else if (liveCanon[static_cast<size_t>(c)].squaredLength() > 1e-12f
-                       && d->neutralDref[static_cast<size_t>(c)].squaredLength()
-                           > 1e-12f
-                       && tb.tgtBindDir[static_cast<size_t>(c)].squaredLength()
-                           > 1e-12f) {
-                Ogre::Vector3 ds = CtInv * liveCanon[static_cast<size_t>(c)];
-                ds.normalise();
-                const Ogre::Vector3& dref =
-                    d->neutralDref[static_cast<size_t>(c)];
-                const bool quatResolved =
-                    (resolvedMask & (1u << static_cast<unsigned>(c))) != 0u;
-                // Stale / held landmark dirs that still match neutral block
-                // PoseIK quaternions — otherwise arms/torso freeze at T-pose.
-                const bool dirNearNeutral =
-                    dref.dotProduct(ds) > 0.9995f;
-                if (quatResolved && dirNearNeutral && c != 0) {
-                    local = quatDeltaArtic(i, c, base);
-                    W[static_cast<size_t>(i)] = Wp * local;
-                } else {
-                    const Ogre::Quaternion R = dref.getRotationTo(ds);
-                    const Ogre::Quaternion Wt =
-                        R * d->dirQbase[static_cast<size_t>(i)];
-                    local = Wp.Inverse() * Wt;
-                    W[static_cast<size_t>(i)] = Wt;
-                }
-            } else {
-                local = quatDeltaArtic(i, c, base);
-                W[static_cast<size_t>(i)] = Wp * local;
-            }
-            out.emplace_back(static_cast<unsigned short>(i), local);
+            W[static_cast<size_t>(i)] = parent * local;
         }
+        const Ogre::Quaternion torsoDelta = pose.resolved(PoseIK::Hip)
+            && d->previousGeometry.resolved(PoseIK::Hip)
+            ? pose.orientations[PoseIK::Hip] * d->previousGeometry.orientations[PoseIK::Hip].Inverse()
+            : Ogre::Quaternion::IDENTITY;
+        for (int c = 0; c < Jc; ++c)
+            if (pose.resolved(c)) {
+                d->previousGeometry.orientations[c] = pose.orientations[c];
+                d->previousGeometry.mask |= 1u << c;
+            } else if (d->previousGeometry.resolved(c)) {
+                // A held local pose follows the torso while occluded. Keep
+                // its transported pole in that same frame for reacquisition.
+                d->previousGeometry.orientations[c] = torsoDelta * d->previousGeometry.orientations[c];
+            }
         return out;
     }
 #endif
@@ -3114,8 +2957,8 @@ void BodyRetargeter::resetLiveNeutral()
     d->neutralResolvedMask = 0;
 #ifdef ENABLE_MOCAP
     d->haveNeutralDir = false;
-    d->neutralDref.clear();
-    d->dirQbase.clear();
+    d->heldLocal = d->tb.bindLocal;
+    d->previousGeometry = {};
 #endif
 }
 

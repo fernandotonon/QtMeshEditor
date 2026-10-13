@@ -1,4 +1,5 @@
 #include "LLMWorker.h"
+#include <array>
 #include <QFileInfo>
 #include <QDebug>
 #include <QThread>
@@ -101,6 +102,10 @@ bool LLMWorker::loadModel(const QString &modelPath)
         } else {
             // Get the vocabulary
             m_vocab = llama_model_get_vocab(m_model);
+            const char *tmpl = llama_model_chat_template(m_model, nullptr);
+            m_chatTemplate = tmpl ? QString::fromUtf8(tmpl) : QString();
+            qDebug() << "LLMWorker: prompt family"
+                     << static_cast<int>(detectPromptFamily(m_chatTemplate));
             if (!m_vocab) {
                 error = "Failed to get vocabulary from model";
                 qWarning() << "LLMWorker:" << error;
@@ -199,6 +204,7 @@ void LLMWorker::unloadModelInternal()
         llama_model_free(m_model);
         m_model = nullptr;
         m_vocab = nullptr;
+        m_chatTemplate.clear();
         qDebug() << "LLMWorker: Model unloaded";
     }
 
@@ -256,17 +262,8 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
         return;
     }
 
-    // Build the full prompt with chat template
-    QString fullPrompt;
-
-    // Use a simple chat format that works with most models
-    if (!systemPrompt.isEmpty()) {
-        fullPrompt = QString("<|system|>\n%1\n<|user|>\n%2\n<|assistant|>\n")
-                         .arg(systemPrompt)
-                         .arg(userPrompt);
-    } else {
-        fullPrompt = QString("<|user|>\n%1\n<|assistant|>\n").arg(userPrompt);
-    }
+    // Build the prompt in the model's own chat format.
+    const QString fullPrompt = buildPrompt(systemPrompt, userPrompt);
 
     qDebug() << "LLMWorker: Generating with prompt length:" << fullPrompt.length();
 
@@ -402,7 +399,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
 
             // Emit progress
             float progress = static_cast<float>(i + 1) / effectiveMaxTokens;
-            emit generationProgress(generatedText, progress);
+            emit generationProgress(stripReasoning(generatedText), progress);
         }
 
         // Prepare next batch
@@ -421,7 +418,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt,
     m_isGenerating.store(false);
 
     qDebug() << "LLMWorker: Generation completed, tokens:" << generatedTokens.size();
-    emit generationCompleted(generatedText.trimmed());
+    emit generationCompleted(stripReasoning(generatedText).trimmed());
     // LCOV_EXCL_STOP
 #else
     Q_UNUSED(systemPrompt);
@@ -486,6 +483,41 @@ void LLMWorker::cleanupContext()
     }
 }
 
+QString LLMWorker::buildPrompt(const QString &systemPrompt, const QString &userPrompt) const
+{
+    if (QString prompt = formatChatPrompt(detectPromptFamily(m_chatTemplate), m_chatTemplate,
+                                          systemPrompt, userPrompt);
+        !prompt.isEmpty())
+        return prompt;
+
+    // Another family: llama.cpp's built-in formatter recognises dozens of
+    // non-Jinja templates (Mistral, Phi, DeepSeek, …) from the same string.
+    if (!m_chatTemplate.isEmpty()) {
+        const QByteArray tmpl = m_chatTemplate.toUtf8();
+        const QByteArray sys = systemPrompt.toUtf8();
+        const QByteArray usr = userPrompt.toUtf8();
+        std::vector<llama_chat_message> msgs;
+        if (!sys.isEmpty()) msgs.push_back({"system", sys.constData()});
+        msgs.push_back({"user", usr.constData()});
+        std::vector<char> buf(static_cast<size_t>(sys.size() + usr.size()) * 2 + 1024);
+        int n = llama_chat_apply_template(tmpl.constData(), msgs.data(), msgs.size(), true,
+                                          buf.data(), static_cast<int32_t>(buf.size()));
+        if (n > static_cast<int>(buf.size())) {
+            buf.resize(static_cast<size_t>(n) + 1);
+            n = llama_chat_apply_template(tmpl.constData(), msgs.data(), msgs.size(), true,
+                                          buf.data(), static_cast<int32_t>(buf.size()));
+        }
+        if (n > 0)
+            return QString::fromUtf8(buf.data(), n);
+    }
+
+    // Last resort (no or unrecognised template): the generic format this
+    // worker always used.
+    if (!systemPrompt.isEmpty())
+        return QString("<|system|>\n%1\n<|user|>\n%2\n<|assistant|>\n").arg(systemPrompt, userPrompt);
+    return QString("<|user|>\n%1\n<|assistant|>\n").arg(userPrompt);
+}
+
 std::vector<llama_token> LLMWorker::tokenize(const QString &text, bool addBos)
 {
     if (!m_vocab) {
@@ -536,3 +568,96 @@ QString LLMWorker::detokenize(const std::vector<llama_token> &tokens)
 }
 #endif
 // LCOV_EXCL_STOP
+
+// ---- Chat formats (pure — unit-tested without a model) ----
+
+LLMWorker::PromptFamily LLMWorker::detectPromptFamily(const QString &t)
+{
+    if (t.isEmpty()) return PromptFamily::Unknown;
+    // Gemma 4 first: its template also mentions roles a looser check could misread.
+    if (t.contains(QLatin1String("<|turn>"))) return PromptFamily::Gemma4;
+    if (t.contains(QLatin1String("<|im_start|>"))) return PromptFamily::ChatML;
+    if (t.contains(QLatin1String("<start_of_turn>"))) return PromptFamily::Gemma;
+    if (t.contains(QLatin1String("<|start_header_id|>"))) return PromptFamily::Llama3;
+    return PromptFamily::Unknown;
+}
+
+QString LLMWorker::formatChatPrompt(PromptFamily family, const QString &embeddedTemplate,
+                                    const QString &systemPrompt, const QString &userPrompt)
+{
+    // BOS is NOT written here: tokenize(…, addBos=true) adds it when the
+    // vocabulary wants one, and a literal "<bos>" would double it.
+    QString p;
+    switch (family) {
+    case PromptFamily::ChatML:
+        if (!systemPrompt.isEmpty())
+            p += QStringLiteral("<|im_start|>system\n") + systemPrompt + QStringLiteral("<|im_end|>\n");
+        p += QStringLiteral("<|im_start|>user\n") + userPrompt + QStringLiteral("<|im_end|>\n");
+        p += QStringLiteral("<|im_start|>assistant\n");
+        // Hybrid thinking models (Qwen3, Qwen 3.5/3.6) honour enable_thinking=false
+        // by starting the reply with an empty think block — the template's own
+        // switch. Instruct-only models (Qwen 2.5, Qwen3 2507) have no <think>.
+        if (embeddedTemplate.contains(QLatin1String("enable_thinking")))
+            p += QStringLiteral("<think>\n\n</think>\n\n");
+        return p;
+    case PromptFamily::Gemma4:
+        // Thinking is off unless <|think|> opens the system turn.
+        if (!systemPrompt.isEmpty())
+            p += QStringLiteral("<|turn>system\n") + systemPrompt.trimmed() + QStringLiteral("<turn|>\n");
+        p += QStringLiteral("<|turn>user\n") + userPrompt + QStringLiteral("<turn|>\n");
+        p += QStringLiteral("<|turn>model\n");
+        // The larger Gemma 4 models (12B, 26B-A4B, 31B) also open an EMPTY
+        // thought channel when thinking is off; E2B/E4B do not. Follow the
+        // template: the Jinja source spells the newline as a literal "\n".
+        if (embeddedTemplate.contains(QLatin1String("<|channel>thought\\n<channel|>"))
+            || embeddedTemplate.contains(QLatin1String("<|channel>thought\n<channel|>")))
+            p += QStringLiteral("<|channel>thought\n<channel|>");
+        return p;
+    case PromptFamily::Gemma: {
+        // Gemma 2/3 have no system role: the template prepends it to the first user turn.
+        const QString user = systemPrompt.isEmpty() ? userPrompt
+                                                    : systemPrompt + QStringLiteral("\n\n") + userPrompt;
+        return QStringLiteral("<start_of_turn>user\n") + user
+             + QStringLiteral("<end_of_turn>\n<start_of_turn>model\n");
+    }
+    case PromptFamily::Llama3:
+        if (!systemPrompt.isEmpty())
+            p += QStringLiteral("<|start_header_id|>system<|end_header_id|>\n\n") + systemPrompt
+               + QStringLiteral("<|eot_id|>");
+        p += QStringLiteral("<|start_header_id|>user<|end_header_id|>\n\n") + userPrompt
+           + QStringLiteral("<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
+        return p;
+    case PromptFamily::Unknown:
+        break;
+    }
+    return QString();
+}
+
+QString LLMWorker::stripReasoning(const QString &text)
+{
+    // Reasoning comes BEFORE the answer, so only leading blocks are removed —
+    // a "<think>" inside the answer (e.g. a JSON string value) is content.
+    QString out = text;
+    struct Block { const char *open; const char *close; };
+    static constexpr std::array<Block, 2> blocks{{
+        {"<think>", "</think>"},
+        {"<|channel>thought", "<channel|>"},
+    }};
+    bool removed = true;
+    while (removed) {
+        removed = false;
+        qsizetype lead = 0;
+        while (lead < out.size() && out.at(lead).isSpace()) ++lead;
+        for (const auto &b : blocks) {
+            const QString open = QString::fromLatin1(b.open);
+            const QString close = QString::fromLatin1(b.close);
+            if (!QStringView(out).mid(lead).startsWith(open)) continue;
+            const qsizetype end = out.indexOf(close, lead + open.size());
+            if (end < 0) return QString();   // ran into the token limit mid-thought: no answer yet
+            out.remove(0, end + close.size());
+            removed = true;
+            break;
+        }
+    }
+    return out;
+}

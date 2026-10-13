@@ -40,6 +40,14 @@ public:
         // libraries written before the field carry "" and are treated as
         // human, which is what they were implicitly assumed to be.
         QString category;
+        /// Skeleton the clip's joints belong to: "" / "humanoid" (the
+        /// 22-joint canonical skeleton, the default and what every existing
+        /// library holds) or a creature plan — "quadruped", "wingedBiped".
+        /// A creature clip's quats are indexed by a DIFFERENT joint list, so
+        /// this must be checked before a clip is handed to the retarget:
+        /// playing quadruped data through the humanoid path is exactly the
+        /// "legs moving sideways" failure (#1073).
+        QString skeleton;
         int frames = 0;
         int fps = 30;
         // quats[frame][joint] = (x,y,z,w) unit quaternion, joint in canonical
@@ -53,6 +61,11 @@ public:
         // bind onto the target bind); absent (CMU-built libraries) → the
         // standing-pose path.
         std::vector<std::array<float, 4>> restWorld;
+        /// Creature libraries only: per-frame ROOT displacement from frame 0,
+        /// in units of the SOURCE rig's hip height. Empty for older libraries
+        /// (and for humanoid ones), in which case the retarget stays
+        /// rotation-only. See CreatureMotionExtract.h for why it exists.
+        std::vector<std::array<float, 3>> rootOffset;
         // Optional: canonical-frame bind bone directions (22 × [x,y,z]) —
         // enables the direction-aligned bind-referenced retarget.
         std::vector<std::array<float, 3>> restDir;
@@ -168,6 +181,13 @@ public:
     // the pre-category behaviour.
     std::vector<int> takesForAction(const QString& action,
                                     const QString& category) const;
+    /// Same, additionally restricted to a SKELETON ("humanoid",
+    /// "quadruped", "wingedBiped"). Empty means any. Unlike the category
+    /// filter this is HARD: a creature clip's joints are a different list,
+    /// so handing one to a humanoid retarget cannot degrade gracefully.
+    std::vector<int> takesForAction(const QString& action,
+                                    const QString& category,
+                                    const QString& skeletonWanted) const;
     // Category of a clip ("human"/"undead"/"creature"); see Clip::category.
     QString clipCategory(int i) const { return m_clips.at(static_cast<size_t>(i)).category; }
     // The categories present in this library, sorted, for help text / GUI.
@@ -219,15 +239,12 @@ public:
     // / QSettings ai/motionLibraryBaseUrl. Call on a thread with an event loop.
     static QString ensureLibraryBlocking();
 
-    // ---- Curation (user-approved "good" clips) ------------------------------
-    // The user reviews retargeted clips in the Animation Library picker and
-    // marks the good ones; approvals persist as a set of clip `source` strings
-    // (stable across library rebuilds) in curation.json next to the library.
-    // The library builder consumes the same file (--curation/--approved-only)
-    // to SHIP only the approved set while the rest is iterated on.
-    static QString curationPath();                    // .../motion/curation.json
-    static QSet<QString> loadCuration();              // approved clip sources
-    static bool saveCuration(const QSet<QString>& approved);
+    /// Path of the optional CREATURE library (#1073) — quadruped / winged
+    /// clips on their own canonical skeletons. A separate file from the
+    /// humanoid library: different skeletons, different release cadence, and
+    /// a user who never animates creatures should not carry it.
+    static QString creatureLibraryPath();
+    static bool creatureLibraryPresent();
 
     // Reference bone directions (22 × [x,y,z]) for a MODEL-generated clip:
     // model output carries no reference triple, so its base pose is

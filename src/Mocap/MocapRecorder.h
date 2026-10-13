@@ -32,6 +32,7 @@
 #include <QStringList>
 
 #include <vector>
+#include <optional>
 
 namespace Ogre {
 class Entity;
@@ -85,6 +86,9 @@ struct BodyRecordOptions {
     // is enabled — typically Neck | Neck1 | Head so webcam look-down does not
     // stack with the face solve).
     uint32_t skipRolesMask = 0;
+    bool rootMotion = true;
+    // Preserve preview calibration when recording starts mid-performance.
+    std::optional<BodyLiveFrame> neutralFrame;
 };
 
 struct BodyRecordReport {

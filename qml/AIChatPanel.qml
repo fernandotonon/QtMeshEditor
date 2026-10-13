@@ -93,17 +93,21 @@ Rectangle {
                 }
             }
 
-            // Model status dot + name — click to open AI Model Settings and switch models.
+            // Model picker (Ollama-style): status dot + name; click to pick a
+            // downloaded model, unload it, or go download more.
             Rectangle {
                 id: modelChip
-                Layout.maximumWidth: 150
+                Layout.maximumWidth: 170
                 implicitWidth: modelChipRow.implicitWidth + 10
                 height: 20; radius: 3
-                color: modelChipArea.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : "transparent"
-                ToolTip.visible: modelChipArea.containsMouse
+                color: modelChipArea.containsMouse || modelPicker.opened
+                       ? Qt.lighter(PropertiesPanelController.panelColor, 1.5) : "transparent"
+                border.color: PropertiesPanelController.borderColor
+                ToolTip.visible: modelChipArea.containsMouse && !modelPicker.opened
                 ToolTip.delay: 500
-                ToolTip.text: (AIChatManager.modelAvailable ? "Model: " + AIChatManager.currentModelName : "No model loaded")
-                              + " — click to open AI Model Settings"
+                ToolTip.text: AIChatManager.modelLoading ? "Loading " + AIChatManager.currentModelName + "…"
+                              : AIChatManager.modelAvailable ? "Model: " + AIChatManager.currentModelName + " — click to switch"
+                              : "No model loaded — click to choose one"
                 Row {
                     id: modelChipRow
                     anchors.centerIn: parent
@@ -111,16 +115,23 @@ Rectangle {
                     Rectangle {
                         width: 8; height: 8; radius: 4
                         anchors.verticalCenter: parent.verticalCenter
-                        color: AIChatManager.modelAvailable ? "#44dd44" : "#dd4444"
+                        color: AIChatManager.modelLoading ? "#ddaa33"
+                             : AIChatManager.modelAvailable ? "#44dd44" : "#dd4444"
                     }
                     Text {
-                        text: AIChatManager.modelAvailable
-                              ? AIChatManager.currentModelName
-                              : "No model"
+                        text: AIChatManager.modelLoading ? "Loading…"
+                              : AIChatManager.modelAvailable ? AIChatManager.currentModelName
+                              : "Select model"
                         color: PropertiesPanelController.textColor
                         font.pixelSize: 10
                         elide: Text.ElideMiddle
-                        width: Math.min(implicitWidth, 120)
+                        width: Math.min(implicitWidth, 130)
+                    }
+                    Text {
+                        text: "▾"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                        anchors.verticalCenter: parent.verticalCenter
                     }
                 }
                 MouseArea {
@@ -128,7 +139,140 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: AIChatManager.openModelSettings()
+                    onClicked: modelPicker.opened ? modelPicker.close() : modelPicker.open()
+                }
+
+                Popup {
+                    id: modelPicker
+                    objectName: "modelPicker"
+                    width: Math.min(280, root.width - 16)
+                    x: modelChip.width - width
+                    y: modelChip.height + 4
+                    padding: 4
+                    margins: 4   // keep it inside the dock
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                    onAboutToShow: AIChatManager.refreshModels()
+
+                    background: Rectangle {
+                        color: PropertiesPanelController.panelColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1; radius: 4
+                    }
+
+                    contentItem: Column {
+                        spacing: 1
+
+                        Text {
+                            text: "Models"
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.6
+                            font.pixelSize: 10; font.bold: true
+                            leftPadding: 6; topPadding: 2; bottomPadding: 4
+                        }
+
+                        Text {
+                            visible: AIChatManager.availableModels.length === 0
+                            width: modelPicker.availableWidth
+                            text: "No models downloaded yet."
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.6
+                            font.pixelSize: 11; font.italic: true
+                            leftPadding: 6; bottomPadding: 4
+                            wrapMode: Text.Wrap
+                        }
+
+                        Repeater {
+                            model: AIChatManager.availableModels
+                            delegate: Rectangle {
+                                id: modelRow
+                                required property string modelData
+                                readonly property bool isCurrent: modelData === AIChatManager.currentModelName
+                                                                  && (AIChatManager.modelAvailable || AIChatManager.modelLoading)
+                                width: modelPicker.availableWidth
+                                height: 24; radius: 3
+                                color: rowArea.containsMouse ? PropertiesPanelController.highlightColor : "transparent"
+                                RowLayout {
+                                    anchors { fill: parent; leftMargin: 6; rightMargin: 6 }
+                                    spacing: 6
+                                    Text {
+                                        Layout.preferredWidth: 12
+                                        text: modelRow.isCurrent ? (AIChatManager.modelLoading ? "…" : "✓") : ""
+                                        color: PropertiesPanelController.accentColor
+                                        font.pixelSize: 11; font.bold: true
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: modelRow.modelData
+                                        color: PropertiesPanelController.textColor
+                                        font.pixelSize: 11
+                                        font.bold: modelRow.isCurrent
+                                        elide: Text.ElideMiddle
+                                    }
+                                    Text {
+                                        visible: AIAgentManager.modelIsRecommended(modelRow.modelData)
+                                        text: "agent"
+                                        color: PropertiesPanelController.textColor
+                                        opacity: 0.55
+                                        font.pixelSize: 9
+                                    }
+                                }
+                                MouseArea {
+                                    id: rowArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    enabled: !AIChatManager.modelLoading
+                                    onClicked: {
+                                        AIChatManager.selectModel(modelRow.modelData)
+                                        modelPicker.close()
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            width: modelPicker.availableWidth; height: 1
+                            color: PropertiesPanelController.borderColor
+                        }
+
+                        Repeater {
+                            model: [
+                                { label: "Unload model (free memory)", action: "unload" },
+                                { label: "Download models…",           action: "download" }
+                            ]
+                            delegate: Rectangle {
+                                id: actionRow
+                                required property var modelData
+                                readonly property bool actionEnabled: modelData.action !== "unload"
+                                    || (AIChatManager.modelAvailable && !AIChatManager.modelLoading)
+                                width: modelPicker.availableWidth
+                                height: 24; radius: 3
+                                color: actionArea.containsMouse && actionEnabled
+                                       ? PropertiesPanelController.highlightColor : "transparent"
+                                Text {
+                                    anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
+                                    text: actionRow.modelData.label
+                                    color: PropertiesPanelController.textColor
+                                    opacity: actionRow.actionEnabled ? 1.0 : 0.4
+                                    font.pixelSize: 11
+                                }
+                                MouseArea {
+                                    id: actionArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: actionRow.actionEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: {
+                                        if (!actionRow.actionEnabled) return
+                                        if (actionRow.modelData.action === "unload")
+                                            AIChatManager.unloadModel()
+                                        else
+                                            AIChatManager.openModelSettings()
+                                        modelPicker.close()
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -151,10 +295,62 @@ Rectangle {
         }
     }
 
+    // ---- Model status: loading / error / nothing loaded ----
+    Rectangle {
+        id: modelStatus
+        objectName: "modelStatus"
+        anchors { top: header.bottom; left: parent.left; right: parent.right }
+        readonly property string message:
+            AIChatManager.modelLoading ? "Loading " + AIChatManager.currentModelName + "… this can take a few seconds."
+          : AIChatManager.modelError.length > 0 ? "Could not load the model: " + AIChatManager.modelError
+          : AIChatManager.modelAvailable ? ""
+          : AIChatManager.availableModels.length === 0 ? "No AI model downloaded yet."
+          : "No model loaded."
+        readonly property bool showAction: !AIChatManager.modelLoading && !AIChatManager.modelAvailable
+        visible: message.length > 0
+        height: visible ? Math.max(statusText.implicitHeight, statusAction.height) + 10 : 0
+        color: AIChatManager.modelError.length > 0 && !AIChatManager.modelLoading
+               ? Qt.rgba(1, 0.3, 0.3, 0.12) : Qt.rgba(0.3, 0.6, 1, 0.08)
+        Text {
+            id: statusText
+            anchors { left: parent.left; right: statusAction.left; verticalCenter: parent.verticalCenter
+                      leftMargin: 8; rightMargin: 6 }
+            text: modelStatus.message
+            wrapMode: Text.Wrap
+            font.pixelSize: 10
+            color: PropertiesPanelController.textColor
+        }
+        Rectangle {
+            id: statusAction
+            visible: modelStatus.showAction
+            anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+            width: visible ? statusActionText.implicitWidth + 14 : 0
+            height: 20; radius: 3
+            color: statusActionArea.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.2)
+                                                  : PropertiesPanelController.highlightColor
+            border.color: PropertiesPanelController.borderColor
+            Text {
+                id: statusActionText
+                anchors.centerIn: parent
+                text: AIChatManager.availableModels.length === 0 ? "Download a model…" : "Choose model"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+            }
+            MouseArea {
+                id: statusActionArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: AIChatManager.availableModels.length === 0
+                           ? AIChatManager.openModelSettings() : modelPicker.open()
+            }
+        }
+    }
+
     // ---- Model recommendation (#1021e) ----
     Rectangle {
         id: modelHint
-        anchors { top: header.bottom; left: parent.left; right: parent.right }
+        anchors { top: modelStatus.bottom; left: parent.left; right: parent.right }
         visible: AIChatManager.agentMode && AIChatManager.modelAvailable
                  && !AIAgentManager.modelIsRecommended(AIChatManager.currentModelName)
         height: visible ? hintText.implicitHeight + 8 : 0
@@ -444,7 +640,8 @@ Rectangle {
             placeholderText: AIChatManager.modelAvailable
                              ? (AIChatManager.agentMode ? "Describe a task — e.g. \"load the wolf, rig it as a quadruped and export a glb\""
                                                         : "Ask AI to do something…")
-                             : "Load an AI model first (AI → AI Model Settings)"
+                             : AIChatManager.modelLoading ? "Loading the model…"
+                             : "Choose a model from the menu above to start"
             color: PropertiesPanelController.textColor
             background: null
             font.pixelSize: 12

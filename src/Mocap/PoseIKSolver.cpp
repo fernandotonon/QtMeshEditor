@@ -34,7 +34,7 @@ float length(const Vec3& a) { return std::sqrt(dot(a, a)); }
 bool normalize(Vec3& a)
 {
     const float n = length(a);
-    if (n < 1e-6f) return false;
+    if (!std::isfinite(n) || n < 1e-6f) return false;
     a = mul(a, 1.f / n);
     return true;
 }
@@ -102,7 +102,7 @@ void Solver::canonicalizeMediaPipeWorld(
 {
     for (int i = 0; i < kLandmarkCount; ++i)
         out[static_cast<size_t>(i)] = {
-            world33x3[i * 3 + 0], -world33x3[i * 3 + 1], world33x3[i * 3 + 2]};
+            world33x3[i * 3 + 0], -world33x3[i * 3 + 1], -world33x3[i * 3 + 2]};
 }
 
 bool Solver::limbSegmentDirection(
@@ -136,21 +136,8 @@ bool Solver::limbSegmentDirection(
         }
         break;
     }
-    // Foot-index landmarks are often occluded — aim the foot bone along the shin.
-    if (role == RFoot && visible(26) && visible(28)) {
-        Vec3 dir = sub(p[28], p[26]);
-        if (normalize(dir)) {
-            outDir = dir;
-            return true;
-        }
-    }
-    if (role == LFoot && visible(25) && visible(27)) {
-        Vec3 dir = sub(p[27], p[25]);
-        if (normalize(dir)) {
-            outDir = dir;
-            return true;
-        }
-    }
+    // Missing toes cannot define ankle orientation. Hold the foot's last
+    // local pose instead of pointing it down the incoming shin.
     return false;
 }
 
@@ -246,10 +233,8 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
     if (m_hasPrev)
         result.quats = m_prevQuats;  // unresolved roles hold their last pose
 
-    // Canonicalize MediaPipe's frame (+x subject-left, +y down, +z toward camera)
-    // into the CMU/canonical rig frame (+Y up, +Z forward, LEFT at +X). Flip Y
-    // and keep Z (subject faces +Z); do NOT negate X — (-x,-y,+z) would swap
-    // anatomical left/right on rigs whose left bones already sit at +X.
+    // MediaPipe +Z points away from the camera. Rotate 180° about X to
+    // preserve handedness: (x,-y,-z), +Y up and +Z toward the camera.
     Vec3 p[kLandmarkCount];
     std::array<std::array<float, 3>, kLandmarkCount> canon{};
     canonicalizeMediaPipeWorld(world, canon);
@@ -273,23 +258,13 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
         const Vec3 hipMid = mid(LHipLm, RHipLm);
         const Vec3 shoulderMid = mid(LShoulderLm, RShoulderLm);
         Vec3 up = sub(shoulderMid, hipMid);
-        Vec3 hipLine = sub(p[RHipLm], p[LHipLm]);
-        const Vec3 shoulderLine = sub(p[RShoulderLm], p[LShoulderLm]);
-        // Stabilize the hip's horizontal reference. On a seated / partially-
-        // occluded subject the hip landmarks are noisy and hipLine can FLIP
-        // sign between frames, whipping the whole torso 180° about Y (observed:
-        // Hip quat identity → (0,-1,0,0) mid-clip). The SHOULDER line is far
-        // more reliable, so:
-        //  (a) if the hip line is short/degenerate or points opposite the
-        //      shoulder line, fall back to the shoulder line for the hip frame;
-        //  (b) keep the hip line temporally continuous (no sudden sign flip).
-        if (length(hipLine) < 0.05f * length(shoulderLine)
-            || dot(hipLine, shoulderLine) < 0.f)
+        Vec3 hipLine = sub(p[LHipLm], p[RHipLm]);
+        const Vec3 shoulderLine = sub(p[LShoulderLm], p[RShoulderLm]);
+        // A collapsed hip line cannot define facing. The labeled shoulder
+        // line is a fallback, but never flip a valid anatomical hip line:
+        // doing so erases real body turns and independent torso twisting.
+        if (length(hipLine) < 0.05f * length(shoulderLine))
             hipLine = shoulderLine;
-        const Vec3 prevHip{m_prevHipLine[0], m_prevHipLine[1], m_prevHipLine[2]};
-        if (m_hasPrev && dot(hipLine, prevHip) < 0.f)
-            hipLine = mul(hipLine, -1.f);   // preserve orientation continuity
-        m_prevHipLine = {hipLine[0], hipLine[1], hipLine[2]};
         Quat q1, q2;
         const bool ok1 = basisFromPrimary(up, hipLine, q1, nullptr);
         const bool ok2 = basisFromPrimary(up, shoulderLine, q2, nullptr);
@@ -314,7 +289,7 @@ FrameResult Solver::solveFrame(const float* world, const float* visibility,
     // ---- head ------------------------------------------------------------------
     if (visible(Nose) && visible(LEar) && visible(REar)) {
         const Vec3 earMid = mid(LEar, REar);
-        Vec3 x = sub(p[REar], p[LEar]);          // ear line
+        Vec3 x = sub(p[LEar], p[REar]);          // anatomical left
         Vec3 fwd = sub(p[Nose], earMid);         // facing direction
         // y (head-up) completes the frame: up = fwd x earline is unstable when
         // looking straight down, so orthonormalize fwd against x and derive y.

@@ -141,10 +141,16 @@ bool MotionLibrary::parse(const QByteArray& json)
     if (schema != QLatin1String("qtmesh-motion-library-v1") &&
         schema != QLatin1String("qtmesh-motion-library-v2") &&
         schema != QLatin1String("qtmesh-motion-library-v3") &&
-        schema != QLatin1String("qtmesh-motion-library-v4")) {
+        schema != QLatin1String("qtmesh-motion-library-v4") &&
+        schema != QLatin1String("qtmesh-creature-library-v1")) {
         m_error = QStringLiteral("unexpected library schema");
         return false;
     }
+    // A CREATURE library (#1073) mixes body plans, so its joint count is
+    // PER CLIP (quadruped 18, wingedBiped 16) rather than per library. The
+    // humanoid schemas keep their fixed count.
+    const bool creatureLib =
+        (schema == QLatin1String("qtmesh-creature-library-v1"));
     // v4 folds the fingers INTO the canonical skeleton (52 joints: 22 body + 30
     // finger); v1..v3 are 22-joint body-only (fingers ride the separate
     // `fingers` side-channel). The joint count per pose depends on the schema.
@@ -184,14 +190,23 @@ bool MotionLibrary::parse(const QByteArray& json)
         clip.quats.reserve(frames.size());
         for (const QJsonValue& fv : frames) {
             const QJsonArray joints = fv.toArray();
-            if (joints.size() != nJoints) {   // schema guard (22 v1..v3 / 52 v4)
+            // Creature clips declare their own width (their skeleton is
+            // recorded per clip), so validate against the FIRST frame of
+            // this clip rather than a library-wide constant.
+            const int expect = creatureLib
+                ? (clip.quats.empty()
+                       ? static_cast<int>(joints.size())
+                       : static_cast<int>(clip.quats.front().size()))
+                : nJoints;
+            if (joints.size() != expect) {   // schema guard
                 m_error = QStringLiteral("clip '%1' has %2 joints (expected %3)")
-                              .arg(clip.action).arg(joints.size()).arg(nJoints);
+                              .arg(clip.action).arg(joints.size()).arg(expect);
                 m_clips.clear();
                 return false;
             }
-            std::vector<std::array<float, 4>> pose(nJoints);
-            for (int j = 0; j < nJoints; ++j) {
+            std::vector<std::array<float, 4>> pose(
+                static_cast<size_t>(expect));
+            for (int j = 0; j < expect; ++j) {
                 const QJsonArray q = joints[j].toArray();
                 pose[j] = { static_cast<float>(q.at(0).toDouble()),
                             static_cast<float>(q.at(1).toDouble()),
@@ -204,15 +219,32 @@ bool MotionLibrary::parse(const QByteArray& json)
         // Optional per-clip source-bind orientations (bind-referenced
         // retarget). Malformed/absent → empty, the standing-pose path runs.
         const QJsonArray rest = co.value("restWorld").toArray();
-        if (rest.size() == nJoints) {
-            clip.restWorld.reserve(nJoints);
-            for (int j = 0; j < nJoints; ++j) {
+        const int restWant = creatureLib && !clip.quats.empty()
+                                 ? static_cast<int>(clip.quats.front().size())
+                                 : nJoints;
+        if (rest.size() == restWant) {
+            clip.restWorld.reserve(static_cast<size_t>(restWant));
+            for (int j = 0; j < restWant; ++j) {
                 const QJsonArray q = rest[j].toArray();
                 clip.restWorld.push_back({
                     static_cast<float>(q.at(0).toDouble()),
                     static_cast<float>(q.at(1).toDouble()),
                     static_cast<float>(q.at(2).toDouble()),
                     static_cast<float>(q.at(3).toDouble(1.0))});
+            }
+        }
+        // Creature root-translation channel (#jump/death/attack). Accepted
+        // only at full length: a short array would silently freeze the root
+        // partway through, which is the exact failure this channel fixes.
+        const QJsonArray roff = co.value("rootOffset").toArray();
+        if (roff.size() == static_cast<int>(clip.quats.size())) {
+            clip.rootOffset.reserve(clip.quats.size());
+            for (const QJsonValue& ov : roff) {
+                const QJsonArray o = ov.toArray();
+                clip.rootOffset.push_back({
+                    static_cast<float>(o.at(0).toDouble()),
+                    static_cast<float>(o.at(1).toDouble()),
+                    static_cast<float>(o.at(2).toDouble())});
             }
         }
         const QJsonArray rdir = co.value("restDir").toArray();
@@ -289,6 +321,18 @@ bool MotionLibrary::parse(const QByteArray& json)
         // string — otherwise every already-installed library would stay
         // uncategorised and the filter would be a no-op until the user
         // happened to re-download ~28 MB.
+        // Skeleton id. Absent => humanoid: every library written before
+        // creature support holds 22-joint humanoid clips, and silently
+        // treating those as creatures would be the very mis-retarget
+        // this field exists to prevent.
+        // Keep the AUTHORED spelling ("wingedBiped"), do not lower-case
+        // it: the value is compared case-insensitively everywhere, and
+        // flattening it here made clip.skeleton read back as
+        // "wingedbiped", which no longer matched what the extractor
+        // writes or what a caller would reasonably assert on.
+        clip.skeleton = co.value("skeleton").toString().trimmed();
+        if (clip.skeleton.isEmpty())
+            clip.skeleton = QStringLiteral("humanoid");
         clip.category = co.value("category").toString().toLower().trimmed();
         // Only the three known values are honoured. A typo ("humn") would
         // otherwise be stored verbatim, match no filter, and silently fall
@@ -490,10 +534,25 @@ std::vector<int> MotionLibrary::takesForAction(const QString& action) const
 std::vector<int> MotionLibrary::takesForAction(const QString& action,
                                                const QString& category) const
 {
+    return takesForAction(action, category, QString());
+}
+
+std::vector<int> MotionLibrary::takesForAction(const QString& action,
+                                               const QString& category,
+                                               const QString& skeletonWanted) const
+{
     std::vector<int> hits;
     for (int i = 0; i < static_cast<int>(m_clips.size()); ++i) {
         const auto& c = m_clips[static_cast<size_t>(i)];
         if (c.action.compare(action, Qt::CaseInsensitive) != 0)
+            continue;
+        // A creature clip's quats are indexed by a DIFFERENT joint list, so
+        // it can never satisfy a humanoid request (or vice versa). This is a
+        // HARD filter, unlike the category fallback below: returning a
+        // quadruped clip for a human rig does not degrade gracefully, it
+        // produces the sideways-legs failure.
+        if (!skeletonWanted.isEmpty()
+            && c.skeleton.compare(skeletonWanted, Qt::CaseInsensitive) != 0)
             continue;
         if (!category.isEmpty()
             && c.category.compare(category, Qt::CaseInsensitive) != 0)
@@ -505,8 +564,11 @@ std::vector<int> MotionLibrary::takesForAction(const QString& action,
     // otherwise become unreachable for a default human request, which is a
     // regression against today's behaviour. Fall back to the unfiltered set
     // and let the caller report the mismatch instead of failing.
+    // Relax the CATEGORY when nothing matched (several actions are
+    // undead-only), but never the SKELETON — a humanoid rig must not be
+    // handed creature data as a consolation.
     if (hits.empty() && !category.isEmpty())
-        return takesForAction(action, QString());
+        return takesForAction(action, QString(), skeletonWanted);
     return hits;
 }
 
@@ -628,39 +690,18 @@ QString MotionLibrary::libraryPath()
 
 bool MotionLibrary::libraryPresent() { return QFileInfo::exists(libraryPath()); }
 
-QString MotionLibrary::curationPath()
+QString MotionLibrary::creatureLibraryPath()
 {
-    return QDir(AppStorage::aiModelsRoot()).filePath(
-        QStringLiteral("motion/curation.json"));
+    // Separate FILE rather than extra clips in the humanoid library: the two
+    // use different canonical skeletons, ship on different schedules, and a
+    // user with no interest in creatures should not pay 4 MB for them.
+    return QDir(QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("motion")))
+        .filePath(QStringLiteral("creature-library.json"));
 }
 
-QSet<QString> MotionLibrary::loadCuration()
+bool MotionLibrary::creatureLibraryPresent()
 {
-    QSet<QString> out;
-    QFile f(curationPath());
-    if (!f.open(QIODevice::ReadOnly)) return out;
-    const QJsonObject root = QJsonDocument::fromJson(f.readAll()).object();
-    for (const QJsonValue& v : root.value(QStringLiteral("approved")).toArray())
-        if (v.isString()) out.insert(v.toString());
-    return out;
-}
-
-bool MotionLibrary::saveCuration(const QSet<QString>& approved)
-{
-    QJsonObject root;
-    root[QStringLiteral("schema")] =
-        QStringLiteral("qtmesh-motion-curation-v1");
-    QJsonArray arr;
-    // stable file diffs: sorted
-    QStringList sorted(approved.begin(), approved.end());
-    sorted.sort();
-    for (const QString& s : sorted) arr.append(s);
-    root[QStringLiteral("approved")] = arr;
-    QDir().mkpath(QFileInfo(curationPath()).absolutePath());
-    QFile f(curationPath());
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
-    return true;
+    return QFileInfo::exists(creatureLibraryPath());
 }
 
 QString MotionLibrary::ensureLibraryBlocking()
