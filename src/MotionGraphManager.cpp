@@ -797,6 +797,10 @@ int MotionGraphManager::loadSidecar(const QString& assetPath, const QHash<QStrin
         if (error) *error = QStringLiteral("not a %1 file").arg(docSchema());
         return -1;
     }
+    if (!doc.value(QStringLiteral("graphs")).isArray()) {
+        if (error) *error = QStringLiteral("'graphs' must be an array");
+        return -1;
+    }
     const QJsonArray arr = doc.value(QStringLiteral("graphs")).toArray();
     // Parse everything before committing anything.
     std::vector<std::pair<QString, Graph>> parsed;

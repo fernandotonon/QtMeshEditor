@@ -3176,6 +3176,10 @@ int CLIPipeline::cmdAnimGraphInfo(int argc, char* argv[])
             err() << "Error: " << side << ": not a qtmesh-anim-graphs-v1 file" << Qt::endl;
             return 1;
         }
+        if (!doc.value("graphs").isArray()) {
+            err() << "Error: " << side << ": 'graphs' must be an array" << Qt::endl;
+            return 1;
+        }
         for (const QJsonValue& v : doc.value("graphs").toArray()) {
             AnimGraph::Graph g;
             QString e;

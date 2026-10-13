@@ -107,6 +107,20 @@ TEST(MotionGraphManagerStandalone, DocCommandSkipsItsFirstRedoAndSwapsDocuments)
     EXPECT_FALSE(mgr()->hasGraph(QStringLiteral("E")));
 }
 
+TEST(MotionGraphManagerStandalone, MalformedSidecarIsAnErrorNotAnEmptyLoad)
+{
+    mgr()->clear();
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("a.glb"));
+    QFile f(MotionGraphManager::sidecarPath(asset));
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(R"({"schema":"qtmesh-anim-graphs-v1","graphs":null})");
+    f.close();
+    QString err;
+    EXPECT_EQ(mgr()->loadSidecar(asset, {}, {}, &err), -1);
+    EXPECT_TRUE(err.contains(QStringLiteral("graphs"))) << err.toStdString();
+}
+
 TEST(MotionGraphManagerStandalone, SidecarPathSitsBesideTheAsset)
 {
     EXPECT_TRUE(MotionGraphManager::sidecarPath(QStringLiteral("/a/b/hero.glb")).endsWith(QStringLiteral("/a/b/hero.animgraph.json")));
