@@ -118,7 +118,11 @@ public:
     void setEntity(const QString& e);
     QVariantList stateRows() const;
     QVariantList transitionRows() const;
-    QVariantList paramRows() const;
+    QVariantList paramRows() const { return paramRowsFor(m_entity); }
+    /// Parameters of `entity`'s graph: the RUNNING copy when that entity is
+    /// the one playing, else the stored defaults.
+    QVariantList paramRowsFor(const QString& entity) const;
+    QString playingEntity() const { return m_playing ? m_playEntity : QString(); }
     QString entry() const { return m_graphs.value(m_entity).entry; }
     bool playing() const { return m_playing; }
     QString currentState() const { return m_playing ? m_rt.current.primary.state : QString(); }

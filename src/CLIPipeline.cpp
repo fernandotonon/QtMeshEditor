@@ -3164,7 +3164,11 @@ int CLIPipeline::cmdAnimGraphInfo(int argc, char* argv[])
     const QString side = MotionGraphManager::sidecarPath(filePath);
     QFile f(side);
     QJsonArray graphs;
-    if (f.open(QIODevice::ReadOnly)) {
+    if (f.exists() && !f.open(QIODevice::ReadOnly)) {
+        err() << "Error: " << side << ": cannot read (" << f.errorString() << ")" << Qt::endl;
+        return 1;
+    }
+    if (f.isOpen()) {
         QJsonParseError pe;
         const QJsonDocument jd = QJsonDocument::fromJson(f.readAll(), &pe);
         if (pe.error != QJsonParseError::NoError || !jd.isObject()) {
@@ -3187,7 +3191,12 @@ int CLIPipeline::cmdAnimGraphInfo(int argc, char* argv[])
                 err() << "Error: " << side << ": " << e << Qt::endl;
                 return 1;
             }
-            graphs.append(QJsonObject{{"entity", v.toObject().value("entity").toString()}, {"graph", AnimGraph::toJson(g)}});
+            const QJsonValue ent = v.toObject().value("entity");
+            if (!ent.isString() || ent.toString().trimmed().isEmpty()) {
+                err() << "Error: " << side << ": a graph record has no entity name" << Qt::endl;
+                return 1;
+            }
+            graphs.append(QJsonObject{{"entity", ent.toString()}, {"graph", AnimGraph::toJson(g)}});
         }
     }
     if (json) {

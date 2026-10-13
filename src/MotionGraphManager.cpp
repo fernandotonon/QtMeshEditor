@@ -815,6 +815,10 @@ int MotionGraphManager::loadSidecar(const QString& assetPath, const QHash<QStrin
         QString name = o.value(QStringLiteral("entity")).toString();
         if (rename.contains(name)) name = rename.value(name);
         else if (arr.size() == 1 && !fallbackEntity.isEmpty()) name = fallbackEntity;
+        if (name.trimmed().isEmpty()) {
+            if (error) *error = QStringLiteral("a graph record has no entity name");
+            return -1;
+        }
         parsed.emplace_back(name, g);
     }
     ensureSceneHook();
@@ -891,10 +895,10 @@ QVariantMap MotionGraphManager::transitionDetails(const QString& id) const
     return {};
 }
 
-QVariantList MotionGraphManager::paramRows() const
+QVariantList MotionGraphManager::paramRowsFor(const QString& entity) const
 {
     QVariantList rows;
-    const std::vector<Param>& ps = m_playing && m_playEntity == m_entity ? m_runParams : m_graphs.value(m_entity).params;
+    const std::vector<Param>& ps = m_playing && m_playEntity == entity ? m_runParams : m_graphs.value(entity).params;
     for (const auto& p : ps)
         rows << QVariantMap{{QStringLiteral("name"), p.name}, {QStringLiteral("type"), paramTypeId(p.type)},
                             {QStringLiteral("value"), p.value}};

@@ -93,4 +93,32 @@ TEST_F(MCPServerMotionGraphCoverageTest, SetPlayParamStopRoundTrip)
     EXPECT_EQ(payload(server->toolGetMotionGraph({{"entity", "MCP_Graph"}}))["current_state"].toString(), QStringLiteral("b"));
     const auto stop = server->toolStopMotionGraph({});
     EXPECT_FALSE(payload(stop)["playing"].toBool());
+    EXPECT_EQ(payload(stop)["stopped"].toString(), QStringLiteral("MCP_Graph"));
+}
+
+TEST_F(MCPServerMotionGraphCoverageTest, MaskBonesMustExistAndStatusIsPerEntity)
+{
+    Ogre::Entity* e = createAnimatedTestEntity("MCP_GraphA");
+    Ogre::Animation* other = e->getSkeleton()->createAnimation("Other", 1.0f);
+    other->createNodeTrack(0, e->getSkeleton()->getBone("Root"))->createNodeKeyFrame(0.0f);
+    e->refreshAvailableAnimationState();
+
+    QJsonObject g = graphJson();
+    QJsonArray ts = g["transitions"].toArray();
+    QJsonObject t0 = ts[0].toObject();
+    t0["mask"] = QJsonArray{"Child", "NoSuchBone"};
+    ts[0] = t0;
+    g["transitions"] = ts;
+    const auto bad = server->toolSetMotionGraph({{"entity", "MCP_GraphA"}, {"graph", g}});
+    EXPECT_TRUE(bad["isError"].toBool());
+    EXPECT_TRUE(textOf(bad).contains("NoSuchBone")) << textOf(bad).toStdString();
+
+    ASSERT_FALSE(server->toolSetMotionGraph({{"entity", "MCP_GraphA"}, {"graph", graphJson()}})["isError"].toBool());
+    ASSERT_FALSE(server->toolPlayMotionGraph({{"entity", "MCP_GraphA"}})["isError"].toBool());
+    // Another entity's status must not borrow A's running playback.
+    const auto other_ = payload(server->toolGetMotionGraph({{"entity", "SomeoneElse"}}));
+    EXPECT_FALSE(other_["playing"].toBool());
+    EXPECT_EQ(other_["playing_entity"].toString(), QStringLiteral("MCP_GraphA"));
+    EXPECT_TRUE(other_["current_state"].toString().isEmpty());
+    MotionGraphManager::instance()->stop();
 }

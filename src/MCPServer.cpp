@@ -10659,14 +10659,19 @@ QString motionGraphEntityArg(const QJsonObject& args)
     return e;
 }
 
-QJsonObject motionGraphStatus()
+/// Status of `entity`'s graph. Playback fields describe that entity only —
+/// the manager plays one graph at a time, and `playing_entity` names it.
+QJsonObject motionGraphStatus(const QString& entity)
 {
     auto* gm = MotionGraphManager::instance();
-    QJsonObject o{{"playing", gm->playing()}, {"current_state", gm->currentState()},
-                  {"blending_from", gm->previousState()}, {"blend_progress", gm->blendProgress()},
-                  {"last_transition", gm->lastTransition()}};
+    const bool mine = !entity.isEmpty() && gm->playingEntity() == entity;
+    QJsonObject o{{"entity", entity}, {"playing", mine}, {"playing_entity", gm->playingEntity()},
+                  {"current_state", mine ? gm->currentState() : QString()},
+                  {"blending_from", mine ? gm->previousState() : QString()},
+                  {"blend_progress", mine ? gm->blendProgress() : 1.0},
+                  {"last_transition", mine ? gm->lastTransition() : QString()}};
     QJsonArray params;
-    for (const QVariant& v : gm->paramRows()) params.append(QJsonObject::fromVariantMap(v.toMap()));
+    for (const QVariant& v : gm->paramRowsFor(entity)) params.append(QJsonObject::fromVariantMap(v.toMap()));
     o["params"] = params;
     return o;
 }
@@ -10677,8 +10682,7 @@ QJsonObject MCPServer::toolGetMotionGraph(const QJsonObject& args)
     SentryReporter::addBreadcrumb("ai.tool_call", "get_motion_graph");
     auto* gm = MotionGraphManager::instance();
     const QString e = motionGraphEntityArg(args);
-    QJsonObject content = motionGraphStatus();
-    content["entity"] = e;
+    QJsonObject content = motionGraphStatus(e);
     content["has_graph"] = gm->hasGraph(e);
     if (gm->hasGraph(e)) content["graph"] = AnimGraph::toJson(gm->graph(e));
     content["entities_with_graphs"] = QJsonArray::fromStringList(gm->graphEntities());
@@ -10704,6 +10708,12 @@ QJsonObject MCPServer::toolSetMotionGraph(const QJsonObject& args)
         if (!clips.contains(st.clip))
             return makeErrorResult(QStringLiteral("Error: state '%1': '%2' has no clip '%3' (clips: %4)")
                                        .arg(st.name, e, st.clip, clips.join(", ")));
+    const QStringList bones = gm->bonesOf(e);
+    for (const auto& t : g.transitions)
+        for (const QString& b : t.mask)
+            if (!bones.contains(b))
+                return makeErrorResult(QStringLiteral("Error: transition %1: '%2' has no bone '%3' (the mask would drive nothing there)")
+                                           .arg(t.id, e, b));
     if (!gm->setGraph(e, g, true, &err, QStringLiteral("Set motion graph"))) return makeErrorResult("Error: " + err);
     gm->setEntity(e);
     QJsonObject content{{"ok", true}, {"entity", e}, {"graph", AnimGraph::toJson(gm->graph(e))}};
@@ -10717,16 +10727,19 @@ QJsonObject MCPServer::toolPlayMotionGraph(const QJsonObject& args)
     const QString e = motionGraphEntityArg(args);
     QString err;
     if (!gm->play(e, &err)) return makeErrorResult("Error: " + err);
-    QJsonObject content = motionGraphStatus();
-    content["entity"] = e;
+    QJsonObject content = motionGraphStatus(e);
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
 QJsonObject MCPServer::toolStopMotionGraph(const QJsonObject& /*args*/)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "stop_motion_graph");
-    MotionGraphManager::instance()->stop();
-    return makeSuccessResult(QString::fromUtf8(QJsonDocument(motionGraphStatus()).toJson(QJsonDocument::Indented)));
+    auto* gm = MotionGraphManager::instance();
+    const QString was = gm->playingEntity();
+    gm->stop();
+    QJsonObject content = motionGraphStatus(was);
+    content["stopped"] = was;
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
 QJsonObject MCPServer::toolSetMotionGraphParam(const QJsonObject& args)
@@ -10742,7 +10755,9 @@ QJsonObject MCPServer::toolSetMotionGraphParam(const QJsonObject& args)
     else value = 1.0;   // omitted: fire a trigger / set a bool
     QString err;
     if (!gm->setParamValue(name, value, &err)) return makeErrorResult("Error: " + err);
-    return makeSuccessResult(QString::fromUtf8(QJsonDocument(motionGraphStatus()).toJson(QJsonDocument::Indented)));
+    // setParamValue targets the running graph while playing, else the panel entity.
+    const QString owner = gm->playing() ? gm->playingEntity() : gm->entity();
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(motionGraphStatus(owner)).toJson(QJsonDocument::Indented)));
 }
 
 QJsonObject MCPServer::toolListPoses(const QJsonObject & /*args*/)
