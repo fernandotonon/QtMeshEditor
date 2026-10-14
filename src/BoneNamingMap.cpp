@@ -299,6 +299,24 @@ PairingReport Map::pair(const QStringList& boneNames) const
     QHash<QString, QString> claimedBy; // target name → source bone
     QSet<QString> consumed;            // bones already listed inside a pair
 
+    // PRE-PASS: count how many present bones aim at each target, so a
+    // collision is reported independently of the order the bones happen to
+    // arrive in. Detecting it inline during the main loop made the diagnostic
+    // order-dependent: with the non-mutual source first it failed the
+    // mutuality check before claiming the target, the mutual pair then
+    // succeeded, and the same rig reported no collision at all.
+    QHash<QString, int> aimedAt;
+    for (const QString& name : boneNames) {
+        Side s = Side::Center;
+        const QString t = applyRules(name, nullptr, &s);
+        if (t.isEmpty() || s == Side::Center || !present.contains(t)) continue;
+        ++aimedAt[t];
+    }
+    for (auto it = aimedAt.constBegin(); it != aimedAt.constEnd(); ++it)
+        if (it.value() > 1) rep.collisions.push_back(it.key());
+    // Stable output: QHash iteration order is unspecified.
+    rep.collisions.sort();
+
     for (const QString& name : boneNames) {
         Convention conv = Convention::None;
         Side side = Side::Center;
@@ -314,12 +332,10 @@ PairingReport Map::pair(const QStringList& boneNames) const
         }
         if (consumed.contains(name)) continue; // already emitted as the partner
 
-        if (const auto it = claimedBy.constFind(other); it != claimedBy.constEnd()) {
-            // `other` was already paired off with a different bone. Report the
-            // collision BEFORE the mutuality check below: a second bone aiming
-            // at an already-claimed target is exactly the lossy case the
-            // caller needs told about, and "unpaired" would hide it.
-            if (!rep.collisions.contains(other)) rep.collisions.push_back(other);
+        if (claimedBy.constFind(other) != claimedBy.constEnd()) {
+            // `other` was already paired off with a different bone. The
+            // pre-pass has already recorded the collision; just don't emit a
+            // second pair for the same target.
             continue;
         }
         // A pair must be MUTUAL. A custom rule can map A -> B without B -> A;

@@ -289,6 +289,28 @@ TEST(BoneNamingMap, PairingReportDetectsCollisions)
     EXPECT_FALSE(rep.collisions.isEmpty());
 }
 
+TEST(BoneNamingMap, CollisionsAreReportedRegardlessOfBoneOrder)
+{
+    // The diagnostic must not depend on the order bones happen to appear in.
+    // With the non-mutual source FIRST, it used to fail the mutuality check
+    // before claiming the target, the mutual pair then succeeded, and the
+    // report came back with no collision at all — the same rig reporting a
+    // problem or not depending purely on skeleton bone order.
+    CustomRule rule;
+    rule.leftPattern      = "^(armA_l|armB_l)$";
+    rule.leftReplacement  = "arm_r";
+    rule.rightPattern     = "^arm_r$";
+    rule.rightReplacement = "armA_l";
+    Map m({rule});
+
+    for (const QStringList& bones : {QStringList{"armA_l", "armB_l", "arm_r"},
+                                     QStringList{"armB_l", "armA_l", "arm_r"}}) {
+        const auto rep = m.pair(bones);
+        EXPECT_FALSE(rep.collisions.isEmpty())
+            << "no collision reported for order: " << bones.join(",").toStdString();
+    }
+}
+
 TEST(BoneNamingMap, MixedConventionRigStillPairs)
 {
     // Real assets are inconsistent — a rig can carry deform bones in one
