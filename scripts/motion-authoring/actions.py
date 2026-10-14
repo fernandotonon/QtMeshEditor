@@ -69,6 +69,10 @@ def walk():
         kneeL = 40.0 * _bump((p % 1.0))            # left swing first half
         kneeR = 40.0 * _bump(((p + 0.5) % 1.0))
         return {
+            # Loose hands close slightly at the back of each arm swing.  The
+            # asymmetry is subtle but removes the mannequin-stiff fingers.
+            "l_grip": 0.18 + 0.09 * max(0.0, swingL),
+            "r_grip": 0.18 + 0.09 * max(0.0, swingR),
             "l_upleg": (24.0 * swingL - 4.0, 0, 0),
             "r_upleg": (24.0 * swingR - 4.0, 0, 0),
             "l_leg": (kneeL + 6.0, 0, 0),
@@ -110,6 +114,8 @@ def run():
         kneeL = 85.0 * _bump(p % 1.0)
         kneeR = 85.0 * _bump((p + 0.5) % 1.0)
         return {
+            "l_grip": 0.48 + 0.10 * max(0.0, swingL),
+            "r_grip": 0.48 + 0.10 * max(0.0, swingR),
             "l_upleg": (38.0 * swingL + 6.0, 0, 0),
             "r_upleg": (38.0 * swingR + 6.0, 0, 0),
             "l_leg": (kneeL + 12.0, 0, 0),
@@ -144,6 +150,10 @@ def idle():
         w = _s(2 * t)                    # slow weight shift
         look = _bump(_seg(t, 0.45, 0.85))   # brief glance to the side
         return {
+            "l_grip": 0.12 + 0.035 * (b + 1.0),
+            "r_grip": 0.14 + 0.03 * (b + 1.0),
+            "l_spread": 3.0 - 1.0 * b,
+            "r_spread": 2.5 - 1.0 * b,
             "l_arm": (72.0 + 4.0 * b, 0, 4.0 + 2.0 * b),
             "r_arm": (72.0 + 4.0 * b, 0, 4.0 + 2.0 * b),
             "l_forearm": (0, 0, 12.0 + 5.0 * b),
@@ -177,21 +187,131 @@ def wave():
         raise01 = _ease(_seg(t, 0.0, up_t)) * (1.0 - _ease(_seg(t, down_t, 1.0)))
         wig = _s(3.0 * _seg(t, up_t, down_t)) * raise01
         return {
+            "l_grip": 0.16,
+            "r_grip": 0.08 + 0.08 * (1.0 - raise01),
+            "r_spread": 7.0 * raise01,
             # left arm hangs relaxed
             "l_arm": (84.0, 0, 2.0),
             "l_forearm": (0, 0, 10.0),
             # right arm: hanging (X 84, close to the body) -> straight overhead
             # (X -84). A splayed arm (the old 72 -> -58) sits near the
             # retarget's shoulder singularity and inverts.
-            "r_arm": (84.0 - 140.0 * raise01 + 14.0 * wig, 0, 78.0 * raise01),
+            # Keep a relaxed elbow and wave beside the temple.  The old pose
+            # drove the shoulder almost straight overhead; on compact target
+            # rigs that read as a distress signal rather than a greeting.
+            "r_arm": (84.0 - 128.0 * raise01 + 8.0 * wig, 0, -70.0 * raise01),
             # the visible wave: forearm curls in-and-out around a half-bent
             # elbow while the arm is up
-            "r_forearm": (0, 0, 18.0 * raise01 + 46.0 * wig),
-            "r_hand": (0, 0, 12.0 * wig),
+            "r_forearm": (0, 0, (38.0 + 18.0 * wig) * raise01),
+            "r_hand": (0, 0, 16.0 * wig),
             "spine": (0, -4.0 * raise01, -4.0 * raise01),
             "head": (0, 6.0 * raise01, 5.0 * raise01),
             "l_upleg": (0, 0, 1.5),
             "r_upleg": (0, 0, 1.5),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
+# SALUTE — right hand rises crisply to the brow, holds, then returns.  The
+# fingers straighten together while the thumb remains tucked.
+# ---------------------------------------------------------------------------
+def salute():
+    seconds = 2.2
+
+    def pose(t):
+        # Fold just ahead of the lift so the transition never flashes a
+        # straight, twisted arm.  On return, lower the folded arm first and
+        # only then relax the elbow/wrist beside the torso.
+        fold = (_ease(_seg(t, 0.0, 0.14))
+                * (1.0 - _ease(_seg(t, 0.84, 1.0))))
+        lift = (_ease(_seg(t, 0.06, 0.24))
+                * (1.0 - _ease(_seg(t, 0.72, 0.94))))
+        return {
+            "l_grip": 0.16,
+            "r_grip": 0.08 + 0.10 * (1.0 - fold),
+            "r_thumb_grip": 0.55 * fold + 0.18 * (1.0 - fold),
+            "r_spread": 1.5 * fold,
+            "l_arm": (84.0, 0, 2.0),
+            "l_forearm": (0, 0, 12.0),
+            # Shares the proven raised-arm quadrant with wave, but a firmer
+            # elbow fold parks the straight hand at the brow.
+            # Solved against the calibrated Mixamo chain: elbow remains out
+            # from the ribs while the palm lands beside the right temple.
+            "r_arm": (84.0 - 49.0 * lift, 44.0 * lift, -31.0 * lift),
+            # This source sign looks reversed in Mixamo local space, but after
+            # canonical transport it is the anatomical elbow fold on the
+            # compact officer/operator skeletons (positive opened the arm).
+            "r_forearm": (0, 0, 12.0 - 126.0 * fold),
+            # Keep the fingers together and rotate the wrist from the raised
+            # vertical pose into the flat, fingers-forward salute line.
+            "r_hand": (75.0 * fold, 0, 0),
+            "spine": (1.0, -3.0 * lift, 0),
+            "head": (-2.0 * lift, 3.0 * lift, 0),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
+# POINT — acquire a target, extend the right arm, hold, and recover.  The
+# index remains straight while the other fingers close around the palm.
+# ---------------------------------------------------------------------------
+def point():
+    seconds = 2.4
+
+    def pose(t):
+        aim = _ease(_seg(t, 0.0, 0.24)) * (1.0 - _ease(_seg(t, 0.78, 1.0)))
+        return {
+            "l_grip": 0.16,
+            "r_grip": 0.16 + 0.72 * aim,
+            "r_index_grip": 0.06 + 0.04 * (1.0 - aim),
+            "r_thumb_grip": 0.30 + 0.30 * aim,
+            # Extend toward the character's front, with a small shoulder drop
+            # so the silhouette remains readable in a three-quarter view.
+            "r_arm": (84.0 - 64.0 * aim, 0, -68.0 * aim),
+            "r_forearm": (0, 0, 12.0 - 6.0 * aim),
+            "r_hand": (0, 0, -6.0 * aim),
+            "l_arm": (84.0, 0, 2.0),
+            "l_forearm": (0, 0, 12.0),
+            "spine": (2.0, -7.0 * aim, 0),
+            "spine1": (0, -3.0 * aim, 0),
+            "head": (-1.0 * aim, 9.0 * aim, 0),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
+# CLAP — three readable contacts with anticipation and recoil.  Hands open on
+# separation and close slightly at contact instead of remaining rigid plates.
+# ---------------------------------------------------------------------------
+def clap():
+    seconds = 2.4
+
+    def pose(t):
+        active = _ease(_seg(t, 0.0, 0.16)) * (1.0 - _ease(_seg(t, 0.86, 1.0)))
+        contact = 0.5 + 0.5 * _c(2.5 * _seg(t, 0.16, 0.86))
+        contact *= active
+        return {
+            "l_grip": 0.08 + 0.18 * contact,
+            "r_grip": 0.08 + 0.18 * contact,
+            "l_spread": 5.0 * (1.0 - contact) * active,
+            "r_spread": 5.0 * (1.0 - contact) * active,
+            "l_arm": (84.0 - 64.0 * active - 6.0 * contact,
+                      -1.5 * contact, -58.0 * active + 0.8 * contact),
+            "r_arm": (84.0 - 64.0 * active - 6.0 * contact,
+                      -1.5 * contact, -58.0 * active + 0.8 * contact),
+            # On the canonical compact rigs, negative source curl closes the
+            # elbows toward the sternum.  Positive curl was opening them back
+            # into a T-pose, so the previous version never reached contact.
+            "l_forearm": (0, 0, 12.0 - (34.0 + 18.0 * contact) * active),
+            "r_forearm": (0, 0, 12.0 - (34.0 + 18.0 * contact) * active),
+            "l_hand": (0, 0, -6.0 * contact),
+            "r_hand": (0, 0, -6.0 * contact),
+            "spine": (3.0 * active, 0, 0),
+            "head": (-2.0 * active, 0, 0),
         }
 
     return seconds, pose, None
@@ -212,6 +332,8 @@ def jump():
         legX = 55.0 * crouch + 30.0 * air + 45.0 * land
         kneeX = 80.0 * crouch + 45.0 * air + 70.0 * land
         return {
+            "l_grip": 0.22 + 0.22 * crouch,
+            "r_grip": 0.22 + 0.22 * crouch,
             "l_upleg": (legX, 0, 2.0),
             "r_upleg": (legX, 0, 2.0),
             "l_leg": (kneeX, 0, 0),
@@ -254,6 +376,8 @@ def punch():
         guard_out = _ease(_seg(t, 0.82, 1.0))
         guard = guard_in * (1.0 - guard_out)
         return {
+            "l_grip": 0.18 + 0.82 * guard,
+            "r_grip": 0.18 + 0.82 * max(guard, strike),
             # guard: arms down-forward, elbows curled hard (fists up)
             "l_arm": (84.0 - 20.0 * guard, 0, 26.0 * guard),
             "l_forearm": (0, 0, 100.0 * guard),
@@ -293,6 +417,8 @@ def kick():
         # smooth-bake in the generate path averaged it away).
         extend = _ease(_seg(t, 0.36, 0.52)) * (1.0 - _ease(_seg(t, 0.66, 0.82)))
         return {
+            "l_grip": 0.15 + 0.65 * prep,
+            "r_grip": 0.15 + 0.65 * prep,
             # right leg: thigh up (chamber+extend), knee folds then snaps out
             "r_upleg": (52.0 * chamber + 78.0 * extend, 0, 4.0 * prep),
             "r_leg": (100.0 * chamber * (1.0 - extend) + 3.0 * extend, 0, 0),
@@ -603,6 +729,9 @@ ACTIONS = {
     "run": run,
     "idle": idle,
     "wave": wave,
+    "salute": salute,
+    "point": point,
+    "clap": clap,
     "jump": jump,
     "punch": punch,
     "kick": kick,

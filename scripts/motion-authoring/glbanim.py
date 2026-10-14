@@ -193,6 +193,52 @@ MIXAMO = {
     "r_toe": "mixamorig:RightToeBase",
 }
 
+# Mixamo's fourth finger node is an end/tip marker, not an articulated
+# phalanx.  Author the three deforming segments, matching the runtime's
+# 2 sides x 5 fingers x 3 segments canonical hand layout.
+for _side_key, _side_name in (("l", "Left"), ("r", "Right")):
+    for _finger_key, _finger_name in (("thumb", "Thumb"),
+                                      ("index", "Index"),
+                                      ("middle", "Middle"),
+                                      ("ring", "Ring"),
+                                      ("pinky", "Pinky")):
+        for _segment in range(1, 4):
+            MIXAMO[f"{_side_key}_{_finger_key}{_segment}"] = (
+                f"mixamorig:{_side_name}Hand{_finger_name}{_segment}")
+
+
+def _hand_euler(pose, key):
+    """Resolve a finger joint from compact, anatomical hand controls.
+
+    Pose functions may still provide an explicit joint Euler.  Otherwise
+    ``l_grip`` / ``r_grip`` (0=open, 1=fist) drives all phalanges, with
+    optional per-finger overrides such as ``r_index_grip``.  A small spread
+    control gives open hands some life without coupling it to flexion.
+    """
+    if key in pose:
+        return pose[key]
+    side, tail = key.split("_", 1)
+    finger = next(name for name in ("thumb", "index", "middle", "ring", "pinky")
+                  if tail.startswith(name))
+    segment = int(tail[-1])
+    grip = max(0.0, min(1.0, float(
+        pose.get(f"{side}_{finger}_grip", pose.get(f"{side}_grip", 0.12)))))
+    spread = float(pose.get(f"{side}_spread", 0.0))
+
+    if finger == "thumb":
+        # Thumb opposition needs a little abduction at the metacarpal; the
+        # remaining segments primarily flex.  Values are intentionally below
+        # a hard fist so retargeted thumbs do not tunnel through the palm.
+        x = (12.0 + 20.0 * grip) if segment == 1 else 0.0
+        y = (10.0 + 24.0 * grip) if segment == 1 else 0.0
+        z = (10.0, 32.0, 38.0)[segment - 1] * grip
+        return (x, y, z)
+
+    curl = (58.0, 72.0, 54.0)[segment - 1] * grip
+    fan = {"index": -1.0, "middle": -0.25,
+           "ring": 0.35, "pinky": 1.0}[finger]
+    return (0.0, fan * spread if segment == 1 else 0.0, curl)
+
 
 def author(src_glb, out_glb, anim_name, fps, seconds, pose_fn,
            hips_translate_fn=None):
@@ -222,7 +268,9 @@ def author(src_glb, out_glb, anim_name, fps, seconds, pose_fn,
         mirror = key.startswith("r_")
         quats = []
         for p in poses:
-            e = p.get(key, (0.0, 0.0, 0.0))
+            e = (_hand_euler(p, key) if any(name in key for name in
+                 ("thumb", "index", "middle", "ring", "pinky"))
+                 else p.get(key, (0.0, 0.0, 0.0)))
             order = "XYZ" if len(e) == 3 else e[3]
             ey, ez = (-e[1], -e[2]) if mirror else (e[1], e[2])
             delta = quat_from_euler(e[0], ey, ez, order=order)
