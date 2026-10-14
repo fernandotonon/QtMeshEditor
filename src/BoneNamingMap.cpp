@@ -315,8 +315,19 @@ PairingReport Map::pair(const QStringList& boneNames) const
         if (consumed.contains(name)) continue; // already emitted as the partner
 
         if (const auto it = claimedBy.constFind(other); it != claimedBy.constEnd()) {
-            // `other` was already paired off with a different bone.
+            // `other` was already paired off with a different bone. Report the
+            // collision BEFORE the mutuality check below: a second bone aiming
+            // at an already-claimed target is exactly the lossy case the
+            // caller needs told about, and "unpaired" would hide it.
             if (!rep.collisions.contains(other)) rep.collisions.push_back(other);
+            continue;
+        }
+        // A pair must be MUTUAL. A custom rule can map A -> B without B -> A;
+        // reporting that as a pair makes `buildPairTable` send both sides'
+        // weights to B instead of swapping them — corrupting a mirror while
+        // reporting success. Treat a one-way mapping as unpaired instead.
+        if (counterpart(other) != name) {
+            rep.unpairedSided.push_back(name);
             continue;
         }
         claimedBy.insert(other, name);
@@ -342,6 +353,9 @@ std::vector<int> buildPairTable(const QStringList& boneNamesByHandle,
         if (other.isEmpty()) continue;                   // centre bone
         const int oh = boneNamesByHandle.indexOf(other);
         if (oh < 0 || oh >= n) continue;                 // partner not present
+        // Only a MUTUAL mapping is a swap (see Map::pair) — a one-way custom
+        // rule would fold both sides onto one bone.
+        if (naming.counterpart(other) != boneNamesByHandle.at(h)) continue;
         table[static_cast<size_t>(h)] = oh;
     }
     // Counted via pair() rather than halving the mapped-bone count: an

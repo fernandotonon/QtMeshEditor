@@ -10983,10 +10983,22 @@ QJsonObject MCPServer::toolMirrorBoneSelection(const QJsonObject &args)
 QJsonObject MCPServer::toolMirrorSkinWeights(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "mirror_skin_weights");
+    // Enforce the advertised schema BEFORE editing weights. `handleToolsCall`
+    // does not type-check, and QJsonValue's accessors fall back silently: a
+    // non-string `plane` would read as "" and mirror across X, and a STRING
+    // "position_only" ("true") would read as false and swap bone handles —
+    // i.e. run the opposite of what was asked, with a success result.
+    const QJsonValue planeVal = args.value("plane");
+    if (!planeVal.isUndefined() && !planeVal.isNull() && !planeVal.isString())
+        return makeErrorResult("Error: 'plane' must be a string ('x', 'y', or 'z')");
+    const QJsonValue posOnlyVal = args.value("position_only");
+    if (!posOnlyVal.isUndefined() && !posOnlyVal.isNull() && !posOnlyVal.isBool())
+        return makeErrorResult("Error: 'position_only' must be a boolean");
+
     // Default X (the sagittal plane) but REJECT an unrecognised value rather
     // than falling back to it — mirroring across the wrong plane yields a
     // plausible-looking, wrong result.
-    const QString planeId = args.value("plane").toString(QStringLiteral("x"));
+    const QString planeId = planeVal.toString(QStringLiteral("x"));
     PoseMirror::Plane plane;
     if (!PoseMirror::planeFromId(planeId, &plane))
         return makeErrorResult(
@@ -10999,7 +11011,7 @@ QJsonObject MCPServer::toolMirrorSkinWeights(const QJsonObject &args)
     if (!ctl)
         return makeErrorResult("Error: skin weight controller unavailable");
 
-    const bool positionOnly = args.value("position_only").toBool(false);
+    const bool positionOnly = posOnlyVal.toBool(false);
     const bool ok = positionOnly ? ctl->mirrorAllPositionOnly(axis)
                                  : ctl->mirrorAll(axis);
     if (!ok)

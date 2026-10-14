@@ -17,6 +17,16 @@ bool boneLocked(int boneHandle, const std::vector<std::uint8_t>& lockedBones)
     return i < lockedBones.size() && lockedBones[i] != 0;
 }
 
+/// Total weight carried by one row. Used to tell "this row has influences" from
+/// "every influence was dropped", which the normalisers cannot distinguish
+/// (both return early on such a row rather than inventing a distribution).
+double rowSumOf(const SkinWeights::VertexWeights& vw)
+{
+    double s = 0.0;
+    for (int k = 0; k < vw.count; ++k) s += vw.weights[k];
+    return s;
+}
+
 /// Renormalise a row while holding every LOCKED bone at its current value: the
 /// unlocked bones are scaled to fill whatever headroom is left. This is what
 /// makes "lock bone" hold under any brush mode — a plain renormalise would
@@ -572,6 +582,15 @@ int mirrorByPositionWithBonePairs(const float* positions, int vertexCount,
             // target was dropped.
             normalizeRow(next);
         }
+
+        // Every mirrored influence can be dropped — all of them landing on
+        // LOCKED bones, or on bones with no counterpart — leaving `next`
+        // empty or summing to ~0. Both normalisers return early on such a row
+        // rather than inventing a distribution, so writing it would leave the
+        // vertex with NO bone influence at all: it detaches from the skeleton
+        // and collapses to the origin under animation. Keep the vertex's
+        // existing weights instead, and do not count it as modified.
+        if (next.count <= 0 || rowSumOf(next) <= 1e-9) continue;
 
         weights[static_cast<size_t>(v)] = next;
         ++modified;

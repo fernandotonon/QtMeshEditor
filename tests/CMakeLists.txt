@@ -284,6 +284,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
 
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneNamingMap.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseMirror.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WeightPaintOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GeodesicVoxelBind.cpp

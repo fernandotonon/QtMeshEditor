@@ -3838,10 +3838,12 @@ Rectangle {
                             ToolTip.delay: 500
                             ToolTip.text: modelData.op === "mirror"
                                 ? (SkinWeightController.detectedBonePairCount() > 0
-                                   ? "Mirror weights across X, swapping left/right BONE pairs ("
+                                   ? "Mirror weights across " + SkeletonEditor.mirrorPlaneId().toUpperCase()
+                                     + ", swapping left/right BONE pairs ("
                                      + SkinWeightController.detectedBonePairCount()
                                      + " detected) so the mirrored half deforms correctly. Locked bones are never written."
-                                   : "Mirror weights across X by vertex position. No left/right bone pairs were detected in this skeleton's names, so bone handles will NOT be swapped — see \"Left/right pairing\" below.")
+                                   : "Mirror weights across " + SkeletonEditor.mirrorPlaneId().toUpperCase()
+                                     + " by vertex position. No left/right bone pairs were detected in this skeleton's names, so bone handles will NOT be swapped — see \"Left/right pairing\" below.")
                                 : (modelData.op === "fill"
                                    ? "Flood-fill the connected island under the cursor at the active bone."
                                    : "Applies to the whole mesh. Undoable.")
@@ -3849,7 +3851,13 @@ Rectangle {
                                 if (modelData.op === "normalize") SkinWeightController.normalizeAll()
                                 else if (modelData.op === "smooth") SkinWeightController.smoothAll(2)
                                 else if (modelData.op === "limit") SkinWeightController.limitInfluencesAll(4)
-                                else if (modelData.op === "mirror") SkinWeightController.mirrorAll(0, 0.001)
+                                // Honour the shared symmetry plane (#559). Hardcoding
+                                // X here mirrored weights across the sagittal plane
+                                // even after the user picked Y or Z in the Skeleton
+                                // panel — a plausible-looking but wrong result.
+                                else if (modelData.op === "mirror")
+                                    SkinWeightController.mirrorAll(
+                                        root.mirrorAxisIndex(SkeletonEditor.mirrorPlaneId()), 0.001)
                                 else if (modelData.op === "fill") SkinWeightController.fillConnectedAtHover(0)
                             }
                         }
@@ -4800,6 +4808,14 @@ Rectangle {
                     }
 
                     Component.onCompleted: refresh()
+                    // Switching between two rigged meshes does not recreate this
+                    // component and changes no skeleton, so without the
+                    // selection hook the panel keeps showing the PREVIOUS rig's
+                    // pairs, unpaired bones and collision warnings.
+                    Connections {
+                        target: PropertiesPanelController
+                        function onSelectionChanged() { mirrorPairCol.refresh() }
+                    }
                     Connections {
                         target: SkeletonEditor
                         function onSkeletonStructureChanged() { mirrorPairCol.refresh() }
@@ -10886,6 +10902,15 @@ Rectangle {
             attachBoneLoader.item.openForBone(AnimationControlController.selectedBone,
                                               SkeletonEditor.attachTargetEntities())
         }
+    }
+
+    /// Map a mirror-plane id ("x"/"y"/"z") to the axis index the weight-mirror
+    /// ops take (0=X, 1=Y, 2=Z). Unknown ids fall back to X, matching
+    /// PoseLibrary::mirrorPlane()'s stored-preference read path.
+    function mirrorAxisIndex(planeId) {
+        if (planeId === "y") return 1
+        if (planeId === "z") return 2
+        return 0
     }
 
     function runSkeletonToolAction(action) {

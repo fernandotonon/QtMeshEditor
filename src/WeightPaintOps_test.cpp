@@ -457,6 +457,31 @@ TEST(WeightPaintOpsTest, BonePairMirrorNeverWritesALockedBone) {
     for (const auto& row : w) EXPECT_NEAR(rowSum(row), 1.0, 1e-9);
 }
 
+TEST(WeightPaintOpsTest, BonePairMirrorKeepsTheVertexWhenEveryMirroredWeightIsLocked) {
+    // REGRESSION: dropping every mirrored weight onto locked bones used to
+    // leave an EMPTY row, which both normalisers return early on, so the empty
+    // row was written and the vertex DETACHED from the skeleton (it then
+    // follows nothing and collapses to the origin under animation).
+    //
+    // Trigger: bone 1 (right shoulder) is locked. Vertex 1 is weighted only to
+    // bone 2 (right elbow, unlocked), and its mirror partner is weighted only
+    // to bone 0 (left shoulder) — which maps onto the LOCKED bone 1. So every
+    // mirrored weight is dropped and the vertex has no locked weight of its
+    // own to fall back on.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{0, 1.0}}), vw({{2, 1.0}})};
+    const std::vector<int> pairs{1, 0, -1};          // 0<->1, bone 2 centre
+    const std::vector<std::uint8_t> locked{0u, 1u, 0u};  // bone 1 locked
+
+    WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 2, w, 0, 0.0, 0.1,
+                                                  pairs, locked);
+    // The vertex must still be weighted to SOMETHING — its original bone.
+    EXPECT_GT(w[1].count, 0) << "vertex detached from the skeleton";
+    EXPECT_NEAR(rowSum(w[1]), 1.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 2), 1.0, 1e-9)
+        << "the vertex should keep its original weights, not be emptied";
+}
+
 TEST(WeightPaintOpsTest, BonePairMirrorFoldsTwoBonesOntoOneDestination) {
     // A rig can map two bones onto the same counterpart (mirror table not a
     // clean involution). Accumulating means the row stays normalised instead

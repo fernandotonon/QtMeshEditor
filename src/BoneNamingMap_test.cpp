@@ -317,6 +317,34 @@ TEST(BoneNamingMap, BuildPairTableMapsHandlesBothWays)
     EXPECT_EQ(pairs, 1);
 }
 
+TEST(BoneNamingMap, NonReciprocalCustomRuleIsNotReportedAsAPair)
+{
+    // A syntactically valid custom rule can map A -> B without B -> A. Treating
+    // that as a pair is WORSE than reporting nothing: `buildPairTable` would
+    // map A onto B while B maps onto itself, so a weight mirror sends BOTH
+    // sides' weights to B instead of swapping them — corrupting the result
+    // while reporting success. A pair must be mutual.
+    CustomRule rule;
+    rule.leftPattern      = "^armA_l$";
+    rule.leftReplacement  = "armB_r";
+    // The reverse direction deliberately points somewhere else entirely.
+    rule.rightPattern     = "^armB_r$";
+    rule.rightReplacement = "somewhere_else";
+    Map m({rule});
+
+    const QStringList bones{"armA_l", "armB_r"};
+    const auto rep = m.pair(bones);
+    EXPECT_EQ(rep.pairCount(), 0) << "a one-way mapping is not a pair";
+
+    // And the handle table must not map it either, or the weight mirror
+    // silently folds both sides onto one bone.
+    int pairs = -1;
+    const std::vector<int> t = BoneNaming::buildPairTable(bones, m, &pairs);
+    ASSERT_EQ(t.size(), 2u);
+    EXPECT_EQ(t[0], -1) << "armA_l must not map onto a bone that does not map back";
+    EXPECT_EQ(pairs, 0);
+}
+
 TEST(BoneNamingMap, BuildPairTableLeavesAMissingPartnerUnmapped)
 {
     // A sided bone whose partner is absent must map to -1 ("keep your own
