@@ -15,13 +15,19 @@ The MIT License — see other project sources for the full header.
 #include <gtest/gtest.h>
 
 #include "SkinWeightController.h"
+#include "Manager.h"
 #include "SelectionSet.h"
+#include "SkeletonEditor.h"
 #include "TestHelpers.h"
 #include "WeightPaintOps.h"
 
+#include <OgreBone.h>
+#include <OgreEntity.h>
 #include <OgreMesh.h>
 #include <OgreHardwareBufferManager.h>
 #include <OgreMeshManager.h>
+#include <OgreSceneManager.h>
+#include <OgreSkeleton.h>
 #include <OgreSubMesh.h>
 
 #include <QApplication>
@@ -64,6 +70,7 @@ TEST(SkinWeightControllerTest, OpsDegradeSafelyWithoutASession) {
     EXPECT_FALSE(c->smoothAll(2));
     EXPECT_FALSE(c->limitInfluencesAll(4));
     EXPECT_FALSE(c->mirrorAll(0, 0.001));
+    EXPECT_FALSE(c->mirrorAllPositionOnly(0, 0.001));      // slice E (#559)
     EXPECT_FALSE(c->fillConnectedAtHover(0));
     EXPECT_FALSE(c->setVertexWeight(0, QStringLiteral("Nope"), 0.5));
     EXPECT_TRUE(c->vertexWeights(0).isEmpty());
@@ -112,6 +119,77 @@ protected:
         return std::string(prefix) + std::to_string(++counter);
     }
 };
+
+// --- mirror / bone pairing (slice E #559) ---------------------------------
+
+TEST(SkinWeightControllerTest, PairCountIsZeroWithNoSelectionRatherThanCrashing) {
+    auto* c = SkinWeightController::instance();
+    ASSERT_NE(c, nullptr);
+    if (auto* sel = SelectionSet::getSingletonPtr()) sel->clear();
+    // Reachable from QML/MCP at any time; must answer, not dereference null.
+    // With nothing selected there is no skeleton to read names from, so the
+    // honest answer is 0 pairs.
+    EXPECT_EQ(c->detectedBonePairCount(), 0);
+}
+
+TEST(SkinWeightControllerTest, MirrorBoneNamesUsesTheSharedNamingConventions) {
+    auto* c = SkinWeightController::instance();
+    ASSERT_NE(c, nullptr);
+    // Pure name mapping — needs no session, and must agree with BoneNamingMap
+    // rather than carrying a second heuristic.
+    EXPECT_EQ(c->mirrorBoneNames({QStringLiteral("Hand_l")}),
+              QStringList({QStringLiteral("Hand_r")}));
+    EXPECT_EQ(c->mirrorBoneNames({QStringLiteral("mixamorig:LeftArm")}),
+              QStringList({QStringLiteral("mixamorig:RightArm")}));
+    // Centre bones drop out (selecting "the mirror of the spine" is a no-op).
+    EXPECT_TRUE(c->mirrorBoneNames({QStringLiteral("Spine")}).isEmpty());
+}
+
+TEST_F(SkinWeightControllerSceneTest, PairCountReadsTheSelectedSkeletonNotAStaleSession) {
+    // REGRESSION (#559), two related bugs found by driving the MCP tool live:
+    //
+    //  1. detectedBonePairCount() read the live paint session's bone-name
+    //     table, which is empty until a session exists. A caller asking before
+    //     painting (the MCP tool; the UI gate deciding whether to offer the
+    //     bone-pair mirror) always saw 0 pairs, and mirrorAll then silently
+    //     degraded to a position-only mirror — the WRONG result, reported as
+    //     success. mirrorAll now establishes the session before counting.
+    //
+    //  2. The session-backed branch did not check the session belonged to the
+    //     CURRENTLY selected entity, so a session left over from another mesh
+    //     answered for that one.
+    //
+    // The fixture skeleton has no left/right pair (Root/Child), so the pair
+    // count here must be 0 — and, critically, it must be 0 for the RIGHT
+    // reason: read off the current selection, not inherited from whatever
+    // session an earlier test left behind.
+    Ogre::Entity* entity = createAnimatedTestEntity(uniqueName("swcPairs"));
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    if (auto* sel = SelectionSet::getSingletonPtr()) {
+        sel->clear();
+        sel->append(entity);
+    }
+    ASSERT_EQ(SkeletonEditor::selectedSkinnedEntity(), entity);
+
+    auto* c = SkinWeightController::instance();
+    ASSERT_NE(c, nullptr);
+    EXPECT_EQ(c->detectedBonePairCount(), 0)
+        << "Root/Child is not a left/right pair";
+
+    // Establishing a session must not change the answer for this entity.
+    c->normalizeAll();
+    EXPECT_EQ(c->detectedBonePairCount(), 0);
+
+    // With the selection cleared the answer is 0 because there is no skeleton
+    // to read — NOT because a stale session is being consulted.
+    if (auto* sel = SelectionSet::getSingletonPtr()) sel->clear();
+    EXPECT_EQ(c->detectedBonePairCount(), 0);
+
+    // A mirror with no selection must refuse rather than "succeed" having
+    // done nothing.
+    EXPECT_FALSE(c->mirrorAll(0, 0.001));
+}
 
 TEST_F(SkinWeightControllerSceneTest, SnapshotRoundTripsBoneAssignments) {
     // The undo path depends on capture/restore being exact. The fixture weights

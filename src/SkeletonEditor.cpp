@@ -3,7 +3,9 @@
 #include "SkeletonEditor.h"
 
 #include "AnimationControlController.h"
+#include "BoneNamingMap.h"
 #include "Manager.h"
+#include "PoseLibrary.h"
 #include "PropertiesPanelController.h"
 #include "SentryReporter.h"
 #include "SelectionSet.h"
@@ -23,7 +25,9 @@
 #include <QIODevice>
 #include <QSet>
 #include <QStringList>
+#include <QVariantList>
 #include <QVariantMap>
+#include <QVector>
 
 #include <algorithm>
 #include <limits>
@@ -1686,6 +1690,138 @@ QString SkeletonEditor::selectedBoneName() const
     if (auto* anim = AnimationControlController::instance())
         return anim->selectedBone();
     return {};
+}
+
+// --- mirror / left-right naming (slice E #559) ----------------------------
+
+namespace {
+/// Bone names of the selected entity's skeleton, in handle order.
+QStringList selectedSkeletonBoneNames()
+{
+    QStringList names;
+    Ogre::Entity* entity = SkeletonEditor::selectedSkinnedEntity();
+    if (!entity || !entity->hasSkeleton()) return names;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    if (!skel) return names;
+    const unsigned short n = skel->getNumBones();
+    names.reserve(n);
+    for (unsigned short i = 0; i < n; ++i)
+        names.push_back(QString::fromStdString(skel->getBone(i)->getName()));
+    return names;
+}
+} // namespace
+
+QVariantMap SkeletonEditor::bonePairingReport() const
+{
+    QVariantMap out;
+    const QStringList bones = selectedSkeletonBoneNames();
+    const BoneNaming::Map naming(PoseLibrary::customNamingRules());
+    const BoneNaming::PairingReport rep = naming.pair(bones);
+
+    QVariantList pairs;
+    for (const auto& p : rep.pairs) {
+        QVariantMap m;
+        m[QStringLiteral("left")] = p.left;
+        m[QStringLiteral("right")] = p.right;
+        m[QStringLiteral("convention")] = p.convention;
+        pairs.push_back(m);
+    }
+    out[QStringLiteral("pairs")] = pairs;
+    out[QStringLiteral("centerBones")] = rep.centerBones;
+    out[QStringLiteral("unpairedSided")] = rep.unpairedSided;
+    out[QStringLiteral("collisions")] = rep.collisions;
+    out[QStringLiteral("pairCount")] = rep.pairCount();
+    out[QStringLiteral("boneCount")] = bones.size();
+    out[QStringLiteral("plane")] = PoseLibrary::mirrorPlaneId();
+
+    SentryReporter::addBreadcrumb("scene.skel.mirror.detect",
+        QStringLiteral("pairing: %1 pairs, %2 centre, %3 unpaired, %4 collisions "
+                       "(of %5 bones)")
+            .arg(rep.pairCount())
+            .arg(rep.centerBones.size())
+            .arg(rep.unpairedSided.size())
+            .arg(rep.collisions.size())
+            .arg(bones.size()));
+    return out;
+}
+
+QString SkeletonEditor::mirrorSelectedBone()
+{
+    const QString current = selectedBoneName();
+    if (current.isEmpty()) return {};
+
+    const BoneNaming::Map naming(PoseLibrary::customNamingRules());
+    const QString other = naming.counterpart(current);
+    // No counterpart: leave the selection alone rather than "selecting" the
+    // same bone, which would look like the action silently failed.
+    if (other.isEmpty()) {
+        SentryReporter::addBreadcrumb("scene.skel.mirror.selection",
+            QStringLiteral("'%1' has no counterpart").arg(current));
+        return {};
+    }
+    // The counterpart must actually exist on this skeleton — a name-only flip
+    // would otherwise "select" a bone that isn't there.
+    if (!selectedSkeletonBoneNames().contains(other)) {
+        SentryReporter::addBreadcrumb("scene.skel.mirror.selection",
+            QStringLiteral("'%1' -> '%2' not present in skeleton")
+                .arg(current, other));
+        return {};
+    }
+    if (auto* anim = AnimationControlController::instance())
+        anim->selectBone(other);
+    SentryReporter::addBreadcrumb("scene.skel.mirror.selection",
+        QStringLiteral("'%1' -> '%2'").arg(current, other));
+    return other;
+}
+
+QString SkeletonEditor::mirrorPlaneId() const
+{
+    return PoseLibrary::mirrorPlaneId();
+}
+
+bool SkeletonEditor::setMirrorPlaneId(const QString& planeId)
+{
+    return PoseLibrary::setMirrorPlaneId(planeId);
+}
+
+QVariantList SkeletonEditor::customNamingRules() const
+{
+    QVariantList out;
+    for (const BoneNaming::CustomRule& r : BoneNaming::loadCustomRules()) {
+        QVariantMap m;
+        m[QStringLiteral("leftPattern")] = r.leftPattern;
+        m[QStringLiteral("leftReplacement")] = r.leftReplacement;
+        m[QStringLiteral("rightPattern")] = r.rightPattern;
+        m[QStringLiteral("rightReplacement")] = r.rightReplacement;
+        out.push_back(m);
+    }
+    return out;
+}
+
+int SkeletonEditor::setCustomNamingRules(const QVariantList& rules)
+{
+    QVector<BoneNaming::CustomRule> parsed;
+    parsed.reserve(rules.size());
+    for (const QVariant& v : rules) {
+        const QVariantMap m = v.toMap();
+        BoneNaming::CustomRule r;
+        r.leftPattern = m.value(QStringLiteral("leftPattern")).toString();
+        r.leftReplacement = m.value(QStringLiteral("leftReplacement")).toString();
+        r.rightPattern = m.value(QStringLiteral("rightPattern")).toString();
+        r.rightReplacement = m.value(QStringLiteral("rightReplacement")).toString();
+        parsed.push_back(r);
+    }
+    const int saved = BoneNaming::saveCustomRules(parsed);
+    SentryReporter::addBreadcrumb("scene.skel.mirror.convention",
+        QStringLiteral("custom rules: %1 of %2 saved").arg(saved).arg(rules.size()));
+    emit skeletonStructureChanged();   // refresh the diagnostic panel
+    return saved;
+}
+
+QString SkeletonEditor::previewCounterpart(const QString& boneName) const
+{
+    const BoneNaming::Map naming(PoseLibrary::customNamingRules());
+    return naming.counterpart(boneName);
 }
 
 QString SkeletonEditor::selectedBoneParentName() const

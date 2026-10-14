@@ -2,9 +2,11 @@
 
 #include "AnimationControlController.h"
 #include "AnimationWidget.h"
+#include "BoneNamingMap.h"
 #include "BoneWeightOverlay.h"
 #include "EditModeController.h"
 #include "Manager.h"
+#include "PoseMirror.h"
 #include "SentryReporter.h"
 #include "SkeletonEditor.h"
 #include "SkinWeightsPost.h"
@@ -777,12 +779,105 @@ bool SkinWeightController::limitInfluencesAll(int maxInfluences)
     });
 }
 
+std::vector<int> SkinWeightController::bonePairTable(int* pairCount) const
+{
+    std::vector<int> table;
+    if (pairCount) *pairCount = 0;
+    if (!m_haveData) return table;
+
+    // Shared builder — the CLI (`qtmesh rig --mirror-weights`) uses the same
+    // one, so the GUI and headless paths cannot pair bones differently.
+    const BoneNaming::Map naming(BoneNaming::loadCustomRules());
+    return BoneNaming::buildPairTable(m_data.boneNames, naming, pairCount);
+}
+
+int SkinWeightController::detectedBonePairCount() const
+{
+    // Deliberately NOT via bonePairTable() alone: that needs a live session,
+    // and this is a const query the UI calls to decide whether to offer the
+    // bone-pair mirror at all — including before any session exists. Read the
+    // names straight off the selected skeleton in that case.
+    Ogre::Entity* entity = SkeletonEditor::selectedSkinnedEntity();
+    // The session must belong to the CURRENTLY selected entity. A session left
+    // over from a different mesh would otherwise answer for that one — which
+    // reads as "this rig has no pairs" on a rig that pairs perfectly well.
+    if (m_haveData && m_entity && m_entity == entity) {
+        int pairs = 0;
+        bonePairTable(&pairs);
+        return pairs;
+    }
+    if (!entity || !entity->hasSkeleton()) return 0;
+    Ogre::SkeletonInstance* skel = entity->getSkeleton();
+    if (!skel) return 0;
+    QStringList names;
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+        names.push_back(QString::fromStdString(skel->getBone(i)->getName()));
+    const BoneNaming::Map naming(BoneNaming::loadCustomRules());
+    return naming.pair(names).pairCount();
+}
+
+QStringList SkinWeightController::mirrorBoneNames(const QStringList& boneNames) const
+{
+    const BoneNaming::Map naming(BoneNaming::loadCustomRules());
+    int matched = 0;
+    const QStringList out = PoseMirror::mirrorSelection(boneNames, naming, &matched);
+    SentryReporter::addBreadcrumb("scene.skel.mirror.selection",
+        QStringLiteral("mirror selection: %1 of %2 bone(s) paired")
+            .arg(matched).arg(boneNames.size()));
+    return out;
+}
+
 bool SkinWeightController::mirrorAll(int axis, double tolerance)
 {
-    return runUndoableOp(QStringLiteral("Mirror Weights"), [this, axis, tolerance]() {
+    // Establish the session FIRST. `bonePairTable` reads `m_data.boneNames`,
+    // which is only populated once a session exists — counting pairs before
+    // that always yielded 0 and silently degraded a perfectly pairable rig to
+    // the position-only mirror (i.e. the wrong result, reported as success).
+    // runUndoableOp calls ensureSession too; it is idempotent.
+    if (!ensureSession()) {
+        emit weightPaintChanged();
+        return false;
+    }
+
+    int pairs = 0;
+    const std::vector<int> pairTable = bonePairTable(&pairs);
+    if (pairs <= 0) {
+        // No recognised L/R names. Swapping nothing is exactly the
+        // position-only mirror, so run that instead of failing — but say so,
+        // because on a rig that SHOULD have paired this is the user's cue that
+        // its naming needs a custom convention.
+        SentryReporter::addBreadcrumb("scene.skel.mirror.weights",
+            QStringLiteral("no bone pairs detected — position-only mirror"));
+        const bool ok = mirrorAllPositionOnly(axis, tolerance);
+        if (ok) {
+            m_status = QStringLiteral("Mirrored by position — no left/right bone "
+                                      "pairs found in this skeleton's names.");
+            emit weightPaintChanged();
+        }
+        return ok;
+    }
+
+    SentryReporter::addBreadcrumb("scene.skel.mirror.weights",
+        QStringLiteral("bone-pair mirror axis=%1 (%2 pairs)").arg(axis).arg(pairs));
+    // pairTable captured BY VALUE: runUndoableOp invokes the op synchronously
+    // today, but a by-reference capture would become a dangling read the
+    // moment that changes.
+    return runUndoableOp(QStringLiteral("Mirror Weights"),
+                         [this, axis, tolerance, pairTable]() {
         // Deliberately the BIND POSE, not pickPositions(): mirroring pairs
         // vertices across the rest-pose symmetry plane, and a posed mesh is not
         // symmetric — picking uses the skinned pose, this must not.
+        return WeightPaintOps::mirrorByPositionWithBonePairs(
+            m_data.positions.data(), static_cast<int>(m_data.weights.size()),
+            m_data.weights, axis, /*pivot=*/0.0, tolerance, pairTable,
+            lockedBoneFlags());
+    });
+}
+
+bool SkinWeightController::mirrorAllPositionOnly(int axis, double tolerance)
+{
+    return runUndoableOp(QStringLiteral("Mirror Weights"), [this, axis, tolerance]() {
+        // Bind pose, same reasoning as mirrorAll.
         return WeightPaintOps::mirrorByPosition(
             m_data.positions.data(), static_cast<int>(m_data.weights.size()),
             m_data.weights, axis, /*pivot=*/0.0, tolerance, lockedBoneFlags());

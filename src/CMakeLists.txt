@@ -140,6 +140,8 @@ QuadRetopo.cpp
 QuadRetopoController.cpp
 SkinWeights.cpp
 SkinWeightsPost.cpp
+BoneNamingMap.cpp
+PoseMirror.cpp
 WeightPaintOps.cpp
 SkinWeightController.cpp
 GeodesicVoxelBind.cpp
@@ -427,6 +429,8 @@ QuadRetopo.h
 QuadRetopoController.h
 SkinWeights.h
 SkinWeightsPost.h
+BoneNamingMap.h
+PoseMirror.h
 WeightPaintOps.h
 SkinWeightController.h
 GeodesicVoxelBind.h

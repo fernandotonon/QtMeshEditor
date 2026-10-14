@@ -364,6 +364,164 @@ TEST(WeightPaintOpsTest, MirrorLeavesAVertexAloneWhenNoPartnerIsInTolerance) {
     EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 0), 1.0, 1e-9);
 }
 
+// --- mirror with bone pairs (slice E #559) ---------------------------------
+
+TEST(WeightPaintOpsTest, BonePairMirrorSwapsBoneHandlesNotJustVertices) {
+    // The gap slice D documented: on a rig with distinct L/R bones, copying a
+    // partner vertex's weights WITHOUT re-addressing the bone leaves the
+    // mirrored half driven by the wrong side's bone.
+    //
+    // Bones: 0 = left shoulder, 1 = right shoulder (a pair).
+    // Vertex at x=-1 is weighted to bone 0; at x=+1 to bone 1.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{0, 1.0}}), vw({{1, 1.0}})};
+    const std::vector<int> pairs{1, 0};   // 0<->1
+
+    const int n = WeightPaintOps::mirrorByPositionWithBonePairs(
+        pos.data(), 2, w, /*axis=*/0, /*pivot=*/0.0, /*tolerance=*/0.1, pairs);
+    EXPECT_EQ(n, 2);
+    // Vertex 0 takes vertex 1's weights (bone 1) re-addressed onto bone 1's
+    // MIRROR, which is bone 0 — so a symmetric rig stays symmetric. This is
+    // precisely what the position-only mirror gets wrong (it would leave
+    // vertex 0 weighted to bone 1, i.e. the far shoulder).
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 0), 1.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 1), 0.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 1), 1.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 0), 0.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorCarriesAnAsymmetricEditToTheOtherSide) {
+    // The real use case: the user hand-fixed the LEFT arm's weights and wants
+    // the same fix on the right. Bone 0/1 are the L/R pair; bone 2 is a centre
+    // bone (spine) that pairs with itself.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{
+        vw({{0, 0.75}, {2, 0.25}}),   // left vertex: hand-tuned blend
+        vw({{1, 1.0}}),               // right vertex: untouched
+    };
+    const std::vector<int> pairs{1, 0, -1};   // 0<->1, bone 2 has no partner
+
+    ASSERT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(
+                  pos.data(), 2, w, 0, 0.0, 0.1, pairs), 2);
+    // The RIGHT vertex now carries the left's tuned blend, with the arm bone
+    // swapped to the right arm and the centre bone left as itself.
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 1), 0.75, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 2), 0.25, 1e-9);
+    EXPECT_NEAR(rowSum(w[1]), 1.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorKeepsCentreBonesOnThemselves) {
+    // A vertex weighted only to a centre bone must keep that bone: mapping it
+    // anywhere else would drag the spine's influence onto a limb.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{5, 1.0}}), vw({{5, 1.0}})};
+    const std::vector<int> pairs{-1, -1, -1, -1, -1, -1};
+
+    ASSERT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(
+                  pos.data(), 2, w, 0, 0.0, 0.1, pairs), 2);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 5), 1.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 5), 1.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorIsIdempotentOnASymmetricMesh) {
+    // Mirroring an already-symmetric rig must not disturb it — a user who
+    // mirrors twice, or mirrors a clean mesh, gets no drift.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{0, 1.0}}), vw({{1, 1.0}})};
+    const std::vector<int> pairs{1, 0};
+
+    WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 2, w, 0, 0.0, 0.1, pairs);
+    const auto after1 = w;
+    WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 2, w, 0, 0.0, 0.1, pairs);
+    for (size_t v = 0; v < w.size(); ++v)
+        for (int b = 0; b < 2; ++b)
+            EXPECT_NEAR(WeightPaintOps::weightOf(w[v], b),
+                        WeightPaintOps::weightOf(after1[v], b), 1e-9)
+                << "vertex " << v << " bone " << b;
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorNeverWritesALockedBone) {
+    // A lock means "this bone's weights are exactly what I set" — the mirror
+    // must not push weight onto it from the other side.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{0, 1.0}}), vw({{1, 1.0}})};
+    const std::vector<int> pairs{1, 0};
+    const std::vector<std::uint8_t> locked{0u, 1u};   // bone 1 locked
+
+    WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 2, w, 0, 0.0, 0.1,
+                                                  pairs, locked);
+    // Vertex 0's mirrored source (bone 1) maps onto bone 0 — unlocked, fine.
+    // Vertex 1's mirrored source (bone 0) maps onto bone 1, which is LOCKED,
+    // so it must keep its own locked value rather than receiving the mirror.
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 1), 1.0, 1e-9);
+    for (const auto& row : w) EXPECT_NEAR(rowSum(row), 1.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorFoldsTwoBonesOntoOneDestination) {
+    // A rig can map two bones onto the same counterpart (mirror table not a
+    // clean involution). Accumulating means the row stays normalised instead
+    // of the last write silently winning.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{
+        vw({{0, 0.5}, {1, 0.5}}),
+        vw({{2, 1.0}}),
+    };
+    const std::vector<int> pairs{2, 2, -1};   // both 0 and 1 map onto 2
+
+    ASSERT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(
+                  pos.data(), 2, w, 0, 0.0, 0.1, pairs), 2);
+    // Vertex 1 receives 0.5+0.5 accumulated onto bone 2.
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 2), 1.0, 1e-9);
+    EXPECT_NEAR(rowSum(w[1]), 1.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorToleratesAShortPairTable) {
+    // A pair table shorter than the bone range (skeleton grew since it was
+    // built) must leave the unmapped handles alone, not read out of bounds.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{9, 1.0}}), vw({{9, 1.0}})};
+    const std::vector<int> pairs{1, 0};   // says nothing about bone 9
+
+    ASSERT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(
+                  pos.data(), 2, w, 0, 0.0, 0.1, pairs), 2);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[0], 9), 1.0, 1e-9);
+    EXPECT_NEAR(WeightPaintOps::weightOf(w[1], 9), 1.0, 1e-9);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorRejectsBadInput) {
+    std::vector<float> pos{0.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> w{vw({{0, 1.0}})};
+    const std::vector<int> pairs{0};
+    EXPECT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(nullptr, 1, w, 0, 0.0,
+                                                            0.1, pairs), 0);
+    EXPECT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 1, w,
+                                                            /*axis=*/3, 0.0, 0.1,
+                                                            pairs), 0);
+    EXPECT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 1, w, 0, 0.0,
+                                                            /*tolerance=*/0.0,
+                                                            pairs), 0);
+    std::vector<VertexWeights> shortW;
+    EXPECT_EQ(WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 1, shortW, 0,
+                                                            0.0, 0.1, pairs), 0);
+}
+
+TEST(WeightPaintOpsTest, BonePairMirrorWithEmptyTableMatchesPositionOnlyMirror) {
+    // An empty pair table means "no bone pairs known", which must degrade to
+    // exactly the position-only behaviour — that equivalence is what lets the
+    // controller fall back without a second code path.
+    std::vector<float> pos{-1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f};
+    std::vector<VertexWeights> a{vw({{0, 1.0}}), vw({{7, 1.0}})};
+    std::vector<VertexWeights> b = a;
+
+    WeightPaintOps::mirrorByPositionWithBonePairs(pos.data(), 2, a, 0, 0.0, 0.1, {});
+    WeightPaintOps::mirrorByPosition(pos.data(), 2, b, 0, 0.0, 0.1);
+    for (size_t v = 0; v < a.size(); ++v)
+        for (int bone : {0, 7})
+            EXPECT_NEAR(WeightPaintOps::weightOf(a[v], bone),
+                        WeightPaintOps::weightOf(b[v], bone), 1e-9)
+                << "vertex " << v << " bone " << bone;
+}
+
 TEST(WeightPaintOpsTest, MirrorRejectsBadInput) {
     std::vector<float> pos{0.0f, 0.0f, 0.0f};
     std::vector<VertexWeights> w{vw({{0, 1.0}})};

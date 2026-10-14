@@ -198,6 +198,12 @@ qtmesh skin model.fbx --skip-unweighted --merge -o filled.glb  # fill missing we
 qtmesh facerig head.glb -o rigged.glb                       # fit ARKit template + transfer 52 shapes
 qtmesh facerig head.fbx -o rigged.glb --max-shapes 20 --json  # cap shapes / machine-readable report
 
+# Left/right mirroring (detects _l/_r, .l/.r, Left*/Right*, *_left/*_right + custom rules)
+qtmesh rig rigged.fbx --mirror-info                         # which bones pair up; flags unpaired + collisions
+qtmesh rig rigged.fbx --mirror-info --json                  # same, machine-readable
+qtmesh rig rigged.fbx --mirror-weights -o mirrored.glb      # mirror weights AND swap left/right bone pairs
+qtmesh rig rigged.fbx --mirror-weights --plane z -o out.glb  # mirror across Z instead of the sagittal plane
+
 # Drive those blendshapes from SPEECH (NVIDIA Audio2Face-3D, runs locally)
 qtmesh lipsync take.wav --mesh head.glb -o spoken.glb        # audio -> ARKit weight animation
 qtmesh lipsync take.wav --mesh head.glb --fps 60 --clip Speech -o out.glb

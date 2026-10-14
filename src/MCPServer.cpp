@@ -39,6 +39,9 @@
 #include "ConstraintManager.h"
 #include "MotionGraphManager.h"
 #include "AnimGenerators.h"
+#include "PoseMirror.h"
+#include "SkeletonEditor.h"
+#include "SkinWeightController.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -839,6 +842,10 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("delete_pose"), &MCPServer::toolDeletePose},
         {QStringLiteral("mirror_pose"), &MCPServer::toolMirrorPose},
         {QStringLiteral("blend_poses"), &MCPServer::toolBlendPoses},
+        // Skel slice E (#559)
+        {QStringLiteral("bone_pairing_report"), &MCPServer::toolBonePairingReport},
+        {QStringLiteral("mirror_bone_selection"), &MCPServer::toolMirrorBoneSelection},
+        {QStringLiteral("mirror_skin_weights"), &MCPServer::toolMirrorSkinWeights},
         {QStringLiteral("save_pose_library"), &MCPServer::toolSavePoseLibrary},
         {QStringLiteral("load_pose_library"), &MCPServer::toolLoadPoseLibrary},
         {QStringLiteral("apply_pose_masked"), &MCPServer::toolApplyPoseMasked},
@@ -954,6 +961,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("uv_project"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap")},
             {QStringLiteral("compute_skin_weights"), QStringLiteral("skin_weights")},
+            // Skel slice E (#559): weight mirroring is skin-weight authoring.
+            // Reuses the existing cluster key rather than adding one, which
+            // would need coordinating with qtmesh-cloud's DISCOVERY_FEATURES.
+            {QStringLiteral("mirror_skin_weights"), QStringLiteral("skin_weights")},
             {QStringLiteral("auto_rig"), QStringLiteral("auto_rig")},
             {QStringLiteral("add_arkit_blendshapes"), QStringLiteral("auto_rig")},
             {QStringLiteral("generate_lipsync"), QStringLiteral("mocap")},
@@ -1020,7 +1031,11 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("set_motion_graph"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
         QStringLiteral("apply_pose"), QStringLiteral("delete_pose"), QStringLiteral("mirror_pose"),
-        QStringLiteral("blend_poses"), QStringLiteral("load_pose_library")
+        QStringLiteral("blend_poses"), QStringLiteral("load_pose_library"),
+        // Skel slice E (#559). bone_pairing_report and mirror_bone_selection are
+        // NOT here: the first only reads, and the second changes the bone
+        // SELECTION rather than the scene itself.
+        QStringLiteral("mirror_skin_weights")
     };
     SentryReporter::captureInvocationEvent(QStringLiteral("mcp"), name,
         failed ? QStringLiteral("failed") : QStringLiteral("completed"),
@@ -10921,6 +10936,91 @@ QJsonObject MCPServer::toolMirrorPose(const QJsonObject &args)
         QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+// ─── Skel slice E (#559): mirror / left-right naming ─────────────────────
+
+QJsonObject MCPServer::toolBonePairingReport(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    SentryReporter::addBreadcrumb("ai.tool_call", "bone_pairing_report");
+    // getSingleton(), not getSingletonPtr(): in headless --mcp mode nothing
+    // has constructed the editor yet, and the Ptr variant would return null
+    // for every call ("skeleton editor unavailable" on a perfectly good rig).
+    auto* editor = SkeletonEditor::getSingleton();
+    if (!editor)
+        return makeErrorResult("Error: skeleton editor unavailable");
+    const QVariantMap rep = editor->bonePairingReport();
+    if (rep.value(QStringLiteral("boneCount")).toInt() <= 0)
+        return makeErrorResult("Error: no skinned entity selected (select a mesh "
+                               "with a skeleton first)");
+    return makeSuccessResult(QString::fromUtf8(
+        QJsonDocument(QJsonObject::fromVariantMap(rep))
+            .toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMirrorBoneSelection(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    SentryReporter::addBreadcrumb("ai.tool_call", "mirror_bone_selection");
+    auto* editor = SkeletonEditor::getSingleton();
+    if (!editor)
+        return makeErrorResult("Error: skeleton editor unavailable");
+    const QString before = editor->selectedBoneName();
+    if (before.isEmpty())
+        return makeErrorResult("Error: no bone selected");
+    const QString after = editor->mirrorSelectedBone();
+    if (after.isEmpty())
+        return makeErrorResult(
+            QString("Error: '%1' has no left/right counterpart on this skeleton "
+                    "(centre bone, or the partner is missing)").arg(before));
+    QJsonObject content;
+    content["ok"] = true;
+    content["previous"] = before;
+    content["selected"] = after;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolMirrorSkinWeights(const QJsonObject &args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "mirror_skin_weights");
+    // Default X (the sagittal plane) but REJECT an unrecognised value rather
+    // than falling back to it — mirroring across the wrong plane yields a
+    // plausible-looking, wrong result.
+    const QString planeId = args.value("plane").toString(QStringLiteral("x"));
+    PoseMirror::Plane plane;
+    if (!PoseMirror::planeFromId(planeId, &plane))
+        return makeErrorResult(
+            QString("Error: 'plane' must be 'x', 'y', or 'z' (got '%1')")
+                .arg(planeId));
+    const int axis = (plane == PoseMirror::Plane::X) ? 0
+                   : (plane == PoseMirror::Plane::Y) ? 1 : 2;
+
+    auto* ctl = SkinWeightController::instance();
+    if (!ctl)
+        return makeErrorResult("Error: skin weight controller unavailable");
+
+    const bool positionOnly = args.value("position_only").toBool(false);
+    const bool ok = positionOnly ? ctl->mirrorAllPositionOnly(axis)
+                                 : ctl->mirrorAll(axis);
+    if (!ok)
+        return makeErrorResult(
+            "Error: mirror failed (no skinned selection, or no vertex had a "
+            "mirror partner within tolerance — is the mesh symmetric?)");
+
+    // Read the pair count AFTER the op: the mirror establishes the weight
+    // session, and querying beforehand reports 0 on a rig that pairs fine.
+    const int pairs = ctl->detectedBonePairCount();
+
+    QJsonObject content;
+    content["ok"] = true;
+    content["plane"] = PoseMirror::planeId(plane);
+    content["bone_pairs"] = pairs;
+    content["bone_pairs_swapped"] = !positionOnly && pairs > 0;
+    content["status"] = ctl->status();
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolSavePoseLibrary(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "save_pose_library");
@@ -14545,11 +14645,16 @@ QJsonArray MCPServer::buildToolsList()
         required.append("dst");
         appendTool(
             "mirror_pose",
-            "Mirror a saved pose across the YZ plane using the bone-name "
-            "heuristic. Recognises `_l`/`_r`, `.L`/`.R`, and `Left*`/`Right*` "
-            "naming. TRS flip: pos.x → -pos.x, rotation (w,x,y,z) → (w,x,-y,-z), "
-            "scale.x → -scale.x. Centre-line bones (Spine, Hips, Head) get "
-            "the X-flipped TRS in place. Writes the result under `dst`.",
+            "Mirror a saved pose across the configured symmetry plane (default "
+            "the YZ / sagittal plane) using the shared bone-naming conventions: "
+            "`_l`/`_r`, `.l`/`.r`, `Left*`/`Right*`, `*_left`/`*_right`, 3ds Max "
+            "Biped side tokens, camelCase affixes, plus any custom rules. TRS "
+            "flip: the position component along the plane normal is negated, and "
+            "the rotation is conjugated (for X: (w,x,y,z) → (w,x,-y,-z)). SCALE "
+            "IS PRESERVED — the rotation conjugation carries the handedness "
+            "flip, so mirroring twice is a no-op. Centre-line bones (Spine, "
+            "Hips, Head) are reflected in place. Writes the result under `dst`. "
+            "Use bone_pairing_report first to check the rig's naming.",
             props,
             required
         );
@@ -14577,6 +14682,60 @@ QJsonArray MCPServer::buildToolsList()
             "T-pose. Writes the result under `dst`.",
             props,
             required
+        );
+    }
+
+    // bone_pairing_report (Skel slice E #559)
+    {
+        QJsonObject props;
+        appendTool(
+            "bone_pairing_report",
+            "Report which of the selected skeleton's bones pair up as left/right "
+            "counterparts, which are centre bones (mirrored in place), which are "
+            "side-named but have no partner present, and which collide (two bones "
+            "mapping onto one name — a mirror would lose data there). Use this to "
+            "verify a rig follows a naming convention BEFORE relying on "
+            "mirror_pose / mirror_skin_weights / mirror_bone_selection. Light "
+            "read; makes no changes.",
+            props
+        );
+    }
+
+    // mirror_bone_selection (Skel slice E #559)
+    {
+        QJsonObject props;
+        appendTool(
+            "mirror_bone_selection",
+            "Select the opposite-side counterpart of the currently selected bone "
+            "(`Hand_l` → `Hand_r`). Errors when the selected bone is a centre "
+            "bone or its partner is absent from the skeleton, leaving the "
+            "selection untouched rather than silently reselecting the same bone.",
+            props
+        );
+    }
+
+    // mirror_skin_weights (Skel slice E #559)
+    {
+        QJsonObject props;
+        props["plane"] = QJsonObject{{"type", "string"},
+            {"description", "Symmetry plane: 'x' (default, the sagittal plane of "
+                            "a character rig), 'y', or 'z'. An unrecognised value "
+                            "is rejected rather than defaulting."}};
+        props["position_only"] = QJsonObject{{"type", "boolean"},
+            {"description", "When true, copy partner-vertex weights WITHOUT "
+                            "swapping left/right bone handles. Only correct for a "
+                            "mesh weighted purely to centre bones; the default "
+                            "(false) swaps bone pairs, which is what makes the "
+                            "mirrored half deform correctly on an L/R rig."}};
+        appendTool(
+            "mirror_skin_weights",
+            "Mirror the selected mesh's skin weights across a plane, pairing "
+            "vertices by position AND re-addressing each weight onto the mirrored "
+            "BONE, so a hand-tuned left arm can be carried to the right. Locked "
+            "bones are never written. Falls back to a position-only mirror (and "
+            "says so) when the skeleton's names yield no left/right pairs. "
+            "Undoable as one step.",
+            props
         );
     }
 
