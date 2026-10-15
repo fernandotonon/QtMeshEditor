@@ -242,8 +242,13 @@ def _hand_euler(pose, key):
 
 def author(src_glb, out_glb, anim_name, fps, seconds, pose_fn,
            hips_translate_fn=None):
-    """pose_fn(t01) -> {joint_key: (x_deg, y_deg, z_deg)} local-delta Eulers.
-    hips_translate_fn(t01) -> (dx, dy, dz) added to hips bind translation."""
+    """Write sampled local-delta animation channels into a rigged GLB.
+
+    ``pose_fn(t01)`` returns joint-keyed Euler deltas in degrees;
+    ``hips_translate_fn(t01)`` optionally returns a translation offset for the
+    hips bind position. Returns counts of authored joints, missing joints,
+    and sampled frames.
+    """
     g = Glb(src_glb)
     nframes = max(2, int(round(fps * seconds)) + 1)
     times = [i / fps for i in range(nframes)]
