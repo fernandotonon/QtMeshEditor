@@ -188,6 +188,9 @@ qtmesh uv model.fbx --info --json                           # report UV channels
 qtmesh retopo model.fbx -o quads.glb                        # pair every viable triangle into quads
 qtmesh retopo model.fbx --target-faces 5000 -o lo.glb       # stop early once near target face count
 qtmesh retopo model.fbx --max-angle 15 -o conservative.glb  # tighter coplanarity gate
+# Field-aligned all-quad remesh (QuadriFlow): new clean topology, textures re-baked, rig kept
+qtmesh retopo character.fbx --algo quadriflow --target-faces 4000 -o clean.fbx
+qtmesh generate3d photo.png --quad-remesh -o asset.fbx       # remesh the AI result into quads
 
 # Compute skin weights (inverse-distance heuristic; mesh must have a skeleton)
 qtmesh skin model.fbx -o skinned.glb                        # default 4 influences, falloff 4

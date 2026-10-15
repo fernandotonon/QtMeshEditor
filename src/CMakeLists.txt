@@ -107,6 +107,7 @@ commands/SkeletonResolver.cpp
 commands/ComputeSkinWeightsCommand.cpp
 commands/AutoRigCommand.cpp
 commands/SplitMeshCommand.cpp
+commands/ReplaceEntityMeshCommand.cpp
 commands/LatticeCommands.cpp
 commands/ExplodePartsCommand.cpp
 commands/JoinPartsCommand.cpp
@@ -135,6 +136,9 @@ UVEditorController.cpp
 UVTransform.cpp
 QuadRetopo.cpp
 QuadRetopoController.cpp
+QuadRemesh/QuadRemeshCore.cpp
+QuadRemesh/QuadriFlowRunner.cpp
+QuadRemesh/QuadRemeshEntity.cpp
 SkinWeights.cpp
 SkinWeightsPost.cpp
 WeightPaintOps.cpp
@@ -241,6 +245,7 @@ EmbeddedTextureCache.cpp
 NormalMapGenerator.cpp
 ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
+ImageTo3D/MeshGenCleanup.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
 ImageTo3D/GameReadyPresets.cpp
@@ -936,6 +941,22 @@ if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)
         ")
 endif()
 
+# QuadriFlow remesh helper: QuadRemesh probes for it next to the editor
+# binary. On Linux/Windows that is already the shared runtime output dir; on
+# macOS it must be copied into the bundle's Contents/MacOS (where the
+# codesign loop signs every executable).
+if(TARGET qtmesh_quadriflow)
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_quadriflow)
+    if(APPLE)
+        add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:qtmesh_quadriflow>"
+                    "${QTMESH_QUADRIFLOW_LICENSES}"
+                    "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+            COMMENT "Copying qtmesh_quadriflow helper into the app bundle")
+    endif()
+endif()
+
 # Link Sentry if enabled
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)
@@ -1023,6 +1044,10 @@ if(BUILD_TESTS)
     )
     target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM QTMESH_UNIT_TESTS
         "QTMESH_UT_SOURCE_ROOT=\"${CMAKE_SOURCE_DIR}\"")
+    # QuadRemesh tests drive the real QuadriFlow helper (same bin/ dir).
+    if(TARGET qtmesh_quadriflow)
+        add_dependencies(UnitTests qtmesh_quadriflow)
+    endif()
     # Debug macro, scoped to the test target only (not FetchContent deps).
     if(QTMESH_DEFINE_DEBUG)
         target_compile_definitions(UnitTests PRIVATE DEBUG)

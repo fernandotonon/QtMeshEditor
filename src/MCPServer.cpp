@@ -167,6 +167,8 @@
 #include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
+#include "QuadRemesh/QuadRemeshEntity.h"
+#include "commands/ReplaceEntityMeshCommand.h"
 #include "SubMeshOps.h"
 #include "PartOpsMesh.h"
 #include "commands/SplitMeshCommand.h"
@@ -2241,6 +2243,14 @@ QJsonObject MCPServer::toolRetopologize(const QJsonObject &args)
     if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
+    if (args.contains("algo") && !args["algo"].isString())
+        return makeErrorResult("Error: 'algo' must be a string.");
+    const QString algo = args.value("algo").toString(QStringLiteral("pair")).toLower();
+    if (algo == QLatin1String("quadriflow"))
+        return retopologizeQuadriFlow(args);
+    if (algo != QLatin1String("pair") && algo != QLatin1String("trianglepair"))
+        return makeErrorResult("Error: 'algo' must be 'pair' or 'quadriflow'.");
+
     QuadRetopoOptions opts;
     if (args.contains("target_faces"))    opts.targetFaces        = args["target_faces"].toInt(-1);
     if (args.contains("max_angle_deg"))   opts.maxAngleDeg        = args["max_angle_deg"].toDouble(25.0);
@@ -2289,6 +2299,99 @@ QJsonObject MCPServer::toolRetopologize(const QJsonObject &args)
 
     QJsonObject result = makeSuccessResult(QuadRetopo::reportToText(report));
     result["retopo"] = QuadRetopo::reportToJson(report);
+    return result;
+}
+
+QJsonObject MCPServer::retopologizeQuadriFlow(const QJsonObject &args)
+{
+    // Field-aligned QuadriFlow remesh: new topology, textures re-baked onto a
+    // fresh atlas, skin weights transferred by closest point. ONE undo step
+    // (ReplaceEntityMeshCommand swaps the whole mesh).
+    for (const char* k : {"target_faces", "seed", "voxel_resolution", "texture_size", "timeout_sec"})
+        if (args.contains(k) && !args[k].isDouble())
+            return makeErrorResult(QStringLiteral("Error: '%1' must be a number.").arg(QLatin1String(k)));
+    for (const char* k : {"preserve_sharp", "preserve_boundary", "adaptive", "bake_textures", "detail_normal"})
+        if (args.contains(k) && !args[k].isBool())
+            return makeErrorResult(QStringLiteral("Error: '%1' must be a boolean.").arg(QLatin1String(k)));
+    if (args.contains("voxel") && !args["voxel"].isString())
+        return makeErrorResult("Error: 'voxel' must be a string (auto|on|off).");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    const QList<Ogre::Entity*> resolved = sel ? sel->getResolvedEntities() : QList<Ogre::Entity*>{};
+    if (resolved.isEmpty() || !resolved.first())
+        return makeErrorResult("No selected entity.");
+    Ogre::Entity* entity = resolved.first();
+
+    QuadRemesh::Options opts;
+    int target = args.value("target_faces").toInt(-1);
+    if (target <= 0) {
+        int tris = 0;
+        for (unsigned short i = 0; entity->getMesh() && i < entity->getMesh()->getNumSubMeshes(); ++i)
+            if (entity->getMesh()->getSubMesh(i)->indexData)
+                tris += int(entity->getMesh()->getSubMesh(i)->indexData->indexCount / 3);
+        target = QuadRemesh::defaultTargetFaces(tris);
+    }
+    opts.targetFaces = target;
+    opts.preserveSharp = args.value("preserve_sharp").toBool(true);
+    opts.preserveBoundary = args.value("preserve_boundary").toBool(false);
+    opts.adaptiveScale = args.value("adaptive").toBool(true);
+    opts.seed = args.value("seed").toInt(0);
+    opts.voxelResolution = args.value("voxel_resolution").toInt(0);
+    opts.bakeTextures = args.value("bake_textures").toBool(true);
+    opts.bakeDetailNormal = args.value("detail_normal").toBool(true);
+    opts.textureSize = args.value("texture_size").toInt(0);
+    if (args.contains("timeout_sec")) opts.timeoutMs = args["timeout_sec"].toInt() * 1000;
+    bool voxelOk = true;
+    opts.voxel = QuadRemeshEntity::voxelModeFromString(args.value("voxel").toString(), &voxelOk);
+    if (!voxelOk)
+        return makeErrorResult("Error: 'voxel' must be auto, on or off.");
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.retopo"),
+        QStringLiteral("retopologize quadriflow entity=%1 target=%2")
+            .arg(QString::fromStdString(entity->getName())).arg(opts.targetFaces));
+
+    // Main-thread tool: pump at ~20 Hz so the window paints and the agent's
+    // Stop reaches m_toolCancelRequested (the generate_lipsync pattern).
+    m_toolCancelRequested = false;
+    QElapsedTimer pumpClock;
+    pumpClock.start();
+    opts.progress = [this, &pumpClock](const QString& stage, double f) {
+        if (f >= 0)
+            emit toolProgress(QStringLiteral("retopologize"), stage, int(f * 100), 100);
+        if (pumpClock.elapsed() >= 50) {
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;
+    };
+
+    QuadRemesh::SourceMesh src;
+    QuadRemeshEntity::SourceInfo info;
+    QString readErr;
+    if (!QuadRemeshEntity::readSource(entity, src, info, &readErr))
+        return makeErrorResult(QStringLiteral("Quad remesh failed: %1").arg(readErr));
+    const std::string name = entity->getName();
+    const QuadRemesh::Result r = QuadRemesh::remesh(src, opts);
+    if (!r.ok)
+        return makeErrorResult(r.cancelled ? QStringLiteral("cancelled")
+                                           : QStringLiteral("Quad remesh failed: %1").arg(r.error));
+    const QuadRemeshEntity::Built built = QuadRemeshEntity::buildMesh(r, info, name);
+    if (!built.ok)
+        return makeErrorResult(QStringLiteral("Quad remesh failed: %1").arg(built.error));
+    // The entity may have been touched while events were pumped — re-resolve
+    // by name inside the command rather than reusing `entity`.
+    auto* cmd = new ReplaceEntityMeshCommand(name, built.mesh, QStringLiteral("Quad Remesh (QuadriFlow)"));
+    UndoManager::getSingleton()->push(cmd);
+    if (!cmd->ok())
+        return makeErrorResult("Quad remesh: could not apply the new mesh (entity gone?).");
+
+    QJsonObject report = QuadRemeshEntity::reportToJson(r);
+    QJsonArray tex;
+    for (const QString& t : built.texturePaths) tex.append(t);
+    report["textures"] = tex;
+    QJsonObject result = makeSuccessResult(QuadRemeshEntity::reportToText(r)
+        + QStringLiteral("Quads are kept by .fbx/.obj export; glTF re-triangulates."));
+    result["retopo"] = report;
     return result;
 }
 
@@ -3166,6 +3269,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
     // #1017: opt-in UV-seam fill (LaMa; ~200 MB first-use download).
     if (args.contains("inpaint_seams")) opts.inpaintSeams = args["inpaint_seams"].toBool(false);
+    if (args.contains("quads")) opts.quadify = args["quads"].toBool(false);
+    if (args.contains("quad_remesh")) opts.quadRemesh = args["quad_remesh"].toBool(false);
+    if (args.contains("quad_remesh_target")) opts.quadRemeshTarget = args["quad_remesh_target"].toInt(0);
+    if (args.contains("remove_degenerates"))
+        opts.removeDegenerates = args["remove_degenerates"].toBool(true);
     if (args.contains("texture_size")) {
         opts.textureSize = args["texture_size"].toInt(1024);
         if (opts.textureSize < 64 || opts.textureSize > 8192)
@@ -3367,6 +3475,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 {MeshGenPredictor::Stage::Refine,  QStringLiteral("refining the surface")},
                 {MeshGenPredictor::Stage::Bake,    QStringLiteral("baking the texture")},
                 {MeshGenPredictor::Stage::Color,   QStringLiteral("colouring")},
+                {MeshGenPredictor::Stage::Remesh,  QStringLiteral("quad remeshing")},
             };
             emit toolProgress(QStringLiteral("generate_mesh_from_image"),
                               names.value(stage, QStringLiteral("working")), done, total);
@@ -3449,6 +3558,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                                 : QStringLiteral(" and saved it")));
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
+    result["degeneratesRemoved"] = res.degeneratesRemoved;
+    if (!res.faces.empty()) {
+        result["faceCount"] = static_cast<int>(res.faces.size());
+        result["quadCount"] = res.quadCount;
+    }
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     result["backend"] = backendName;
     if (!gamePresetId.isEmpty()) {
@@ -12340,6 +12454,10 @@ QJsonArray MCPServer::buildToolsList()
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution, any value 64..8192 (default 1024; GUI default for TRELLIS.2 is 2048). xatlas treats it as a hint, so the atlas can land slightly larger. Overrides game_preset's texture cap when both are given (past a Roblox limit it is honoured and flagged). TRELLIS.2's texture VOLUME is a separate knob: tex_res 512|1024."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
+        props["quads"] = QJsonObject{{"type", "boolean"}, {"description", "Pair triangles into a quad-dominant mesh (triangle pairing, no new vertices — UVs survive). Kept by .fbx/.obj export and Edit Mode; glTF/GLB re-triangulates (no quad primitive). Default false."}};
+        props["quad_remesh"] = QJsonObject{{"type", "boolean"}, {"description", "Rebuild the result as a clean field-aligned all-quad mesh (QuadriFlow): new topology, the baked texture maps are re-baked onto it plus a detail normal map. Supersedes 'quads'. Kept by .fbx/.obj export; glTF/GLB re-triangulates. A failed remesh keeps the triangle mesh with a warning. Default false."}};
+        props["quad_remesh_target"] = QJsonObject{{"type", "integer"}, {"description", "Approximate quad count for quad_remesh (0 = 0.6x the triangles, 1000..20000)."}};
+        props["remove_degenerates"] = QJsonObject{{"type", "boolean"}, {"description", "Drop zero-area, repeated-index and duplicate triangles from the result. Default true."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
         props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "pixal3d", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the same trellis-cli runtime — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; pixal3d = TencentARC Pixal3D (MIT), a TRELLIS.2 fork that swaps the global DINOv3 cross-attention for view-aligned projection conditioning — an alternative to trellis2, same runtime, but needs its own pixal3d_* flow weights and has no res-512 texture flow (use resolution 1024 for textures); triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
@@ -13012,13 +13130,42 @@ QJsonArray MCPServer::buildToolsList()
             {"description",
              "Maximum aspect ratio (longest edge / shortest edge) of an accepted quad. "
              "Default 6."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"pair", "quadriflow"}},
+            {"description",
+             "'pair' (default): pair existing triangles into quads — keeps every vertex, UV "
+             "and weight. 'quadriflow': field-aligned all-quad REMESH with new topology near "
+             "target_faces quads (default: 0.6x the input triangles, 1000..20000); textures "
+             "are re-baked onto a new atlas and skin weights transferred, one undo step."}};
+        props["preserve_sharp"] = QJsonObject{{"type", "boolean"},
+            {"description", "quadriflow: align to sharp creases. Default true."}};
+        props["preserve_boundary"] = QJsonObject{{"type", "boolean"},
+            {"description", "quadriflow: keep open borders in place. Default false."}};
+        props["adaptive"] = QJsonObject{{"type", "boolean"},
+            {"description", "quadriflow: denser quads where curvature is high (keeps small features). Default true."}};
+        props["seed"] = QJsonObject{{"type", "integer"},
+            {"description", "quadriflow: random seed (different seeds give different layouts)."}};
+        props["voxel"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "on", "off"}},
+            {"description",
+             "quadriflow: voxel pre-pass that rebuilds a closed manifold surface first. "
+             "'auto' (default) runs it for non-manifold input or when the direct remesh fails."}};
+        props["voxel_resolution"] = QJsonObject{{"type", "integer"},
+            {"description", "quadriflow: voxel cells along the longest axis (0 = auto)."}};
+        props["bake_textures"] = QJsonObject{{"type", "boolean"},
+            {"description", "quadriflow: re-bake the source textures onto the new UVs. Default true."}};
+        props["detail_normal"] = QJsonObject{{"type", "boolean"},
+            {"description", "quadriflow: bake a normal map carrying the source's surface detail even "
+                            "when the source had none. Default true."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"},
+            {"description", "quadriflow: baked texture size (0 = largest source map, min 1024)."}};
+        props["timeout_sec"] = QJsonObject{{"type", "integer"},
+            {"description", "quadriflow: give up on a helper attempt after this many seconds (a plain retry may follow). Default 300."}};
         appendTool(
             "retopologize",
-            "Quad-dominant retopology of the selected mesh via triangle pairing. "
-            "Walks every interior edge whose two adjacent faces are triangles and scores "
-            "the merge by coplanarity + quad shape + aspect ratio; takes the best pairs "
-            "greedily. Output faces are committed via the qtme.faces.<i> n-gon binding so "
-            "FBX and glTF exporters round-trip the new quads. Issue #401.",
+            "Quad retopology of the selected mesh. algo 'pair' (default) pairs adjacent "
+            "triangles into quads by coplanarity + shape + aspect ratio (no new vertices). "
+            "algo 'quadriflow' builds a clean field-aligned all-quad mesh (QuadriFlow) and "
+            "carries textures and skin weights across. Quads ride the qtme.faces.<i> n-gon "
+            "binding — keep them with FBX/OBJ export. Issue #401.",
             props
         );
     }

@@ -62,6 +62,8 @@
 #include "UvPipeline.h"
 #include "UvProject.h"
 #include "QuadRetopo.h"
+#include "QuadRemesh/QuadRemeshEntity.h"
+#include "commands/ReplaceEntityMeshCommand.h"
 #include "SkinWeights.h"
 #include "SkinEvaluate.h"
 #include "AutoRig.h"
@@ -900,17 +902,24 @@ void CLIPipeline::printUsage()
         "                  [--pos x,y,z] [--dir x,y,z] [--range N] [--enabled 0|1] -o <out>\n"
         "  light <file> --apply-rig <rig_id> [--replace] -o <out>\n"
         "  retopo <file> [--target-faces N] [--max-angle DEG] [--shape-tol DEG] [--max-aspect R] -o <out> [--json]\n"
+        "                                    Quad-dominant retopology via triangle pairing (default --algo pair).\n"
+        "                                    Pairs adjacent triangles into convex quads where coplanarity + shape +\n"
+        "                                    aspect-ratio gates pass. Writes quads via the n-gon binding so the FBX /\n"
+        "                                    glTF exporter round-trips them. No new vertices are introduced — UVs\n"
+        "                                    and skin weights survive unchanged.\n"
+        "  retopo <file> --algo quadriflow [--target-faces N] [--no-sharp] [--no-adaptive] [--boundary] [--seed N]\n"
+        "                [--voxel auto|on|off] [--voxel-res N] [--no-bake] [--no-detail-normal]\n"
+        "                [--texture-size N] [--fit-iterations N] [--timeout SEC] -o <out> [--json]\n"
+        "                                    Field-aligned all-quad REMESH (QuadriFlow). Builds new topology near\n"
+        "                                    --target-faces quads; textures are re-baked onto a fresh UV atlas and\n"
+        "                                    skin weights are transferred by closest point. Non-manifold input is\n"
+        "                                    rebuilt by a voxel pre-pass first. Keep quads with .fbx/.obj output.\n"
         "  lattice <file> --apply <lattice.json> -o <out> [--json]\n"
         "                                    Lattice (free-form) deform: bend a mesh with a lattice saved from the\n"
         "                                    GUI's Lattice Deform section (Save Lattice…) or MCP lattice_get\n"
         "  lattice <file> --info [--resolution nx,ny,nz] [--json]\n"
         "                                    Print the REST lattice boxing the mesh (a starting point to edit)\n"
         "  lattice --info <lattice.json> [--json]  Describe a saved lattice file\n"
-        "                                    Quad-dominant retopology via triangle pairing. Pairs adjacent\n"
-        "                                    triangles into convex quads where coplanarity + shape + aspect-ratio\n"
-        "                                    gates pass. Writes quads via the n-gon binding so the FBX / glTF\n"
-        "                                    exporter round-trips them. No new vertices are introduced — UVs\n"
-        "                                    and skin weights survive unchanged.\n"
         "  rig <file> [--skeleton humanoid|biped|quadruped|generic|vehicle] [--algo pinocchio|unirig] [--rigid]\n"
         "             [--up-axis x|y|z] [--skin] -o <out> [--json]\n"
         "                                    Auto-rig an UNRIGGED mesh: embed a skeleton template into the\n"
@@ -11755,11 +11764,57 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
     double maxAngleDeg = 25.0;
     double shapeToleranceDeg = 65.0;
     double maxAspectRatio = 6.0;
+    // --algo quadriflow (field-aligned remesh) options.
+    QString algo = QStringLiteral("pair");
+    QuadRemesh::Options qf;
+    bool targetGiven = false;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
         if (arg == "retopo" || arg == "--cli") continue;
         if (arg == "--json") { jsonOutput = true; continue; }
+        if (arg == "--algo" && i + 1 < argc) {
+            algo = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (algo == QLatin1String("trianglepair") || algo == QLatin1String("triangle-pair"))
+                algo = QStringLiteral("pair");
+            if (algo != QLatin1String("pair") && algo != QLatin1String("quadriflow")) {
+                err() << "Error: --algo must be pair or quadriflow." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--sharp") { qf.preserveSharp = true; continue; }        // default
+        if (arg == "--no-sharp") { qf.preserveSharp = false; continue; }
+        if (arg == "--boundary") { qf.preserveBoundary = true; continue; }
+        if (arg == "--adaptive") { qf.adaptiveScale = true; continue; }     // default
+        if (arg == "--no-adaptive") { qf.adaptiveScale = false; continue; }
+        if (arg == "--no-bake") { qf.bakeTextures = false; continue; }
+        if (arg == "--no-detail-normal") { qf.bakeDetailNormal = false; continue; }
+        if ((arg == "--seed" || arg == "--voxel-res" || arg == "--texture-size" || arg == "--timeout"
+             || arg == "--fit-iterations")
+            && i + 1 < argc) {
+            bool ok = false;
+            const int v = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || v < 0) {
+                err() << "Error: " << arg << " must be a non-negative integer." << Qt::endl;
+                return 2;
+            }
+            if (arg == "--seed") qf.seed = v;
+            else if (arg == "--voxel-res") qf.voxelResolution = v;
+            else if (arg == "--texture-size") qf.textureSize = v;
+            else if (arg == "--fit-iterations") qf.reprojectIterations = v;
+            else qf.timeoutMs = v * 1000;
+            continue;
+        }
+        if (arg == "--voxel" && i + 1 < argc) {
+            bool ok = false;
+            qf.voxel = QuadRemeshEntity::voxelModeFromString(QString::fromLocal8Bit(argv[++i]), &ok);
+            if (!ok) {
+                err() << "Error: --voxel must be auto, on or off." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
@@ -11770,7 +11825,7 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
                 err() << "Error: --target-faces must be a positive integer." << Qt::endl;
                 return 2;
             }
-            targetFaces = v; continue;
+            targetFaces = v; targetGiven = true; continue;
         }
         if (arg == "--max-angle" && i + 1 < argc) {
             bool ok = false;
@@ -11840,6 +11895,9 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
     }
     Ogre::Entity* entity = entities.first();
 
+    if (algo == QLatin1String("quadriflow"))
+        return retopoQuadriFlow(entity, qf, targetGiven ? targetFaces : -1, outputPath, jsonOutput);
+
     QuadRetopoOptions opts;
     opts.targetFaces        = targetFaces;
     opts.maxAngleDeg        = maxAngleDeg;
@@ -11871,6 +11929,76 @@ int CLIPipeline::cmdRetopo(int argc, char* argv[])
         {{QStringLiteral("tris_before"), report.totalTrianglesBefore},
          {QStringLiteral("tris_after"), report.totalTrianglesAfterRetopo},
          {QStringLiteral("quad_ratio_after"), report.quadDominance()}},
+        GamificationManager::Surface::Cli);
+    return 0;
+}
+
+int CLIPipeline::retopoQuadriFlow(Ogre::Entity* entity, QuadRemesh::Options opts, int targetFaces,
+                                  const QString& outputPath, bool jsonOutput)
+{
+    int inputTris = 0;
+    if (entity && entity->getMesh())
+        for (unsigned short i = 0; i < entity->getMesh()->getNumSubMeshes(); ++i) {
+            const Ogre::SubMesh* sm = entity->getMesh()->getSubMesh(i);
+            if (sm->indexData) inputTris += int(sm->indexData->indexCount / 3);
+        }
+    // Default budget: QuadRemesh::defaultTargetFaces (0.6x the triangles).
+    opts.targetFaces = targetFaces > 0 ? targetFaces : QuadRemesh::defaultTargetFaces(inputTris);
+    opts.progress = [](const QString& stage, double f) {
+        if (f >= 0 && !stage.isEmpty())
+            err() << QStringLiteral("  [%1%] %2").arg(int(f * 100)).arg(stage) << Qt::endl;
+        return true;
+    };
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.retopo"),
+        QStringLiteral("quadriflow target=%1 voxel=%2 bake=%3")
+            .arg(opts.targetFaces).arg(int(opts.voxel)).arg(opts.bakeTextures));
+
+    const QString texDir = QFileInfo(outputPath).absolutePath();
+    QuadRemeshEntity::Outcome out = QuadRemeshEntity::remeshEntity(entity, opts, texDir);
+    if (!out.ok) {
+        err() << "Error: quad remesh failed — " << out.error << Qt::endl;
+        return 1;
+    }
+    // Swap the mesh in place on the entity's node (the command's swap logic,
+    // run directly — there is no undo stack in a CLI run).
+    const std::string name = entity->getName();
+    ReplaceEntityMeshCommand swap(name, out.mesh, QStringLiteral("Quad Remesh"));
+    swap.redo();
+    Ogre::Entity* ne = nullptr;
+    for (Ogre::Entity* e : Manager::getSingleton()->getEntities())
+        if (e && e->getName() == name) ne = e;
+    if (!swap.ok() || !ne) {
+        err() << "Error: could not apply the remeshed mesh." << Qt::endl;
+        return 1;
+    }
+    const QString fmt = formatForExtension(outputPath);
+    if (MeshImporterExporter::exporter(ne->getParentSceneNode(), QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
+        err() << "Error: export failed." << Qt::endl;
+        return 1;
+    }
+    const QString ext = QFileInfo(outputPath).suffix().toLower();
+    const bool keepsQuads = ext == QLatin1String("fbx") || ext == QLatin1String("obj");
+    if (jsonOutput) {
+        QJsonObject j = QuadRemeshEntity::reportToJson(out.result);
+        j[QStringLiteral("output")] = QFileInfo(outputPath).absoluteFilePath();
+        j[QStringLiteral("quadsPreservedInOutput")] = keepsQuads;
+        QJsonArray tex;
+        for (const QString& t : out.texturePaths) tex.append(t);
+        j[QStringLiteral("textures")] = tex;
+        cliWrite(QString::fromUtf8(QJsonDocument(j).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        QString text = QuadRemeshEntity::reportToText(out.result);
+        if (!keepsQuads)
+            text += QStringLiteral("  note: .%1 stores triangles — use .fbx or .obj to keep the quads\n").arg(ext);
+        cliWrite(text + QStringLiteral("Wrote: %1\n").arg(QFileInfo(outputPath).fileName()));
+    }
+    GamificationManager::noteOperation(
+        QStringLiteral("retopo"),
+        {{QStringLiteral("tris_before"), out.result.inputTriangles},
+         {QStringLiteral("tris_after"), int(out.result.indices.size() / 3)},
+         {QStringLiteral("quad_ratio_after"),
+          out.result.quads + out.result.triangles > 0
+              ? double(out.result.quads) / (out.result.quads + out.result.triangles) : 0.0}},
         GamificationManager::Surface::Cli);
     return 0;
 }
@@ -12666,6 +12794,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool refine = true;
     bool bake = true;
     bool inpaintSeams = false;   // #1017: opt-in UV-seam fill
+    bool quadify = false;        // pair triangles into quads (FBX/OBJ keep them)
+    bool quadRemesh = false;     // QuadriFlow all-quad remesh (+ texture re-bake)
+    int  quadRemeshTarget = 0;
+    bool removeDegenerates = true; // drop zero-area/duplicate triangles
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
     int textureSize = 1024;
@@ -12717,6 +12849,19 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--inpaint-seams") { inpaintSeams = true; continue; }   // #1017
+        if (arg == "--quads") { quadify = true; continue; }
+        if (arg == "--quad-remesh") { quadRemesh = true; continue; }
+        if (arg == "--quad-target" && i + 1 < argc) {
+            bool ok = false;
+            quadRemeshTarget = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || quadRemeshTarget <= 0) {
+                err() << "Error: --quad-target must be a positive integer." << Qt::endl;
+                return 2;
+            }
+            quadRemesh = true;
+            continue;
+        }
+        if (arg == "--keep-degenerates") { removeDegenerates = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
         if (arg == "--backend") {
@@ -12982,7 +13127,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
-                 "[--upscale-texture] [--no-pbr] "
+                 "[--upscale-texture] [--no-pbr] [--quads] [--quad-remesh [--quad-target N]] [--keep-degenerates] "
                  "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
                  "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
@@ -13154,6 +13299,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.inpaintSeams    = inpaintSeams;
+    opts.quadify         = quadify;
+    opts.quadRemesh      = quadRemesh;
+    opts.quadRemeshTarget = quadRemeshTarget;
+    opts.removeDegenerates = removeDegenerates;
     opts.textureSize     = textureSize;
     opts.backend         = backend;
     opts.flowSteps       = flowSteps;
@@ -13248,6 +13397,13 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
 
     const QString fmt = formatForExtension(outputPath);
+    if ((quadify || quadRemesh) && !res.faces.empty()) {
+        const QString ext = QFileInfo(outputPath).suffix().toLower();
+        if (ext != QLatin1String("fbx") && ext != QLatin1String("obj"))
+            err() << "Note: quads are kept only by .fbx and .obj; ." << ext
+                  << " stores triangles (glTF has no quad primitive), so the "
+                     "quads are re-triangulated on export." << Qt::endl;
+    }
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
         QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
     if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
@@ -13255,7 +13411,15 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         return 1;
     }
 
-    cliWrite(QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n%5")
+    QString topo;
+    if (res.degeneratesRemoved > 0)
+        topo += QStringLiteral("Removed %1 degenerate triangles\n").arg(res.degeneratesRemoved);
+    if (!res.faces.empty())
+        topo += QStringLiteral("Quads: %1 of %2 faces (%3% of triangles paired)\n")
+                    .arg(res.quadCount).arg(res.faces.size())
+                    .arg(res.triangleCount > 0
+                             ? qRound(200.0 * res.quadCount / res.triangleCount) : 0);
+    cliWrite(topo + QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n%5")
                  .arg(res.vertexCount).arg(res.triangleCount)
                  .arg(!res.uvs.empty()
                           ? QStringLiteral(" (+baked %1px diffuse texture)").arg(res.texture.width())

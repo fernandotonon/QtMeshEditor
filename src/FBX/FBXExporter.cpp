@@ -64,13 +64,17 @@ static constexpr int64_t FBX_TICKS_PER_SECOND = 46186158000LL;
 // FBX version 7300 (v7.3)
 static constexpr uint32_t FBX_VERSION = 7300;
 
-// ─── Z-mirror helpers ────────────────────────────────────────────
-// Ogre stores data that was ConvertToLeftHanded during Assimp import
-// (Z negated, UVs flipped, winding reversed).  To produce a correct
-// FBX file that round-trips through Assimp reimport (which applies
-// ConvertToLeftHanded again), we must undo the LH transform here:
-//   negate Z positions/normals, flip UV V, reverse winding,
-//   and mirror bone transforms across Z.
+// ─── Coordinate space ────────────────────────────────────────────
+// The scene holds data in the SOURCE file's space: since 3.37.1 (#977) the
+// Assimp import applies only FlipUVs — no ConvertToLeftHanded axis mirror —
+// and FBX is right-handed like Ogre. So the exporter writes positions,
+// normals, winding, bones, bind matrices, animation and morph deltas AS-IS;
+// the only conversion is the V flip (FBX's UV origin is bottom-left).
+//
+// This file used to Z-mirror all of the above to undo the old import mirror.
+// When #977 removed that mirror (fixing glTF/GLB), the FBX compensation was
+// left behind, so every FBX export came out Z-mirrored — a character facing
+// the camera re-imported facing away, alternating on every round trip.
 
 // Build a 4×4 local transform matrix from position, scale, orientation
 static Ogre::Matrix4 buildLocalMatrix(const Ogre::Vector3& pos,
@@ -98,14 +102,6 @@ static Ogre::Matrix4 computeGlobalBindPose(Ogre::Bone* bone)
     if (parent)
         return computeGlobalBindPose(parent) * local;
     return local;
-}
-
-// Mirror a quaternion across the Z-plane:
-//   rotation axis (ax,ay,az) → (ax,ay,-az) and angle negates
-//   ⇒ q(w,x,y,z) → q(w,-x,-y,z)
-static Ogre::Quaternion mirrorZ(const Ogre::Quaternion& q)
-{
-    return Ogre::Quaternion(q.w, -q.x, -q.y, q.z);
 }
 
 // Quaternion → Euler XYZ (degrees)
@@ -140,26 +136,15 @@ static void quaternionToEulerXYZ(const Ogre::Quaternion& q,
     rz *= 180.0 / M_PI;
 }
 
-// 4x4 matrix → 16 doubles (row-major) with Z-mirror applied.
-// Z-mirror: M' = S * M * S where S = diag(1,1,-1,1).
-// Elements [0][2],[1][2],[2][0],[2][1],[2][3],[3][2] are negated.
-static void matrix4ToDoublesMirrorZ(const Ogre::Matrix4& m, double* out)
+// 4x4 matrix → 16 doubles in FBX layout.
+static void matrix4ToFbxDoubles(const Ogre::Matrix4& m, double* out)
 {
     // FBX uses row-vector convention (v' = v * M) with translation in the last
     // row.  Ogre uses column-vector convention (v' = M * v) with translation in
     // the last column.  Writing transposed maps Ogre column-major → FBX row-major.
-    Ogre::Matrix4 mz = m;
-    // Z-mirror: negate the six off-diagonal Z elements (undo ConvertToLeftHanded)
-    mz[0][2] = -mz[0][2];
-    mz[1][2] = -mz[1][2];
-    mz[2][0] = -mz[2][0];
-    mz[2][1] = -mz[2][1];
-    mz[2][3] = -mz[2][3];
-    mz[3][2] = -mz[3][2];
-    // Write transposed so translation lands in the last row for FBX
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
-            out[c * 4 + r] = mz[r][c];
+            out[c * 4 + r] = m[r][c];
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1039,7 +1024,7 @@ private:
             m_w.writePropertyS("Mesh");
             m_w.endProperties();
 
-            // ── Vertices (Z-mirrored, no unit scaling) ──
+            // ── Vertices (source space, no unit scaling) ──
             std::vector<double> positions;
             const auto* posElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
             if (posElem)
@@ -1055,7 +1040,7 @@ private:
                         const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
                     positions[j * 3 + 0] = p[0];
                     positions[j * 3 + 1] = p[1];
-                    positions[j * 3 + 2] = -static_cast<double>(p[2]); // negate Z
+                    positions[j * 3 + 2] = p[2];
                 }
                 vbuf->unlock();
             }
@@ -1064,15 +1049,13 @@ private:
             m_w.endProperties();
             m_w.endNodeLeaf();
 
-            // ── PolygonVertexIndex (winding reversed for Z-mirror) ──
+            // ── PolygonVertexIndex (source winding) ──
             //
             // Walk source polygons (quads/n-gons via the qtme.faces.<i>
             // binding when present, else triangles from the GPU index
-            // buffer). For each polygon (v0, v1, .., vN-1):
-            //   * the FBX exporter emits the reverse winding to compensate
-            //     for the Z-mirror applied to positions/normals;
-            //   * the LAST index is bitwise-NOT-encoded (-(idx+1)) to mark
-            //     the polygon boundary, per FBX binary spec.
+            // buffer). Each polygon (v0, v1, .., vN-1) is written in its own
+            // order; the LAST index is bitwise-NOT-encoded (-(idx+1)) to mark
+            // the polygon boundary, per FBX binary spec.
             //
             // `polyVertexOrder` records the buffer-index sequence in
             // PolygonVertexIndex order so the per-polygon-vertex layers
@@ -1112,20 +1095,12 @@ private:
                 polyVertexOrder.reserve(totalIndices);
                 for (const auto& poly : ngonFaces) {
                     if (poly.size() < 3) continue;
-                    // Reverse winding: (v0, v1, ..., vN-1)
-                    //              → (v0, vN-1, vN-2, ..., v1)
-                    polyVertexOrder.push_back(poly[0]);
-                    for (size_t k = poly.size(); k-- > 1; ) {
-                        polyVertexOrder.push_back(poly[k]);
+                    for (unsigned int vi : poly) {
+                        polyVertexOrder.push_back(vi);
+                        polyIndices.push_back(static_cast<int32_t>(vi));
                     }
                     // Encode for FBX: last entry is the polygon end marker.
-                    const size_t base = polyIndices.size();
-                    polyIndices.push_back(static_cast<int32_t>(poly[0]));
-                    for (size_t k = poly.size(); k-- > 1; ) {
-                        polyIndices.push_back(static_cast<int32_t>(poly[k]));
-                    }
                     polyIndices.back() = -(polyIndices.back() + 1);
-                    (void)base;
                 }
             }
             else if (iData && iData->indexCount > 0)
@@ -1149,13 +1124,12 @@ private:
                         u1 = reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 1];
                         u2 = reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 2];
                     }
-                    // Reverse winding: (v0, v1, v2) → (v0, v2, v1)
                     polyVertexOrder[f * 3 + 0] = u0;
-                    polyVertexOrder[f * 3 + 1] = u2;
-                    polyVertexOrder[f * 3 + 2] = u1;
+                    polyVertexOrder[f * 3 + 1] = u1;
+                    polyVertexOrder[f * 3 + 2] = u2;
                     polyIndices[f * 3 + 0] = static_cast<int32_t>(u0);
-                    polyIndices[f * 3 + 1] = static_cast<int32_t>(u2);
-                    polyIndices[f * 3 + 2] = -(static_cast<int32_t>(u1) + 1);
+                    polyIndices[f * 3 + 1] = static_cast<int32_t>(u1);
+                    polyIndices[f * 3 + 2] = -(static_cast<int32_t>(u2) + 1);
                 }
                 ibuf->unlock();
             }
@@ -1179,7 +1153,7 @@ private:
                         const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
                     normals[j * 3 + 0] = p[0];
                     normals[j * 3 + 1] = p[1];
-                    normals[j * 3 + 2] = -static_cast<double>(p[2]); // negate Z
+                    normals[j * 3 + 2] = p[2];
                 }
                 vbuf->unlock();
 
@@ -1498,7 +1472,7 @@ private:
 
             m_w.endNode(); // NodeAttribute
 
-            // Model (LimbNode) — Z-mirrored, using initial (bind pose) values.
+            // Model (LimbNode) — source space, using initial (bind pose) values.
             // All bones use raw transforms directly. BoneProcessor on reimport
             // also reads transforms directly (no inversion), so the round-trip
             // preserves the original values. External tools like Blender also
@@ -1507,9 +1481,8 @@ private:
             Ogre::Quaternion ori = bone->getInitialOrientation();
             Ogre::Vector3 scl = bone->getInitialScale();
 
-            Ogre::Quaternion mirroredRot = mirrorZ(ori);
             double rx, ry, rz;
-            quaternionToEulerXYZ(mirroredRot, rx, ry, rz);
+            quaternionToEulerXYZ(ori, rx, ry, rz);
 
             m_w.beginNode("Model");
             m_w.writePropertyL(boneModelId);
@@ -1522,7 +1495,7 @@ private:
             m_w.beginNode("Properties70");
             m_w.endProperties();
 
-            writeP70LclTranslation(pos.x, pos.y, -pos.z); // negate Z
+            writeP70LclTranslation(pos.x, pos.y, pos.z);
             writeP70LclRotation(rx, ry, rz);
             writeP70LclScaling(scl.x, scl.y, scl.z);
 
@@ -1607,22 +1580,18 @@ private:
                 m_w.endProperties();
                 m_w.endNodeLeaf();
 
-                // TransformLink = bone's global bind pose, Z-mirrored
+                // TransformLink = bone's global bind pose
                 // Use computeGlobalBindPose (from initial transforms) instead of
                 // _getFullTransform() which may reflect the current animation state
                 Ogre::Matrix4 boneGlobal = computeGlobalBindPose(bone);
                 double transformLinkArr[16];
-                matrix4ToDoublesMirrorZ(boneGlobal, transformLinkArr);
+                matrix4ToFbxDoubles(boneGlobal, transformLinkArr);
 
                 // Transform = bone_global^{-1} @ mesh_global (in bone space, per FBX convention)
                 // Blender's FBX importer computes mesh_global = TransformLink @ Transform,
                 // so storing bone^{-1} ensures all clusters produce the same mesh_global.
                 // Since our mesh is at origin, mesh_global = identity → Transform = bone^{-1}.
-                Ogre::Matrix4 boneGlobalMirrored;
-                for (int r = 0; r < 4; ++r)
-                    for (int c = 0; c < 4; ++c)
-                        boneGlobalMirrored[r][c] = transformLinkArr[c * 4 + r];
-                Ogre::Matrix4 transformMat = boneGlobalMirrored.inverse();
+                Ogre::Matrix4 transformMat = boneGlobal.inverse();
                 double transformArr[16];
                 for (int r = 0; r < 4; ++r)
                     for (int c = 0; c < 4; ++c)
@@ -1745,8 +1714,8 @@ private:
     //                      ←OO— Geometry("Shape", sparse vertex deltas)
     //
     // The Shape node stores `Indexes` (vertex indices that move) and
-    // `Vertices` (per-vertex delta XYZ). Same Z-mirroring convention
-    // as the rest of the binary FBX export.
+    // `Vertices` (per-vertex delta XYZ), in the same (source) space as
+    // the base mesh vertices.
     void writeBlendShapeDeformers()
     {
         for (size_t gi = 0; gi < m_geomIds.size(); ++gi) {
@@ -1832,13 +1801,10 @@ private:
                 deltas.reserve(p->getVertexOffsets().size() * 3u);
                 for (const auto& [vi, d] : p->getVertexOffsets()) {
                     indexes.push_back(static_cast<int32_t>(vi));
-                    // FBX uses right-handed Y-up with Z mirrored on
-                    // export (same convention writeMeshModels uses
-                    // for vertex positions). Mirroring Z keeps the
-                    // morph delta consistent with the base mesh.
+                    // Same space as the base vertex positions (as-is).
                     deltas.push_back(static_cast<double>(d.x));
                     deltas.push_back(static_cast<double>(d.y));
-                    deltas.push_back(static_cast<double>(-d.z));
+                    deltas.push_back(static_cast<double>(d.z));
                 }
 
                 m_w.beginNode("Geometry");
@@ -1939,9 +1905,9 @@ private:
                     Ogre::Vector3 pos = bindPos + kf->getTranslate();
                     tx[ki] = pos.x;
                     ty[ki] = pos.y;
-                    tz[ki] = -static_cast<double>(pos.z); // negate Z
+                    tz[ki] = pos.z;
 
-                    Ogre::Quaternion rot = mirrorZ(bindRot * kf->getRotation());
+                    Ogre::Quaternion rot = bindRot * kf->getRotation();
                     rot.normalise();
                     double erx, ery, erz;
                     quaternionToEulerXYZ(rot, erx, ery, erz);
@@ -2370,13 +2336,13 @@ private:
                 writePoseNode(modelId, identity);
         }
 
-        // Bone PoseNodes (global bind pose, Z-mirrored)
+        // Bone PoseNodes (global bind pose)
         for (unsigned short bi = 0; bi < m_skeleton->getNumBones(); ++bi)
         {
             auto* bone = m_skeleton->getBone(bi);
             Ogre::Matrix4 globalBind = computeGlobalBindPose(bone);
             double mat[16];
-            matrix4ToDoublesMirrorZ(globalBind, mat);
+            matrix4ToFbxDoubles(globalBind, mat);
             writePoseNode(m_boneModelIds[bone->getHandle()], mat);
         }
 

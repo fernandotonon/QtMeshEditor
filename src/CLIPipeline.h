@@ -8,6 +8,8 @@
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 
+#include "QuadRemesh/QuadRemeshCore.h"
+
 struct MeshInfo {
     QString file;
     unsigned int vertices = 0;
@@ -264,6 +266,9 @@ public:
     /// greedily. Output is committed via the n-gon binding so quads
     /// round-trip through the FBX / glTF exporter. Issue #401.
     static int cmdRetopo(int argc, char* argv[]);
+    // `retopo --algo quadriflow`: remesh `entity`, swap it in, export.
+    static int retopoQuadriFlow(Ogre::Entity* entity, QuadRemesh::Options opts, int targetFaces,
+                                const QString& outputPath, bool jsonOutput);
 
     /// Compute skin weights for a mesh + skeleton via inverse-
     /// distance heuristic. Issue #402.

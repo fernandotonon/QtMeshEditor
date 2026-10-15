@@ -2599,16 +2599,18 @@ Rectangle {
                     width: 190
                     enabled: !MeshGenController.busy
                     // 64..512 for simple props whose texture is a few flat
-                    // faces (a mat, a pizza box); 4096 for hero assets.
+                    // faces (a mat, a pizza box); 4096/8192 for hero assets
+                    // (8192 is the bake's hard cap — a 64 MB RGBA atlas per
+                    // map and a long bake, so it is opt-in, not a default).
                     // Backend range is 64..8192, so every entry here is valid.
                     // NB xatlas treats this as a HINT, not a size: it only
                     // seeds an estimated texelsPerUnit, so the atlas that
                     // lands can differ (a 64 request measured 140x143).
                     // Treat these as a budget, not a guarantee.
                     model: ["64 px", "128 px", "256 px", "512 px", "1024 px",
-                            "2048 px (default)", "4096 px"]
+                            "2048 px (default)", "4096 px", "8192 px (max)"]
                     currentIndex: 5
-                    readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096]
+                    readonly property var sizeValues: [64, 128, 256, 512, 1024, 2048, 4096, 8192]
                     property int sizeValue: sizeValues[currentIndex]
                     // A platform preset (Roblox: 1024 px) caps the bake size:
                     // snap to the largest entry within the cap, and keep it
@@ -2777,6 +2779,29 @@ Rectangle {
                 checked: false
                 enabled: !MeshGenController.busy && mgBake.checked
             }
+            // Final topology clean-up, every backend. Degenerate removal is
+            // pure cleanup (zero-area / duplicate triangles) and stays on;
+            // quads are opt-in because glTF/GLB cannot store them.
+            InspectorCheck {
+                id: mgCleanDegen
+                text: "Remove degenerate triangles"
+                checked: true
+                enabled: !MeshGenController.busy
+            }
+            InspectorCheck {
+                id: mgQuads
+                text: "Convert to quads (FBX/OBJ keep them)"
+                checked: false
+                enabled: !MeshGenController.busy && !mgQuadRemesh.checked
+            }
+            // Field-aligned all-quad remesh (QuadriFlow): new, clean topology;
+            // the baked maps are re-baked onto it. Supersedes the pairing above.
+            InspectorCheck {
+                id: mgQuadRemesh
+                text: "Quad remesh (QuadriFlow, clean all-quad topology)"
+                checked: false
+                enabled: !MeshGenController.busy
+            }
 
             // Step 2: generate from the selected image. Disabled until one is
             // picked (or while busy). Builds the per-step progress list from
@@ -2831,6 +2856,8 @@ Rectangle {
                         steps.push({ key: "bake", label: "Bake texture" })
                     else if (!sg && !mgBake.checked)
                         steps.push({ key: "color", label: "Vertex colors" })
+                    if (mgQuadRemesh.checked)
+                        steps.push({ key: "remesh", label: "Quad remesh (QuadriFlow)" })
                     if (mgUpscale.checked && buildBake)
                         steps.push({ key: "upscale", label: "Upscale texture 2×" })
                     steps.push({ key: "build",
@@ -2859,6 +2886,9 @@ Rectangle {
                         "bake_texture": buildBake,
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
+                        "remove_degenerates": mgCleanDegen.checked,
+                        "quads": mgQuads.checked,
+                        "quad_remesh": mgQuadRemesh.checked,
                         "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
                         // The preset id carries the strict-ceiling + texture

@@ -1068,6 +1068,18 @@ jobs:
               done
             fi
 
+            # QuadriFlow quad-remesh helper (out-of-process, see
+            # cmake/QuadriFlow.cmake) — QuadriFlowRunner probes next to the
+            # editor binary. BSD-3/BSL/MPL2 notices travel with it.
+            if [ ! -f ./bin/qtmesh_quadriflow ]; then
+              echo "ERROR: ./bin/qtmesh_quadriflow is missing (quad remesh would fail at runtime)"
+              exit 1
+            fi
+            cp ./bin/qtmesh_quadriflow ./pack-deb/usr/share/qtmesheditor/qtmesh_quadriflow
+            chmod 755 ./pack-deb/usr/share/qtmesheditor/qtmesh_quadriflow
+            cp ./bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt \
+               ./pack-deb/usr/share/doc/qtmesheditor/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt
+
             # Create proper launcher script
             printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor

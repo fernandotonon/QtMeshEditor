@@ -1,4 +1,6 @@
 #include "MeshGenPredictor.h"
+#include "QuadRemesh/QuadRemeshCore.h"
+#include "MeshGenCleanup.h"
 
 #include "MarchingCubes.h"
 #include "MeshRefine.h"       // Taubin smoothing + iso-surface reprojection
@@ -17,6 +19,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 
 #include "AppStorage.h"
 
@@ -749,6 +752,115 @@ void MeshGenPredictor::capResultTextures(Result& r, int maxSize)
     cap(r.metallicMap);
 }
 
+void MeshGenPredictor::finalizeTopology(Result& r, const Options& opts,
+                                        const std::function<bool(int, int)>& remeshProgress)
+{
+    if (opts.removeDegenerates) {
+        const MeshGenCleanup::DegenerateReport dr =
+            MeshGenCleanup::removeDegenerates(
+                r.positions, r.indices,
+                {{&r.uvs, 2}, {&r.normals, 3}, {&r.colors, 3}});
+        r.degeneratesRemoved = dr.total();
+        r.vertexCount = static_cast<int>(r.positions.size() / 3);
+        r.triangleCount = static_cast<int>(r.indices.size() / 3);
+        if (dr.total() > 0 || dr.removedVertices > 0) {
+            fprintf(stderr,
+                    "[meshgen] cleanup: removed %d degenerate triangles "
+                    "(%d repeated-index, %d zero-area, %d duplicate), "
+                    "%d orphan vertices\n",
+                    dr.total(), dr.repeatedIndex, dr.zeroArea, dr.duplicate,
+                    dr.removedVertices);
+        }
+        if (r.triangleCount <= 0) {
+            r.ok = false;
+            r.error = QStringLiteral("MeshGen: mesh was entirely degenerate.");
+            return;
+        }
+    }
+    r.faces.clear();
+    r.quadCount = 0;
+    if (opts.quadRemesh) {
+        QuadRemesh::SourceMesh src;
+        src.positions = r.positions;
+        src.indices = r.indices;
+        if (r.normals.size() == r.positions.size()) src.normals = r.normals;
+        if (r.uvs.size() == r.positions.size() / 3 * 2) src.uvs = r.uvs;
+        QuadRemesh::SourceMaterial mat;
+        if (!r.texture.isNull()) mat.maps.insert(QStringLiteral("diffuse_map"), r.texture.convertToFormat(QImage::Format_ARGB32));
+        if (!r.normalMap.isNull()) mat.maps.insert(QStringLiteral("normal_map"), r.normalMap.convertToFormat(QImage::Format_ARGB32));
+        if (!r.roughnessMap.isNull()) mat.maps.insert(QStringLiteral("roughness"), r.roughnessMap.convertToFormat(QImage::Format_ARGB32));
+        if (!r.metallicMap.isNull()) mat.maps.insert(QStringLiteral("metallic"), r.metallicMap.convertToFormat(QImage::Format_ARGB32));
+        src.materials.push_back(mat);
+
+        QuadRemesh::Options qo;
+        const int tris = int(r.indices.size() / 3);
+        qo.targetFaces = opts.quadRemeshTarget > 0 ? opts.quadRemeshTarget : QuadRemesh::defaultTargetFaces(tris);
+        qo.textureSize = r.texture.isNull() ? 0 : std::max(r.texture.width(), r.texture.height());
+        // A detail normal only when there is a material to carry it — a
+        // vertex-colour-only result has no UV pipeline downstream.
+        qo.bakeDetailNormal = !r.texture.isNull();
+        qo.bakeTextures = !src.uvs.empty();
+        qo.progress = [&remeshProgress](const QString&, double f) {
+            if (!remeshProgress) return true;
+            return remeshProgress(f < 0 ? -1 : int(f * 100), 100);
+        };
+        const QuadRemesh::Result q = QuadRemesh::remesh(src, qo);
+        if (q.ok) {
+            r.positions = q.positions;
+            r.normals = q.normals;
+            r.uvs = q.uvs;
+            r.indices = q.indices;
+            r.faces = q.faces;
+            r.quadCount = q.quads;
+            // Vertex colours do not survive new topology; the texture does.
+            if (!r.colors.empty()) {
+                r.colors.clear();
+                if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
+                r.warning += QStringLiteral("quad remesh dropped the vertex colours (enable the texture bake to keep colour).");
+            }
+            auto take = [&](const char* slot, QImage& dst) {
+                const QImage img = q.maps.value(QLatin1String(slot));
+                if (!img.isNull()) dst = img;
+            };
+            take("diffuse_map", r.texture);
+            take("normal_map", r.normalMap);
+            take("roughness", r.roughnessMap);
+            take("metallic", r.metallicMap);
+            r.vertexCount = static_cast<int>(r.positions.size() / 3);
+            r.triangleCount = static_cast<int>(r.indices.size() / 3);
+            fprintf(stderr, "[meshgen] quad remesh: %d tris -> %d quads + %d tris%s\n",
+                    q.inputTriangles, q.quads, q.triangles, q.voxelized ? " (voxel rebuild)" : "");
+            return;
+        }
+        if (q.cancelled) {
+            r.ok = false;
+            r.error = QStringLiteral("cancelled");
+            return;
+        }
+        if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
+        r.warning += QStringLiteral("quad remesh failed (%1) — kept the triangle mesh.").arg(q.error);
+        // fall through: plain triangle pairing when requested
+    }
+    if (opts.quadify) {
+        const MeshGenCleanup::QuadReport qr =
+            MeshGenCleanup::pairIntoQuads(r.positions, r.indices, r.faces);
+        if (qr.ok) {
+            r.quadCount = qr.quads;
+            fprintf(stderr,
+                    "[meshgen] quads: %d tris -> %d quads + %d tris "
+                    "(%.0f%% quad-dominant)\n",
+                    qr.trianglesBefore, qr.quads, qr.triangles,
+                    100.0 * qr.quadDominance());
+        } else {
+            r.faces.clear();
+            if (!r.warning.isEmpty())
+                r.warning += QStringLiteral(" ");
+            r.warning += QStringLiteral("quad conversion found no pairs — "
+                                        "kept triangles.");
+        }
+    }
+}
+
 MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                                                    const QString& encoderModelPath,
                                                    const QString& decoderModelPath,
@@ -756,6 +868,10 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                                                    const ProgressFn& progress)
 {
     Result r = predictImpl(image, encoderModelPath, decoderModelPath, opts, progress);
+    if (r.ok)
+        finalizeTopology(r, opts, [&progress](int done, int total) {
+            return !progress || progress(Stage::Remesh, done, done < 0 ? 0 : total);
+        });
     // The bake honours textureSize only as a request (xatlas can hand back a
     // larger atlas), so a platform cap is applied to what actually came out.
     if (r.ok)
