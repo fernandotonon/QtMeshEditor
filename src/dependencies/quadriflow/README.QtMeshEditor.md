@@ -64,4 +64,8 @@ several failures.
    revisit or after `4·|F|+8` steps, and the two fixed-point passes are
    capped at 64 iterations; stopping early only leaves a valence fix undone.
 
+6. **MinGW build** (`src/dedge.cpp`): the `_InterlockedCompareExchange` branch
+   is gated on `_MSC_VER` instead of `_WIN32` — it is an MSVC intrinsic, and
+   MinGW (GCC) uses the `__sync` builtin like the other platforms.
+
 Nothing else differs from upstream; `exit()` calls are left as they are.
