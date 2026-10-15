@@ -14,6 +14,12 @@ better. Those actions are served by corpus clips instead. Treat that as the
 bar: only ship an authored clip that beats what the corpus already has, or
 that fills a genuine gap.
 
+The current author set also contains three new gesture candidates — **salute,
+point, and clap** — plus articulated hands on the core idle/locomotion/action
+clips. They are intentionally still candidates until promoted through the
+normal curation file; generating them makes them appear as distinct actions in
+a locally-built template library without silently replacing approved takes.
+
 Not shipped; the app never runs Python.
 
 ## Pipeline
@@ -48,6 +54,13 @@ multi-word names that match no keyword.
 samples `pose_fn(t01) -> {joint: (x_deg, y_deg, z_deg)}` at 30 fps and writes
 `final_local = bind_local * euler_delta` rotation channels (LINEAR). An optional
 `hips_translate_fn(t01)` adds root bob/travel to the hips translation.
+
+Hands use the same pose dictionary. `l_grip` / `r_grip` range from 0 (open)
+to 1 (fist), `l_spread` / `r_spread` fan an open hand, and a per-finger key
+such as `r_index_grip` overrides the hand value. The author expands these
+controls to all 30 deforming Mixamo finger joints; explicit keys such as
+`l_thumb2: (x, y, z)` remain available for exceptional poses. Keep the
+fourth Mixamo finger node untouched—it is a tip marker, not a phalanx.
 
 `actions.py` holds the action library. Angles are **anatomical**: the author
 layer negates Y and Z for right-side joints, because the Mixamo right-side bind
