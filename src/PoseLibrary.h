@@ -20,7 +20,11 @@ The MIT License
 #include <QSet>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 #include <QtQml/qqmlregistration.h>
+
+#include "BoneNamingMap.h"
+#include "PoseMirror.h"
 
 #include <OgreQuaternion.h>
 #include <OgreVector.h>
@@ -207,16 +211,17 @@ public:
                     const QString& srcName,
                     const QString& dstName);
 
-    /// Heuristic name flip for mirror-pose. Recognises three
-    /// common rig conventions:
-    ///   - suffix `_l` ↔ `_r` (`Mixamo_Hand_l` ↔ `Mixamo_Hand_r`)
-    ///   - suffix `.L` ↔ `.R` (Blender convention, case-preserved)
-    ///   - prefix `Left` ↔ `Right` (Maya convention, case-preserved)
+    /// Name flip for mirror-pose. Since slice E (#559) this simply
+    /// forwards to the shared `BoneNaming::Map`, which recognises
+    /// every built-in convention (`_l`/`_r`, `.l`/`.r`,
+    /// `Left*`/`Right*`, `*_left`/`*_right`, Biped side tokens,
+    /// camelCase affixes) plus the user's custom regex rules —
+    /// rather than carrying its own copy of the heuristic.
     /// Returns the original name unchanged when no rule matches —
     /// centre-line bones (`Spine`, `Hips`, `Head`) flow through
     /// untouched and just have their TRS reflected in place.
     /// Pure function with no Ogre dependency — exposed publicly
-    /// for tests and so future apply-with-mask code can reuse it.
+    /// for tests and so apply-with-mask code can reuse it.
     static QString flipBoneName(const QString& boneName);
 
     /// Blend two saved poses and write the result under `dstName`.
@@ -282,6 +287,18 @@ public:
     /// the undo path (which restores its own snapshot) and when an
     /// entity is torn down. Returns true if a blend was cancelled.
     bool cancelBlend(Ogre::Entity* entity);
+
+    /// The user's custom naming conventions, loaded from settings.
+    /// Read fresh per call so a newly added rule applies to the
+    /// next mirror without an editor restart.
+    static QVector<BoneNaming::CustomRule> customNamingRules();
+
+    /// The configured symmetry plane (#559). Defaults to X — the
+    /// sagittal plane every character rig is built around.
+    static PoseMirror::Plane mirrorPlane();
+    /// Persist the symmetry plane. Rejects an unparseable id.
+    Q_INVOKABLE static bool setMirrorPlaneId(const QString& planeId);
+    Q_INVOKABLE static QString mirrorPlaneId();
 
     /// Drop every entry on `entity` (called when an entity is
     /// destroyed or a scene closes). No-op if `entity` was never

@@ -165,6 +165,69 @@ bool SkinEvaluate::extract(Ogre::Entity* entity, EvalData& out,
     return true;
 }
 
+bool SkinEvaluate::applyWeights(Ogre::Entity* entity, const EvalData& data,
+                                QString* error)
+{
+    auto fail = [&](const QString& msg) {
+        if (error) *error = msg;
+        return false;
+    };
+    if (!entity || !entity->getMesh()) return fail(QStringLiteral("no entity"));
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh->getSkeleton())
+        return fail(QStringLiteral("mesh has no skeleton attached"));
+    if (data.weights.empty()) return fail(QStringLiteral("no weights to apply"));
+
+    size_t base = 0;
+    auto writeOwner = [&](Ogre::SubMesh* sub, size_t vertexCount) {
+        if (sub) sub->clearBoneAssignments();
+        else     mesh->clearBoneAssignments();
+        for (size_t v = 0; v < vertexCount; ++v) {
+            const size_t gv = base + v;
+            if (gv >= data.weights.size()) break;
+            const auto& vw = data.weights[gv];
+            for (int k = 0; k < vw.count; ++k) {
+                if (vw.boneIndices[k] < 0 || vw.weights[k] <= 0.0) continue;
+                Ogre::VertexBoneAssignment vba;
+                vba.vertexIndex = static_cast<unsigned int>(v);
+                vba.boneIndex   = static_cast<unsigned short>(vw.boneIndices[k]);
+                vba.weight      = static_cast<float>(vw.weights[k]);
+                if (sub) sub->addBoneAssignment(vba);
+                else     mesh->addBoneAssignment(vba);
+            }
+        }
+        // Once per owner: this re-packs the whole owner's blend buffer.
+        if (sub) sub->_compileBoneAssignments();
+        else     mesh->_compileBoneAssignments();
+        base += vertexCount;
+    };
+
+    // Must match `extract`'s owner walk EXACTLY, including its skips — the
+    // weights array is indexed by that walk, so visiting an owner extract
+    // skipped (or skipping one it visited) shifts every later owner's
+    // vertices onto the wrong bones.
+    if (mesh->sharedVertexData) {
+        bool anyShared = false;
+        for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si)
+            if (mesh->getSubMesh(si) && mesh->getSubMesh(si)->useSharedVertices) {
+                anyShared = true;
+                break;
+            }
+        std::vector<float> pos;
+        if (anyShared && extractPositions(mesh->sharedVertexData, pos))
+            writeOwner(nullptr, mesh->sharedVertexData->vertexCount);
+    }
+    for (unsigned short si = 0; si < mesh->getNumSubMeshes(); ++si) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(si);
+        if (!sub || sub->useSharedVertices || !sub->vertexData) continue;
+        std::vector<float> pos;
+        if (!extractPositions(sub->vertexData, pos)) continue;
+        writeOwner(sub, sub->vertexData->vertexCount);
+    }
+    if (base == 0) return fail(QStringLiteral("mesh has no writable vertex data"));
+    return true;
+}
+
 QJsonObject SkinEvaluate::evaluate(Ogre::Entity* entity, int voxelResolution,
                                    QString* error)
 {

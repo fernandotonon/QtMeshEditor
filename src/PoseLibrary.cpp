@@ -10,6 +10,7 @@ The MIT License
 
 #include "PoseLibrary.h"
 
+#include "AppSettingsKeys.h"
 #include "GamificationManager.h"
 
 #include "ModelTurntableRenderer.h"
@@ -26,6 +27,7 @@ The MIT License
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QSettings>
 #include <QThread>
 
 #include <OgreAnimationState.h>
@@ -466,44 +468,60 @@ QStringList PoseLibrary::listPoses(Ogre::Entity* entity) const
 
 QString PoseLibrary::flipBoneName(const QString& boneName)
 {
-    // Mixamo / generic _l ↔ _r suffix. Case-preserving on the
-    // suffix letter so "BoneL" stays uppercase, "bone_l" stays
-    // lowercase, etc.
-    if (boneName.endsWith(QStringLiteral("_l"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral("_r");
-    }
-    if (boneName.endsWith(QStringLiteral("_r"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral("_l");
-    }
-    if (boneName.endsWith(QStringLiteral("_L"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral("_R");
-    }
-    if (boneName.endsWith(QStringLiteral("_R"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral("_L");
-    }
-    // Blender .L / .R convention.
-    if (boneName.endsWith(QStringLiteral(".L"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral(".R");
-    }
-    if (boneName.endsWith(QStringLiteral(".R"))) {
-        return boneName.left(boneName.size() - 2) + QStringLiteral(".L");
-    }
-    // Maya Left / Right prefix. We require the prefix to be
-    // followed by an uppercase letter so "Lefty" isn't flipped
-    // to "Righty"; the convention is "LeftHand", "RightArm" etc.
-    auto hasPrefixWord = [&](const QString& prefix) {
-        if (!boneName.startsWith(prefix)) return false;
-        if (boneName.size() == prefix.size()) return true;
-        const QChar next = boneName.at(prefix.size());
-        return next.isUpper() || next == QLatin1Char('_');
-    };
-    if (hasPrefixWord(QStringLiteral("Left"))) {
-        return QStringLiteral("Right") + boneName.mid(4);
-    }
-    if (hasPrefixWord(QStringLiteral("Right"))) {
-        return QStringLiteral("Left") + boneName.mid(5);
-    }
-    return boneName;
+    // Slice E (#559): detection now lives in the shared, pure-data
+    // `BoneNaming::Map` so the pose mirror, the skin-weight mirror
+    // (slice D #558) and the mirror-chain (slice B #556) all agree
+    // on what the opposite-side bone is called. This is a thin
+    // forwarder kept for the existing callers and its documented
+    // contract.
+    //
+    // NB the contract difference at this boundary: `counterpart()`
+    // returns an EMPTY string for a centre bone (so a mirror op can
+    // tell "no counterpart" from "maps to itself"), whereas this
+    // function's long-standing contract is to echo the input back
+    // unchanged. Translate rather than propagate, or every caller
+    // that flips a centre bone's name would get "".
+    const BoneNaming::Map naming(customNamingRules());
+    const QString other = naming.counterpart(boneName);
+    return other.isEmpty() ? boneName : other;
+}
+
+QVector<BoneNaming::CustomRule> PoseLibrary::customNamingRules()
+{
+    // User-defined conventions, persisted per project (#559). Read
+    // fresh on each call so a rule the user just added applies to
+    // the next mirror without an editor restart.
+    return BoneNaming::loadCustomRules();
+}
+
+PoseMirror::Plane PoseLibrary::mirrorPlane()
+{
+    QSettings settings;
+    const QString id =
+        settings.value(AppSettingsKeys::skeletonMirrorPlane()).toString();
+    PoseMirror::Plane p = PoseMirror::Plane::X;
+    // An unset / unparseable value falls back to X here on purpose: this is
+    // the stored-preference read path, where "never configured" is the normal
+    // case and X is the correct default for a character rig. The strictness
+    // lives in setMirrorPlaneId, which refuses to STORE a bad id.
+    PoseMirror::planeFromId(id, &p);
+    return p;
+}
+
+QString PoseLibrary::mirrorPlaneId()
+{
+    return PoseMirror::planeId(mirrorPlane());
+}
+
+bool PoseLibrary::setMirrorPlaneId(const QString& planeId)
+{
+    PoseMirror::Plane p;
+    if (!PoseMirror::planeFromId(planeId, &p)) return false;
+    QSettings settings;
+    settings.setValue(AppSettingsKeys::skeletonMirrorPlane(), PoseMirror::planeId(p));
+    SentryReporter::addBreadcrumb("scene.skel.mirror.plane",
+        QStringLiteral("plane = %1").arg(PoseMirror::planeId(p)));
+    return true;
 }
 
 bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
@@ -528,27 +546,36 @@ bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
     if (poseIt == entIt->byName.constEnd()) return false;
     const PoseSnapshot& src = *poseIt;
 
-    // Build the mirrored snapshot: for each source bone, look up
-    // its mirrored counterpart's name and write the X-flipped TRS
-    // under that key. Bones whose flipped name is the same as the
-    // original (centre-line: Spine, Hips, Head, etc.) get the
-    // reflected TRS in place.
-    PoseSnapshot mirrored;
-    mirrored.reserve(src.size());
+    // Slice E (#559): the reflection + name mapping is now the
+    // shared `PoseMirror::mirror`, so the pose mirror, the
+    // skin-weight mirror (#558) and the mirror-chain (#556) cannot
+    // drift apart. Convert to the shared Pose type (a field copy —
+    // the structs are deliberately the same shape), mirror, convert
+    // back.
+    PoseMirror::Pose in;
+    in.reserve(src.size());
     for (auto it = src.cbegin(); it != src.cend(); ++it) {
-        const QString flipped = flipBoneName(it.key());
+        PoseMirror::BoneTransform t;
+        t.translate = it.value().translate;
+        t.rotation = it.value().rotation;
+        t.scale = it.value().scale;
+        in.insert(it.key(), t);
+    }
+
+    const BoneNaming::Map naming(customNamingRules());
+    PoseMirror::MirrorOptions opts;
+    opts.plane = mirrorPlane();
+    PoseMirror::MirrorReport mrep;
+    const PoseMirror::Pose flipped = PoseMirror::mirror(in, naming, opts, &mrep);
+
+    PoseSnapshot mirrored;
+    mirrored.reserve(flipped.size());
+    for (auto it = flipped.cbegin(); it != flipped.cend(); ++it) {
         BonePoseSnapshot bs;
-        const auto& s = it.value();
-        bs.translate = Ogre::Vector3(-s.translate.x, s.translate.y, s.translate.z);
-        // X-symmetric reflection of a quaternion: keep w, x; flip y, z.
-        // Equivalent to conjugating by the reflection-X transform.
-        bs.rotation = Ogre::Quaternion(s.rotation.w, s.rotation.x,
-                                       -s.rotation.y, -s.rotation.z);
-        // Negative scale.x is the standard mirror trick — preserves
-        // volume and produces the correct mirrored orientation when
-        // the renderer applies the bone transform.
-        bs.scale = Ogre::Vector3(-s.scale.x, s.scale.y, s.scale.z);
-        mirrored.insert(flipped, bs);
+        bs.translate = it.value().translate;
+        bs.rotation = it.value().rotation;
+        bs.scale = it.value().scale;
+        mirrored.insert(it.key(), bs);
     }
 
     // Write the mirrored snapshot directly into m_byEntity. We're
@@ -559,9 +586,22 @@ bool PoseLibrary::mirrorPose(Ogre::Entity* entity,
     // emits posesChanged just like a normal save would.
     const bool isOverwrite = storePose(entity, dstName, mirrored);
 
-    SentryReporter::addBreadcrumb("scene.anim.pose",
-        QStringLiteral("mirror '%1' -> '%2' (%3 bones%4)")
-            .arg(srcName, dstName).arg(mirrored.size())
+    // Slice E (#559): report what the mirror actually managed, not just a
+    // bone count. A pose that mirrored 0 pairs (rig follows no recognised
+    // convention) looks identical to a successful one from the count alone.
+    SentryReporter::addBreadcrumb("scene.skel.mirror.pose",
+        QStringLiteral("mirror '%1' -> '%2' plane=%3 (%4 bones: %5 paired, "
+                       "%6 centre%7%8%9)")
+            .arg(srcName, dstName, PoseMirror::planeId(opts.plane))
+            .arg(mirrored.size())
+            .arg(mrep.pairedBonesMirrored)
+            .arg(mrep.centerBonesMirrored)
+            .arg(mrep.unpairedSided.isEmpty()
+                     ? QString()
+                     : QStringLiteral(", %1 unpaired").arg(mrep.unpairedSided.size()))
+            .arg(mrep.collisions.isEmpty()
+                     ? QString()
+                     : QStringLiteral(", %1 COLLISION").arg(mrep.collisions.size()))
             .arg(isOverwrite ? QStringLiteral(", overwrite") : QString()));
     return true;
 }

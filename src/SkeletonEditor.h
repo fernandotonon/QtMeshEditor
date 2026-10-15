@@ -207,6 +207,40 @@ public:
     Q_INVOKABLE bool resetRestPoseForSelected();
     Q_INVOKABLE bool snapSelectedBonesToCurrentPose();
 
+    // --- mirror / left-right naming (slice E #559) ------------------------
+
+    /// Pairing diagnostic for the selected entity's skeleton, for the
+    /// Inspector panel that lets a user verify their rig follows a naming
+    /// convention BEFORE relying on any mirror op. Shape:
+    ///   { pairs: [{left, right, convention}], centerBones: [name],
+    ///     unpairedSided: [name], collisions: [name],
+    ///     pairCount, boneCount, plane }
+    /// Empty `pairs` with a non-empty `unpairedSided` is the interesting
+    /// case: the rig HAS side-named bones whose partners are missing.
+    Q_INVOKABLE QVariantMap bonePairingReport() const;
+
+    /// Mirror the current bone selection (`Hand_l` → `Hand_r`). Selects the
+    /// counterpart and returns its name; empty string when the selected bone
+    /// has no counterpart (a centre bone), leaving the selection untouched.
+    Q_INVOKABLE QString mirrorSelectedBone();
+
+    /// The configured symmetry plane id ("x"/"y"/"z") and its setter.
+    /// Delegates to PoseLibrary so the pose mirror, weight mirror and this
+    /// panel all read one stored preference.
+    Q_INVOKABLE QString mirrorPlaneId() const;
+    Q_INVOKABLE bool setMirrorPlaneId(const QString& planeId);
+
+    /// User-defined naming conventions (#559). Each entry is
+    /// { leftPattern, leftReplacement, rightPattern, rightReplacement }.
+    Q_INVOKABLE QVariantList customNamingRules() const;
+    /// Replace the stored rule set. Invalid regexes are rejected; returns the
+    /// number actually saved so the UI can report a bad entry instead of
+    /// silently dropping it.
+    Q_INVOKABLE int setCustomNamingRules(const QVariantList& rules);
+    /// Preview what a convention set would do to one name, for the rule
+    /// editor's live feedback. Returns an empty string for a centre bone.
+    Q_INVOKABLE QString previewCounterpart(const QString& boneName) const;
+
     Q_INVOKABLE bool hasSkeletonSelection() const;
     Q_INVOKABLE QString selectedBoneName() const;
     /// Current parent of the selected bone; empty string if root / none.

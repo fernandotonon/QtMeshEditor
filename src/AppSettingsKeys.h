@@ -463,6 +463,22 @@ inline const QString& paintTilingOffsetV()
     return k;
 }
 
+/** @brief Skel slice E (#559): user-defined left/right bone naming
+ *  conventions, stored as a JSON array of
+ *  {leftPattern,leftReplacement,rightPattern,rightReplacement}. */
+inline const QString& skeletonMirrorCustomRules()
+{
+    static const QString k(QStringLiteral("Skeleton/mirrorCustomNamingRules"));
+    return k;
+}
+
+/** @brief Skel slice E (#559): mirror symmetry plane id ("x"/"y"/"z"). */
+inline const QString& skeletonMirrorPlane()
+{
+    static const QString k(QStringLiteral("Skeleton/mirrorPlane"));
+    return k;
+}
+
 } // namespace AppSettingsKeys
 
 #endif // APP_SETTINGS_KEYS_H

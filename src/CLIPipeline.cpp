@@ -64,7 +64,10 @@
 #include "UvProject.h"
 #include "QuadRetopo.h"
 #include "SkinWeights.h"
+#include "BoneNamingMap.h"
+#include "PoseMirror.h"
 #include "SkinEvaluate.h"
+#include "WeightPaintOps.h"
 #include "AutoRig.h"
 #include "FaceRig/ArkitTemplate.h"
 #include "FaceRig/FaceRigAttach.h"
@@ -12214,11 +12217,16 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
 {
     // Parse: rig <file> [--skeleton humanoid|biped|quadruped|generic]
     //        [--algo pinocchio|unirig] [--skin] [--up-axis x|y|z] -o <out> [--json]
+    //   or:  rig <file> --mirror-info [--json]              (slice E #559)
+    //   or:  rig <file> --mirror-weights [--plane x|y|z] -o <out> [--json]
     QString inputPath, outputPath, templateName = QStringLiteral("humanoid");
     QString algoName = QStringLiteral("pinocchio");
+    QString planeName = QStringLiteral("x");
     bool jsonOutput = false;
     bool alsoSkin = false;
     bool rigid = false;   // #1013: --rigid = skin with SkinWeights::rigidOptions()
+    bool mirrorInfo = false;
+    bool mirrorWeights = false;
     int upAxis = 1;   // +Y default
 
     for (int i = 1; i < argc; ++i) {
@@ -12227,6 +12235,24 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         if (arg == "--json") { jsonOutput = true; continue; }
         if (arg == "--skin") { alsoSkin = true; continue; }
         if (arg == "--rigid") { alsoSkin = true; rigid = true; continue; }
+        if (arg == "--mirror-info") { mirrorInfo = true; continue; }
+        if (arg == "--mirror-weights") { mirrorWeights = true; continue; }
+        if (arg == "--plane") {
+            // Reject a missing/absent value rather than silently mirroring
+            // across X — a wrong plane produces a plausible but wrong result.
+            if (i + 1 >= argc || QString::fromLocal8Bit(argv[i + 1]).startsWith("-")) {
+                err() << "Error: --plane requires 'x', 'y', or 'z'." << Qt::endl;
+                return 2;
+            }
+            planeName = QString::fromLocal8Bit(argv[++i]).toLower();
+            PoseMirror::Plane parsed;
+            if (!PoseMirror::planeFromId(planeName, &parsed)) {
+                err() << "Error: --plane must be 'x', 'y', or 'z' (got '"
+                      << planeName << "')." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString::fromLocal8Bit(argv[++i]); continue;
         }
@@ -12270,9 +12296,19 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh rig <file> [--skeleton humanoid|biped|quadruped|generic|vehicle] [--rigid] "
                  "[--algo pinocchio|unirig] [--skin] [--up-axis x|y|z] -o <out> [--json]" << Qt::endl;
+        err() << "   or: qtmesh rig <file> --mirror-info [--json]" << Qt::endl;
+        err() << "   or: qtmesh rig <file> --mirror-weights [--plane x|y|z] -o <out> [--json]"
+              << Qt::endl;
         return 2;
     }
-    if (outputPath.isEmpty()) {
+    if (mirrorInfo && mirrorWeights) {
+        err() << "Error: --mirror-info is a read-only report; it cannot be combined "
+                 "with --mirror-weights." << Qt::endl;
+        return 2;
+    }
+    // --mirror-info writes nothing, so -o is not required (and requiring it
+    // would make a pure diagnostic look like a mutating command).
+    if (outputPath.isEmpty() && !mirrorInfo) {
         err() << "Error: -o <output> required." << Qt::endl;
         return 2;
     }
@@ -12307,6 +12343,134 @@ int CLIPipeline::cmdRig(int argc, char* argv[])
         return 1;
     }
     Ogre::Entity* entity = meshEntities.first();
+
+    // ── slice E (#559): mirror modes ──────────────────────────────────────
+    if (mirrorInfo || mirrorWeights) {
+        if (!entity->hasSkeleton()) {
+            err() << "Error: " << inputPath << " has no skeleton — nothing to mirror."
+                  << Qt::endl;
+            return 1;
+        }
+        Ogre::SkeletonInstance* skel = entity->getSkeleton();
+        QStringList boneNames;
+        for (unsigned short i = 0; i < skel->getNumBones(); ++i)
+            boneNames.push_back(QString::fromStdString(skel->getBone(i)->getName()));
+
+        const BoneNaming::Map naming(BoneNaming::loadCustomRules());
+        const BoneNaming::PairingReport rep = naming.pair(boneNames);
+
+        if (mirrorInfo) {
+            if (jsonOutput) {
+                QJsonArray pairs;
+                for (const auto& p : rep.pairs) {
+                    QJsonObject o;
+                    o["left"] = p.left;
+                    o["right"] = p.right;
+                    o["convention"] = p.convention;
+                    pairs.append(o);
+                }
+                QJsonObject root;
+                root["boneCount"] = boneNames.size();
+                root["pairCount"] = rep.pairCount();
+                root["pairs"] = pairs;
+                root["centerBones"] = QJsonArray::fromStringList(rep.centerBones);
+                root["unpairedSided"] = QJsonArray::fromStringList(rep.unpairedSided);
+                root["collisions"] = QJsonArray::fromStringList(rep.collisions);
+                writeOutput(QString::fromUtf8(
+                    QJsonDocument(root).toJson(QJsonDocument::Indented)));
+            } else {
+                QString text;
+                text += QStringLiteral("Bones: %1  Pairs: %2\n")
+                            .arg(boneNames.size()).arg(rep.pairCount());
+                for (const auto& p : rep.pairs)
+                    text += QStringLiteral("  %1  <->  %2   [%3]\n")
+                                .arg(p.left, p.right, p.convention);
+                if (!rep.centerBones.isEmpty())
+                    text += QStringLiteral("Centre (mirrored in place): %1\n")
+                                .arg(rep.centerBones.join(QStringLiteral(", ")));
+                if (!rep.unpairedSided.isEmpty())
+                    text += QStringLiteral("Side-named but UNPAIRED (partner missing): %1\n")
+                                .arg(rep.unpairedSided.join(QStringLiteral(", ")));
+                if (!rep.collisions.isEmpty())
+                    text += QStringLiteral("COLLISIONS (two bones map onto one): %1\n")
+                                .arg(rep.collisions.join(QStringLiteral(", ")));
+                if (rep.pairCount() == 0)
+                    text += QStringLiteral("No left/right pairs detected — this rig's "
+                                           "names follow no recognised convention.\n");
+                writeOutput(text);
+            }
+            return 0;
+        }
+
+        // --mirror-weights: bone-pair-aware weight mirror, then export.
+        PoseMirror::Plane plane = PoseMirror::Plane::X;
+        PoseMirror::planeFromId(planeName, &plane);
+        const int axis = (plane == PoseMirror::Plane::X) ? 0
+                       : (plane == PoseMirror::Plane::Y) ? 1 : 2;
+
+        SkinEvaluate::EvalData data;
+        QString extractErr;
+        if (!SkinEvaluate::extract(entity, data, &extractErr)) {
+            err() << "Error: could not read skinning — " << extractErr << Qt::endl;
+            return 1;
+        }
+        if (data.weights.empty()) {
+            err() << "Error: no skin weights on " << inputPath << Qt::endl;
+            return 1;
+        }
+        // Handle → counterpart handle, via the SHARED builder the GUI
+        // controller also uses, so the two surfaces cannot pair differently.
+        const std::vector<int> pairTable =
+            BoneNaming::buildPairTable(data.boneNames, naming);
+
+        SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.mirror.weights"),
+            QString("cli mirror-weights plane=%1 pairs=%2")
+                .arg(planeName).arg(rep.pairCount()));
+
+        const int changed = WeightPaintOps::mirrorByPositionWithBonePairs(
+            data.positions.data(), static_cast<int>(data.weights.size()),
+            data.weights, axis, /*pivot=*/0.0, /*tolerance=*/0.001, pairTable);
+        if (changed <= 0) {
+            err() << "Error: no vertices had a mirror partner within tolerance — "
+                     "is the mesh symmetric about the " << planeName << " axis?"
+                  << Qt::endl;
+            return 1;
+        }
+        QString applyErr;
+        if (!SkinEvaluate::applyWeights(entity, data, &applyErr)) {
+            err() << "Error: failed to write mirrored weights — " << applyErr << Qt::endl;
+            return 1;
+        }
+
+        auto* mnode = entity->getParentSceneNode();
+        const QString mfmt = formatForExtension(outputPath);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
+        if (MeshImporterExporter::exporter(
+                mnode, QFileInfo(outputPath).absoluteFilePath(), mfmt) != 0) {
+            err() << "Error: export failed." << Qt::endl;
+            return 1;
+        }
+        if (jsonOutput) {
+            QJsonObject root;
+            root["mirroredVertices"] = changed;
+            root["bonePairs"] = rep.pairCount();
+            root["plane"] = planeName;
+            root["output"] = outputPath;
+            writeOutput(QString::fromUtf8(
+                QJsonDocument(root).toJson(QJsonDocument::Indented)));
+        } else {
+            QString text = QStringLiteral("Mirrored %1 vertices across %2 using "
+                                          "%3 bone pair(s) -> %4\n")
+                               .arg(changed).arg(planeName.toUpper())
+                               .arg(rep.pairCount()).arg(outputPath);
+            if (rep.pairCount() == 0)
+                text += QStringLiteral("Note: no left/right bone pairs were detected, "
+                                       "so bone handles were not swapped.\n");
+            writeOutput(text);
+        }
+        return 0;
+    }
 
     AutoRig::Options opts;
     opts.tmpl      = AutoRig::templateFromString(templateName);
