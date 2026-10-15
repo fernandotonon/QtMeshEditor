@@ -44,6 +44,13 @@ QString slotKey(const Ogre::TextureUnitState* tus, unsigned short index)
     if (lower == QLatin1String("diffuse") || lower == QLatin1String("basecolor")
         || lower == QLatin1String("base_color") || lower == QLatin1String("diffuse_map"))
         return QStringLiteral("diffuse_map");
+    // Every name RTShaderHelper treats as a normal map (isNormalSlotName) is
+    // the tangent-space normal slot to the bake — otherwise it would be
+    // resampled as colour and ignored when re-expressing normals.
+    if (name == QLatin1String("normal_map") || name == QLatin1String("NormalMap")
+        || lower == QLatin1String("bump") || name == QLatin1String("BumpMap")
+        || name == QLatin1String("height_map"))
+        return QStringLiteral("normal_map");
     return name;
 }
 
@@ -161,6 +168,11 @@ bool readSource(Ogre::Entity* entity, QuadRemesh::SourceMesh& out, SourceInfo& i
         if (Ogre::Technique* tech = firstTechnique(mat)) {
             if (tech->getNumPasses() > 0) {
                 Ogre::Pass* pass = tech->getPass(0);
+                const Ogre::ColourValue d = pass->getDiffuse();
+                sm.diffuse[0] = d.r;
+                sm.diffuse[1] = d.g;
+                sm.diffuse[2] = d.b;
+                sm.diffuse[3] = d.a;
                 for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
                     const Ogre::TextureUnitState* tus = pass->getTextureUnitState(i);
                     if (!bakeableUnit(tus)) continue;
@@ -280,6 +292,13 @@ Built buildMesh(const QuadRemesh::Result& r, const SourceInfo& info, const std::
             Ogre::TextureUnitState* tus = pass->createTextureUnitState(it.value().toStdString());
             tus->setName(it.key().toStdString());
         }
+    }
+    if (r.diffuseColorBaked) {
+        // Per-material colours now live in the diffuse map; keep the pass
+        // from tinting it a second time with the FIRST material's colour.
+        for (Ogre::Technique* tech : mat->getTechniques())
+            for (unsigned short pi = 0; pi < tech->getNumPasses(); ++pi)
+                tech->getPass(pi)->setDiffuse(Ogre::ColourValue::White);
     }
     RTShaderHelper::wirePbrSlotsForFFP(mat.get());
     // A PBR-tagged source keeps Cook-Torrance (a no-op for plain materials).

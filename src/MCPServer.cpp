@@ -2371,10 +2371,22 @@ QJsonObject MCPServer::retopologizeQuadriFlow(const QJsonObject &args)
     if (!QuadRemeshEntity::readSource(entity, src, info, &readErr))
         return makeErrorResult(QStringLiteral("Quad remesh failed: %1").arg(readErr));
     const std::string name = entity->getName();
+    const Ogre::Mesh* sourceMesh = entity->getMesh().get();
     const QuadRemesh::Result r = QuadRemesh::remesh(src, opts);
     if (!r.ok)
         return makeErrorResult(r.cancelled ? QStringLiteral("cancelled")
                                            : QStringLiteral("Quad remesh failed: %1").arg(r.error));
+    // The progress pump let other events run: the entity may have been
+    // edited, reloaded or deleted meanwhile. Apply only onto the mesh we read
+    // (the GUI path's check), never onto a same-named replacement.
+    {
+        Ogre::Entity* live = nullptr;
+        if (auto* mgr = Manager::getSingletonPtr())
+            for (Ogre::Entity* e : mgr->getEntities())
+                if (e && e->getMovableType() == "Entity" && e->getName() == name) live = e;
+        if (!live || live->getMesh().get() != sourceMesh)
+            return makeErrorResult("Quad remesh: the mesh changed while it was being remeshed — nothing applied.");
+    }
     const QuadRemeshEntity::Built built = QuadRemeshEntity::buildMesh(r, info, name);
     if (!built.ok)
         return makeErrorResult(QStringLiteral("Quad remesh failed: %1").arg(built.error));

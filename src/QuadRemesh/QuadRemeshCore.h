@@ -46,6 +46,11 @@ struct BoneWeight {
 // normal map; every other slot is resampled as colour data.
 struct SourceMaterial {
     QHash<QString, QImage> maps;
+    // The pass diffuse colour (RGBA, 0..1). When submeshes differ by colour
+    // rather than by texture, it is baked into the diffuse map per source
+    // triangle — collapsing to one material would otherwise give every region
+    // the first material's colour.
+    float diffuse[4] = {1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 struct SourceMesh {
@@ -105,6 +110,9 @@ struct Result {
     std::vector<uint32_t> indices;     // fan triangulation of `faces`
     std::vector<std::vector<BoneWeight>> bones; // N or empty
     QHash<QString, QImage> maps;       // baked texture per slot
+    // True when per-material diffuse colours were baked into the diffuse map:
+    // the output material's diffuse colour must then be white.
+    bool diffuseColorBaked = false;
 
     // Report.
     int  inputTriangles = 0;

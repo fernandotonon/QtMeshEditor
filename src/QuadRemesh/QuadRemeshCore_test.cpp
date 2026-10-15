@@ -427,3 +427,65 @@ TEST(QuadRemeshCore, FitToSurfaceRespectsSnapLimit)
     fitToSurface(far, f, loc, 0, 0.5f);
     EXPECT_EQ(far, before);   // beyond maxSnap: left alone
 }
+
+TEST(QuadRemeshCore, BakeIsDeterministicAcrossRuns)
+{
+    // Texel ownership (lowest triangle index) makes shared-edge texels
+    // exclusive, so two runs produce byte-identical images.
+    SourceMesh src;
+    plane(10, src.positions, src.indices, &src.uvs);
+    SourceMaterial m;
+    m.maps.insert(QStringLiteral("diffuse_map"), uvGradient(64));
+    src.materials.push_back(m);
+    std::vector<float> qp;
+    std::vector<std::vector<uint32_t>> qf;
+    quadPlane(9, qp, qf);
+    Options o;
+    o.textureSize = 256;
+    const Result a = transferOnto(src, qp, qf, o);
+    const Result b = transferOnto(src, qp, qf, o);
+    ASSERT_TRUE(a.ok && b.ok);
+    EXPECT_EQ(a.maps.value(QStringLiteral("diffuse_map")), b.maps.value(QStringLiteral("diffuse_map")));
+    EXPECT_EQ(a.maps.value(QStringLiteral("normal_map")), b.maps.value(QStringLiteral("normal_map")));
+}
+
+TEST(QuadRemeshCore, PerMaterialColoursAreBakedWhenTheyDiffer)
+{
+    // Two untextured materials: left half red, right half blue. Collapsing to
+    // one material must not paint everything with the first colour.
+    SourceMesh src;
+    plane(10, src.positions, src.indices, &src.uvs);
+    for (size_t t = 0; t < src.indices.size() / 3; ++t) {
+        const float cx = (src.positions[3 * src.indices[3 * t]] + src.positions[3 * src.indices[3 * t + 1]]
+                          + src.positions[3 * src.indices[3 * t + 2]]) / 3.0f;
+        src.triangleMaterial.push_back(cx < 0.5f ? 0 : 1);
+    }
+    SourceMaterial red, blue;
+    red.diffuse[0] = 1; red.diffuse[1] = 0; red.diffuse[2] = 0;
+    blue.diffuse[0] = 0; blue.diffuse[1] = 0; blue.diffuse[2] = 1;
+    src.materials = {red, blue};
+    std::vector<float> qp;
+    std::vector<std::vector<uint32_t>> qf;
+    quadPlane(8, qp, qf);
+    Options o;
+    o.textureSize = 128;
+    o.bakeDetailNormal = false;
+    const Result r = transferOnto(src, qp, qf, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_TRUE(r.diffuseColorBaked);
+    ASSERT_TRUE(r.maps.contains(QStringLiteral("diffuse_map")));
+    const QImage& tex = r.maps.value(QStringLiteral("diffuse_map"));
+    for (const auto& f : r.faces) {
+        float u = 0, v = 0, x = 0;
+        for (uint32_t c : f) {
+            u += r.uvs[2 * c] / f.size();
+            v += r.uvs[2 * c + 1] / f.size();
+            x += r.positions[3 * c] / f.size();
+        }
+        if (std::fabs(x - 0.5f) < 0.15f) continue;   // the material boundary
+        const QRgb px = tex.pixel(std::min(tex.width() - 1, int(u * tex.width())),
+                                  std::min(tex.height() - 1, int(v * tex.height())));
+        if (x < 0.5f) { EXPECT_GT(qRed(px), 200); EXPECT_LT(qBlue(px), 50); }
+        else          { EXPECT_GT(qBlue(px), 200); EXPECT_LT(qRed(px), 50); }
+    }
+}

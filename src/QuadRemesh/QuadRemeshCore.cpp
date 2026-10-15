@@ -17,6 +17,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <thread>
 #include <unordered_map>
@@ -817,6 +818,19 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
         for (auto it = m.maps.cbegin(); it != m.maps.cend(); ++it)
             if (!it.value().isNull() && !slotNames.contains(it.key())) slotNames << it.key();
     if (!hasUv) slotNames.clear();
+    // Submeshes that differ by diffuse COLOUR: bake the colours in (a
+    // synthetic diffuse map when no material has one). Needs no UVs.
+    bool colorsDiffer = false;
+    for (size_t m = 1; m < src.materials.size(); ++m)
+        for (int k = 0; k < 4; ++k)
+            if (std::fabs(src.materials[m].diffuse[k] - src.materials[0].diffuse[k]) > 1e-3f)
+                colorsDiffer = true;
+    const bool bakeColor = colorsDiffer && opts.bakeTextures;
+    auto isDiffuseSlot = [](const QString& n) {
+        return n == QLatin1String("diffuse_map") || n == QLatin1String("albedo");
+    };
+    if (bakeColor && std::none_of(slotNames.begin(), slotNames.end(), isDiffuseSlot))
+        slotNames << QStringLiteral("diffuse_map");
     const bool haveSourceNormal = slotNames.contains(QStringLiteral("normal_map"));
     const bool bakeNormal = opts.bakeTextures && (haveSourceNormal || opts.bakeDetailNormal);
     const bool doUnwrap = opts.bakeTextures && (!slotNames.isEmpty() || bakeNormal);
@@ -863,7 +877,7 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
         r.textureHeight = H;
 
         // Group slotNames that are byte-identical per material.
-        struct Group { QString key; QStringList slotNames; bool normal = false; };
+        struct Group { QString key; QStringList slotNames; bool normal = false; bool diffuse = false; };
         std::vector<Group> groups;
         for (const QString& s : slotNames) {
             if (s == QStringLiteral("normal_map")) continue;
@@ -871,10 +885,10 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
             for (const SourceMaterial& m : src.materials)
                 key += QString::number(m.maps.value(s).cacheKey()) + QLatin1Char(',');
             auto it = std::find_if(groups.begin(), groups.end(), [&](const Group& g) { return g.key == key; });
-            if (it == groups.end()) groups.push_back({key, {s}, false});
+            if (it == groups.end()) groups.push_back({key, {s}, false, bakeColor && isDiffuseSlot(s)});
             else it->slotNames << s;
         }
-        if (bakeNormal) groups.push_back({QStringLiteral("normal"), {QStringLiteral("normal_map")}, true});
+        if (bakeNormal) groups.push_back({QStringLiteral("normal"), {QStringLiteral("normal_map")}, true, false});
 
         std::vector<QImage> images(groups.size());
         for (QImage& img : images) {
@@ -912,6 +926,16 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
         std::atomic<size_t> nextTri{0};
         std::atomic<bool> cancel{false};
         std::atomic<size_t> doneTris{0};
+        // Texel ownership. Triangles sharing an edge both cover texel centres
+        // on it, and two workers writing one texel is a data race even when
+        // the values agree (normal-map values need not: each triangle has its
+        // own tangent frame). A cheap first pass gives every texel to the
+        // LOWEST triangle index covering it (atomic min); the expensive second
+        // pass writes only owned texels — exclusive and deterministic.
+        std::unique_ptr<std::atomic<int32_t>[]> owner(new std::atomic<int32_t>[size_t(W) * H]);
+        for (size_t i = 0; i < size_t(W) * H; ++i)
+            owner[i].store(std::numeric_limits<int32_t>::max(), std::memory_order_relaxed);
+        bool claimPass = true;
         auto worker = [&]() {
             const size_t chunk = 64;
             while (!cancel.load()) {
@@ -947,6 +971,15 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
                             if (w0 < eps || w1 < eps || w2 < eps) continue;
                             w0 /= aa; w1 /= aa; w2 /= aa;
                             const size_t pix = size_t(y) * W + x;
+                            const int32_t me = int32_t(ti);
+                            if (claimPass) {
+                                int32_t cur = owner[pix].load(std::memory_order_relaxed);
+                                while (me < cur
+                                       && !owner[pix].compare_exchange_weak(cur, me, std::memory_order_relaxed)) {
+                                }
+                                continue;
+                            }
+                            if (owner[pix].load(std::memory_order_relaxed) != me) continue;
                             const V3 p = at(r.positions, t.v[0]) * w0 + at(r.positions, t.v[1]) * w1
                                          + at(r.positions, t.v[2]) * w2;
                             const V3 nT = normalized(at(r.normals, t.v[0]) * w0 + at(r.normals, t.v[1]) * w1
@@ -970,15 +1003,13 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
                             for (size_t g = 0; g < groups.size(); ++g) {
                                 QRgb out;
                                 if (!groups[g].normal) {
-                                    const QImage* img = mapOf(sm, groups[g].slotNames.first());
-                                    if (img) {
-                                        float c4[4];
-                                        sampleBilinear(*img, su, sv, c4);
-                                        out = qRgba(int(c4[0] * 255 + 0.5f), int(c4[1] * 255 + 0.5f),
-                                                    int(c4[2] * 255 + 0.5f), int(c4[3] * 255 + 0.5f));
-                                    } else {
-                                        out = qRgba(255, 255, 255, 255);
-                                    }
+                                    const QImage* img = hasUv ? mapOf(sm, groups[g].slotNames.first()) : nullptr;
+                                    float c4[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                                    if (img) sampleBilinear(*img, su, sv, c4);
+                                    if (groups[g].diffuse && sm)
+                                        for (int k = 0; k < 4; ++k) c4[k] *= sm->diffuse[k];
+                                    out = qRgba(int(c4[0] * 255 + 0.5f), int(c4[1] * 255 + 0.5f),
+                                                int(c4[2] * 255 + 0.5f), int(c4[3] * 255 + 0.5f));
                                 } else {
                                     // Source shading normal (+ its normal map) → world → target frame.
                                     V3 nS = srcHasNormals
@@ -1003,9 +1034,7 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
                                                 int((tn.y * 0.5f + 0.5f) * 255 + 0.5f),
                                                 int((tn.z * 0.5f + 0.5f) * 255 + 0.5f), 255);
                                 }
-                                // Distinct triangles never share a texel centre except on
-                                // shared edges, where both writers compute the same value.
-                                pixels[g][pix] = out;
+                                pixels[g][pix] = out;   // exclusive: this triangle owns pix
                             }
                             covered[pix] = 1;
                         }
@@ -1014,18 +1043,23 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
             }
         };
         const unsigned threads = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
-        std::vector<std::thread> pool;
-        for (unsigned i = 1; i < threads; ++i) pool.emplace_back(worker);
-        // The calling thread polls progress/cancel while it also works.
-        std::thread self(worker);
-        while (nextTri.load() < tris.size() && !cancel.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            if (!report(QStringLiteral("bake"),
-                        0.78 + 0.2 * double(doneTris.load()) / std::max<size_t>(1, tris.size())))
-                cancel = true;
-        }
-        self.join();
-        for (auto& t : pool) t.join();
+        auto runPass = [&](double from, double span) {
+            nextTri = 0;
+            doneTris = 0;
+            std::vector<std::thread> pool;
+            for (unsigned i = 0; i < threads; ++i) pool.emplace_back(worker);
+            // The calling thread polls progress/cancel while the pool works.
+            while (nextTri.load() < tris.size() && !cancel.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                if (!report(QStringLiteral("bake"),
+                            from + span * double(doneTris.load()) / std::max<size_t>(1, tris.size())))
+                    cancel = true;
+            }
+            for (auto& t : pool) t.join();   // joins publish the pass's writes
+        };
+        runPass(0.76, 0.02);
+        claimPass = false;
+        if (!cancel.load()) runPass(0.78, 0.2);
         if (cancel.load()) {
             r = Result();
             r.cancelled = true;
@@ -1045,6 +1079,7 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
             }
             for (const QString& s : groups[g].slotNames)
                 r.maps.insert(s, images[g]);
+            if (groups[g].diffuse) r.diffuseColorBaked = true;
         }
     }
 
