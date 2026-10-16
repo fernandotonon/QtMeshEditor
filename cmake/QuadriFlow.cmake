@@ -57,6 +57,13 @@ if(NOT MSVC)
     # unoptimised Eigen is ~50x slower, so a Debug remesh would look hung.
     target_compile_options(qtmesh_quadriflow PRIVATE -w -O2)
 endif()
+# Ship the helper stripped on GCC/MinGW. The Linux/Windows release builds
+# compile with -g (for the editor's Sentry symbols), which left this helper at
+# 42 MB in the 3.52.0 .deb and 62 MB in the Windows zip/installer, against
+# 0.6 MB on macOS. Nothing consumes its symbols, so drop them at link time.
+if(NOT MSVC AND NOT APPLE)
+    target_link_options(qtmesh_quadriflow PRIVATE -s)
+endif()
 # Plain console tool: no macOS bundle, no Windows GUI subsystem.
 set_target_properties(qtmesh_quadriflow PROPERTIES MACOSX_BUNDLE FALSE WIN32_EXECUTABLE FALSE
     AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
