@@ -504,13 +504,50 @@ TEST(QuadRemeshCore, CancelDuringBakeIsHonoured)
     std::vector<std::vector<uint32_t>> qf;
     quadPlane(4, qp, qf);
     Options o;
-    o.textureSize = 4096;
+    o.textureSize = 2048;
     int bakePolls = 0;
     o.progress = [&](const QString& stage, double) {
         if (stage == QLatin1String("bake")) ++bakePolls;
         return bakePolls < 2;   // cancel on the second bake poll
     };
     const Result r = transferOnto(src, qp, qf, o);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.cancelled);
+}
+
+TEST(QuadRemeshCore, VoxelRebuildPollsCancellation)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    uvSphere(24, 48, pos, idx);
+    std::vector<float> vp;
+    std::vector<uint32_t> vi;
+    QString err;
+    bool cancelled = false;
+    int polls = 0;
+    // Cancel on the third poll: proves the long loops call back at all.
+    const bool ok = voxelRemesh(pos, idx, 128, vp, vi, &err,
+                                [&]() { return ++polls < 3; }, &cancelled);
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(cancelled);
+    EXPECT_GE(polls, 3);
+    EXPECT_TRUE(vi.empty());
+
+    // Through remesh(): a cancel during a forced voxel pass is reported as
+    // cancelled, with no plain-settings retry.
+    SourceMesh src;
+    src.positions = pos;
+    src.indices = idx;
+    Options o;
+    o.voxel = VoxelMode::Always;
+    o.bakeTextures = false;
+    o.helperPath = QStringLiteral("/nonexistent/qtmesh_quadriflow");   // never reached
+    int calls = 0;
+    o.progress = [&](const QString& stage, double f) {
+        if (f < 0 && stage.isEmpty()) return ++calls < 2;   // cancel inside the voxel poll
+        return true;
+    };
+    const Result r = remesh(src, o);
     EXPECT_FALSE(r.ok);
     EXPECT_TRUE(r.cancelled);
 }

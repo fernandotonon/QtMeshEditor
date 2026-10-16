@@ -273,8 +273,20 @@ int weldByPosition(std::vector<float>& positions, std::vector<uint32_t>& indices
 
 bool voxelRemesh(const std::vector<float>& positions, const std::vector<uint32_t>& indices,
                  int resolution, std::vector<float>& outPositions,
-                 std::vector<uint32_t>& outIndices, QString* error)
+                 std::vector<uint32_t>& outIndices, QString* error,
+                 const std::function<bool()>& keepGoing, bool* cancelled)
 {
+    if (cancelled) *cancelled = false;
+    // Polled every few thousand units of work so Cancel/Stop land promptly
+    // (the GUI's cancel flag, the MCP event pump) on a large voxel grid.
+    auto stop = [&]() {
+        if (!keepGoing || keepGoing()) return false;
+        if (cancelled) *cancelled = true;
+        if (error) *error = QStringLiteral("cancelled");
+        outPositions.clear();
+        outIndices.clear();
+        return true;
+    };
     outPositions.clear();
     outIndices.clear();
     if (positions.size() < 9 || indices.size() < 3) {
@@ -307,6 +319,7 @@ bool voxelRemesh(const std::vector<float>& positions, const std::vector<uint32_t
     const float band = 1.5f * h;
     std::vector<float> dist(total, std::numeric_limits<float>::max());
     for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        if ((t / 3) % 2048 == 0 && stop()) return false;
         const float* a = &positions[3 * size_t(indices[t])];
         const float* b = &positions[3 * size_t(indices[t + 1])];
         const float* c = &positions[3 * size_t(indices[t + 2])];
@@ -348,7 +361,9 @@ bool voxelRemesh(const std::vector<float>& positions, const std::vector<uint32_t
             for (int x = 0; x < n[0]; ++x)
                 if (x == 0 || y == 0 || z == 0 || x == n[0] - 1 || y == n[1] - 1 || z == n[2] - 1)
                     seed(x, y, z);
+    size_t popped = 0;
     while (!q.empty()) {
+        if (++popped % 262144 == 0 && stop()) return false;
         const size_t i = q.front();
         q.pop_front();
         const int x = int(i % n[0]), y = int((i / n[0]) % n[1]), z = int(i / (size_t(n[0]) * n[1]));
@@ -369,8 +384,10 @@ bool voxelRemesh(const std::vector<float>& positions, const std::vector<uint32_t
     const std::array<float, 3> gmin{origin[0], origin[1], origin[2]};
     const std::array<float, 3> gmax{origin[0] + (n[0] - 1) * h, origin[1] + (n[1] - 1) * h,
                                     origin[2] + (n[2] - 1) * h};
+    if (stop()) return false;
     MarchingCubes::Mesh m = MarchingCubes::extract(field.data(), n[0], n[1], n[2], 0.0f, gmin, gmax,
                                                    field.size());
+    if (stop()) return false;
     if (m.indices.empty()) {
         if (error) *error = QStringLiteral("voxel remesh produced no surface");
         return false;
@@ -1133,8 +1150,12 @@ Result remesh(const SourceMesh& src, const Options& opts)
         std::vector<float> vp;
         std::vector<uint32_t> vi;
         QString err;
-        if (!voxelRemesh(pos, idx, res, vp, vi, &err)) {
-            fail.error = err;
+        bool cancelled = false;
+        // A poll (empty stage, fraction < 0): the MCP pump and the GUI
+        // cancel flag both answer through the progress callback.
+        if (!voxelRemesh(pos, idx, res, vp, vi, &err,
+                         [&]() { return report(QString(), -1.0); }, &cancelled)) {
+            if (!cancelled) fail.error = err;   // empty error = cancelled (voxelFailed)
             return false;
         }
         pos.swap(vp);
@@ -1186,6 +1207,8 @@ Result remesh(const SourceMesh& src, const Options& opts)
         const QString first = flow.error;
         if (voxelize(QStringLiteral("direct remesh failed: %1").arg(first)))
             flow = runFlow(opts.preserveSharp, opts.adaptiveScale);
+        else if (fail.error.isEmpty())
+            return voxelFailed();   // cancelled during the rebuild: stop, no plain retry
     }
     if (!flow.ok && !flow.cancelled && !flow.helperMissing
         && (opts.preserveSharp || opts.adaptiveScale)) {

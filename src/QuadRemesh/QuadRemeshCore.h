@@ -157,10 +157,13 @@ int weldByPosition(std::vector<float>& positions, std::vector<uint32_t>& indices
 
 // Rebuild a closed 2-manifold approximation of an arbitrary triangle soup.
 // `resolution` = cells along the longest bbox axis (clamped 16..512).
+// `keepGoing` is polled inside the long loops (distance field, flood fill,
+// before extraction); returning false aborts with *cancelled = true.
 bool voxelRemesh(const std::vector<float>& positions,
                  const std::vector<uint32_t>& indices, int resolution,
                  std::vector<float>& outPositions, std::vector<uint32_t>& outIndices,
-                 QString* error = nullptr);
+                 QString* error = nullptr,
+                 const std::function<bool()>& keepGoing = {}, bool* cancelled = nullptr);
 
 // Closest-point queries over a fixed triangle set.
 class SurfaceLocator {
