@@ -240,6 +240,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ReplaceEntityMeshCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/LatticeCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ExplodePartsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/JoinPartsCommand.cpp
@@ -253,6 +254,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MarchingCubes.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshRefine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenCleanup.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/GameReadyPresets.cpp
@@ -281,6 +283,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UVTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRetopoController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRemesh/QuadRemeshCore.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRemesh/QuadriFlowRunner.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QuadRemesh/QuadRemeshEntity.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
 

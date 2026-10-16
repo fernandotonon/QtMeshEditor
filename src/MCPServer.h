@@ -221,6 +221,7 @@ private:
     /// convex quads when coplanarity + shape + aspect ratio gates
     /// pass. Output is committed via the n-gon binding.
     QJsonObject toolRetopologize(const QJsonObject &args);
+    QJsonObject retopologizeQuadriFlow(const QJsonObject &args);
     /// Issue #402 (+ #819): compute skin weights (geodesic-voxel
     /// default). Mesh must have a skeleton attached.
     QJsonObject toolComputeSkinWeights(const QJsonObject &args);

@@ -1,4 +1,5 @@
 #include "MeshGenPredictor.h"
+#include "MeshGenCleanup.h"
 
 #include "MarchingCubes.h"
 #include "MeshRefine.h"       // Taubin smoothing + iso-surface reprojection
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 
 #include "AppStorage.h"
 
@@ -749,6 +751,32 @@ void MeshGenPredictor::capResultTextures(Result& r, int maxSize)
     cap(r.metallicMap);
 }
 
+void MeshGenPredictor::finalizeTopology(Result& r, const Options& opts)
+{
+    if (opts.removeDegenerates) {
+        const MeshGenCleanup::DegenerateReport dr =
+            MeshGenCleanup::removeDegenerates(
+                r.positions, r.indices,
+                {{&r.uvs, 2}, {&r.normals, 3}, {&r.colors, 3}});
+        r.degeneratesRemoved = dr.total();
+        r.vertexCount = static_cast<int>(r.positions.size() / 3);
+        r.triangleCount = static_cast<int>(r.indices.size() / 3);
+        if (dr.total() > 0 || dr.removedVertices > 0) {
+            fprintf(stderr,
+                    "[meshgen] cleanup: removed %d degenerate triangles "
+                    "(%d repeated-index, %d zero-area, %d duplicate), "
+                    "%d orphan vertices\n",
+                    dr.total(), dr.repeatedIndex, dr.zeroArea, dr.duplicate,
+                    dr.removedVertices);
+        }
+        if (r.triangleCount <= 0) {
+            r.ok = false;
+            r.error = QStringLiteral("MeshGen: mesh was entirely degenerate.");
+            return;
+        }
+    }
+}
+
 MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                                                    const QString& encoderModelPath,
                                                    const QString& decoderModelPath,
@@ -756,6 +784,8 @@ MeshGenPredictor::Result MeshGenPredictor::predict(const QImage& image,
                                                    const ProgressFn& progress)
 {
     Result r = predictImpl(image, encoderModelPath, decoderModelPath, opts, progress);
+    if (r.ok)
+        finalizeTopology(r, opts);
     // The bake honours textureSize only as a request (xatlas can hand back a
     // larger atlas), so a platform cap is applied to what actually came out.
     if (r.ok)

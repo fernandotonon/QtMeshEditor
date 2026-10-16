@@ -5,7 +5,8 @@ import QtQuick.Window
 import MaterialEditorQML 1.0
 import PropertiesPanel 1.0
 
-// Issue #401: top-level Window for triangle-pairing quad retopology.
+// Issue #401: top-level Window for quad retopology — triangle pairing
+// (in place) or a QuadriFlow field-aligned remesh (worker thread).
 // Same Inspector-styled idiom as UvUnwrapDialog (Rectangle + Text +
 // MouseArea primitives over PropertiesPanelController.* colors).
 // Operates on the currently selected entity — no input-path field.
@@ -15,10 +16,10 @@ import PropertiesPanel 1.0
 Window {
     id: dialog
     title: "Quad Retopology"
-    width: 540
-    height: 420
-    minimumWidth: 460
-    minimumHeight: 380
+    width: 560
+    height: 520
+    minimumWidth: 480
+    minimumHeight: 460
     flags: Qt.Dialog
     modality: Qt.ApplicationModal
     color: PropertiesPanelController.panelColor
@@ -29,6 +30,18 @@ Window {
     property double shapeToleranceDeg: 65.0
     property double maxAspectRatio:    6.0
 
+    // "pair" = triangle pairing (in place, keeps every vertex/UV/weight);
+    // "quadriflow" = field-aligned all-quad remesh (new topology; textures
+    // re-baked and skin weights transferred; runs on a worker thread).
+    property string method: "pair"
+    property int    qfTarget: 5000
+    property bool   qfSharp: true
+    property bool   qfAdaptive: true
+    property bool   qfBoundary: false
+    property bool   qfBake: true
+    property bool   qfDetailNormal: true
+    property string qfVoxel: "auto"
+
     // Last-run result, surfaced as a green status line at the bottom.
     property string lastStatus: ""
     property bool   lastWasError: false
@@ -36,6 +49,7 @@ Window {
     function open() {
         dialog.lastStatus = ""
         dialog.lastWasError = false
+        dialog.qfTarget = QuadRetopoController.suggestedQuadriFlowTarget()
         dialog.show()
         dialog.raise()
         dialog.requestActivate()
@@ -49,6 +63,19 @@ Window {
     function runRetopo() {
         if (QuadRetopoController.busy) return
         if (!QuadRetopoController.hasSelection) return
+        if (dialog.method === "quadriflow") {
+            dialog.lastStatus = ""
+            QuadRetopoController.remeshSelectedQuadriFlow({
+                targetFaces: dialog.qfTarget,
+                preserveSharp: dialog.qfSharp,
+                adaptive: dialog.qfAdaptive,
+                preserveBoundary: dialog.qfBoundary,
+                bakeTextures: dialog.qfBake,
+                detailNormal: dialog.qfDetailNormal,
+                voxel: dialog.qfVoxel
+            })
+            return
+        }
         const r = QuadRetopoController.retopologizeSelected(
             dialog.targetFaces,
             dialog.maxAngleDeg,
@@ -121,6 +148,52 @@ Window {
         }
     }
 
+    component InspectorCheck: Rectangle {
+        id: ck
+        property string label: ""
+        property bool checked: false
+        signal toggled(bool on)
+        implicitHeight: 22
+        implicitWidth: ckRow.implicitWidth
+        color: "transparent"
+        Row {
+            id: ckRow
+            spacing: 6
+            anchors.verticalCenter: parent.verticalCenter
+            Rectangle {
+                width: 14; height: 14; radius: 2
+                anchors.verticalCenter: parent.verticalCenter
+                color: ck.checked ? PropertiesPanelController.highlightColor
+                                  : PropertiesPanelController.inputColor
+                border.color: PropertiesPanelController.borderColor
+                Text {
+                    anchors.centerIn: parent
+                    visible: ck.checked
+                    text: "✓"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                }
+            }
+            Text {
+                text: ck.label
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: ck.toggled(!ck.checked)
+        }
+    }
+
+    component SegmentButton: InspectorButton {
+        property bool selected: false
+        color: selected ? PropertiesPanelController.highlightColor
+                        : PropertiesPanelController.headerColor
+    }
+
     component InspectorLabel: Text {
         color: PropertiesPanelController.textColor
         font.pixelSize: 11
@@ -167,7 +240,146 @@ Window {
         anchors.margins: 16
         spacing: 12
 
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 4
+            InspectorLabel { text: "Method:"; Layout.preferredWidth: 110 }
+            SegmentButton {
+                label: "Triangle pairing"
+                Layout.preferredWidth: 140
+                selected: dialog.method === "pair"
+                buttonEnabled: !QuadRetopoController.busy
+                onClicked: dialog.method = "pair"
+            }
+            SegmentButton {
+                label: "QuadriFlow remesh"
+                Layout.preferredWidth: 140
+                selected: dialog.method === "quadriflow"
+                buttonEnabled: !QuadRetopoController.busy && QuadRetopoController.quadriFlowAvailable
+                onClicked: dialog.method = "quadriflow"
+            }
+            Item { Layout.fillWidth: true }
+        }
+
+        // ── QuadriFlow options ────────────────────────────────────────
+        ColumnLayout {
+            visible: dialog.method === "quadriflow"
+            Layout.fillWidth: true
+            spacing: 8
+
+            InspectorLabel {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                opacity: 0.85
+                text: "Rebuild the surface as a clean, field-aligned all-quad mesh "
+                    + "(QuadriFlow). New topology: the textures are re-baked onto a fresh "
+                    + "UV atlas and skin weights are copied from the closest point on the "
+                    + "original, so a rigged mesh stays rigged. Non-manifold meshes get a "
+                    + "voxel rebuild first. One undo step. Export as FBX or OBJ to keep the quads."
+            }
+            RowLayout {
+                spacing: 8
+                Layout.fillWidth: true
+                InspectorLabel { text: "Target quads:"; Layout.preferredWidth: 110 }
+                InspectorNumberField {
+                    Layout.preferredWidth: 100
+                    value: dialog.qfTarget
+                    minValue: 16
+                    maxValue: 200000
+                    isInt: true
+                    onNewValue: dialog.qfTarget = Math.round(v)
+                }
+                InspectorLabel {
+                    text: "approximate — more quads keep more of the original form"
+                    opacity: 0.7
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                }
+            }
+            RowLayout {
+                spacing: 16
+                Layout.fillWidth: true
+                Item { Layout.preferredWidth: 110 }
+                InspectorCheck {
+                    label: "Re-bake textures"
+                    checked: dialog.qfBake
+                    onToggled: function(on) { dialog.qfBake = on }
+                }
+                InspectorCheck {
+                    label: "Detail normal map"
+                    checked: dialog.qfDetailNormal
+                    opacity: dialog.qfBake ? 1.0 : 0.45
+                    onToggled: function(on) { dialog.qfDetailNormal = on }
+                }
+            }
+            RowLayout {
+                spacing: 16
+                Layout.fillWidth: true
+                Item { Layout.preferredWidth: 110 }
+                InspectorCheck {
+                    label: "Preserve sharp edges"
+                    checked: dialog.qfSharp
+                    onToggled: function(on) { dialog.qfSharp = on }
+                }
+                InspectorCheck {
+                    label: "Preserve open borders"
+                    checked: dialog.qfBoundary
+                    onToggled: function(on) { dialog.qfBoundary = on }
+                }
+            }
+            RowLayout {
+                spacing: 16
+                Layout.fillWidth: true
+                Item { Layout.preferredWidth: 110 }
+                InspectorCheck {
+                    label: "Adaptive density (keeps small features)"
+                    checked: dialog.qfAdaptive
+                    onToggled: function(on) { dialog.qfAdaptive = on }
+                }
+            }
+            RowLayout {
+                spacing: 4
+                Layout.fillWidth: true
+                InspectorLabel { text: "Voxel rebuild:"; Layout.preferredWidth: 110 }
+                Repeater {
+                    model: [ ["auto", "Auto"], ["on", "Always"], ["off", "Never"] ]
+                    delegate: SegmentButton {
+                        required property var modelData
+                        label: modelData[1]
+                        Layout.preferredWidth: 70
+                        selected: dialog.qfVoxel === modelData[0]
+                        onClicked: dialog.qfVoxel = modelData[0]
+                    }
+                }
+                Item { Layout.fillWidth: true }
+            }
+            // Progress while the worker runs.
+            ColumnLayout {
+                visible: QuadRetopoController.busy
+                Layout.fillWidth: true
+                spacing: 4
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 6
+                    radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor
+                    Rectangle {
+                        width: parent.width * Math.max(0, Math.min(1, QuadRetopoController.progress))
+                        height: parent.height
+                        radius: 3
+                        color: PropertiesPanelController.highlightColor
+                    }
+                }
+                InspectorLabel {
+                    text: QuadRetopoController.progressText
+                    opacity: 0.8
+                }
+            }
+        }
+
         InspectorLabel {
+            visible: dialog.method === "pair"
             Layout.fillWidth: true
             wrapMode: Text.WordWrap
             opacity: 0.85
@@ -181,6 +393,7 @@ Window {
 
         // Target faces
         RowLayout {
+            visible: dialog.method === "pair"
             spacing: 8
             Layout.fillWidth: true
             InspectorLabel { text: "Target faces:"; Layout.preferredWidth: 110 }
@@ -202,6 +415,7 @@ Window {
 
         // Max angle
         RowLayout {
+            visible: dialog.method === "pair"
             spacing: 8
             Layout.fillWidth: true
             InspectorLabel { text: "Max angle:"; Layout.preferredWidth: 110 }
@@ -222,6 +436,7 @@ Window {
 
         // Shape tolerance
         RowLayout {
+            visible: dialog.method === "pair"
             spacing: 8
             Layout.fillWidth: true
             InspectorLabel { text: "Shape tol:"; Layout.preferredWidth: 110 }
@@ -242,6 +457,7 @@ Window {
 
         // Max aspect ratio
         RowLayout {
+            visible: dialog.method === "pair"
             spacing: 8
             Layout.fillWidth: true
             InspectorLabel { text: "Max aspect:"; Layout.preferredWidth: 110 }
@@ -281,7 +497,15 @@ Window {
                 onClicked: dialog.close()
             }
             InspectorButton {
-                label: QuadRetopoController.busy ? "Retopologizing…" : "Retopologize"
+                visible: QuadRetopoController.busy && dialog.method === "quadriflow"
+                label: "Cancel"
+                Layout.preferredWidth: 90
+                onClicked: QuadRetopoController.cancelRemesh()
+            }
+            InspectorButton {
+                label: QuadRetopoController.busy
+                    ? (dialog.method === "quadriflow" ? "Remeshing…" : "Retopologizing…")
+                    : (dialog.method === "quadriflow" ? "Remesh" : "Retopologize")
                 Layout.preferredWidth: 160
                 buttonEnabled: !QuadRetopoController.busy
                     && QuadRetopoController.hasSelection
@@ -295,6 +519,17 @@ Window {
         function onError(msg) {
             dialog.lastStatus = "Failed: " + msg
             dialog.lastWasError = true
+        }
+        function onRemeshFinished(r) {
+            let msg = "Done: " + r.inputTriangles + " tris → " + r.quads + " quads"
+                + (r.triangles > 0 ? " + " + r.triangles + " tris" : "")
+                + ", " + r.vertices + " vertices"
+            if (r.voxelized) msg += " (voxel rebuild)"
+            if (r.skinned) msg += ", skin weights transferred"
+            if (r.bakedMaps && r.bakedMaps.length > 0)
+                msg += ", re-baked " + r.textureWidth + "×" + r.textureHeight + " textures"
+            dialog.lastStatus = msg + ". Ctrl+Z to undo."
+            dialog.lastWasError = false
         }
     }
 }

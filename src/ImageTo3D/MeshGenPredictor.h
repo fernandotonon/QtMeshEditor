@@ -127,6 +127,16 @@ public:
         // reason to fail a generation.
         bool inpaintSeams = false;
 
+        // ---- Final topology clean-up (every backend) --------------------------
+        // Drop zero-area / repeated-index / duplicate triangles from the
+        // finished mesh (MeshGenCleanup::removeDegenerates). ON by default:
+        // nothing it removes is visible geometry.
+        bool removeDegenerates = true;
+        // Quad topology is NOT part of generation: run Quad Retopology
+        // (triangle pairing or the QuadriFlow remesh) on the result — CLI
+        // `qtmesh retopo`, MCP `retopologize`, GUI dialog. Both operate on
+        // exactly what this pipeline outputs (simplified + baked).
+
         // ---- Backend selection ------------------------------------------------
         // TripoSG ignores the colour/bake options (geometry-only model) and
         // maps Quality::Int8 onto its int8 DiT tier. flowSteps/guidanceScale
@@ -196,6 +206,7 @@ public:
         // position-welded ones so chart seams stay smooth.
         std::vector<float>    normals;
         QImage                texture;
+        int degeneratesRemoved = 0;
         int vertexCount   = 0;
         int triangleCount = 0;
         bool usedModel    = false;     // true iff the ONNX path ran
@@ -283,6 +294,10 @@ public:
     // it with Options::maxTextureSize; exposed for the post-predict paths
     // (upscale) and for tests.
     static void capResultTextures(Result& r, int maxSize);
+    // Final topology pass applied by predict() to every backend's Result:
+    // Options::removeDegenerates (MeshGenCleanup).
+    // Exposed so the pure-data tests can drive it without a model.
+    static void finalizeTopology(Result& r, const Options& opts);
 
     // ---- Pure-data helpers (no ONNX / no Ogre — unit-testable) ----------------
 

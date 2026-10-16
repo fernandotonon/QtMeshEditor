@@ -109,9 +109,10 @@ class QuadRetopo {
 public:
     enum class Algorithm {
         TrianglePair,   // Default — pure-data triangle pairing into quads.
-        // Future:
-        //   QuadriFlow      — field-aligned via QuadriFlow library
-        //   InstantMeshes   — if/when a clean library extraction exists
+        // The field-aligned QuadriFlow REMESH lives in src/QuadRemesh/
+        // (QuadRemeshCore + QuadRemeshEntity): it builds new topology, so it
+        // re-bakes textures and transfers skin weights instead of rewriting
+        // this entity's faces in place — a different contract from this API.
     };
 
     // Apply quad retopology to `entity` in place. The base mesh is

@@ -410,6 +410,30 @@ jobs:
         Write-Host "bundled trellis-cli.exe present: $((Get-Item "${{github.workspace}}/bin/trellis-cli.exe").Length) bytes"
       shell: powershell
 
+    - name: Verify bundled QuadriFlow helper
+      run: |
+        # Quad remesh runs out of process; the editor probes bin/ for it.
+        $exe = "${{github.workspace}}/bin/qtmesh_quadriflow.exe"
+        if (-not (Test-Path $exe)) {
+            Write-Error "bin/qtmesh_quadriflow.exe is missing (quad remesh would fail at runtime)"
+            exit 1
+        }
+        $lic = "${{github.workspace}}/bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt"
+        if (-not (Test-Path $lic) -or (Get-Item $lic).Length -eq 0) {
+            Write-Error "qtmesh_quadriflow licence notices missing or EMPTY in bin/"
+            exit 1
+        }
+        # No arguments → it prints its usage line and exits 2. Seeing that
+        # line proves the exe loads (no missing DLL).
+        $out = & $exe 2>&1 | Out-String
+        Write-Host $out
+        if ($out -notmatch "QF_ERROR usage") {
+            Write-Error "qtmesh_quadriflow.exe did not run (missing runtime DLL?)"
+            exit 1
+        }
+        exit 0
+      shell: powershell
+
     - name: Upload debug symbols to Sentry
       if: github.event_name == 'release' && github.event.action == 'published'
       env:
@@ -924,6 +948,30 @@ jobs:
     - name: Build
       run: sudo make install -j8
 
+    - name: Verify bundled QuadriFlow helper
+      run: |
+            # Quad remesh runs out of process; the .deb (and the snap/Docker
+            # images built from it) ship it next to the editor binary.
+            set -e
+            if [ ! -x ./bin/qtmesh_quadriflow ]; then
+              echo "ERROR: ./bin/qtmesh_quadriflow is missing"
+              ls -la ./bin | head -40
+              exit 1
+            fi
+            if [ ! -s ./bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt ]; then
+              echo "ERROR: qtmesh_quadriflow licence notices missing or empty"
+              exit 1
+            fi
+            ldd ./bin/qtmesh_quadriflow
+            if ldd ./bin/qtmesh_quadriflow | grep -q "not found"; then
+              echo "ERROR: qtmesh_quadriflow has unresolved shared libraries"
+              exit 1
+            fi
+            # No arguments → usage line + exit 2; the line proves it runs.
+            out=$(./bin/qtmesh_quadriflow 2>&1 || true)
+            echo "$out"
+            echo "$out" | grep -q "QF_ERROR usage"
+
     - name: Verify bundled trellis-cli is loadable
       run: |
             # Regression guard for 3.37.3/3.37.4: shipping trellis-cli without
@@ -1067,6 +1115,18 @@ jobs:
                 cp -a "$ggml_lib" ./pack-deb/usr/lib/qtmesheditor/
               done
             fi
+
+            # QuadriFlow quad-remesh helper (out-of-process, see
+            # cmake/QuadriFlow.cmake) — QuadriFlowRunner probes next to the
+            # editor binary. BSD-3/BSL/MPL2 notices travel with it.
+            if [ ! -f ./bin/qtmesh_quadriflow ]; then
+              echo "ERROR: ./bin/qtmesh_quadriflow is missing (quad remesh would fail at runtime)"
+              exit 1
+            fi
+            cp ./bin/qtmesh_quadriflow ./pack-deb/usr/share/qtmesheditor/qtmesh_quadriflow
+            chmod 755 ./pack-deb/usr/share/qtmesheditor/qtmesh_quadriflow
+            cp ./bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt \
+               ./pack-deb/usr/share/doc/qtmesheditor/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt
 
             # Create proper launcher script
             printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
@@ -2265,6 +2325,27 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
+
+    - name: Verify bundled QuadriFlow helper (macOS)
+      run: |
+            # Copied into Contents/MacOS by a QtMeshEditor POST_BUILD step;
+            # the codesign loop below signs it with the other executables.
+            set -euo pipefail
+            MACOS_DIR="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS"
+            H="$MACOS_DIR/qtmesh_quadriflow"
+            if [ ! -x "$H" ]; then
+              echo "ERROR: qtmesh_quadriflow missing from the .app"
+              ls -la "$MACOS_DIR" | head -40
+              exit 1
+            fi
+            if [ ! -s "$MACOS_DIR/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt" ]; then
+              echo "ERROR: qtmesh_quadriflow licence notices missing or empty"
+              exit 1
+            fi
+            otool -L "$H"
+            out=$("$H" 2>&1 || true)
+            echo "$out"
+            echo "$out" | grep -q "QF_ERROR usage"
 
     - name: Verify bundled trellis-cli (macOS)
       run: |

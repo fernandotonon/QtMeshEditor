@@ -464,6 +464,14 @@ endif()
 message(STATUS "xatlas enabled (auto UV unwrap)")
 
 ##############################################################
+#  QuadriFlow — field-aligned quad remeshing (BSD-3). Built as
+#  the out-of-process helper `qtmesh_quadriflow` (see
+#  cmake/QuadriFlow.cmake). Consumer: QuadRemesh / `qtmesh
+#  retopo --algo quadriflow`.
+##############################################################
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuadriFlow.cmake)
+
+##############################################################
 #  stb — Radiance .hdr decode for HDR environment maps (#467).
 ##############################################################
 FetchContent_Declare(

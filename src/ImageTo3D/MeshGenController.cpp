@@ -615,6 +615,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
+    const bool wantClean   = optBool("remove_degenerates", true);
     m_upscaleTexture       = optBool("upscale_texture", false);
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
     int textureSize = options.contains(QLatin1String("texture_size"))
@@ -788,7 +789,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
                                      t2TargetTrisStrict, t2MaxTexture,
-                                     t2Supersample,
+                                     t2Supersample, wantClean,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -839,6 +840,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
+        opts.removeDegenerates = wantClean;
         opts.textureSize     = textureSize;
         opts.backend         = backend;
         opts.flowSteps       = flowSteps;
@@ -892,13 +894,21 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // on this worker. Model was ensured on the main thread; best-effort.
         // A platform preset caps the FINAL image (Roblox: 1024 px): a 2x
         // that would cross it is skipped, and the result says so.
-        const bool upscaleBlockedByCap = t2MaxTexture > 0 && !r.texture.isNull()
-            && (r.texture.width() * 2 > t2MaxTexture
-                || r.texture.height() * 2 > t2MaxTexture);
+        // Without a preset the 8192 px bake ceiling still applies: a 2x of
+        // an 8192 bake would be a 16384² image (1 GB of RGBA) that most GPUs
+        // cannot even sample.
+        constexpr int kMaxTexturePx = 8192;
+        const int upscaleCap = t2MaxTexture > 0 ? t2MaxTexture : kMaxTexturePx;
+        const bool upscaleBlockedByCap = !r.texture.isNull()
+            && (r.texture.width() * 2 > upscaleCap
+                || r.texture.height() * 2 > upscaleCap);
         if (r.ok && m_upscaleTexture && upscaleBlockedByCap) {
             if (!r.warning.isEmpty()) r.warning += QStringLiteral(" ");
-            r.warning += tr("Upscale skipped: the preset caps textures at %1 px.")
-                             .arg(t2MaxTexture);
+            r.warning += t2MaxTexture > 0
+                ? tr("Upscale skipped: the preset caps textures at %1 px.")
+                      .arg(t2MaxTexture)
+                : tr("Upscale skipped: the texture is already at the %1 px maximum.")
+                      .arg(kMaxTexturePx);
         }
         if (r.ok && m_upscaleTexture && !upscaleBlockedByCap
             && !m_upscaleModelPath.isEmpty()

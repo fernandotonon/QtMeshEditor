@@ -1140,7 +1140,7 @@ TEST_F(FBXExporterCoverageTest, Definitions_MeshOnly) {
 
 // ── Group B: Geometry ──────────────────────────────────────────
 
-TEST_F(FBXExporterCoverageTest, Vertices_ZMirrored) {
+TEST_F(FBXExporterCoverageTest, Vertices_WrittenAsIs) {
     auto name = uniqueName("vz");
     auto* entity = createSimpleMesh(name);
     auto r = exportAndParse(entity);
@@ -1156,19 +1156,18 @@ TEST_F(FBXExporterCoverageTest, Vertices_ZMirrored) {
     ASSERT_NE(verts, nullptr);
     ASSERT_EQ(verts->properties[0].doubleArray.size(), 9u); // 3 vertices * 3 components
 
-    // Original z values were 0, 0, 0 → negated should be -0, -0, -0
-    // v0: (0,0,-0), v1: (1,0,-0), v2: (0,1,-0)
+    // Written in source space (no axis mirror): (0,0,0), (1,0,0), (0,1,0)
     auto& v = verts->properties[0].doubleArray;
     EXPECT_NEAR(v[0], 0.0, 0.001); // v0.x
     EXPECT_NEAR(v[1], 0.0, 0.001); // v0.y
-    EXPECT_NEAR(v[2], 0.0, 0.001); // v0.z (was 0, negated is -0)
+    EXPECT_NEAR(v[2], 0.0, 0.001); // v0.z
     EXPECT_NEAR(v[3], 1.0, 0.001); // v1.x
     EXPECT_NEAR(v[7], 1.0, 0.001); // v2.y
 
     cleanup(r);
 }
 
-TEST_F(FBXExporterCoverageTest, PolygonIndices_WindingReversed) {
+TEST_F(FBXExporterCoverageTest, PolygonIndices_SourceWinding) {
     auto name = uniqueName("pi");
     auto* entity = createSimpleMesh(name);
     auto r = exportAndParse(entity);
@@ -1183,11 +1182,10 @@ TEST_F(FBXExporterCoverageTest, PolygonIndices_WindingReversed) {
     auto& pi = polyIdx->properties[0].intArray;
     ASSERT_EQ(pi.size(), 3u);
 
-    // Original indices: 0, 1, 2
-    // Reversed winding: (i0, i2, -(i1+1)) = (0, 2, -2)
+    // Source winding kept; the last index is the polygon-end marker -(i2+1).
     EXPECT_EQ(pi[0], 0);
-    EXPECT_EQ(pi[1], 2);
-    EXPECT_EQ(pi[2], -(1 + 1));
+    EXPECT_EQ(pi[1], 1);
+    EXPECT_EQ(pi[2], -(2 + 1));
 
     cleanup(r);
 }
@@ -1218,12 +1216,11 @@ TEST_F(FBXExporterCoverageTest, Normals_ExpandedByPolygonVertex) {
     // 1 triangle * 3 vertices = 3 normals * 3 components = 9 doubles
     ASSERT_EQ(normals->properties[0].doubleArray.size(), 9u);
 
-    // Original normal is (0,0,1) → Z-mirrored: (0,0,-1)
-    // Expanded in reversed winding order: v0(0,0,-1), v2(0,0,-1), v1(0,0,-1)
+    // Original normal (0,0,1) is written as-is, in polygon-vertex order.
     auto& n = normals->properties[0].doubleArray;
-    EXPECT_NEAR(n[2], -1.0, 0.001); // v0 normal Z
-    EXPECT_NEAR(n[5], -1.0, 0.001); // v2 normal Z
-    EXPECT_NEAR(n[8], -1.0, 0.001); // v1 normal Z
+    EXPECT_NEAR(n[2], 1.0, 0.001); // v0 normal Z
+    EXPECT_NEAR(n[5], 1.0, 0.001); // v1 normal Z
+    EXPECT_NEAR(n[8], 1.0, 0.001); // v2 normal Z
 
     cleanup(r);
 }
@@ -1254,15 +1251,14 @@ TEST_F(FBXExporterCoverageTest, UVs_VFlipped) {
     EXPECT_NEAR(uv[4], 0.0, 0.001);
     EXPECT_NEAR(uv[5], 0.0, 0.001);
 
-    // Check UVIndex has reversed winding
+    // UVIndex follows the source winding.
     auto* uvIdx = uvLayer->find("UVIndex");
     ASSERT_NE(uvIdx, nullptr);
     auto& ui = uvIdx->properties[0].intArray;
     ASSERT_EQ(ui.size(), 3u);
-    // Original: 0,1,2 → Reversed winding: (0, 2, 1)
     EXPECT_EQ(ui[0], 0);
-    EXPECT_EQ(ui[1], 2);
-    EXPECT_EQ(ui[2], 1);
+    EXPECT_EQ(ui[1], 1);
+    EXPECT_EQ(ui[2], 2);
 
     cleanup(r);
 }
@@ -1294,7 +1290,7 @@ TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
 
     auto* colors = colorLayer->find("Colors");
     ASSERT_NE(colors, nullptr);
-    // One tri × 3 polygon-vertices × 4 components (exporter reverses winding: v0, v2, v1).
+    // One tri × 3 polygon-vertices × 4 components, in source order v0, v1, v2.
     ASSERT_EQ(colors->properties[0].doubleArray.size(), 12u);
     const auto& c = colors->properties[0].doubleArray;
     EXPECT_NEAR(c[0], 1.0, 1e-4);
@@ -1302,13 +1298,13 @@ TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
     EXPECT_NEAR(c[2], 0.0, 1e-4);
     EXPECT_NEAR(c[3], 1.0, 1e-4); // red corner (vi0)
     EXPECT_NEAR(c[4], 0.0, 1e-4);
-    EXPECT_NEAR(c[5], 0.0, 1e-4);
-    EXPECT_NEAR(c[6], 1.0, 1e-4);
-    EXPECT_NEAR(c[7], 1.0, 1e-4); // blue corner (vi2)
+    EXPECT_NEAR(c[5], 1.0, 1e-4);
+    EXPECT_NEAR(c[6], 0.0, 1e-4);
+    EXPECT_NEAR(c[7], 1.0, 1e-4); // green corner (vi1)
     EXPECT_NEAR(c[8], 0.0, 1e-4);
-    EXPECT_NEAR(c[9], 1.0, 1e-4);
-    EXPECT_NEAR(c[10], 0.0, 1e-4);
-    EXPECT_NEAR(c[11], 1.0, 1e-4); // green corner (vi1)
+    EXPECT_NEAR(c[9], 0.0, 1e-4);
+    EXPECT_NEAR(c[10], 1.0, 1e-4);
+    EXPECT_NEAR(c[11], 1.0, 1e-4); // blue corner (vi2)
 
     auto* layer = geomNodes[0]->find("Layer");
     ASSERT_NE(layer, nullptr);
@@ -1375,10 +1371,10 @@ TEST_F(FBXExporterCoverageTest, Indices32Bit) {
     ASSERT_NE(polyIdx, nullptr);
     auto& pi = polyIdx->properties[0].intArray;
     ASSERT_EQ(pi.size(), 3u);
-    // Same winding reversal: (0, 2, -(1+1))
+    // Source winding, end marker on the last index: (0, 1, -(2+1))
     EXPECT_EQ(pi[0], 0);
-    EXPECT_EQ(pi[1], 2);
-    EXPECT_EQ(pi[2], -2);
+    EXPECT_EQ(pi[1], 1);
+    EXPECT_EQ(pi[2], -3);
 
     cleanup(r);
 }
@@ -1398,7 +1394,6 @@ TEST_F(FBXExporterCoverageTest, NonSharedVertexData) {
     ASSERT_EQ(verts->properties[0].doubleArray.size(), 9u);
 
     // Positions from non-shared data: (2,0,0), (3,0,0), (2,1,0)
-    // Z-mirrored: (2,0,-0), (3,0,-0), (2,1,-0)
     auto& v = verts->properties[0].doubleArray;
     EXPECT_NEAR(v[0], 2.0, 0.001);
     EXPECT_NEAR(v[3], 3.0, 0.001);
@@ -1564,10 +1559,10 @@ TEST_F(FBXExporterCoverageTest, DeformingBoneTransform) {
 
     auto* lclT = findP70(*props, "Lcl Translation");
     ASSERT_NE(lclT, nullptr);
-    // Spine position: (0, 1, 0.5) → Z-mirrored: (0, 1, -0.5)
+    // Spine position (0, 1, 0.5) is written as-is (no axis mirror).
     EXPECT_NEAR(lclT->properties[4].doubleVal, 0.0, 0.01);
     EXPECT_NEAR(lclT->properties[5].doubleVal, 1.0, 0.01);
-    EXPECT_NEAR(lclT->properties[6].doubleVal, -0.5, 0.01);
+    EXPECT_NEAR(lclT->properties[6].doubleVal, 0.5, 0.01);
 
     cleanup(r);
 }
@@ -2536,8 +2531,10 @@ TEST_F(FBXExporterCoverageTest, ExportMeshWithMaterials_WritesMaterialData) {
     cleanup(r);
 }
 
-TEST_F(FBXExporterCoverageTest, VerticesZMirrored_WithNonZeroZ) {
-    // Create mesh with non-zero Z values to verify Z-negation
+TEST_F(FBXExporterCoverageTest, VerticesNonZeroZ_WrittenAsIs) {
+    // Non-zero Z values must reach the file unchanged: the scene is in the
+    // source file's space (no import mirror since #977), so a Z-negation here
+    // made every FBX re-import face the other way.
     auto name = uniqueName("vzn");
 
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
@@ -2585,10 +2582,9 @@ TEST_F(FBXExporterCoverageTest, VerticesZMirrored_WithNonZeroZ) {
     auto& v = vertsNode->properties[0].doubleArray;
     ASSERT_EQ(v.size(), 9u);
 
-    // Z values should be negated: 1.5→-1.5, 2.5→-2.5, 3.5→-3.5
-    EXPECT_NEAR(v[2], -1.5, 0.001);
-    EXPECT_NEAR(v[5], -2.5, 0.001);
-    EXPECT_NEAR(v[8], -3.5, 0.001);
+    EXPECT_NEAR(v[2], 1.5, 0.001);
+    EXPECT_NEAR(v[5], 2.5, 0.001);
+    EXPECT_NEAR(v[8], 3.5, 0.001);
 
     cleanup(r);
 }
