@@ -151,19 +151,19 @@ void limitInfluences(std::vector<SkinWeights::VertexWeights>& weights,
 
 /// Mirror weights across a world axis by position.
 ///
-/// Slice E (#559) owns the `_l`/`_r` bone-naming convention and has not landed,
-/// so this is the issue's documented fallback: for each vertex, find the vertex
-/// nearest to its reflection across `axis` (0=X, 1=Y, 2=Z) about `pivot` and
-/// copy that vertex's weights onto it. `tolerance` is the maximum accepted
-/// distance to the reflected position — beyond it the vertex is left alone
-/// rather than given a wrong partner's weights.
+/// Position-only weight mirror: for each vertex, find the vertex nearest to
+/// its reflection across `axis` (0=X, 1=Y, 2=Z) about `pivot` and copy that
+/// vertex's weights onto it. `tolerance` is the maximum accepted distance to
+/// the reflected position — beyond it the vertex is left alone rather than
+/// given a wrong partner's weights.
 ///
-/// NOTE this mirrors weights BETWEEN VERTICES, not between bone pairs: a vertex
-/// on the left gets the weights of its right-hand counterpart, still referring
-/// to the same bone handles. On a skeleton with distinct left/right bones that
-/// is only correct once bone pairs are also swapped, which needs Slice E. It IS
-/// correct for a symmetric mesh weighted to shared/centre bones, and it is what
-/// the acceptance criterion asks for.
+/// NOTE this mirrors weights BETWEEN VERTICES only, NOT between bone pairs: a
+/// vertex on the left gets the weights of its right-hand counterpart, still
+/// referring to the same bone handles. That is correct for a symmetric mesh
+/// weighted to shared/centre bones, but on a skeleton with distinct left/right
+/// bones the bone handles must be swapped too — use
+/// `mirrorByPositionWithBonePairs` (slice E #559) for that case. This entry
+/// point is kept for centre-bone rigs and because it needs no skeleton.
 /// Returns the number of vertices modified.
 int mirrorByPosition(const float* positions, int vertexCount,
                      std::vector<SkinWeights::VertexWeights>& weights,
@@ -171,6 +171,35 @@ int mirrorByPosition(const float* positions, int vertexCount,
                      double pivot,
                      double tolerance,
                      const std::vector<std::uint8_t>& lockedBones = {});
+
+/// Mirror weights across a world axis, ALSO swapping left/right bone pairs.
+///
+/// This is what slice D's note above was waiting for (#559 has now landed).
+/// Same vertex pairing as `mirrorByPosition`, but every weight copied from the
+/// partner vertex is additionally re-addressed onto the mirrored BONE: a right
+/// upper-arm weight taken from the right shoulder lands on the LEFT shoulder
+/// bone, which is what makes the mirrored half deform correctly on a rig with
+/// distinct left/right bones.
+///
+/// `bonePairs` maps bone handle → its counterpart's handle, and is supplied by
+/// the caller (resolved from bone NAMES via `BoneNaming::Map`) so this layer
+/// stays pure data with no Ogre/skeleton dependency. Handles with no
+/// counterpart must map to themselves (or to a negative value, treated the
+/// same) — centre bones like the spine keep their own weights.
+///
+/// A locked bone is never written. When the mirrored weight WOULD land on a
+/// locked bone, it is dropped rather than silently redirected, and the row is
+/// renormalised over what remains, so a lock means "this bone's weights are
+/// exactly what I set" in both directions.
+///
+/// Returns the number of vertices modified.
+int mirrorByPositionWithBonePairs(const float* positions, int vertexCount,
+                                  std::vector<SkinWeights::VertexWeights>& weights,
+                                  int axis,
+                                  double pivot,
+                                  double tolerance,
+                                  const std::vector<int>& bonePairs,
+                                  const std::vector<std::uint8_t>& lockedBones = {});
 
 /// Sum of one bone's weight across every vertex — cheap way for a test or a
 /// readout to show a paint op actually changed something.

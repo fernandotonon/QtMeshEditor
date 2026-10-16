@@ -84,12 +84,15 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationRetargeter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimGenerators.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimConstraints.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimGraph.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/RetargetAnimationCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RetargetController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimGeneratorManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AnimGeneratorCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ConstraintManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ConstraintCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGraphManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MotionGraphCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/FootContact.cpp
         # Face auto-rig (#889): MCPServer/CLIPipeline/mainwindow reference
         # these — without them the per-suite test executables fail to link.
@@ -286,6 +289,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeights.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightsPost.cpp
 
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneNamingMap.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseMirror.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WeightPaintOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkinWeightController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GeodesicVoxelBind.cpp

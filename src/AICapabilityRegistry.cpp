@@ -76,7 +76,9 @@ QHash<QString, QString> buildTaxonomy()
                       "get_playback_state", "select_animation", "select_bone", "set_keyframe_value",
                       "move_bone_keyframe", "step_keyframe", "get_channel_values", "play_vertex_animation",
                       "bake_vat", "generate_isometric_sprites", "list_constraints", "add_constraint",
-                      "set_constraint", "move_constraint", "remove_constraint", "bake_constraints"});
+                      "set_constraint", "move_constraint", "remove_constraint", "bake_constraints",
+                      "get_motion_graph", "set_motion_graph", "play_motion_graph", "stop_motion_graph",
+                      "set_motion_graph_param"});
     add("motion_ai", {"motion_in_between", "generate_motion", "adjust_arm_space", "pin_feet"});
     add("morph_pose", {"list_morph_targets", "set_morph_weight", "set_morph_weight_keyframe",
                        "clear_morph_weight_keyframe", "list_poses", "save_pose", "apply_pose", "delete_pose",

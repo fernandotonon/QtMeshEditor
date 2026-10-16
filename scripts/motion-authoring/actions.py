@@ -58,10 +58,12 @@ def _seg(t, a, b):
 # WALK — 2 full strides over the clip (1 cycle = 1s at 2 steps).
 # ---------------------------------------------------------------------------
 def walk():
+    """Build a two-cycle walk with relaxed, lightly articulated hands."""
     seconds = 2.0
     cycles = 2.0            # two full gait cycles
 
     def pose(t):
+        """Sample the gait pose at normalized clip time ``t``."""
         p = cycles * t      # gait phase in cycles
         swingL = _s(p)      # +1 = left thigh forward
         swingR = _s(p, math.pi)
@@ -69,6 +71,10 @@ def walk():
         kneeL = 40.0 * _bump((p % 1.0))            # left swing first half
         kneeR = 40.0 * _bump(((p + 0.5) % 1.0))
         return {
+            # Loose hands close slightly at the back of each arm swing.  The
+            # asymmetry is subtle but removes the mannequin-stiff fingers.
+            "l_grip": 0.18 + 0.09 * max(0.0, swingL),
+            "r_grip": 0.18 + 0.09 * max(0.0, swingR),
             "l_upleg": (24.0 * swingL - 4.0, 0, 0),
             "r_upleg": (24.0 * swingR - 4.0, 0, 0),
             "l_leg": (kneeL + 6.0, 0, 0),
@@ -97,6 +103,7 @@ def walk():
 # RUN — faster, deeper knees, forward lean, bigger arm drive.
 # ---------------------------------------------------------------------------
 def run():
+    """Build a brisk two-cycle run with a guarded hand pose."""
     # Whole number of gait cycles — the app LOOPS clips, so a fractional
     # cycle count snaps the legs/hips at the wrap point. Cadence kept at
     # 1.5625 cycles/s (the original 2.5-cycles-in-1.6s feel).
@@ -104,12 +111,15 @@ def run():
     cycles = 2.0
 
     def pose(t):
+        """Sample the running pose at normalized clip time ``t``."""
         p = cycles * t
         swingL = _s(p)
         swingR = _s(p, math.pi)
         kneeL = 85.0 * _bump(p % 1.0)
         kneeR = 85.0 * _bump((p + 0.5) % 1.0)
         return {
+            "l_grip": 0.48 + 0.10 * max(0.0, swingL),
+            "r_grip": 0.48 + 0.10 * max(0.0, swingR),
             "l_upleg": (38.0 * swingL + 6.0, 0, 0),
             "r_upleg": (38.0 * swingR + 6.0, 0, 0),
             "l_leg": (kneeL + 12.0, 0, 0),
@@ -137,13 +147,19 @@ def run():
 # IDLE — subtle breathing sway, weight shift.
 # ---------------------------------------------------------------------------
 def idle():
+    """Build a subtle breathing and weight-shift idle loop."""
     seconds = 3.0
 
     def pose(t):
+        """Sample the idle pose at normalized clip time ``t``."""
         b = _s(t, -math.pi / 2)          # breath, starts at minimum
         w = _s(2 * t)                    # slow weight shift
         look = _bump(_seg(t, 0.45, 0.85))   # brief glance to the side
         return {
+            "l_grip": 0.12 + 0.035 * (b + 1.0),
+            "r_grip": 0.14 + 0.03 * (b + 1.0),
+            "l_spread": 3.0 - 1.0 * b,
+            "r_spread": 2.5 - 1.0 * b,
             "l_arm": (72.0 + 4.0 * b, 0, 4.0 + 2.0 * b),
             "r_arm": (72.0 + 4.0 * b, 0, 4.0 + 2.0 * b),
             "l_forearm": (0, 0, 12.0 + 5.0 * b),
@@ -170,24 +186,32 @@ def idle():
 # WAVE — right arm raised overhead, forearm waves side to side.
 # ---------------------------------------------------------------------------
 def wave():
+    """Build a friendly raised-hand wave with a relaxed elbow."""
     seconds = 2.4
     up_t, down_t = 0.18, 0.85            # raise / lower windows
 
     def pose(t):
+        """Sample the wave pose at normalized clip time ``t``."""
         raise01 = _ease(_seg(t, 0.0, up_t)) * (1.0 - _ease(_seg(t, down_t, 1.0)))
         wig = _s(3.0 * _seg(t, up_t, down_t)) * raise01
         return {
+            "l_grip": 0.16,
+            "r_grip": 0.08 + 0.08 * (1.0 - raise01),
+            "r_spread": 7.0 * raise01,
             # left arm hangs relaxed
             "l_arm": (84.0, 0, 2.0),
             "l_forearm": (0, 0, 10.0),
             # right arm: hanging (X 84, close to the body) -> straight overhead
             # (X -84). A splayed arm (the old 72 -> -58) sits near the
             # retarget's shoulder singularity and inverts.
-            "r_arm": (84.0 - 140.0 * raise01 + 14.0 * wig, 0, 78.0 * raise01),
+            # Keep a relaxed elbow and wave beside the temple.  The old pose
+            # drove the shoulder almost straight overhead; on compact target
+            # rigs that read as a distress signal rather than a greeting.
+            "r_arm": (84.0 - 128.0 * raise01 + 8.0 * wig, 0, -70.0 * raise01),
             # the visible wave: forearm curls in-and-out around a half-bent
             # elbow while the arm is up
-            "r_forearm": (0, 0, 18.0 * raise01 + 46.0 * wig),
-            "r_hand": (0, 0, 12.0 * wig),
+            "r_forearm": (0, 0, (38.0 + 18.0 * wig) * raise01),
+            "r_hand": (0, 0, 16.0 * wig),
             "spine": (0, -4.0 * raise01, -4.0 * raise01),
             "head": (0, 6.0 * raise01, 5.0 * raise01),
             "l_upleg": (0, 0, 1.5),
@@ -198,13 +222,125 @@ def wave():
 
 
 # ---------------------------------------------------------------------------
+# SALUTE — right hand rises crisply to the brow, holds, then returns.  The
+# fingers straighten together while the thumb remains tucked.
+# ---------------------------------------------------------------------------
+def salute():
+    """Build a crisp right-handed salute with a folded elbow."""
+    seconds = 2.2
+
+    def pose(t):
+        """Sample the salute pose at normalized clip time ``t``."""
+        # Fold just ahead of the lift so the transition never flashes a
+        # straight, twisted arm.  On return, lower the folded arm first and
+        # only then relax the elbow/wrist beside the torso.
+        fold = (_ease(_seg(t, 0.0, 0.14))
+                * (1.0 - _ease(_seg(t, 0.84, 1.0))))
+        lift = (_ease(_seg(t, 0.06, 0.24))
+                * (1.0 - _ease(_seg(t, 0.72, 0.94))))
+        return {
+            "l_grip": 0.16,
+            "r_grip": 0.08 + 0.10 * (1.0 - fold),
+            "r_thumb_grip": 0.55 * fold + 0.18 * (1.0 - fold),
+            "r_spread": 1.5 * fold,
+            "l_arm": (84.0, 0, 2.0),
+            "l_forearm": (0, 0, 12.0),
+            # Shares the proven raised-arm quadrant with wave, but a firmer
+            # elbow fold parks the straight hand at the brow.
+            # Solved against the calibrated Mixamo chain: elbow remains out
+            # from the ribs while the palm lands beside the right temple.
+            "r_arm": (84.0 - 49.0 * lift, 44.0 * lift, -31.0 * lift),
+            # This source sign looks reversed in Mixamo local space, but after
+            # canonical transport it is the anatomical elbow fold on the
+            # compact officer/operator skeletons (positive opened the arm).
+            "r_forearm": (0, 0, 12.0 - 126.0 * fold),
+            # Keep the fingers together and rotate the wrist from the raised
+            # vertical pose into the flat, fingers-forward salute line.
+            "r_hand": (75.0 * fold, 0, 0),
+            "spine": (1.0, -3.0 * lift, 0),
+            "head": (-2.0 * lift, 3.0 * lift, 0),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
+# POINT — acquire a target, extend the right arm, hold, and recover.  The
+# index remains straight while the other fingers close around the palm.
+# ---------------------------------------------------------------------------
+def point():
+    """Build a forward-pointing gesture with only the index extended."""
+    seconds = 2.4
+
+    def pose(t):
+        """Sample the pointing pose at normalized clip time ``t``."""
+        aim = _ease(_seg(t, 0.0, 0.24)) * (1.0 - _ease(_seg(t, 0.78, 1.0)))
+        return {
+            "l_grip": 0.16,
+            "r_grip": 0.16 + 0.72 * aim,
+            "r_index_grip": 0.06 + 0.04 * (1.0 - aim),
+            "r_thumb_grip": 0.30 + 0.30 * aim,
+            # Extend toward the character's front, with a small shoulder drop
+            # so the silhouette remains readable in a three-quarter view.
+            "r_arm": (84.0 - 64.0 * aim, 0, 68.0 * aim),
+            "r_forearm": (0, 0, 12.0 - 6.0 * aim),
+            "r_hand": (0, 0, -6.0 * aim),
+            "l_arm": (84.0, 0, 2.0),
+            "l_forearm": (0, 0, 12.0),
+            "spine": (2.0, -7.0 * aim, 0),
+            "spine1": (0, -3.0 * aim, 0),
+            "head": (-1.0 * aim, 9.0 * aim, 0),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
+# CLAP — three readable contacts with anticipation and recoil.  Hands open on
+# separation and close slightly at contact instead of remaining rigid plates.
+# ---------------------------------------------------------------------------
+def clap():
+    """Build a three-contact clap with a restrained arm convergence."""
+    seconds = 2.4
+
+    def pose(t):
+        """Sample the clap pose at normalized clip time ``t``."""
+        active = _ease(_seg(t, 0.0, 0.16)) * (1.0 - _ease(_seg(t, 0.86, 1.0)))
+        contact = 0.5 + 0.5 * _c(2.5 * _seg(t, 0.16, 0.86))
+        contact *= active
+        return {
+            "l_grip": 0.08 + 0.18 * contact,
+            "r_grip": 0.08 + 0.18 * contact,
+            "l_spread": 5.0 * (1.0 - contact) * active,
+            "r_spread": 5.0 * (1.0 - contact) * active,
+            "l_arm": (84.0 - 64.0 * active - 6.0 * contact,
+                      -1.5 * contact, -58.0 * active + 0.8 * contact),
+            "r_arm": (84.0 - 64.0 * active - 6.0 * contact,
+                      -1.5 * contact, -58.0 * active + 0.8 * contact),
+            # On the canonical compact rigs, negative source curl closes the
+            # elbows toward the sternum.  Positive curl was opening them back
+            # into a T-pose, so the previous version never reached contact.
+            "l_forearm": (0, 0, 12.0 - (34.0 + 18.0 * contact) * active),
+            "r_forearm": (0, 0, 12.0 - (34.0 + 18.0 * contact) * active),
+            "l_hand": (0, 0, -6.0 * contact),
+            "r_hand": (0, 0, -6.0 * contact),
+            "spine": (3.0 * active, 0, 0),
+            "head": (-2.0 * active, 0, 0),
+        }
+
+    return seconds, pose, None
+
+
+# ---------------------------------------------------------------------------
 # JUMP — anticipation crouch, extend, airborne tuck, land, recover.
 # ---------------------------------------------------------------------------
 def jump():
+    """Build a jump with anticipation, airtime, landing, and recovery."""
     seconds = 1.6
     # phases: 0-0.25 crouch, 0.25-0.4 launch, 0.4-0.65 air, 0.65-0.8 land, ->1 recover
 
     def pose(t):
+        """Sample the jump pose at normalized clip time ``t``."""
         crouch = _ease(_seg(t, 0.0, 0.22)) * (1.0 - _ease(_seg(t, 0.22, 0.38)))
         launch = _ease(_seg(t, 0.22, 0.38)) * (1.0 - _ease(_seg(t, 0.55, 0.75)))
         air = _bump(_seg(t, 0.35, 0.72))
@@ -212,6 +348,8 @@ def jump():
         legX = 55.0 * crouch + 30.0 * air + 45.0 * land
         kneeX = 80.0 * crouch + 45.0 * air + 70.0 * land
         return {
+            "l_grip": 0.22 + 0.22 * crouch,
+            "r_grip": 0.22 + 0.22 * crouch,
             "l_upleg": (legX, 0, 2.0),
             "r_upleg": (legX, 0, 2.0),
             "l_leg": (kneeX, 0, 0),
@@ -243,9 +381,11 @@ def jump():
 # PUNCH — boxing guard, right straight, return to guard.
 # ---------------------------------------------------------------------------
 def punch():
+    """Build a guarded punch with a single right-arm strike."""
     seconds = 1.4
 
     def pose(t):
+        """Sample the punch pose at normalized clip time ``t``."""
         guard_in = _ease(_seg(t, 0.0, 0.18))
         # trapezoid strike: extend, HOLD at full extension, retract — the
         # plateau survives the retarget's smoothing pass where a narrow
@@ -254,6 +394,8 @@ def punch():
         guard_out = _ease(_seg(t, 0.82, 1.0))
         guard = guard_in * (1.0 - guard_out)
         return {
+            "l_grip": 0.18 + 0.82 * guard,
+            "r_grip": 0.18 + 0.82 * max(guard, strike),
             # guard: arms down-forward, elbows curled hard (fists up)
             "l_arm": (84.0 - 20.0 * guard, 0, 26.0 * guard),
             "l_forearm": (0, 0, 100.0 * guard),
@@ -283,9 +425,11 @@ def punch():
 # KICK — right front kick: chamber, extend, retract.
 # ---------------------------------------------------------------------------
 def kick():
+    """Build a right-leg kick with chamber, extension, and recovery."""
     seconds = 1.4
 
     def pose(t):
+        """Sample the kick pose at normalized clip time ``t``."""
         prep = _ease(_seg(t, 0.0, 0.2)) * (1.0 - _ease(_seg(t, 0.82, 1.0)))
         chamber = _bump(_seg(t, 0.12, 0.46))
         # HOLD the extension instead of a narrow bump: the strike used to last
@@ -293,6 +437,8 @@ def kick():
         # smooth-bake in the generate path averaged it away).
         extend = _ease(_seg(t, 0.36, 0.52)) * (1.0 - _ease(_seg(t, 0.66, 0.82)))
         return {
+            "l_grip": 0.15 + 0.65 * prep,
+            "r_grip": 0.15 + 0.65 * prep,
             # right leg: thigh up (chamber+extend), knee folds then snaps out
             "r_upleg": (52.0 * chamber + 78.0 * extend, 0, 4.0 * prep),
             "r_leg": (100.0 * chamber * (1.0 - extend) + 3.0 * extend, 0, 0),
@@ -603,6 +749,9 @@ ACTIONS = {
     "run": run,
     "idle": idle,
     "wave": wave,
+    "salute": salute,
+    "point": point,
+    "clap": clap,
     "jump": jump,
     "punch": punch,
     "kick": kick,

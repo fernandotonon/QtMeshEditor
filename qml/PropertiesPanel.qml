@@ -660,6 +660,15 @@ Rectangle {
                 Component.onCompleted: content = constraintsComponent
             }
 
+            // ---- Motion graph (#526) ----
+            CollapsibleSection {
+                title: "Motion Graph"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                expanded: false
+
+                Component.onCompleted: content = motionGraphComponent
+            }
+
             // ---- Isometric sprites (#724) ----
             CollapsibleSection {
                 title: "Isometric Sprites"
@@ -3840,7 +3849,13 @@ Rectangle {
                             ToolTip.visible: containsMouse
                             ToolTip.delay: 500
                             ToolTip.text: modelData.op === "mirror"
-                                ? "Mirror weights across X by vertex position. Bone-pair (_l/_r) mirroring needs Slice E; this matches vertices geometrically."
+                                ? (SkinWeightController.detectedBonePairCount() > 0
+                                   ? "Mirror weights across " + SkeletonEditor.mirrorPlaneId().toUpperCase()
+                                     + ", swapping left/right BONE pairs ("
+                                     + SkinWeightController.detectedBonePairCount()
+                                     + " detected) so the mirrored half deforms correctly. Locked bones are never written."
+                                   : "Mirror weights across " + SkeletonEditor.mirrorPlaneId().toUpperCase()
+                                     + " by vertex position. No left/right bone pairs were detected in this skeleton's names, so bone handles will NOT be swapped — see \"Left/right pairing\" below.")
                                 : (modelData.op === "fill"
                                    ? "Flood-fill the connected island under the cursor at the active bone."
                                    : "Applies to the whole mesh. Undoable.")
@@ -3848,7 +3863,13 @@ Rectangle {
                                 if (modelData.op === "normalize") SkinWeightController.normalizeAll()
                                 else if (modelData.op === "smooth") SkinWeightController.smoothAll(2)
                                 else if (modelData.op === "limit") SkinWeightController.limitInfluencesAll(4)
-                                else if (modelData.op === "mirror") SkinWeightController.mirrorAll(0, 0.001)
+                                // Honour the shared symmetry plane (#559). Hardcoding
+                                // X here mirrored weights across the sagittal plane
+                                // even after the user picked Y or Z in the Skeleton
+                                // panel — a plausible-looking but wrong result.
+                                else if (modelData.op === "mirror")
+                                    SkinWeightController.mirrorAll(
+                                        root.mirrorAxisIndex(SkeletonEditor.mirrorPlaneId()), 0.001)
                                 else if (modelData.op === "fill") SkinWeightController.fillConnectedAtHover(0)
                             }
                         }
@@ -4588,6 +4609,9 @@ Rectangle {
                     property string label: ""
                     property string action: ""
                     property bool needsBone: true
+                    /// Emitted after the action runs, so a caller can refresh
+                    /// its own view (the #559 pairing list does this).
+                    signal activated()
                     width: Math.max(56, skelBtnLabel.implicitWidth + 14)
                     height: 22
                     radius: 3
@@ -4627,6 +4651,7 @@ Rectangle {
                         onClicked: {
                             skelBtn.forceActiveFocus()
                             root.runSkeletonToolAction(skelBtn.action)
+                            skelBtn.activated()
                         }
                     }
                     Keys.onPressed: function(event) {
@@ -4634,6 +4659,7 @@ Rectangle {
                         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                                 || event.key === Qt.Key_Space) {
                             root.runSkeletonToolAction(skelBtn.action)
+                            skelBtn.activated()
                             event.accepted = true
                         }
                     }
@@ -4696,6 +4722,161 @@ Rectangle {
                             if (checked !== SkeletonEditor.showRestPoseGhost)
                                 SkeletonEditor.showRestPoseGhost = checked
                         }
+                    }
+                }
+
+                // ── Mirror / left-right naming (Skel slice E #559) ────────────
+                // Lives in the SKELETON section, not the weight-paint panel:
+                // left/right pairing is a property of the RIG, and it is
+                // consumed by pose mirroring (#521), mirror-selection and the
+                // mirror-chain (#556) as much as by the weight mirror. Gating
+                // a rig-wide diagnostic behind "enter paint mode" hid it from
+                // every non-painting user of it.
+                Text {
+                    text: "Mirror / Left-Right"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    font.pixelSize: 10
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.75
+                    text: "Which bones pair as left/right. Check this before any "
+                        + "mirror op — a rig whose names follow no convention can "
+                        + "only be mirrored by vertex position."
+                }
+
+                Row {
+                    spacing: 4
+                    Text {
+                        text: "Plane:"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Repeater {
+                        model: ["x", "y", "z"]
+                        Rectangle {
+                            required property string modelData
+                            width: 24
+                            height: 20
+                            radius: 3
+                            color: mirrorPairCol.plane === modelData
+                                 ? PropertiesPanelController.highlightColor
+                                 : PropertiesPanelController.inputColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.toUpperCase()
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    SkeletonEditor.setMirrorPlaneId(modelData)
+                                    mirrorPairCol.refresh()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Flow {
+                    width: parent.width
+                    spacing: 4
+                    SkelToolButton {
+                        label: "Mirror Selection"
+                        action: "mirrorSelection"
+                    }
+                    SkelToolButton {
+                        label: "Check Pairing"
+                        action: "checkPairing"
+                        needsBone: false
+                        // Also refresh the list below — runSkeletonToolAction
+                        // only writes the one-line status.
+                        onActivated: mirrorPairCol.refresh()
+                    }
+                }
+
+                Column {
+                    id: mirrorPairCol
+                    width: parent.width
+                    spacing: 3
+
+                    // Recomputed on demand: pairing walks every bone name, so a
+                    // property binding would re-run it on every panel repaint.
+                    property var report: ({})
+                    property string plane: "x"
+
+                    function refresh() {
+                        report = SkeletonEditor.bonePairingReport()
+                        plane = SkeletonEditor.mirrorPlaneId()
+                    }
+
+                    Component.onCompleted: refresh()
+                    // Switching between two rigged meshes does not recreate this
+                    // component and changes no skeleton, so without the
+                    // selection hook the panel keeps showing the PREVIOUS rig's
+                    // pairs, unpaired bones and collision warnings.
+                    Connections {
+                        target: PropertiesPanelController
+                        function onSelectionChanged() { mirrorPairCol.refresh() }
+                    }
+                    Connections {
+                        target: SkeletonEditor
+                        function onSkeletonStructureChanged() { mirrorPairCol.refresh() }
+                    }
+
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        text: {
+                            var r = mirrorPairCol.report
+                            if (r.pairCount === undefined) return "Select a rigged mesh."
+                            if (r.pairCount === 0)
+                                return "No left/right pairs detected in " + r.boneCount
+                                     + " bones — this rig's names follow no recognised "
+                                     + "convention."
+                            var lines = []
+                            var shown = Math.min(r.pairs.length, 10)
+                            for (var i = 0; i < shown; ++i)
+                                lines.push("  " + r.pairs[i].left + "  \u2194  " + r.pairs[i].right)
+                            if (r.pairs.length > shown)
+                                lines.push("  \u2026 and " + (r.pairs.length - shown) + " more")
+                            return r.pairCount + " pairs of " + r.boneCount + " bones:\n"
+                                 + lines.join("\n")
+                        }
+                    }
+                    // Problems get their own line: an unpaired sided bone makes a
+                    // mirror silently incomplete, a collision makes it lossy.
+                    Text {
+                        visible: (mirrorPairCol.report.unpairedSided || []).length > 0
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        color: "#d08a3a"
+                        font.pixelSize: 10
+                        text: {
+                            var u = mirrorPairCol.report.unpairedSided || []
+                            return "\u26a0 Side-named but unpaired: " + u.slice(0, 6).join(", ")
+                                 + (u.length > 6 ? " \u2026 (+" + (u.length - 6) + ")" : "")
+                        }
+                    }
+                    Text {
+                        visible: (mirrorPairCol.report.collisions || []).length > 0
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        color: "#c0504d"
+                        font.pixelSize: 10
+                        text: "\u26a0 Collisions (a mirror would lose data): "
+                              + (mirrorPairCol.report.collisions || []).join(", ")
                     }
                 }
 
@@ -10735,6 +10916,15 @@ Rectangle {
         }
     }
 
+    /// Map a mirror-plane id ("x"/"y"/"z") to the axis index the weight-mirror
+    /// ops take (0=X, 1=Y, 2=Z). Unknown ids fall back to X, matching
+    /// PoseLibrary::mirrorPlane()'s stored-preference read path.
+    function mirrorAxisIndex(planeId) {
+        if (planeId === "y") return 1
+        if (planeId === "z") return 2
+        return 0
+    }
+
     function runSkeletonToolAction(action) {
         root.boneEditError = false
         root.boneEditStatus = ""
@@ -10751,6 +10941,28 @@ Rectangle {
             } else {
                 root.boneEditError = true
                 root.boneEditStatus = "Select a bone first."
+            }
+        } else if (action === "mirrorSelection") {
+            // Slice E (#559): select the opposite-side counterpart.
+            var mirrored = SkeletonEditor.mirrorSelectedBone()
+            if (mirrored.length > 0) {
+                root.boneEditStatus = "Selected " + mirrored + "."
+            } else {
+                root.boneEditError = true
+                root.boneEditStatus = "No left/right counterpart for this bone "
+                    + "(centre bone, or its partner is missing)."
+            }
+        } else if (action === "checkPairing") {
+            // Re-run the diagnostic on demand — after a rename, a custom
+            // convention change, or simply to see the current rig's pairing.
+            var rep = SkeletonEditor.bonePairingReport()
+            if (rep.boneCount === undefined || rep.boneCount === 0) {
+                root.boneEditError = true
+                root.boneEditStatus = "Select a rigged mesh first."
+            } else {
+                root.boneEditError = (rep.pairCount === 0)
+                root.boneEditStatus = rep.pairCount + " left/right pair(s) in "
+                    + rep.boneCount + " bones."
             }
         } else if (action === "reparent") {
             root.openReparentBoneDialog()
@@ -11549,6 +11761,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/ConstraintsPanel.qml"
+        }
+    }
+
+    // ---- Motion graph content (#526) ----
+    Component {
+        id: motionGraphComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/MotionGraphPanel.qml"
         }
     }
 

@@ -518,6 +518,70 @@ TEST_F(PoseLibrarySceneTest, MirrorPoseProducesXFlippedSnapshot) {
     EXPECT_FLOAT_EQ(rot.z, -0.5f);
 }
 
+TEST_F(PoseLibrarySceneTest, MirrorPoseLeavesScaleAlone) {
+    // Slice E (#559) behaviour change, pinned deliberately: the pre-slice-E
+    // mirror negated scale.x "so the volume stays right". It is the ROTATION
+    // conjugation that carries the handedness flip; negating a scale component
+    // additionally gives the mirrored half inside-out normals, and on a
+    // centre-line bone it flips the bone on every run, so mirroring twice was
+    // not a no-op. Scale must come through untouched.
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MirrorScale");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    skel->getBone(0)->setPosition(Ogre::Vector3(2, 3, 4));
+    skel->getBone(0)->setScale(Ogre::Vector3(2, 3, 4));
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("src")));
+    ASSERT_TRUE(lib->mirrorPose(entity, QStringLiteral("src"), QStringLiteral("dst")));
+
+    skel->getBone(0)->setScale(Ogre::Vector3::UNIT_SCALE);
+    lib->applyPose(entity, QStringLiteral("dst"));
+    const auto scale = skel->getBone(0)->getScale();
+    EXPECT_FLOAT_EQ(scale.x, 2.0f) << "scale.x must NOT be negated";
+    EXPECT_FLOAT_EQ(scale.y, 3.0f);
+    EXPECT_FLOAT_EQ(scale.z, 4.0f);
+}
+
+TEST_F(PoseLibrarySceneTest, MirrorPoseTwiceRestoresTheOriginal) {
+    // The property the scale fix buys: mirror-then-mirror is a no-op. This is
+    // what a user relies on when they mirror a pose to check it and mirror
+    // back.
+    Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MirrorTwice");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* lib = PoseLibrary::instance();
+
+    const Ogre::Vector3 pos0(2, 3, 4);
+    const Ogre::Quaternion rot0(0.5, 0.5, 0.5, 0.5);
+    const Ogre::Vector3 scale0(2, 3, 4);
+    skel->getBone(0)->setPosition(pos0);
+    skel->getBone(0)->setOrientation(rot0);
+    skel->getBone(0)->setScale(scale0);
+    ASSERT_TRUE(lib->savePose(entity, QStringLiteral("a")));
+    ASSERT_TRUE(lib->mirrorPose(entity, QStringLiteral("a"), QStringLiteral("b")));
+    ASSERT_TRUE(lib->mirrorPose(entity, QStringLiteral("b"), QStringLiteral("c")));
+
+    skel->getBone(0)->setPosition(Ogre::Vector3::ZERO);
+    skel->getBone(0)->setOrientation(Ogre::Quaternion::IDENTITY);
+    skel->getBone(0)->setScale(Ogre::Vector3::UNIT_SCALE);
+    lib->applyPose(entity, QStringLiteral("c"));
+
+    const auto pos = skel->getBone(0)->getPosition();
+    const auto rot = skel->getBone(0)->getOrientation();
+    const auto scale = skel->getBone(0)->getScale();
+    EXPECT_FLOAT_EQ(pos.x, pos0.x);
+    EXPECT_FLOAT_EQ(pos.y, pos0.y);
+    EXPECT_FLOAT_EQ(pos.z, pos0.z);
+    EXPECT_FLOAT_EQ(rot.w, rot0.w);
+    EXPECT_FLOAT_EQ(rot.x, rot0.x);
+    EXPECT_FLOAT_EQ(rot.y, rot0.y);
+    EXPECT_FLOAT_EQ(rot.z, rot0.z);
+    EXPECT_FLOAT_EQ(scale.x, scale0.x);
+    EXPECT_FLOAT_EQ(scale.y, scale0.y);
+    EXPECT_FLOAT_EQ(scale.z, scale0.z);
+}
+
 TEST_F(PoseLibrarySceneTest, MirrorPoseRejectsMissingSourceAndEmptyDst) {
     Ogre::Entity* entity = createAnimatedTestEntity("PoseLib_MirrorReject");
     ASSERT_NE(entity, nullptr);

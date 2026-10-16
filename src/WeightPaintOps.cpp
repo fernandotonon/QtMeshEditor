@@ -17,6 +17,16 @@ bool boneLocked(int boneHandle, const std::vector<std::uint8_t>& lockedBones)
     return i < lockedBones.size() && lockedBones[i] != 0;
 }
 
+/// Total weight carried by one row. Used to tell "this row has influences" from
+/// "every influence was dropped", which the normalisers cannot distinguish
+/// (both return early on such a row rather than inventing a distribution).
+double rowSumOf(const SkinWeights::VertexWeights& vw)
+{
+    double s = 0.0;
+    for (int k = 0; k < vw.count; ++k) s += vw.weights[k];
+    return s;
+}
+
 /// Renormalise a row while holding every LOCKED bone at its current value: the
 /// unlocked bones are scaled to fill whatever headroom is left. This is what
 /// makes "lock bone" hold under any brush mode — a plain renormalise would
@@ -489,6 +499,99 @@ int mirrorByPosition(const float* positions, int vertexCount,
             }
             normalizeRowRespectingLocks(next, lockedBones);
         }
+        weights[static_cast<size_t>(v)] = next;
+        ++modified;
+    }
+    return modified;
+}
+
+int mirrorByPositionWithBonePairs(const float* positions, int vertexCount,
+                                  std::vector<SkinWeights::VertexWeights>& weights,
+                                  int axis,
+                                  double pivot,
+                                  double tolerance,
+                                  const std::vector<int>& bonePairs,
+                                  const std::vector<std::uint8_t>& lockedBones)
+{
+    if (!positions || vertexCount <= 0 || axis < 0 || axis > 2) return 0;
+    if (weights.size() != static_cast<size_t>(vertexCount)) return 0;
+    if (tolerance <= 0.0) return 0;
+
+    // Bone handle → counterpart handle. Out-of-range or negative entries mean
+    // "no counterpart", i.e. a centre bone that keeps its own weights.
+    const auto pairedBone = [&bonePairs](int handle) {
+        if (handle < 0) return handle;
+        const size_t i = static_cast<size_t>(handle);
+        if (i >= bonePairs.size()) return handle;
+        const int other = bonePairs[i];
+        return other < 0 ? handle : other;
+    };
+
+    // Snapshot, for the same reason as mirrorByPosition: a vertex mirrored
+    // early must not become the source for its own partner.
+    const std::vector<SkinWeights::VertexWeights> source = weights;
+    const double tol2 = tolerance * tolerance;
+
+    int modified = 0;
+    for (int v = 0; v < vertexCount; ++v) {
+        double target[3] = {positions[v * 3 + 0], positions[v * 3 + 1],
+                            positions[v * 3 + 2]};
+        target[axis] = 2.0 * pivot - target[axis];      // reflect
+
+        int best = -1;
+        double bestD2 = tol2;
+        for (int w = 0; w < vertexCount; ++w) {
+            const double dx = positions[w * 3 + 0] - target[0];
+            const double dy = positions[w * 3 + 1] - target[1];
+            const double dz = positions[w * 3 + 2] - target[2];
+            const double d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 <= bestD2) { bestD2 = d2; best = w; }
+        }
+        if (best < 0) continue;   // no partner within tolerance — leave alone
+
+        // Re-address the partner's weights onto the mirrored bones. Build the
+        // row from empty rather than editing a copy: two source bones can map
+        // onto the same destination (a rig where both sides' bones pair to one
+        // centre bone), and accumulating handles that collision correctly
+        // instead of letting the last write win.
+        const SkinWeights::VertexWeights& from = source[static_cast<size_t>(best)];
+        SkinWeights::VertexWeights next{};
+        next.count = 0;
+        for (int k = 0; k < from.count; ++k) {
+            const int dstBone = pairedBone(from.boneIndices[k]);
+            if (dstBone < 0) continue;
+            // Never write a locked bone: a lock means "this bone's weights are
+            // exactly what I set". Drop rather than redirect, and let the
+            // renormalise below spread the freed weight over what is left.
+            if (boneLocked(dstBone, lockedBones)) continue;
+            setWeight(next, dstBone, weightOf(next, dstBone) + from.weights[k]);
+        }
+
+        if (!lockedBones.empty()) {
+            // Restore this vertex's own locked-bone values, then let the
+            // mirrored (unlocked) weights fill the remaining headroom.
+            const SkinWeights::VertexWeights& before = source[static_cast<size_t>(v)];
+            for (int k = 0; k < before.count; ++k) {
+                if (!boneLocked(before.boneIndices[k], lockedBones)) continue;
+                setWeight(next, before.boneIndices[k], before.weights[k]);
+            }
+            normalizeRowRespectingLocks(next, lockedBones);
+        } else {
+            // Renormalise unconditionally: the row can lose or fold weight
+            // when two bones map onto one destination, or a bone's mirrored
+            // target was dropped.
+            normalizeRow(next);
+        }
+
+        // Every mirrored influence can be dropped — all of them landing on
+        // LOCKED bones, or on bones with no counterpart — leaving `next`
+        // empty or summing to ~0. Both normalisers return early on such a row
+        // rather than inventing a distribution, so writing it would leave the
+        // vertex with NO bone influence at all: it detaches from the skeleton
+        // and collapses to the origin under animation. Keep the vertex's
+        // existing weights instead, and do not count it as modified.
+        if (next.count <= 0 || rowSumOf(next) <= 1e-9) continue;
+
         weights[static_cast<size_t>(v)] = next;
         ++modified;
     }

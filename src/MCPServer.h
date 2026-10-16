@@ -473,6 +473,11 @@ private:
     QJsonObject toolMoveConstraint(const QJsonObject &args);
     QJsonObject toolRemoveConstraint(const QJsonObject &args);
     QJsonObject toolBakeConstraints(const QJsonObject &args);
+    QJsonObject toolGetMotionGraph(const QJsonObject &args);
+    QJsonObject toolSetMotionGraph(const QJsonObject &args);
+    QJsonObject toolPlayMotionGraph(const QJsonObject &args);
+    QJsonObject toolStopMotionGraph(const QJsonObject &args);
+    QJsonObject toolSetMotionGraphParam(const QJsonObject &args);
 
     /// Pose-lib D-MCP: capture current bone-TRS on the first
     /// selected entity under `name`. Overwrites in place if the
@@ -495,6 +500,14 @@ private:
     /// Args: `a`, `b` (existing poses), `weight` (0=a … 1=b,
     /// clamped), `dst` (output pose name).
     QJsonObject toolBlendPoses(const QJsonObject &args);
+    /// Skel slice E (#559): which bones the naming conventions pair up, so a
+    /// caller can verify a rig before relying on any mirror op. Light read.
+    QJsonObject toolBonePairingReport(const QJsonObject &args);
+    /// Select the counterpart of the selected bone (`Hand_l` → `Hand_r`).
+    QJsonObject toolMirrorBoneSelection(const QJsonObject &args);
+    /// Mirror skin weights across a plane, swapping left/right BONE pairs.
+    /// Args: `plane` ("x"/"y"/"z", default x), `position_only` (bool).
+    QJsonObject toolMirrorSkinWeights(const QJsonObject &args);
 
     /// Pose-lib D-Project: write the first-selected entity's pose
     /// library to a `.poselib` sidecar JSON file. Args: `path`.

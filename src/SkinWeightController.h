@@ -94,10 +94,28 @@ public:
     Q_INVOKABLE bool normalizeAll();
     Q_INVOKABLE bool smoothAll(int iterations = 2);
     Q_INVOKABLE bool limitInfluencesAll(int maxInfluences = 4);
-    /// Axis-position mirror (0=X, 1=Y, 2=Z). Slice E (#559) owns name-pair
-    /// mirroring; see WeightPaintOps::mirrorByPosition for what this does and
-    /// does not guarantee.
+    /// Bone-pair-aware mirror (slice E #559) — the default mirror.
+    /// Pairs vertices across the axis AND swaps left/right bone pairs, so the
+    /// mirrored half deforms correctly on a rig with distinct L/R bones.
+    /// Falls back to the position-only mirror when the skeleton follows no
+    /// recognised naming convention (a rig weighted purely to centre bones is
+    /// the case where that is still correct), and says so in the status.
     Q_INVOKABLE bool mirrorAll(int axis = 0, double tolerance = 0.001);
+
+    /// Position-only mirror: copies partner-vertex weights without swapping
+    /// bone handles. Exposed separately so a user whose rig pairs badly can
+    /// deliberately ask for the old behaviour.
+    Q_INVOKABLE bool mirrorAllPositionOnly(int axis = 0, double tolerance = 0.001);
+
+    /// How many left/right bone pairs the current skeleton's names yield.
+    /// 0 means mirrorAll can only do the position-only mirror; the Inspector
+    /// uses this to explain that rather than silently degrading.
+    Q_INVOKABLE int detectedBonePairCount() const;
+
+    /// Select the counterpart of every currently "active" bone name
+    /// (mirror-selection, #559). Returns the mirrored names; empty when
+    /// nothing paired.
+    Q_INVOKABLE QStringList mirrorBoneNames(const QStringList& boneNames) const;
     /// Flood-fill the connected island under the last hovered vertex.
     Q_INVOKABLE bool fillConnectedAtHover(int maxHops = 0);
 
@@ -165,6 +183,12 @@ private:
     int fallbackBoneHandle(int forBoneHandle = -1) const;
     /// Per-bone-handle lock flags sized to the skeleton.
     std::vector<std::uint8_t> lockedBoneFlags() const;
+    /// bone handle → mirrored bone handle, resolved from bone NAMES via
+    /// `BoneNaming::Map` (slice E #559). `m_data.boneNames` is indexed by
+    /// handle, so this is the handle↔name bridge the pure-data weight layer
+    /// cannot build for itself. Entries with no counterpart map to themselves.
+    /// `pairCount`, when given, receives how many real pairs were found.
+    std::vector<int> bonePairTable(int* pairCount = nullptr) const;
     /// Adjacency over the session mesh (built lazily; Blur/smooth need it).
     const std::vector<std::vector<int>>& adjacency();
     /// Write the in-memory weights back to the mesh, in place.

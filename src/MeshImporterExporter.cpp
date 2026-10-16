@@ -87,6 +87,7 @@ THE SOFTWARE.
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "MotionGraphManager.h"
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
@@ -2867,6 +2868,30 @@ static void loadConstraintSidecar(const QString& meshPath, const Ogre::Entity* e
         Ogre::LogManager::getSingleton().logWarning("Constraint sidecar load failed: " + err.toStdString());
 }
 
+// Motion graph (#526): authoring/preview only — export writes the clips, the
+// graph itself rides along in `<file>.animgraph.json`. Single-entity export
+// keeps that entity's graph; a renamed re-import rebinds a lone graph to the
+// imported entity.
+static void writeMotionGraphSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty()) return;
+    MotionGraphManager* gm = MotionGraphManager::peek();
+    if (!gm) {
+        QFile::remove(MotionGraphManager::sidecarPath(meshPath));
+        return;
+    }
+    gm->writeSidecar(meshPath, en ? QStringList{QString::fromStdString(en->getName())} : QStringList{});
+}
+
+static void loadMotionGraphSidecar(const QString& meshPath, const Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !QFileInfo::exists(MotionGraphManager::sidecarPath(meshPath))) return;
+    QString err;
+    if (MotionGraphManager::instance()->loadSidecar(meshPath, {}, en ? QString::fromStdString(en->getName()) : QString(),
+                                                    &err) < 0)
+        Ogre::LogManager::getSingleton().logWarning("Motion graph sidecar load failed: " + err.toStdString());
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -3459,6 +3484,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // they may target exist.
             loadGeneratorSidecar(file.filePath(), en);
             loadConstraintSidecar(file.filePath(), en);
+            loadMotionGraphSidecar(file.filePath(), en);
 
             // If a node-transform clip was reconstructed for this node, select
             // the entity so the Inspector Animations list + dope sheet populate
@@ -4106,6 +4132,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
+        writeMotionGraphSidecar(_uri, e);
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
         // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
@@ -4127,6 +4154,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
+        writeMotionGraphSidecar(_uri, e);
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4627,6 +4655,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
+        writeMotionGraphSidecar(_uri, e);
     }
 
     return 0;
@@ -5330,6 +5359,7 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
             writeScenePoseLibrarySidecar(_uri, nodesToEntities);
             writeGeneratorSidecar(_uri, nullptr);
             writeConstraintSidecar(_uri, nullptr);
+            writeMotionGraphSidecar(_uri, nullptr);
         }
 
         // Assimp's glb2 writer may drop custom aiMetadata; persist a sidecar
@@ -5777,6 +5807,7 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
         loadScenePoseLibrarySidecar(_uri, sceneNodeEntities);
         loadGeneratorSidecar(_uri, nullptr);
         loadConstraintSidecar(_uri, nullptr);
+        loadMotionGraphSidecar(_uri, nullptr);
 
         return true;
     } catch (Ogre::Exception& e) {

@@ -36,6 +36,23 @@ public:
     static bool extract(Ogre::Entity* entity, EvalData& out,
                         QString* error = nullptr);
 
+    /// Write `data.weights` back onto the entity's mesh — the exact inverse of
+    /// `extract`, walking vertex-data owners in the SAME order (shared block
+    /// first, then each non-shared submesh) so the flattened global vertex
+    /// index maps back onto the right owner-local index. Getting that walk
+    /// wrong scatters weights onto unrelated vertices, which is why this lives
+    /// here beside `extract` rather than being re-derived per caller.
+    ///
+    /// This is the IN-PLACE write: `clearBoneAssignments` +
+    /// `addBoneAssignment`* + `_compileBoneAssignments` per owner, with NO
+    /// `Entity::_initialise`. Re-initialising would re-pack BLEND_INDICES /
+    /// WEIGHTS into the same vertex buffer a live SkeletonInstance already
+    /// references, which shatters the on-screen mesh (see SkinWeightController
+    /// and the UV-unwrap notes). Headless callers are unaffected either way,
+    /// but sharing one write path keeps GUI and CLI results identical.
+    static bool applyWeights(Ogre::Entity* entity, const EvalData& data,
+                             QString* error = nullptr);
+
     // Metric report on the entity's existing weights:
     //   influence histogram, Laplacian smoothness energy, and —
     //   when the mesh encloses volume — the geodesic bleed fraction
