@@ -1048,8 +1048,13 @@ Result transferOnto(const SourceMesh& src, const std::vector<float>& quadPositio
             doneTris = 0;
             std::vector<std::thread> pool;
             for (unsigned i = 0; i < threads; ++i) pool.emplace_back(worker);
-            // The calling thread polls progress/cancel while the pool works.
-            while (nextTri.load() < tris.size() && !cancel.load()) {
+            // The calling thread polls progress/cancel until every chunk is
+            // DONE — not merely assigned: on a large atlas the workers claim
+            // all triangles at once and the per-texel work follows, and
+            // stopping the poll there would make Cancel unreachable until the
+            // whole bake finished. (Each chunk adds to doneTris when finished;
+            // a cancel stops the loop via the flag.)
+            while (doneTris.load() < tris.size() && !cancel.load()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 if (!report(QStringLiteral("bake"),
                             from + span * double(doneTris.load()) / std::max<size_t>(1, tris.size())))

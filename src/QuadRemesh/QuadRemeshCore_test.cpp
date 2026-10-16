@@ -489,3 +489,28 @@ TEST(QuadRemeshCore, PerMaterialColoursAreBakedWhenTheyDiffer)
         else          { EXPECT_GT(qBlue(px), 200); EXPECT_LT(qRed(px), 50); }
     }
 }
+
+TEST(QuadRemeshCore, CancelDuringBakeIsHonoured)
+{
+    // A small mesh baked into a large atlas: workers claim every triangle at
+    // once, so the poll loop must keep running until the work is DONE for a
+    // cancel to land.
+    SourceMesh src;
+    plane(10, src.positions, src.indices, &src.uvs);
+    SourceMaterial m;
+    m.maps.insert(QStringLiteral("diffuse_map"), uvGradient(64));
+    src.materials.push_back(m);
+    std::vector<float> qp;
+    std::vector<std::vector<uint32_t>> qf;
+    quadPlane(4, qp, qf);
+    Options o;
+    o.textureSize = 4096;
+    int bakePolls = 0;
+    o.progress = [&](const QString& stage, double) {
+        if (stage == QLatin1String("bake")) ++bakePolls;
+        return bakePolls < 2;   // cancel on the second bake poll
+    };
+    const Result r = transferOnto(src, qp, qf, o);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.cancelled);
+}
