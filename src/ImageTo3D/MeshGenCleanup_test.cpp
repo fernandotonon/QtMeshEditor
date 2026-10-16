@@ -1,10 +1,8 @@
 #include "MeshGenCleanup.h"
 #include "MeshGenPredictor.h"
-#include "QuadRemesh/QuadriFlowRunner.h"
 
 #include <gtest/gtest.h>
 
-#include <set>
 
 namespace {
 
@@ -96,27 +94,7 @@ TEST(MeshGenCleanup, ThresholdIsScaleInvariant)
     EXPECT_EQ(MeshGenCleanup::removeDegenerates(tiny, i2).zeroArea, 0);
 }
 
-TEST(MeshGenCleanup, GridPairsIntoQuads)
-{
-    std::vector<float> pos;
-    std::vector<uint32_t> idx;
-    makeGrid(4, pos, idx);                   // 32 tris = 16 squares
-    std::vector<std::vector<uint32_t>> faces;
-    const auto rep = MeshGenCleanup::pairIntoQuads(pos, idx, faces);
-    ASSERT_TRUE(rep.ok);
-    EXPECT_EQ(rep.quads, 16);
-    EXPECT_EQ(rep.triangles, 0);
-    EXPECT_DOUBLE_EQ(rep.quadDominance(), 1.0);
-    // Every quad covers exactly the four corners of one grid square.
-    std::set<std::set<uint32_t>> cells;
-    for (const auto& f : faces) {
-        ASSERT_EQ(f.size(), 4u);
-        cells.insert(std::set<uint32_t>(f.begin(), f.end()));
-    }
-    EXPECT_EQ(cells.size(), 16u);
-}
-
-TEST(MeshGenCleanup, FinalizeTopologyCleansAndQuadifiesResult)
+TEST(MeshGenCleanup, FinalizeTopologyRemovesDegeneratesByDefault)
 {
     MeshGenPredictor::Result r;
     r.ok = true;
@@ -127,15 +105,10 @@ TEST(MeshGenCleanup, FinalizeTopologyCleansAndQuadifiesResult)
 
     MeshGenPredictor::Options opts;
     EXPECT_TRUE(opts.removeDegenerates);    // default on
-    EXPECT_FALSE(opts.quadify);             // default off
-    opts.quadify = true;
     MeshGenPredictor::finalizeTopology(r, opts);
     ASSERT_TRUE(r.ok);
     EXPECT_EQ(r.degeneratesRemoved, 1);
     EXPECT_EQ(r.triangleCount, 8);
-    EXPECT_EQ(r.quadCount, 4);
-    EXPECT_EQ(r.faces.size(), 4u);
-    // The render buffer still holds the original triangles.
     EXPECT_EQ(r.indices.size(), 24u);
 }
 
@@ -150,58 +123,4 @@ TEST(MeshGenCleanup, FinalizeTopologyRespectsOptOut)
     opts.removeDegenerates = false;
     MeshGenPredictor::finalizeTopology(r, opts);
     EXPECT_EQ(r.indices.size(), 9u);
-    EXPECT_TRUE(r.faces.empty());
-}
-
-TEST(MeshGenCleanup, FinalizeTopologyQuadRemeshRebakesTexture)
-{
-    if (QuadriFlowRunner::defaultHelperPath().isEmpty())
-        GTEST_SKIP() << "qtmesh_quadriflow helper not built";
-    // A closed box (welded) with UVs + a texture: the remesh must replace
-    // the topology with quads and hand back a re-baked texture + normal map.
-    MeshGenPredictor::Result r;
-    r.ok = true;
-    const float c[8][3] = {{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
-                           {0, 0, 1}, {1, 0, 1}, {1, 1, 1}, {0, 1, 1}};
-    const int q[6][4] = {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 5, 4},
-                         {2, 3, 7, 6}, {1, 2, 6, 5}, {0, 4, 7, 3}};
-    // Subdivide each face 8x8 so QuadriFlow has something to work with.
-    const int n = 8;
-    for (const auto& f : q) {
-        const uint32_t base = uint32_t(r.positions.size() / 3);
-        for (int y = 0; y <= n; ++y)
-            for (int x = 0; x <= n; ++x) {
-                const float u = float(x) / n, v = float(y) / n;
-                for (int k = 0; k < 3; ++k) {
-                    const float a = c[f[0]][k] + (c[f[1]][k] - c[f[0]][k]) * u;
-                    const float b = c[f[3]][k] + (c[f[2]][k] - c[f[3]][k]) * u;
-                    r.positions.push_back(a + (b - a) * v);
-                }
-                r.uvs.insert(r.uvs.end(), {u, v});
-            }
-        for (int y = 0; y < n; ++y)
-            for (int x = 0; x < n; ++x) {
-                const uint32_t i0 = base + y * (n + 1) + x, i1 = i0 + 1, i2 = i0 + n + 2, i3 = i0 + n + 1;
-                r.indices.insert(r.indices.end(), {i0, i1, i2, i0, i2, i3});
-            }
-    }
-    r.texture = QImage(64, 64, QImage::Format_RGB888);
-    r.texture.fill(QColor(200, 40, 40));
-    r.vertexCount = int(r.positions.size() / 3);
-    r.triangleCount = int(r.indices.size() / 3);
-
-    MeshGenPredictor::Options opts;
-    opts.quadRemesh = true;
-    opts.quadRemeshTarget = 300;
-    MeshGenPredictor::finalizeTopology(r, opts);
-    ASSERT_TRUE(r.ok) << r.error.toStdString();
-    EXPECT_GT(r.quadCount, 150);
-    EXPECT_FALSE(r.faces.empty());
-    ASSERT_EQ(r.uvs.size(), r.positions.size() / 3 * 2);
-    EXPECT_FALSE(r.normalMap.isNull());
-    ASSERT_FALSE(r.texture.isNull());
-    // The flat red survives the re-bake.
-    const QRgb mid = r.texture.pixel(r.texture.width() / 2, r.texture.height() / 2);
-    EXPECT_GT(qRed(mid), 150);
-    EXPECT_LT(qGreen(mid), 90);
 }

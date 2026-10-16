@@ -1,7 +1,6 @@
 #include "MeshGenBuilder.h"
 
 #include "AppStorage.h"
-#include "EditableMesh.h"    // n-gon (quad) face binding
 #include "Manager.h"
 #include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
 #include "MeshImporterExporter.h"  // applyNormalMapsToEntity (tangents + RTSS)
@@ -217,22 +216,6 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     sub->indexData->indexBuffer = ibuf;
     sub->indexData->indexCount  = idxCount;
     sub->indexData->indexStart  = 0;
-
-    // Quad-dominant face list (Options::quadify): store it as the n-gon
-    // binding. The index buffer above keeps rendering the original
-    // triangles; FBX/OBJ export and Edit Mode read the binding and see
-    // quads. Faces reference the same vertices, so nothing else changes.
-    if (!result.faces.empty()) {
-        std::vector<EditableSubMesh> ngon(1);
-        ngon[0].faces.reserve(result.faces.size());
-        for (const auto& f : result.faces) {
-            EditableFace ef;
-            ef.indices.assign(f.begin(), f.end());
-            if (ef.isValid())
-                ngon[0].faces.push_back(std::move(ef));
-        }
-        writeNgonFacesToMesh(mesh.get(), ngon);
-    }
 
     // Baked-texture path: a per-mesh lit material with the baked diffuse bound
     // as the (named) diffuse_map slot, so the RTSS lighting path and PBR-aware

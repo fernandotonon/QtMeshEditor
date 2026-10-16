@@ -3281,9 +3281,6 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("bake_texture")) opts.bakeTexture = args["bake_texture"].toBool(true);
     // #1017: opt-in UV-seam fill (LaMa; ~200 MB first-use download).
     if (args.contains("inpaint_seams")) opts.inpaintSeams = args["inpaint_seams"].toBool(false);
-    if (args.contains("quads")) opts.quadify = args["quads"].toBool(false);
-    if (args.contains("quad_remesh")) opts.quadRemesh = args["quad_remesh"].toBool(false);
-    if (args.contains("quad_remesh_target")) opts.quadRemeshTarget = args["quad_remesh_target"].toInt(0);
     if (args.contains("remove_degenerates"))
         opts.removeDegenerates = args["remove_degenerates"].toBool(true);
     if (args.contains("texture_size")) {
@@ -3487,7 +3484,6 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 {MeshGenPredictor::Stage::Refine,  QStringLiteral("refining the surface")},
                 {MeshGenPredictor::Stage::Bake,    QStringLiteral("baking the texture")},
                 {MeshGenPredictor::Stage::Color,   QStringLiteral("colouring")},
-                {MeshGenPredictor::Stage::Remesh,  QStringLiteral("quad remeshing")},
             };
             emit toolProgress(QStringLiteral("generate_mesh_from_image"),
                               names.value(stage, QStringLiteral("working")), done, total);
@@ -3571,10 +3567,6 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
     result["degeneratesRemoved"] = res.degeneratesRemoved;
-    if (!res.faces.empty()) {
-        result["faceCount"] = static_cast<int>(res.faces.size());
-        result["quadCount"] = res.quadCount;
-    }
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     result["backend"] = backendName;
     if (!gamePresetId.isEmpty()) {
@@ -12466,9 +12458,6 @@ QJsonArray MCPServer::buildToolsList()
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution, any value 64..8192 (default 1024; GUI default for TRELLIS.2 is 2048). xatlas treats it as a hint, so the atlas can land slightly larger. Overrides game_preset's texture cap when both are given (past a Roblox limit it is honoured and flagged). TRELLIS.2's texture VOLUME is a separate knob: tex_res 512|1024."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
-        props["quads"] = QJsonObject{{"type", "boolean"}, {"description", "Pair triangles into a quad-dominant mesh (triangle pairing, no new vertices — UVs survive). Kept by .fbx/.obj export and Edit Mode; glTF/GLB re-triangulates (no quad primitive). Default false."}};
-        props["quad_remesh"] = QJsonObject{{"type", "boolean"}, {"description", "Rebuild the result as a clean field-aligned all-quad mesh (QuadriFlow): new topology, the baked texture maps are re-baked onto it plus a detail normal map. Supersedes 'quads'. Kept by .fbx/.obj export; glTF/GLB re-triangulates. A failed remesh keeps the triangle mesh with a warning. Default false."}};
-        props["quad_remesh_target"] = QJsonObject{{"type", "integer"}, {"description", "Approximate quad count for quad_remesh (0 = 0.6x the triangles, 1000..20000)."}};
         props["remove_degenerates"] = QJsonObject{{"type", "boolean"}, {"description", "Drop zero-area, repeated-index and duplicate triangles from the result. Default true."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};

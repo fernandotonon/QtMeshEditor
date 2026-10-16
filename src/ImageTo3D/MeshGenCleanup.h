@@ -48,33 +48,6 @@ DegenerateReport removeDegenerates(std::vector<float>& positions,
                                    const std::vector<PerVertexStream>& perVertex = {},
                                    float relativeHeightEps = 1e-5f);
 
-// Quad-dominant face list from a triangle list via QuadRetopo's
-// triangle-pairing backend (no new vertices, so UVs/normals/colours stay
-// valid). Each output face holds 3 or 4 vertex indices into the SAME
-// vertex arrays. The triangle index buffer is NOT changed — callers keep
-// rendering the original triangles (each quad's two triangles are exactly
-// the pair it came from) and store the faces as the n-gon binding that
-// FBX/OBJ export and Edit Mode read.
-struct QuadOptions {
-    double maxAngleDeg       = 25.0;  // dihedral limit for a merge
-    double shapeToleranceDeg = 65.0;  // interior angles within 90 ± this
-    double maxAspectRatio    = 6.0;
-};
-struct QuadReport {
-    bool ok = false;
-    int trianglesBefore = 0;
-    int quads = 0;
-    int triangles = 0;        // unpaired triangles left
-    double quadDominance() const
-    {
-        return trianglesBefore > 0 ? 2.0 * quads / trianglesBefore : 0.0;
-    }
-};
-QuadReport pairIntoQuads(const std::vector<float>& positions,
-                         const std::vector<uint32_t>& indices,
-                         std::vector<std::vector<uint32_t>>& outFaces,
-                         const QuadOptions& opts = {});
-
 } // namespace MeshGenCleanup
 
 #endif // MESH_GEN_CLEANUP_H

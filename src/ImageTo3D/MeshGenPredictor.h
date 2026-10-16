@@ -132,19 +132,10 @@ public:
         // finished mesh (MeshGenCleanup::removeDegenerates). ON by default:
         // nothing it removes is visible geometry.
         bool removeDegenerates = true;
-        // Pair triangles into a quad-dominant face list (QuadRetopo triangle
-        // pairing — no new vertices, UVs survive) stored in Result::faces.
-        // FBX/OBJ export and Edit Mode keep the quads; glTF/GLB cannot hold
-        // quads by spec and re-triangulate them. OFF by default.
-        bool quadify = false;
-        // Field-aligned all-quad REMESH (QuadriFlow, out-of-process helper):
-        // new topology near quadRemeshTarget quads (0 = 0.6x the triangles,
-        // 1000..20000); the baked texture maps are re-baked onto the new UVs
-        // and a detail normal map carries the dense mesh's relief. Takes
-        // precedence over `quadify`. Failure keeps the triangle mesh and sets
-        // Result::warning — never fails the generation. OFF by default.
-        bool quadRemesh = false;
-        int  quadRemeshTarget = 0;
+        // Quad topology is NOT part of generation: run Quad Retopology
+        // (triangle pairing or the QuadriFlow remesh) on the result — CLI
+        // `qtmesh retopo`, MCP `retopologize`, GUI dialog. Both operate on
+        // exactly what this pipeline outputs (simplified + baked).
 
         // ---- Backend selection ------------------------------------------------
         // TripoSG ignores the colour/bake options (geometry-only model) and
@@ -215,12 +206,6 @@ public:
         // position-welded ones so chart seams stay smooth.
         std::vector<float>    normals;
         QImage                texture;
-        // Options::quadify: polygon faces (3 or 4 vertex indices each) over
-        // the SAME vertex arrays. `indices` still holds the triangles that
-        // render; MeshGenBuilder stores these as the n-gon binding. Empty =
-        // triangles only.
-        std::vector<std::vector<uint32_t>> faces;
-        int quadCount = 0;
         int degeneratesRemoved = 0;
         int vertexCount   = 0;
         int triangleCount = 0;
@@ -285,7 +270,6 @@ public:
         Refine,   // iso-surface reprojection probes (per-chunk)
         Bake,     // texture bake colour queries (per-chunk, baker-reported)
         Color,    // per-vertex colour fallback pass (per-chunk)
-        Remesh,   // QuadriFlow quad remesh + texture re-bake (percent 0..100)
     };
 
     // Progress/cancel callback. Invoked per unit of work with
@@ -311,10 +295,9 @@ public:
     // (upscale) and for tests.
     static void capResultTextures(Result& r, int maxSize);
     // Final topology pass applied by predict() to every backend's Result:
-    // Options::removeDegenerates, then Options::quadify (MeshGenCleanup).
+    // Options::removeDegenerates (MeshGenCleanup).
     // Exposed so the pure-data tests can drive it without a model.
-    static void finalizeTopology(Result& r, const Options& opts,
-                                 const std::function<bool(int, int)>& remeshProgress = {});
+    static void finalizeTopology(Result& r, const Options& opts);
 
     // ---- Pure-data helpers (no ONNX / no Ogre — unit-testable) ----------------
 

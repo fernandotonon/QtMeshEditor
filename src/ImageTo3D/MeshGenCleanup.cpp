@@ -1,7 +1,5 @@
 #include "MeshGenCleanup.h"
 
-#include "QuadRetopo.h"
-
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -115,42 +113,6 @@ DegenerateReport removeDegenerates(std::vector<float>& positions,
     for (const PerVertexStream& st : perVertex)
         if (st.data && st.data != &positions)
             compactStream(*st.data, st.components);
-    return rep;
-}
-
-QuadReport pairIntoQuads(const std::vector<float>& positions,
-                         const std::vector<uint32_t>& indices,
-                         std::vector<std::vector<uint32_t>>& outFaces,
-                         const QuadOptions& opts)
-{
-    QuadReport rep;
-    outFaces.clear();
-    const int nv = static_cast<int>(positions.size() / 3);
-    const int nt = static_cast<int>(indices.size() / 3);
-    rep.trianglesBefore = nt;
-    if (nv < 3 || nt < 1)
-        return rep;
-
-    QuadRetopoOptions qo;
-    qo.targetFaces = -1;   // pair everything that scores well
-    qo.maxAngleDeg = opts.maxAngleDeg;
-    qo.shapeToleranceDeg = opts.shapeToleranceDeg;
-    qo.maxAspectRatio = opts.maxAspectRatio;
-    std::vector<std::vector<unsigned int>> faces;
-    const QuadRetopoReport qr = QuadRetopo::retopologizeMesh(
-        positions.data(), nv,
-        reinterpret_cast<const unsigned int*>(indices.data()), nt, qo, faces);
-    if (!qr.error.isEmpty() || faces.empty())
-        return rep;
-
-    outFaces.reserve(faces.size());
-    for (auto& f : faces) {
-        if (f.size() == 4) ++rep.quads;
-        else if (f.size() == 3) ++rep.triangles;
-        else continue;
-        outFaces.emplace_back(f.begin(), f.end());
-    }
-    rep.ok = true;
     return rep;
 }
 

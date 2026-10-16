@@ -12794,9 +12794,6 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool refine = true;
     bool bake = true;
     bool inpaintSeams = false;   // #1017: opt-in UV-seam fill
-    bool quadify = false;        // pair triangles into quads (FBX/OBJ keep them)
-    bool quadRemesh = false;     // QuadriFlow all-quad remesh (+ texture re-bake)
-    int  quadRemeshTarget = 0;
     bool removeDegenerates = true; // drop zero-area/duplicate triangles
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
@@ -12849,18 +12846,6 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--inpaint-seams") { inpaintSeams = true; continue; }   // #1017
-        if (arg == "--quads") { quadify = true; continue; }
-        if (arg == "--quad-remesh") { quadRemesh = true; continue; }
-        if (arg == "--quad-target" && i + 1 < argc) {
-            bool ok = false;
-            quadRemeshTarget = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
-            if (!ok || quadRemeshTarget <= 0) {
-                err() << "Error: --quad-target must be a positive integer." << Qt::endl;
-                return 2;
-            }
-            quadRemesh = true;
-            continue;
-        }
         if (arg == "--keep-degenerates") { removeDegenerates = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
@@ -13127,7 +13112,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
-                 "[--upscale-texture] [--no-pbr] [--quads] [--quad-remesh [--quad-target N]] [--keep-degenerates] "
+                 "[--upscale-texture] [--no-pbr] [--keep-degenerates] "
                  "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
                  "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
@@ -13299,9 +13284,6 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.inpaintSeams    = inpaintSeams;
-    opts.quadify         = quadify;
-    opts.quadRemesh      = quadRemesh;
-    opts.quadRemeshTarget = quadRemeshTarget;
     opts.removeDegenerates = removeDegenerates;
     opts.textureSize     = textureSize;
     opts.backend         = backend;
@@ -13397,13 +13379,6 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
 
     const QString fmt = formatForExtension(outputPath);
-    if ((quadify || quadRemesh) && !res.faces.empty()) {
-        const QString ext = QFileInfo(outputPath).suffix().toLower();
-        if (ext != QLatin1String("fbx") && ext != QLatin1String("obj"))
-            err() << "Note: quads are kept only by .fbx and .obj; ." << ext
-                  << " stores triangles (glTF has no quad primitive), so the "
-                     "quads are re-triangulated on export." << Qt::endl;
-    }
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
         QString("Exporting %1").arg(QFileInfo(outputPath).absoluteFilePath()));
     if (MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0) {
@@ -13414,11 +13389,6 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     QString topo;
     if (res.degeneratesRemoved > 0)
         topo += QStringLiteral("Removed %1 degenerate triangles\n").arg(res.degeneratesRemoved);
-    if (!res.faces.empty())
-        topo += QStringLiteral("Quads: %1 of %2 faces (%3% of triangles paired)\n")
-                    .arg(res.quadCount).arg(res.faces.size())
-                    .arg(res.triangleCount > 0
-                             ? qRound(200.0 * res.quadCount / res.triangleCount) : 0);
     cliWrite(topo + QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n%5")
                  .arg(res.vertexCount).arg(res.triangleCount)
                  .arg(!res.uvs.empty()

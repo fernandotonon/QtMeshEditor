@@ -2779,27 +2779,13 @@ Rectangle {
                 checked: false
                 enabled: !MeshGenController.busy && mgBake.checked
             }
-            // Final topology clean-up, every backend. Degenerate removal is
-            // pure cleanup (zero-area / duplicate triangles) and stays on;
-            // quads are opt-in because glTF/GLB cannot store them.
+            // Final topology clean-up, every backend: degenerate removal is
+            // pure cleanup (zero-area / duplicate triangles). Quad topology is
+            // a post-process — Quad Retopology (Material Mode) on the result.
             InspectorCheck {
                 id: mgCleanDegen
                 text: "Remove degenerate triangles"
                 checked: true
-                enabled: !MeshGenController.busy
-            }
-            InspectorCheck {
-                id: mgQuads
-                text: "Convert to quads (FBX/OBJ keep them)"
-                checked: false
-                enabled: !MeshGenController.busy && !mgQuadRemesh.checked
-            }
-            // Field-aligned all-quad remesh (QuadriFlow): new, clean topology;
-            // the baked maps are re-baked onto it. Supersedes the pairing above.
-            InspectorCheck {
-                id: mgQuadRemesh
-                text: "Quad remesh (QuadriFlow, clean all-quad topology)"
-                checked: false
                 enabled: !MeshGenController.busy
             }
 
@@ -2856,8 +2842,6 @@ Rectangle {
                         steps.push({ key: "bake", label: "Bake texture" })
                     else if (!sg && !mgBake.checked)
                         steps.push({ key: "color", label: "Vertex colors" })
-                    if (mgQuadRemesh.checked)
-                        steps.push({ key: "remesh", label: "Quad remesh (QuadriFlow)" })
                     if (mgUpscale.checked && buildBake)
                         steps.push({ key: "upscale", label: "Upscale texture 2×" })
                     steps.push({ key: "build",
@@ -2887,8 +2871,6 @@ Rectangle {
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
                         "remove_degenerates": mgCleanDegen.checked,
-                        "quads": mgQuads.checked,
-                        "quad_remesh": mgQuadRemesh.checked,
                         "backend": mgBackendCombo.backendId,
                         // Game-ready simplification target (all backends).
                         // The preset id carries the strict-ceiling + texture

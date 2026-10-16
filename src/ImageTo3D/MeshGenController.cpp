@@ -615,8 +615,6 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
-    const bool wantQuads   = optBool("quads", false);
-    const bool wantQuadRemesh = optBool("quad_remesh", false);
     const bool wantClean   = optBool("remove_degenerates", true);
     m_upscaleTexture       = optBool("upscale_texture", false);
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
@@ -791,7 +789,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      textureSize, useSG, useT2, flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
                                      t2TargetTrisStrict, t2MaxTexture,
-                                     t2Supersample, wantQuads, wantQuadRemesh, wantClean,
+                                     t2Supersample, wantClean,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -842,8 +840,6 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
-        opts.quadify         = wantQuads;
-        opts.quadRemesh      = wantQuadRemesh;
         opts.removeDegenerates = wantClean;
         opts.textureSize     = textureSize;
         opts.backend         = backend;
@@ -884,7 +880,6 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                     case MeshGenPredictor::Stage::Refine:  name = "refine";  break;
                     case MeshGenPredictor::Stage::Bake:    name = "bake";    break;
                     case MeshGenPredictor::Stage::Color:   name = "color";   break;
-                    case MeshGenPredictor::Stage::Remesh:  name = "remesh";  break;
                 }
                 if (name) post(QString::fromLatin1(name), done, total);
             }
