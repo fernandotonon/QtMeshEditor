@@ -423,6 +423,13 @@ jobs:
             Write-Error "qtmesh_quadriflow licence notices missing or EMPTY in bin/"
             exit 1
         }
+        $size = (Get-Item $exe).Length
+        Write-Host "qtmesh_quadriflow.exe: $size bytes"
+        # Stripped it is ~1-2 MB; 3.52.0 shipped 62 MB of debug info.
+        if ($size -gt 10485760) {
+            Write-Error "qtmesh_quadriflow.exe is over 10 MB — not stripped?"
+            exit 1
+        }
         # No arguments → it prints its usage line and exits 2. Seeing that
         # line proves the exe loads (no missing DLL).
         $out = & $exe 2>&1 | Out-String
@@ -960,6 +967,12 @@ jobs:
             fi
             if [ ! -s ./bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt ]; then
               echo "ERROR: qtmesh_quadriflow licence notices missing or empty"
+              exit 1
+            fi
+            ls -la ./bin/qtmesh_quadriflow
+            # Stripped it is ~1 MB; 3.52.0 shipped 42 MB of debug info.
+            if [ "$(stat -c %s ./bin/qtmesh_quadriflow)" -gt 10485760 ]; then
+              echo "ERROR: qtmesh_quadriflow is over 10 MB — not stripped?"
               exit 1
             fi
             ldd ./bin/qtmesh_quadriflow
