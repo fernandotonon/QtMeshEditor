@@ -2868,12 +2868,13 @@ BodyRetargeter::evaluateFrame(
     // roll of the hand against its bind pose, about the hand's own axis.
     auto limitWristTwist = [&](int boneIdx, const Ogre::Quaternion& local) {
         constexpr float kMaxTwist = 0.2f;  // ~11 degrees: the estimate is noise-dominated
-        Ogre::Vector3 axisWorld = Ogre::Vector3::ZERO;
-        for (int j = 0; j < nBones; ++j)
-            if (tb.parentIdx[static_cast<size_t>(j)] == boneIdx) {
-                axisWorld = tb.bindPos[static_cast<size_t>(j)] - tb.bindPos[static_cast<size_t>(boneIdx)];
-                break;
-            }
+        // Longitudinal axis = forearm -> hand. (A hand's first child may be a
+        // laterally placed thumb, which would point the axis sideways.)
+        const int forearmIdx = tb.parentIdx[static_cast<size_t>(boneIdx)];
+        if (forearmIdx < 0)
+            return local;
+        const Ogre::Vector3 axisWorld =
+            tb.bindPos[static_cast<size_t>(boneIdx)] - tb.bindPos[static_cast<size_t>(forearmIdx)];
         if (axisWorld.squaredLength() < 1e-10f)
             return local;
         const Ogre::Vector3 axis =

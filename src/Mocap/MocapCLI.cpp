@@ -60,6 +60,10 @@ namespace MocapCLI {
 
 namespace {
 
+// Pose keys closer than this collapse into one sample (the baker falls back to
+// frame-index timing when the whole clip spans ~1 microsecond).
+constexpr double kMinKeyGapSec = 0.001;
+
 const char* kUsage =
     "Usage: qtmesh mocap <video> [--face] [--body] --mesh <meshfile> [-o out.glb]\n"
     "              [--clip-name NAME] [--fps 30] [--smooth-cutoff HZ]\n"
@@ -222,9 +226,10 @@ int run(int argc, char* argv[])
             const QString v = value("--key-interval");
             if (v.isEmpty()) return 2;
             keyInterval = v.toDouble();
-            if (!(keyInterval > 0.0)) {
-                CLIPipeline::writeCliError(
-                    QStringLiteral("Error: --key-interval must be > 0 seconds.\n"));
+            if (!std::isfinite(keyInterval) || keyInterval < kMinKeyGapSec) {
+                CLIPipeline::writeCliError(QStringLiteral(
+                    "Error: --key-interval must be a finite value >= %1 seconds.\n")
+                    .arg(kMinKeyGapSec));
                 return 2;
             }
             continue;
@@ -236,10 +241,10 @@ int run(int argc, char* argv[])
                 bool ok = false;
                 const double t = part.trimmed().toDouble(&ok);
                 if (!ok || !std::isfinite(t) || t < 0.0
-                    || (!keyTimes.isEmpty() && t <= keyTimes.last())) {
+                    || (!keyTimes.isEmpty() && t - keyTimes.last() < kMinKeyGapSec)) {
                     CLIPipeline::writeCliError(QStringLiteral(
-                        "Error: --key-times must be strictly ascending "
-                        "non-negative seconds (got '%1').\n").arg(part));
+                        "Error: --key-times must be ascending non-negative seconds, "
+                        "at least %1 s apart (got '%2').\n").arg(kMinKeyGapSec).arg(part));
                     return 2;
                 }
                 keyTimes.append(t);

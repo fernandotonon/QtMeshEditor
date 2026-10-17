@@ -1910,9 +1910,15 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
         return fail(tr("The selection is not a humanoid rig (need a skinned "
                        "mesh resolving at least half of the body roles)."));
 
-    // Times: explicit list wins, else even spacing.
+    // Keys closer than this collapse into one sample (the baker falls back to
+    // frame-index timing when the whole clip spans ~1 microsecond).
+    constexpr double kMinKeyGapSec = 0.001;
+
+    // Times: explicit list wins, else even spacing. Empty fields are KEPT so a
+    // missing value is rejected instead of shifting the rest onto wrong images.
     std::vector<double> times;
-    const QStringList parts = timesCsv.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    const QStringList parts = timesCsv.trimmed().isEmpty()
+        ? QStringList() : timesCsv.split(QLatin1Char(','), Qt::KeepEmptyParts);
     if (!parts.isEmpty()) {
         if (parts.size() != imagePaths.size())
             return fail(tr("Times: %1 values for %2 images.")
@@ -1921,16 +1927,22 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
             bool ok = false;
             const double t = p.trimmed().toDouble(&ok);
             if (!ok || !std::isfinite(t) || t < 0.0
-                || (!times.empty() && t <= times.back()))
-                return fail(tr("Times must be strictly ascending seconds "
-                               "(bad value '%1').").arg(p));
+                || (!times.empty() && t - times.back() < kMinKeyGapSec))
+                return fail(tr("Times must be ascending seconds at least %1 s "
+                               "apart (bad value '%2').")
+                                .arg(kMinKeyGapSec).arg(p));
             times.push_back(t);
         }
     } else {
-        const double step = intervalSec > 0.0 ? intervalSec : 0.5;
+        const double step = (std::isfinite(intervalSec) && intervalSec >= kMinKeyGapSec)
+                                ? intervalSec : 0.5;
         for (int i = 0; i < imagePaths.size(); ++i)
             times.push_back(i * step);
     }
+
+    // Pin the target now: processEvents() below can let the selection change,
+    // and refreshMappingForSelection() would then repoint d->entityName.
+    const std::string targetEntity = entity->getName();
 
     if (!PoseCapPredictor::modelsPresent()) {
         setStatusMessage(tr("Downloading pose capture models…"));
@@ -1972,7 +1984,7 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
     opts.clipName = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
     opts.algorithmUsed = QStringLiteral("pose-ik-keyframes");
     opts.rootMotion = false;  // framing differences between photos aren't travel
-    auto* cmd = new RecordBodyClipCommand(d->entityName, std::move(frames),
+    auto* cmd = new RecordBodyClipCommand(targetEntity, std::move(frames),
                                           30, opts);
     UndoManager::getSingleton()->push(cmd);
     const auto& rep = cmd->report();

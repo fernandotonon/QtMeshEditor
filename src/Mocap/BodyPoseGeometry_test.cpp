@@ -101,4 +101,29 @@ TEST(BodyPoseGeometry, StraightArmKeepsForearmAlignedWithUpperArm)
     EXPECT_NEAR(elbowTwistDegrees(pose, PoseIK::LShoulder, PoseIK::LElbow), 0.0, 1.0);
 }
 
+// A fully folded elbow (forearm back along the upper arm) makes the two
+// directions antiparallel, where the shortest-arc axis is arbitrary. A hair of
+// landmark noise must not flip the forearm roll.
+TEST(BodyPoseGeometry, FoldedElbowRollIsStableUnderLandmarkNoise)
+{
+    auto solveFolded = [](float noiseZ, float noiseY) {
+        Landmarks l = standing();
+        set(l, 13, 0.45f, -0.45f, 0.f);
+        set(l, 15, 0.20f, -0.45f + noiseY, noiseZ);  // folded back toward the shoulder
+        set(l, 14, -0.45f, -0.45f, 0.f);
+        set(l, 16, -0.70f, -0.45f, 0.f);
+        return BodyPoseGeometry::solve(l.data());
+    };
+    // Noise in two perpendicular directions: the arbitrary shortest-arc axis
+    // follows the noise, so the unguarded roll differs by ~180 degrees here.
+    const auto a = solveFolded(0.004f, 0.f);
+    const auto b = solveFolded(0.f, 0.004f);
+    ASSERT_TRUE(a.resolved(PoseIK::LElbow));
+    ASSERT_TRUE(b.resolved(PoseIK::LElbow));
+    const Ogre::Quaternion delta =
+        a.orientations[PoseIK::LElbow].Inverse() * b.orientations[PoseIK::LElbow];
+    const double deg = 2.0 * std::acos(std::min(1.0f, std::fabs(delta.w))) * 180.0 / M_PI;
+    EXPECT_LT(deg, 8.0) << "forearm roll flipped by " << deg << " deg for ~1 deg of noise";
+}
+
 #endif  // ENABLE_MOCAP

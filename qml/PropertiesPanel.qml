@@ -3352,9 +3352,20 @@ Rectangle {
                 property real interval: 0.5
                 readonly property int itemCount: poseItems.length
 
+                // A pinned time wins; an unpinned key follows the previous key by
+                // the default spacing, so appending/reordering stays ascending.
                 function effectiveTime(i) {
                     var t = poseItems[i].time
-                    return t >= 0 ? t : i * interval
+                    if (t >= 0) return t
+                    return i === 0 ? 0 : effectiveTime(i - 1) + interval
+                }
+                // "" when the whole key sequence is valid, else why not.
+                function timesError() {
+                    for (var i = 1; i < poseItems.length; ++i)
+                        if (effectiveTime(i) - effectiveTime(i - 1) < 0.001)
+                            return "Key " + (i + 1) + " must be later than key " + i
+                                   + " — reorder, or edit its time."
+                    return ""
                 }
                 function setItems(arr) { poseItems = arr }
                 function move(i, d) {
@@ -3506,7 +3517,24 @@ Rectangle {
                                         { glyph: "✕", act: 2 }
                                     ]
                                     Rectangle {
+                                        id: rowBtn
                                         required property var modelData
+                                        function activate() {
+                                            if (modelData.act === 0)
+                                                poseKeysCol.move(poseRow.index, -1)
+                                            else if (modelData.act === 1)
+                                                poseKeysCol.move(poseRow.index, 1)
+                                            else
+                                                poseKeysCol.removeAt(poseRow.index)
+                                        }
+                                        activeFocusOnTab: true
+                                        Accessible.role: Accessible.Button
+                                        Accessible.name: (modelData.act === 0 ? "Move up"
+                                            : modelData.act === 1 ? "Move down" : "Remove")
+                                            + " pose " + (poseRow.index + 1)
+                                        Keys.onSpacePressed: activate()
+                                        Keys.onReturnPressed: activate()
+                                        Keys.onEnterPressed: activate()
                                         width: 18; height: 22; radius: 2
                                         anchors.verticalCenter: parent.verticalCenter
                                         color: arrowMa.containsMouse
@@ -3529,14 +3557,7 @@ Rectangle {
                                             anchors.fill: parent
                                             hoverEnabled: true
                                             cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
-                                                if (modelData.act === 0)
-                                                    poseKeysCol.move(poseRow.index, -1)
-                                                else if (modelData.act === 1)
-                                                    poseKeysCol.move(poseRow.index, 1)
-                                                else
-                                                    poseKeysCol.removeAt(poseRow.index)
-                                            }
+                                            onClicked: rowBtn.activate()
                                         }
                                     }
                                 }
@@ -3594,11 +3615,24 @@ Rectangle {
                     }
                 }
 
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    visible: poseKeysCol.itemCount >= 2 && poseKeysCol.timesError() !== ""
+                    color: "#e57373"
+                    font.pixelSize: 10
+                    text: poseKeysCol.timesError()
+                }
                 InspectorButton {
                     text: "Create animation from poses"
                     clickEnabled: poseKeysCol.itemCount >= 2
                                   && MocapController.state === 0
+                                  && poseKeysCol.timesError() === ""
                     onClicked: {
+                        // Take focus off any time field first: its edit is only
+                        // committed on editingFinished (focus loss).
+                        poseKeysCol.forceActiveFocus()
+                        if (poseKeysCol.timesError() !== "") return
                         var paths = [], times = []
                         for (var i = 0; i < poseKeysCol.itemCount; ++i) {
                             paths.push(poseKeysCol.poseItems[i].path)
