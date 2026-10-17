@@ -135,6 +135,17 @@ public:
     // Re-base the head-pose neutral on the current sample ("hold a neutral
     // face"). Auto-applied on the first confident sample of a preview.
     Q_INVOKABLE void calibrateNeutral();
+    // Pose keyframes from still images (sprite frames / photos): multi-select
+    // dialog (returns naturally-sorted local paths, "" list if cancelled), then
+    // one body keyframe per image on the SELECTED humanoid, interpolated
+    // between keys. `timesCsv` (optional, one ascending second value per
+    // image) overrides `intervalSec` spacing. Synchronous, one undo step.
+    // Returns "" on success or an error message.
+    Q_INVOKABLE QStringList pickPoseImages();
+    Q_INVOKABLE QString buildPoseKeyframes(const QStringList& imagePaths,
+                                           double intervalSec,
+                                           const QString& timesCsv,
+                                           const QString& clipName);
 
 #ifdef ENABLE_MOCAP
     // Test seam: enter Previewing without a camera/worker (no camera in CI).

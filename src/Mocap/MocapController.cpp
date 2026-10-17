@@ -41,6 +41,9 @@
 #include <QHash>
 #include <QSettings>
 #include <QBuffer>
+#include <QCollator>
+#include <QFileInfo>
+#include <QImage>
 #include <QElapsedTimer>
 #include <QThread>
 #include <QTimer>
@@ -131,6 +134,12 @@ void MocapController::stopPreview() {}
 bool MocapController::startRecording() { return false; }
 void MocapController::stopRecording() {}
 void MocapController::calibrateNeutral() {}
+QStringList MocapController::pickPoseImages() { return {}; }
+QString MocapController::buildPoseKeyframes(const QStringList&, double,
+                                            const QString&, const QString&)
+{
+    return unavailableReason();
+}
 
 #else  // ENABLE_MOCAP
 
@@ -1847,6 +1856,153 @@ void MocapController::stopPreview()
     if (d->status.isEmpty() || d->status.startsWith(tr("Live")))
         setStatusMessage(tr("Preview stopped."));
     SentryReporter::addBreadcrumb("ai.assist.mocap_live", "preview stop");
+}
+
+QStringList MocapController::pickPoseImages()
+{
+    if (QWidget* activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+    }
+    QApplication::processEvents();
+    QStringList files = QFileDialog::getOpenFileNames(
+        QApplication::activeWindow(),
+        tr("Select pose images (one per keyframe)"),
+        QDir::currentPath(),
+        tr("Images (*.png *.jpg *.jpeg *.bmp);;All files (*)"),
+        nullptr,
+        QFileDialog::DontUseNativeDialog);
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    std::sort(files.begin(), files.end(),
+              [&](const QString& a, const QString& b) {
+                  return collator.compare(a, b) < 0;
+              });
+    return files;
+}
+
+QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
+                                            double intervalSec,
+                                            const QString& timesCsv,
+                                            const QString& clipName)
+{
+    auto fail = [&](const QString& msg) {
+        setStatusMessage(msg);
+        return msg;
+    };
+    if (d->state != Idle)
+        return fail(tr("Stop the live preview first."));
+    if (imagePaths.size() < 2)
+        return fail(tr("Pick at least 2 pose images."));
+
+    refreshMappingForSelection();
+    auto* sel = SelectionSet::getSingleton();
+    Ogre::Entity* entity = nullptr;
+    if (sel) {
+        const auto ents = sel->getResolvedEntities();
+        if (!ents.isEmpty())
+            entity = ents.first();
+    }
+    if (!entity)
+        return fail(tr("Select a humanoid rigged entity first."));
+    if (!d->bodyRigOk)
+        return fail(tr("The selection is not a humanoid rig (need a skinned "
+                       "mesh resolving at least half of the body roles)."));
+
+    // Keys closer than this collapse into one sample (the baker falls back to
+    // frame-index timing when the whole clip spans ~1 microsecond).
+    constexpr double kMinKeyGapSec = 0.001;
+
+    // Times: explicit list wins, else even spacing. Empty fields are KEPT so a
+    // missing value is rejected instead of shifting the rest onto wrong images.
+    std::vector<double> times;
+    const QStringList parts = timesCsv.trimmed().isEmpty()
+        ? QStringList() : timesCsv.split(QLatin1Char(','), Qt::KeepEmptyParts);
+    if (!parts.isEmpty()) {
+        if (parts.size() != imagePaths.size())
+            return fail(tr("Times: %1 values for %2 images.")
+                            .arg(parts.size()).arg(imagePaths.size()));
+        for (const QString& p : parts) {
+            bool ok = false;
+            const double t = p.trimmed().toDouble(&ok);
+            if (!ok || !std::isfinite(t) || t < 0.0
+                || (!times.empty() && t - times.back() < kMinKeyGapSec))
+                return fail(tr("Times must be ascending seconds at least %1 s "
+                               "apart (bad value '%2').")
+                                .arg(kMinKeyGapSec).arg(p));
+            times.push_back(t);
+        }
+    } else {
+        const double step = (std::isfinite(intervalSec) && intervalSec >= kMinKeyGapSec)
+                                ? intervalSec : 0.5;
+        for (int i = 0; i < imagePaths.size(); ++i)
+            times.push_back(i * step);
+    }
+
+    // Pin the target now: processEvents() below can let the selection change,
+    // and refreshMappingForSelection() would then repoint d->entityName.
+    const std::string targetEntity = entity->getName();
+
+    if (!PoseCapPredictor::modelsPresent()) {
+        setStatusMessage(tr("Downloading pose capture models…"));
+        QCoreApplication::processEvents();
+        if (PoseCapPredictor::ensureModelsBlocking().isEmpty())
+            return fail(tr("Pose capture models are not available (offline, "
+                           "or not hosted yet)."));
+    }
+    PoseCapPredictor predictor;
+    if (!predictor.load())
+        return fail(predictor.lastError());
+
+    BodyPoseStream stream;
+    stream.setSmoothing(1.0, false);  // independent poses: no temporal filter
+    std::vector<BodyLiveFrame> frames;
+    QStringList skipped;
+    for (int i = 0; i < imagePaths.size(); ++i) {
+        setStatusMessage(tr("Analysing pose %1 / %2…")
+                             .arg(i + 1).arg(imagePaths.size()));
+        QCoreApplication::processEvents();
+        const QImage img(imagePaths[i]);
+        if (img.isNull())
+            return fail(tr("Cannot read image %1").arg(imagePaths[i]));
+        predictor.resetTracking();
+        stream.reset();
+        BodyLiveFrame frame = stream.process(
+            predictor.predict(img, times[i]), img.width(), img.height());
+        if (!frame.valid) {
+            skipped << QFileInfo(imagePaths[i]).fileName();
+            continue;
+        }
+        frames.push_back(frame);
+    }
+    if (frames.size() < 2)
+        return fail(tr("A person was found in only %1 image(s); need at "
+                       "least 2.").arg(frames.size()));
+
+    MocapRecorder::BodyRecordOptions opts;
+    opts.clipName = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
+    opts.algorithmUsed = QStringLiteral("pose-ik-keyframes");
+    opts.rootMotion = false;  // framing differences between photos aren't travel
+    auto* cmd = new RecordBodyClipCommand(targetEntity, std::move(frames),
+                                          30, opts);
+    UndoManager::getSingleton()->push(cmd);
+    const auto& rep = cmd->report();
+    if (!rep.ok())
+        return fail(rep.error);
+
+    SentryReporter::addBreadcrumb(
+        QStringLiteral("ai.assist.mocap_body"),
+        QStringLiteral("gui pose keyframes: %1 images -> %2 tracks")
+            .arg(imagePaths.size()).arg(rep.tracksWritten));
+    QString msg = tr("Created '%1': %2 keys, %3 tracks, %4s.")
+                      .arg(rep.clipName).arg(rep.framesProcessed)
+                      .arg(rep.tracksWritten)
+                      .arg(rep.clipLength, 0, 'f', 2);
+    if (!skipped.isEmpty())
+        msg += tr(" No person in: %1.").arg(skipped.join(QStringLiteral(", ")));
+    setStatusMessage(msg);
+    return {};
 }
 
 #include "MocapController.moc"

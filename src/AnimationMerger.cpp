@@ -2862,6 +2862,42 @@ BodyRetargeter::evaluateFrame(
     const bool haveNeutral = d->haveNeutral;
 
 #ifdef ENABLE_MOCAP
+    // The pose model's finger landmarks give a noisy hand roll (measured: the
+    // same T-pose read 36 and 113 degrees on two photos, 145 on the other
+    // wrist). Unchecked it twists the forearm skin at the elbow, so cap the
+    // roll of the hand against its bind pose, about the hand's own axis.
+    auto limitWristTwist = [&](int boneIdx, const Ogre::Quaternion& local) {
+        constexpr float kMaxTwist = 0.2f;  // ~11 degrees: the estimate is noise-dominated
+        // Longitudinal axis = forearm -> hand. (A hand's first child may be a
+        // laterally placed thumb, which would point the axis sideways.)
+        const int forearmIdx = tb.parentIdx[static_cast<size_t>(boneIdx)];
+        if (forearmIdx < 0)
+            return local;
+        const Ogre::Vector3 axisWorld =
+            tb.bindPos[static_cast<size_t>(boneIdx)] - tb.bindPos[static_cast<size_t>(forearmIdx)];
+        if (axisWorld.squaredLength() < 1e-10f)
+            return local;
+        const Ogre::Vector3 axis =
+            (tb.bindWorld[static_cast<size_t>(boneIdx)].Inverse() * axisWorld).normalisedCopy();
+        const Ogre::Quaternion delta =
+            tb.bindLocal[static_cast<size_t>(boneIdx)].Inverse() * local;
+        const Ogre::Vector3 v(delta.x, delta.y, delta.z);
+        const float proj = v.dotProduct(axis);
+        float angle = 2.f * std::atan2(proj, delta.w);
+        constexpr float kPi = 3.14159265f;
+        angle = std::fmod(angle + kPi, 2.f * kPi);
+        if (angle < 0.f) angle += 2.f * kPi;
+        angle -= kPi;
+        const float limited = std::clamp(angle, -kMaxTwist, kMaxTwist);
+        if (limited == angle)
+            return local;
+        const Ogre::Quaternion twist(Ogre::Radian(angle), axis);
+        const Ogre::Quaternion swing = delta * twist.Inverse();
+        Ogre::Quaternion out = tb.bindLocal[static_cast<size_t>(boneIdx)] * swing
+                               * Ogre::Quaternion(Ogre::Radian(limited), axis);
+        out.normalise();
+        return out;
+    };
     if (mediaPipeWorld33) {
         const auto pose = BodyPoseGeometry::solve(mediaPipeWorld33, mediaPipeVisibility33, &d->previousGeometry);
         std::vector<Ogre::Quaternion> W(static_cast<size_t>(nBones));
@@ -2880,6 +2916,8 @@ BodyRetargeter::evaluateFrame(
                                                    * d->geometryToBone[static_cast<size_t>(i)];
                     local = parent.Inverse() * world;
                     local.normalise();
+                    if (c == PoseIK::LHand || c == PoseIK::RHand)
+                        local = limitWristTwist(i, local);
                     d->heldLocal[static_cast<size_t>(i)] = local;
                 }
                 out.emplace_back(static_cast<unsigned short>(i), local);
