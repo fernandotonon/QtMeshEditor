@@ -3339,6 +3339,278 @@ Rectangle {
                 }
             }
 
+            // Pose keyframes from still images (sprite frames / photos): each
+            // image is one body pose keyed at its own time; the rig is
+            // interpolated between them. Independent of the live preview.
+            Column {
+                id: poseKeysCol
+                visible: mocapReady && MocapController.bodyAvailable
+                width: parent.width - 16
+                spacing: 4
+                // [{path, time}] in key order; time < 0 = auto (index * interval)
+                property var poseItems: []
+                property real interval: 0.5
+                readonly property int itemCount: poseItems.length
+
+                function effectiveTime(i) {
+                    var t = poseItems[i].time
+                    return t >= 0 ? t : i * interval
+                }
+                function setItems(arr) { poseItems = arr }
+                function move(i, d) {
+                    var j = i + d
+                    if (j < 0 || j >= poseItems.length) return
+                    var a = poseItems.slice()
+                    var t = a[i]; a[i] = a[j]; a[j] = t
+                    poseItems = a
+                }
+                function removeAt(i) {
+                    var a = poseItems.slice()
+                    a.splice(i, 1)
+                    poseItems = a
+                }
+                function setTime(i, v) {
+                    var a = poseItems.slice()
+                    a[i] = { path: a[i].path, time: v }
+                    poseItems = a
+                }
+                function respace() {
+                    poseItems = poseItems.map(function(it) {
+                        return { path: it.path, time: -1 }
+                    })
+                }
+
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    font.bold: true
+                    text: "Pose keyframes from images"
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    color: PropertiesPanelController.textColor
+                    opacity: 0.7
+                    font.pixelSize: 10
+                    text: "Each image is one pose, keyed in list order. Reorder "
+                          + "with the arrows. The first image is the "
+                          + "calibration pose — use a neutral standing one."
+                }
+                Flow {
+                    width: parent.width
+                    spacing: 6
+                    InspectorButton {
+                        text: poseKeysCol.itemCount > 0 ? "Add images…" : "Choose images…"
+                        clickEnabled: MocapController.state === 0
+                        onClicked: {
+                            var files = MocapController.pickPoseImages()
+                            if (!files || files.length === 0) return
+                            var a = poseKeysCol.poseItems.slice()
+                            for (var i = 0; i < files.length; ++i)
+                                a.push({ path: files[i], time: -1 })
+                            poseKeysCol.poseItems = a
+                        }
+                    }
+                    InspectorButton {
+                        text: "Clear"
+                        visible: poseKeysCol.itemCount > 0
+                        onClicked: poseKeysCol.poseItems = []
+                    }
+                }
+
+                // ordered list
+                Column {
+                    width: parent.width
+                    spacing: 2
+                    visible: poseKeysCol.itemCount > 0
+                    Repeater {
+                        model: poseKeysCol.poseItems
+                        Rectangle {
+                            id: poseRow
+                            required property var modelData
+                            required property int index
+                            width: parent.width
+                            height: 44
+                            radius: 3
+                            color: PropertiesPanelController.headerColor
+                            border.color: PropertiesPanelController.borderColor
+                            border.width: 1
+                            Row {
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                spacing: 5
+                                Text {
+                                    width: 14
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: PropertiesPanelController.textColor
+                                    opacity: 0.7
+                                    font.pixelSize: 10
+                                    horizontalAlignment: Text.AlignRight
+                                    text: poseRow.index + 1
+                                }
+                                Image {
+                                    width: 36; height: 36
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    source: "file://" + poseRow.modelData.path
+                                    sourceSize.width: 72
+                                    sourceSize.height: 72
+                                    fillMode: Image.PreserveAspectFit
+                                    asynchronous: true
+                                    cache: true
+                                }
+                                Text {
+                                    width: parent.width - 14 - 36 - 52 - 3 * 18 - 6 * 5
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: PropertiesPanelController.textColor
+                                    font.pixelSize: 10
+                                    elide: Text.ElideMiddle
+                                    text: poseRow.modelData.path.split("/").pop()
+                                    ToolTip.visible: nameHv.hovered
+                                    ToolTip.text: poseRow.modelData.path
+                                    HoverHandler { id: nameHv }
+                                }
+                                // per-key time (seconds)
+                                Rectangle {
+                                    width: 52; height: 22; radius: 2
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: PropertiesPanelController.inputColor
+                                    border.color: poseTimeInput.activeFocus
+                                        ? PropertiesPanelController.highlightColor
+                                        : PropertiesPanelController.borderColor
+                                    border.width: 1
+                                    TextInput {
+                                        id: poseTimeInput
+                                        anchors.fill: parent
+                                        anchors.margins: 4
+                                        color: PropertiesPanelController.textColor
+                                        font.pixelSize: 10
+                                        verticalAlignment: TextInput.AlignVCenter
+                                        selectByMouse: true
+                                        clip: true
+                                        inputMethodHints: Qt.ImhFormattedNumbersOnly
+                                        text: Number(poseKeysCol.effectiveTime(poseRow.index))
+                                                  .toFixed(2)
+                                        onEditingFinished: {
+                                            var v = parseFloat(text)
+                                            if (isFinite(v) && v >= 0)
+                                                poseKeysCol.setTime(poseRow.index, v)
+                                        }
+                                    }
+                                }
+                                Repeater {
+                                    model: [
+                                        { glyph: "▲", act: 0 },
+                                        { glyph: "▼", act: 1 },
+                                        { glyph: "✕", act: 2 }
+                                    ]
+                                    Rectangle {
+                                        required property var modelData
+                                        width: 18; height: 22; radius: 2
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: arrowMa.containsMouse
+                                            ? PropertiesPanelController.highlightColor
+                                            : PropertiesPanelController.inputColor
+                                        border.color: PropertiesPanelController.borderColor
+                                        border.width: 1
+                                        opacity: (modelData.act === 0 && poseRow.index === 0)
+                                                 || (modelData.act === 1
+                                                     && poseRow.index === poseKeysCol.itemCount - 1)
+                                                 ? 0.35 : 1.0
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: modelData.glyph
+                                            color: PropertiesPanelController.textColor
+                                            font.pixelSize: 9
+                                        }
+                                        MouseArea {
+                                            id: arrowMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                if (modelData.act === 0)
+                                                    poseKeysCol.move(poseRow.index, -1)
+                                                else if (modelData.act === 1)
+                                                    poseKeysCol.move(poseRow.index, 1)
+                                                else
+                                                    poseKeysCol.removeAt(poseRow.index)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // default spacing for rows without a custom time
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    visible: poseKeysCol.itemCount > 0
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        text: "Default spacing"
+                    }
+                    Rectangle {
+                        width: 56; height: 22; radius: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: PropertiesPanelController.inputColor
+                        border.color: poseIntervalInput.activeFocus
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.borderColor
+                        border.width: 1
+                        TextInput {
+                            id: poseIntervalInput
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            verticalAlignment: TextInput.AlignVCenter
+                            selectByMouse: true
+                            clip: true
+                            inputMethodHints: Qt.ImhFormattedNumbersOnly
+                            text: "0.5"
+                            onEditingFinished: {
+                                var v = parseFloat(text)
+                                if (isFinite(v) && v > 0) poseKeysCol.interval = v
+                                else text = poseKeysCol.interval
+                            }
+                        }
+                    }
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        text: "s"
+                    }
+                    InspectorButton {
+                        text: "Respace all"
+                        onClicked: poseKeysCol.respace()
+                    }
+                }
+
+                InspectorButton {
+                    text: "Create animation from poses"
+                    clickEnabled: poseKeysCol.itemCount >= 2
+                                  && MocapController.state === 0
+                    onClicked: {
+                        var paths = [], times = []
+                        for (var i = 0; i < poseKeysCol.itemCount; ++i) {
+                            paths.push(poseKeysCol.poseItems[i].path)
+                            times.push(poseKeysCol.effectiveTime(i).toFixed(4))
+                        }
+                        MocapController.buildPoseKeyframes(
+                            paths, poseKeysCol.interval, times.join(","),
+                            "PoseKeys")
+                    }
+                }
+            }
+
             // camera preview + HUD
             // live HUD (webcam thumbnail + detection dots)
             Rectangle {

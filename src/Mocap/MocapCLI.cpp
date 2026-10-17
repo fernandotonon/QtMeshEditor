@@ -42,7 +42,9 @@ int run(int, char*[])
 #include <OgreEntity.h>
 #include <OgreSceneNode.h>
 
+#include <QCollator>
 #include <QDir>
+#include <QImage>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -50,6 +52,7 @@ int run(int, char*[])
 #include <QJsonObject>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <vector>
 
@@ -63,6 +66,7 @@ const char* kUsage =
     "              [--no-smooth] [--map overrides.json] [--no-head]\n"
     "              [--algo sam3dbody|pose-ik] [--no-model] [--in-place]\n"
     "              [--frames-dir DIR] [--json]\n"
+    "              [--key-interval SEC | --key-times t0,t1,...]\n"
     "\n"
     "  --face: facial performance from a video (or an image sequence via\n"
     "  --frames-dir) onto the mesh's ARKit-style morph targets as a weight\n"
@@ -70,7 +74,14 @@ const char* kUsage =
     "  --body: full-body pose onto the mesh's humanoid skeleton as a skeletal\n"
     "  clip with body turns and estimated root movement (--in-place locks\n"
     "  translation; --algo pose-ik or --no-model force the analytic\n"
-    "  fallback backend). Both can run in one pass over the same video.\n";
+    "  fallback backend). Both can run in one pass over the same video.\n"
+    "  --key-interval / --key-times (with --frames-dir, --body only): POSE\n"
+    "  KEYFRAMES. Each image is an independent pose (sprite sheet frame, photo)\n"
+    "  keyed at its own time instead of a continuous video; the rig is\n"
+    "  interpolated between the keys. Images sort naturally (pose2 < pose10).\n"
+    "  --key-interval spaces them evenly (default 0.5s); --key-times gives one\n"
+    "  time per image. The first image is the calibration pose, root motion is\n"
+    "  off unless --root-motion is passed.\n";
 
 QJsonObject reportToJson(const MocapRecorder::FaceRecordReport& r)
 {
@@ -127,6 +138,9 @@ int run(int argc, char* argv[])
     bool noModel = false;
     bool head = true;
     bool jsonOutput = false;
+    bool rootMotionExplicit = false;
+    double keyInterval = -1.0;
+    QList<double> keyTimes;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -137,6 +151,7 @@ int run(int argc, char* argv[])
         if (arg == QLatin1String("--no-model")) { noModel = true; continue; }
         if (arg == QLatin1String("--root-motion")) {
             rootMotion = true;
+            rootMotionExplicit = true;
             continue;
         }
         if (arg == QLatin1String("--algo")) {
@@ -203,6 +218,34 @@ int run(int argc, char* argv[])
             }
             continue;
         }
+        if (arg == QLatin1String("--key-interval")) {
+            const QString v = value("--key-interval");
+            if (v.isEmpty()) return 2;
+            keyInterval = v.toDouble();
+            if (!(keyInterval > 0.0)) {
+                CLIPipeline::writeCliError(
+                    QStringLiteral("Error: --key-interval must be > 0 seconds.\n"));
+                return 2;
+            }
+            continue;
+        }
+        if (arg == QLatin1String("--key-times")) {
+            const QString v = value("--key-times");
+            if (v.isEmpty()) return 2;
+            for (const QString& part : v.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                bool ok = false;
+                const double t = part.trimmed().toDouble(&ok);
+                if (!ok || !std::isfinite(t) || t < 0.0
+                    || (!keyTimes.isEmpty() && t <= keyTimes.last())) {
+                    CLIPipeline::writeCliError(QStringLiteral(
+                        "Error: --key-times must be strictly ascending "
+                        "non-negative seconds (got '%1').\n").arg(part));
+                    return 2;
+                }
+                keyTimes.append(t);
+            }
+            continue;
+        }
         if (arg == QLatin1String("--smooth-cutoff")) {
             const QString v = value("--smooth-cutoff");
             if (v.isEmpty()) return 2;
@@ -229,6 +272,17 @@ int run(int argc, char* argv[])
             QStringLiteral("Error: nothing to capture — pass --face and/or "
                            "--body.\n%1").arg(QLatin1String(kUsage)));
         return 2;
+    }
+    const bool poseKeyMode = keyInterval > 0.0 || !keyTimes.isEmpty();
+    if (poseKeyMode) {
+        if (framesDir.isEmpty() || !body || face) {
+            CLIPipeline::writeCliError(QStringLiteral(
+                "Error: --key-interval/--key-times need --frames-dir and "
+                "--body (and not --face).\n%1").arg(QLatin1String(kUsage)));
+            return 2;
+        }
+        if (!rootMotionExplicit)
+            rootMotion = false;  // unrelated photos: framing shifts are not travel
     }
     if (clipName.isEmpty())
         clipName = face ? QStringLiteral("FaceCap") : QStringLiteral("BodyCap");
@@ -385,30 +439,78 @@ int run(int argc, char* argv[])
     }
 
     // --- frame source -> samples ----------------------------------------------
+    std::vector<FaceSample> samples;
+    std::vector<BodyLiveFrame> poseSamples;
+    BodyPoseStream bodyStream;
+    bodyStream.setSmoothing(smoothCutoff, smooth);
     std::unique_ptr<VideoFrameSource> source;
     if (!framesDir.isEmpty()) {
         QDir dir(framesDir);
         QStringList images = dir.entryList(
             {QStringLiteral("*.png"), QStringLiteral("*.jpg"),
              QStringLiteral("*.jpeg"), QStringLiteral("*.bmp")},
-            QDir::Files, QDir::Name);
+            QDir::Files);
+        // Natural order: pose2 before pose10 (QDir::Name is lexicographic).
+        QCollator collator;
+        collator.setNumericMode(true);
+        collator.setCaseSensitivity(Qt::CaseInsensitive);
+        std::sort(images.begin(), images.end(),
+                  [&](const QString& a, const QString& b) {
+                      return collator.compare(a, b) < 0;
+                  });
         for (QString& f : images)
             f = dir.filePath(f);
-        source = std::make_unique<ImageSequenceFrameSource>(images, fps);
+        if (poseKeyMode) {
+            if (images.size() < 2) {
+                CLIPipeline::writeCliError(QStringLiteral(
+                    "Error: pose keyframes need at least 2 images in %1.\n")
+                    .arg(framesDir));
+                return 1;
+            }
+            if (!keyTimes.isEmpty() && keyTimes.size() != images.size()) {
+                CLIPipeline::writeCliError(QStringLiteral(
+                    "Error: --key-times has %1 values but %2 images were "
+                    "found.\n").arg(keyTimes.size()).arg(images.size()));
+                return 1;
+            }
+            bodyStream.setSmoothing(smoothCutoff, false);  // poses are independent
+            int noPose = 0;
+            for (int i = 0; i < images.size(); ++i) {
+                QImage img(images[i]);
+                if (img.isNull()) {
+                    CLIPipeline::writeCliError(QStringLiteral(
+                        "Error: cannot read image %1\n").arg(images[i]));
+                    return 1;
+                }
+                const double t = keyTimes.isEmpty()
+                    ? i * (keyInterval > 0.0 ? keyInterval : 0.5) : keyTimes[i];
+                // Unrelated photos: no ROI tracking and no filter state carried over.
+                posePredictor.resetTracking();
+                bodyStream.reset();
+                BodyLiveFrame frame = bodyStream.process(
+                    posePredictor.predict(img, t), img.width(), img.height());
+                if (!frame.valid) {
+                    ++noPose;
+                    CLIPipeline::writeCliError(QStringLiteral(
+                        "Warning: no person found in %1 (key skipped)\n")
+                        .arg(QFileInfo(images[i]).fileName()));
+                }
+                poseSamples.push_back(frame);
+            }
+            (void)noPose;
+        } else {
+            source = std::make_unique<ImageSequenceFrameSource>(images, fps);
+        }
     } else {
         source = std::make_unique<FileFrameSource>(videoPath, fps);
     }
     QString openError;
-    if (!source->open(&openError)) {
+    if (source && !source->open(&openError)) {
         CLIPipeline::writeCliError(
             QStringLiteral("Error: %1\n").arg(openError));
         return 1;
     }
 
-    std::vector<FaceSample> samples;
-    std::vector<BodyLiveFrame> poseSamples;
-    BodyPoseStream bodyStream;
-    bodyStream.setSmoothing(smoothCutoff, smooth);
     std::array<OneEuroFilter, 52> weightFilters;
     OneEuroQuatFilter headFilter;
     if (smooth) {
@@ -422,6 +524,7 @@ int run(int argc, char* argv[])
     QEventLoop loop;
     bool finished = false;
     QString streamError;
+    if (source) {
     QObject::connect(source.get(), &VideoFrameSource::frameReady,
                      [&](const MocapFrame& frame) {
                          if (face) {
@@ -455,6 +558,7 @@ int run(int argc, char* argv[])
     source->start();
     if (!finished)
         loop.exec();
+    }  // source (video / image sequence); pose-key mode filled poseSamples above
     if (!streamError.isEmpty()) {
         CLIPipeline::writeCliError(
             QStringLiteral("Error: %1\n").arg(streamError));

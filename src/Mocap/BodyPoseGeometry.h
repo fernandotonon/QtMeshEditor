@@ -155,7 +155,21 @@ inline Pose solve(const float* world, const float* visibility = nullptr,
                 out.mask |= 1u << role;
         };
         if (upperOk) aim(ch.upperRole, upper);
-        if (lowerOk) aim(ch.lowerRole, lower);
+        // Arms: the forearm INHERITS the upper arm's roll (parallel-transported
+        // onto the forearm direction), so the elbow is a pure hinge with zero
+        // twist. Aiming the forearm on its own against the pelvis-forward
+        // reference goes degenerate whenever it points toward the camera (arms
+        // crossed over the chest) and snaps the roll by ~90 degrees.
+        if (!leg && upperOk && lowerOk && out.resolved(ch.upperRole)
+            && upper.squaredLength() > 1e-10f && lower.squaredLength() > 1e-10f) {
+            const Ogre::Quaternion swing =
+                upper.normalisedCopy().getRotationTo(lower.normalisedCopy());
+            out.orientations[ch.lowerRole] = swing * out.orientations[ch.upperRole];
+            out.orientations[ch.lowerRole].normalise();
+            out.mask |= 1u << ch.lowerRole;
+        } else if (lowerOk) {
+            aim(ch.lowerRole, lower);
+        }
     }
     for (const auto& foot : {std::array<int, 3>{PoseIK::LFoot, 27, 31},
                             std::array<int, 3>{PoseIK::RFoot, 28, 32}})
