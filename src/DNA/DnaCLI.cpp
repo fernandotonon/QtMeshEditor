@@ -424,9 +424,21 @@ static int runFace(int argc, char* argv[])
         QString e2;
         auto ev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &e2);
         QVariantList rows;
-        if (rr.ok && ev) {
+        if (!rr.ok || !ev) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: --validate could not run: %1\n")
+                                           .arg(!rr.ok ? rr.error : e2));
+            return 1;
+        }
+        {
             QList<ArkitMap::Entry> map = ArkitMap::defaultMap();
-            if (!mapPath.isEmpty()) map = ArkitMap::loadOverride(mapPath).entries;
+            if (!mapPath.isEmpty()) {
+                const ArkitMap::LoadResult lr = ArkitMap::loadOverride(mapPath);
+                if (!lr.ok) {
+                    CLIPipeline::writeCliError(QStringLiteral("Error: ARKit map: %1\n").arg(lr.error));
+                    return 1;
+                }
+                map = lr.entries;
+            }
             const QList<FaceBake::ShapeSpec> all52 = FaceBake::arkitSpecs(map);
             auto pick = [&](const QStringList& names) {
                 QList<FaceBake::ShapeSpec> v;

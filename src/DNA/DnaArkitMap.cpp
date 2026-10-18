@@ -127,6 +127,11 @@ LoadResult loadOverride(const QString& jsonPath)
     QSet<QString> canonical;
     for (int i = 1; i < FaceCap::kBlendshapeCount; ++i)
         canonical.insert(QString::fromLatin1(FaceCap::kBlendshapeNames[size_t(i)]));
+    if (!root.value(QStringLiteral("map")).isObject()) {
+        r.error = QStringLiteral("'%1' has no \"map\" object (a misspelled top-level key would otherwise "
+                                 "silently apply nothing)").arg(jsonPath);
+        return r;
+    }
     const QJsonObject map = root.value(QStringLiteral("map")).toObject();
     for (auto it = map.begin(); it != map.end(); ++it) {
         if (!canonical.contains(it.key())) {

@@ -63,6 +63,8 @@ TEST(DnaRigEvaluator, UnavailableBuildSaysHowToEnable)
 #include <dna/BinaryStreamReader.h>
 #include <trio/streams/FileStream.h>
 
+namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
+
 TEST(DnaRigEvaluator, NeutralPoseMatchesTheReaderSkeleton)
 {
     const QString path = bodyDna();
@@ -179,7 +181,7 @@ TEST(DnaRigEvaluator, BendingTheKneeDrivesTheKneeCorrectives)
     const JointPose rest = ev->jointPose(ev->jointIndex("calf_knee_l"));
 
     // 90 degrees about the calf's local Z — the authored calf_l_back_90 target.
-    const double h = M_PI / 4.0;
+    const double h = kPi / 4.0;
     ASSERT_TRUE(ev->setDriverRotation("calf_l", {std::cos(h), 0.0, 0.0, -std::sin(h)}));
     const double ms = ev->calculate();
     const JointPose bent = ev->jointPose(ev->jointIndex("calf_knee_l"));

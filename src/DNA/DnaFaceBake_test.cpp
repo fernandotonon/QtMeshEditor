@@ -39,6 +39,8 @@
 #include <cmath>
 #include <map>
 
+namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
+
 using namespace Dna;
 
 namespace {
@@ -69,7 +71,7 @@ public:
         p.joint = j;
         if (j == 1) {
             p.translation = {0, 1, 0};
-            const double a = (v[0] + v[1]) * M_PI / 2.0;     // radians about Z
+            const double a = (v[0] + v[1]) * kPi / 2.0;     // radians about Z
             p.orientation = {std::cos(a / 2), 0, 0, std::sin(a / 2)};
         }
         return p;
@@ -182,6 +184,10 @@ TEST(DnaArkitMap, OverrideReplacesDropsAndRejectsTypos)
     EXPECT_EQ(ok.dropped, QStringList{"mouthClose"});
     for (const auto& e : ok.entries) if (e.arkit == "jawOpen") EXPECT_EQ(e.controls.size(), 2);
 
+    // A misspelled top-level key must not silently apply nothing.
+    const auto noMap = ArkitMap::loadOverride(write("nomap.json", R"({"schema":"qtmesh-dna-arkit-map-v1","maps":{}})"));
+    EXPECT_FALSE(noMap.ok);
+    EXPECT_TRUE(noMap.error.contains("map"));
     EXPECT_FALSE(ArkitMap::loadOverride(write("typo.json", R"({"map":{"jawOpne":{"jawOpen":1}}})")).ok);
     EXPECT_FALSE(ArkitMap::loadOverride(write("bad.json", R"({"map":{"jawOpen":5}})")).ok);
     EXPECT_FALSE(ArkitMap::loadOverride(write("schema.json", R"({"schema":"nope","map":{}})")).ok);

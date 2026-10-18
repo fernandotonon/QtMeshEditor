@@ -11,6 +11,8 @@
 
 #ifdef ENABLE_OPENRIGLOGIC
 #include "DnaTestFixtures.h"
+
+namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
 #endif
 
 using namespace Dna;
@@ -34,10 +36,10 @@ TEST(DnaMath, EulerIdentity)
 TEST(DnaMath, SingleAxisNinetyDegrees)
 {
     const auto q = eulerToQuaternion({0, 90, 0}, "xyz", true);
-    EXPECT_NEAR(q[0], std::cos(M_PI / 4), 1e-9);
-    EXPECT_NEAR(q[2], std::sin(M_PI / 4), 1e-9);
+    EXPECT_NEAR(q[0], std::cos(kPi / 4), 1e-9);
+    EXPECT_NEAR(q[2], std::sin(kPi / 4), 1e-9);
     // Radians path agrees with degrees path.
-    const auto r = eulerToQuaternion({0, M_PI / 2, 0}, "xyz", false);
+    const auto r = eulerToQuaternion({0, kPi / 2, 0}, "xyz", false);
     EXPECT_NEAR(std::abs(dot4(q, r)), 1.0, 1e-9);
 }
 

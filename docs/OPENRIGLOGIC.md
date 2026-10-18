@@ -218,7 +218,7 @@ layer in between (the names are the canonical ARKit names).
 | ARKit-52 → MetaHuman control table (data, overridable) | `src/DNA/DnaArkitMap.{h,cpp}` |
 | Bake + linearity measurement (pure data) | `src/DNA/DnaFaceBake.{h,cpp}` |
 | Import integration | `DnaScene` — automatic for any DNA that exposes expression controls |
-| CLI | `qtmesh dna face head.dna [-o head.glb|sheet.png] [--all-controls] [--map arkit.json] [--preview label:shape=w,… ] [--validate] [--json]` |
+| CLI | `qtmesh dna face head.dna [-o head.glb \| sheet.png] [--all-controls] [--map arkit.json] [--preview label:shape=w,… ] [--validate] [--json]` |
 | Opt-out | `QTMESH_DNA_FACE_MORPHS=0` (face bake), `QTMESH_DNA_CORRECTIVES=0` (live neck correctives) |
 
 ## The mapping (documented supported subset)
