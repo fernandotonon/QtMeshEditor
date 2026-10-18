@@ -660,6 +660,16 @@ Rectangle {
                 Component.onCompleted: content = constraintsComponent
             }
 
+            // ---- MetaHuman body correctives (epic #1095) ----
+            CollapsibleSection {
+                title: "DNA Correctives"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.AnimationMode, true)
+                                && DnaCorrectiveManager.characterCount > 0
+                expanded: true
+
+                Component.onCompleted: content = dnaCorrectivesComponent
+            }
+
             // ---- Motion graph (#526) ----
             CollapsibleSection {
                 title: "Motion Graph"
@@ -12067,6 +12077,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/ConstraintsPanel.qml"
+        }
+    }
+
+    // ---- MetaHuman body correctives content (epic #1095) ----
+    Component {
+        id: dnaCorrectivesComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/DnaCorrectivesPanel.qml"
         }
     }
 

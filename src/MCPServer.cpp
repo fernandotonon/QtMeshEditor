@@ -37,6 +37,8 @@
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "DNA/DnaCorrectiveManager.h"
+#include "DNA/DnaReader.h"
 #include "MotionGraphManager.h"
 #include "AnimGenerators.h"
 #include "PoseMirror.h"
@@ -799,6 +801,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("bake_generator"), &MCPServer::toolBakeGenerator},
         {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
         {QStringLiteral("list_constraints"), &MCPServer::toolListConstraints},
+        {QStringLiteral("get_dna_correctives"), &MCPServer::toolGetDnaCorrectives},
+        {QStringLiteral("set_dna_correctives"), &MCPServer::toolSetDnaCorrectives},
         {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
         {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
         {QStringLiteral("move_constraint"), &MCPServer::toolMoveConstraint},
@@ -10689,6 +10693,36 @@ QJsonObject MCPServer::toolListConstraints(const QJsonObject& /*args*/)
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolGetDnaCorrectives(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "get_dna_correctives");
+    DnaCorrectiveManager* mgr = DnaCorrectiveManager::peek();
+    if (!mgr || mgr->characterCount() == 0)
+        return makeErrorResult(QStringLiteral(
+            "Error: no MetaHuman DNA body is loaded. Import a body .dna (load_mesh) in a build with "
+            "ENABLE_OPENRIGLOGIC; a head DNA has no body rig."));
+    const QString requested = args.value("entity_name").toString();
+    if (!requested.isEmpty() && !mgr->isAttached(requested))
+        return makeErrorResult(QStringLiteral("Error: '%1' is not a loaded DNA character (omit entity_name for the first)")
+                                   .arg(requested));
+    const QJsonObject content = QJsonObject::fromVariantMap(mgr->statsMap(requested));
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
+QJsonObject MCPServer::toolSetDnaCorrectives(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "set_dna_correctives");
+    DnaCorrectiveManager* mgr = DnaCorrectiveManager::peek();
+    if (!mgr || mgr->characterCount() == 0)
+        return makeErrorResult(QStringLiteral("Error: no MetaHuman DNA body is loaded (see get_dna_correctives)."));
+    if (!args.contains("enabled") || !args.value("enabled").isBool())
+        return makeErrorResult(QStringLiteral("Error: 'enabled' (boolean) is required"));
+    mgr->setEnabled(args.value("enabled").toBool());
+    mgr->evaluateNow();
+    return makeSuccessResult(QStringLiteral("DNA correctives %1 (%2)")
+                                 .arg(mgr->enabled() ? "ON — corrected deformation" : "OFF — plain skinning", mgr->summary()));
+}
+
 QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "add_constraint");
@@ -14639,6 +14673,22 @@ QJsonArray MCPServer::buildToolsList()
     }
 
     // #525 — animation constraints
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "DNA character (default: the first)."}};
+        appendTool("get_dna_correctives",
+                   "Status of the live MetaHuman body correctives: enabled, driver bones, corrective bones evaluated, "
+                   "RigLogic and bone-write time per frame, RBF solver/pose counts. Needs a body .dna loaded.",
+                   props);
+    }
+    {
+        QJsonObject props;
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "true = RigLogic-corrected deformation, false = plain skinning (for comparison)."}};
+        appendTool("set_dna_correctives",
+                   "Toggle the MetaHuman body correctives (RBF-driven corrective joints) on or off to compare corrected "
+                   "deformation against ordinary skinning.",
+                   props, QJsonArray{"enabled"});
+    }
     {
         QJsonObject props;
         appendTool("list_constraints",

@@ -14,6 +14,7 @@
 #include <status/Status.h>
 #include <trio/streams/FileStream.h>
 #include <trio/streams/MemoryStream.h>
+#include "DnaReaderInternal.h"
 #endif
 
 namespace Dna {
@@ -491,34 +492,6 @@ ReadResult build(dna::BinaryStreamReader* reader, const ReadOptions& opt, const 
     return res;
 }
 
-dna::Configuration makeConfig(const ReadOptions& opt)
-{
-    dna::Configuration cfg;
-    dna::DataLayer layer = dna::DataLayer::Definition;
-    if (opt.loadGeometry)
-        layer = layer | dna::DataLayer::Geometry;
-    if (opt.loadBehavior)
-        layer = layer | dna::DataLayer::RBFBehavior | dna::DataLayer::MachineLearnedBehavior
-                      | dna::DataLayer::TwistSwingBehavior;
-    cfg.layer = layer;
-    cfg.unknownLayerPolicy = dna::UnknownLayerPolicy::Ignore;
-    if (opt.convertCoordinateSystem) {
-        // Target: right-handed, Y up, character facing +Z (the glTF / Mixamo
-        // convention the turntable and exporters expect). DNA names the
-        // into-screen direction "front", and a MetaHuman faces "front" in its
-        // authored x=right,y=up,z=back system — i.e. toward -Z — so the target
-        // is x=left,y=up,z=front: a proper 180-degree turn about Y, still
-        // right-handed (x=right,y=up,z=front would be a mirror).
-        cfg.coordinateSystemTransformPolicy = dna::CoordinateSystemTransformPolicy::Transform;
-        cfg.coordinateSystem = {tdm::axis_dir::left, tdm::axis_dir::up, tdm::axis_dir::front};
-        cfg.rotationSequence = dna::RotationSequence::xyz;
-        cfg.rotationSign = {dna::RotationDirection::positive, dna::RotationDirection::positive,
-                            dna::RotationDirection::positive};
-        cfg.faceWindingOrder = dna::FaceWindingOrder::ccw;
-    }
-    return cfg;
-}
-
 }  // namespace
 
 ReadResult read(const QString& path, const ReadOptions& options)
@@ -536,7 +509,7 @@ ReadResult read(const QString& path, const ReadOptions& options)
     // result is trustworthy (it resets the status first).
     if (!stream)
         return failure(ErrorCode::FileNotFound, QStringLiteral("Could not open %1.").arg(fi.fileName()));
-    auto reader = pma::makeScoped<dna::BinaryStreamReader>(stream.get(), makeConfig(options));
+    auto reader = pma::makeScoped<dna::BinaryStreamReader>(stream.get(), detail::makeConfig(options));
     if (!reader)
         return failure(ErrorCode::Other, QStringLiteral("Could not create a DNA reader."));
     return build(reader.get(), options, fi.fileName());
@@ -550,7 +523,7 @@ ReadResult readFromBuffer(const std::vector<uint8_t>& bytes, const ReadOptions& 
     if (!bytes.empty())
         stream->write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     stream->seek(0);
-    auto reader = pma::makeScoped<dna::BinaryStreamReader>(stream.get(), makeConfig(options));
+    auto reader = pma::makeScoped<dna::BinaryStreamReader>(stream.get(), detail::makeConfig(options));
     if (!reader)
         return failure(ErrorCode::Other, QStringLiteral("Could not create a DNA reader."));
     return build(reader.get(), options, QStringLiteral("the DNA buffer"));

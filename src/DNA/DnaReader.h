@@ -132,6 +132,10 @@ struct Rig {
     std::vector<Joint> joints;             ///< ALL joints (the skeleton is not LOD-pruned here)
     std::vector<int> lodJointIndices;      ///< joints active at the requested LOD
     std::vector<Mesh> meshes;              ///< meshes at the requested LOD
+    /// Joints the rig reads or moves (driver + corrective joints), when known —
+    /// filled by the importer from RigLogic so a skeleton that must be reduced
+    /// folds everything else first. Empty = no information.
+    std::vector<char> protectedJoint;
     QStringList blendShapeChannels;
     QStringList guiControls;
     QStringList rawControls;

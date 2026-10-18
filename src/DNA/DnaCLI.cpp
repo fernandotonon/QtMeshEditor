@@ -2,6 +2,21 @@
 #include "DnaReader.h"
 
 #include "../CLIPipeline.h"
+#include "../Manager.h"
+#include "../MeshImporterExporter.h"
+#include "DnaCorrectiveManager.h"
+#include "../ModelTurntableRenderer.h"
+
+#include <QImage>
+#include <QPainter>
+
+#include <OgreEntity.h>
+#include <OgreSceneNode.h>
+
+#include <algorithm>
+#include <cmath>
+#include <QFileInfo>
+#include <QVariantMap>
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -17,6 +32,13 @@ void usage()
 {
     CLIPipeline::writeOutput(QStringLiteral(
         "Usage: qtmesh dna info <file.dna> [--lod N] [--json] [--keep-units]\n"
+        "       qtmesh dna pose <body.dna> --set <joint>=<axis>:<deg>|<rx,ry,rz> [--set ...]\n"
+        "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
+        "\n"
+        "pose bends driver joints (rotation relative to neutral, degrees, local axes) and\n"
+        "evaluates the body correctives. --compare reports how far the corrected\n"
+        "deformation moves the skinned vertices versus plain skinning (millimetres).\n"
+        "Example: qtmesh dna pose body.dna --set calf_l=z:-90 --set thigh_l=x:60 --compare\n"
         "\n"
         "Reports a MetaHuman DNA file: descriptor, joints, meshes, blend-shape\n"
         "channels and the rig-logic data it carries (controls, PSD, RBF, ...).\n"
@@ -25,8 +47,13 @@ void usage()
 }
 }
 
+static int runPose(int argc, char* argv[]);
+
 int run(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; ++i)
+        if (QString::fromLocal8Bit(argv[i]) == QLatin1String("pose"))
+            return runPose(argc, argv);
     QString path;
     bool json = false;
     ReadOptions opt;
@@ -126,5 +153,200 @@ int run(int argc, char* argv[])
     return 0;
 }
 
+namespace {
+
+// "z:-90" (one axis) or "10,20,30" (xyz Euler) -> quaternion (w,x,y,z).
+bool parseRotation(const QString& spec, std::array<double, 4>* q)
+{
+    std::array<double, 3> a{0, 0, 0};
+    if (spec.contains(QLatin1Char(':'))) {
+        const QStringList p = spec.split(QLatin1Char(':'));
+        if (p.size() != 2) return false;   // "x:10:20" is not "x:10"
+        const QString ax = p[0].toLower();
+        bool ok = false;
+        const double deg = p.value(1).toDouble(&ok);
+        // QString::toDouble accepts "nan" / "inf": a non-finite angle would put NaN
+        // into the rig controls, so refuse it here.
+        if (!ok || !std::isfinite(deg) || ax.size() != 1 || !QStringLiteral("xyz").contains(ax)) return false;
+        a[size_t(ax[0].unicode() - 'x')] = deg;
+    } else {
+        const QStringList p = spec.split(QLatin1Char(','));
+        if (p.size() != 3) return false;
+        for (int i = 0; i < 3; ++i) {
+            bool ok = false;
+            a[size_t(i)] = p[i].toDouble(&ok);
+            if (!ok || !std::isfinite(a[size_t(i)])) return false;
+        }
+    }
+    *q = eulerToQuaternion(a, QStringLiteral("xyz"), true);
+    return true;
 }
+
+}  // namespace
+
+static int runPose(int argc, char* argv[])
+{
+    QString path, out;
+    QList<QPair<QString, QString>> sets;
+    bool json = false, compare = false, noCorrectives = false;
+    bool sawDna = false, sawPose = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (!sawPose && a == "pose") { sawPose = true; continue; }
+        if (a == "--json") json = true;
+        else if (a == "--compare") compare = true;
+        else if (a == "--no-correctives") noCorrectives = true;
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--set" && i + 1 < argc) {
+            const QString kv = QString::fromLocal8Bit(argv[++i]);
+            const int eq = kv.indexOf(QLatin1Char('='));
+            if (eq <= 0) { CLIPipeline::writeCliError(QStringLiteral("Error: --set expects joint=axis:deg\n")); return 2; }
+            sets.append({kv.left(eq), kv.mid(eq + 1)});
+        }
+        else if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (!a.startsWith('-') && path.isEmpty()) path = a;
+        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
+    }
+    if (path.isEmpty() || sets.isEmpty()) { usage(); return 2; }
+    if (!available()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
+                                                  "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
+        return 1;
+    }
+    if (!CLIPipeline::initOgreHeadless()) return 1;
+
+    MeshImporterExporter::clearLastImportError();
+    MeshImporterExporter::importer({QFileInfo(path).absoluteFilePath()});
+    const QString entityName = QFileInfo(path).completeBaseName() + QStringLiteral("_dna_node");
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : Manager::getSingleton()->getEntities())
+        if (obj && obj->getMovableType() == "Entity" && obj->getName() == entityName.toStdString())
+            entity = static_cast<Ogre::Entity*>(obj);
+    DnaCorrectiveManager* mgr = DnaCorrectiveManager::peek();
+    if (!entity) {
+        const QString why = MeshImporterExporter::lastImportError();
+        CLIPipeline::writeCliError(QStringLiteral("Error: could not import %1%2\n")
+                                       .arg(path, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
+        return 1;
+    }
+    if (!mgr || !mgr->isAttached(entityName)) {
+        CLIPipeline::writeCliError(QStringLiteral(
+            "Error: %1 has no body rig to evaluate (no quaternion driver joints). Body correctives need a "
+            "MetaHuman BODY DNA; facial controls are a later phase.\n").arg(QFileInfo(path).fileName()));
+        return 1;
+    }
+    std::vector<float> neutral;
+    if (compare) {
+        mgr->setEnabled(false);
+        mgr->evaluateNow();
+        neutral = DnaCorrectiveManager::skinnedPositions(entity);
+        mgr->setEnabled(true);
+    }
+    for (const auto& kv : sets) {
+        std::array<double, 4> q;
+        if (!parseRotation(kv.second, &q)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: bad rotation '%1' (use axis:deg or rx,ry,rz)\n").arg(kv.second));
+            return 2;
+        }
+        if (!mgr->setPoseOverride(entityName, kv.first, q)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: joint '%1' is not in the imported skeleton\n").arg(kv.first));
+            return 1;
+        }
+    }
+
+    QVariantMap report;
+    if (compare) {
+        mgr->setEnabled(false);
+        const std::vector<float> plain = DnaCorrectiveManager::skinnedPositions(entity);
+        mgr->setEnabled(true);
+        mgr->evaluateNow();
+        const std::vector<float> corrected = DnaCorrectiveManager::skinnedPositions(entity);
+        // Leave the character in the state the caller asked for, because any
+        // -o export below reads the live pose.
+        if (noCorrectives) {
+            mgr->setEnabled(false);
+            mgr->evaluateNow();
+        }
+        std::vector<double> d;
+        if (plain.size() == corrected.size()) {
+            for (size_t i = 0; i + 2 < plain.size(); i += 3) {
+                const double dx = corrected[i] - plain[i], dy = corrected[i + 1] - plain[i + 1],
+                             dz = corrected[i + 2] - plain[i + 2];
+                d.push_back(std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0);  // metres -> mm
+            }
+        }
+        double bend = 0;   // how far the posed limb itself moved (plain skinning vs neutral)
+        if (neutral.size() == plain.size())
+            for (size_t i = 0; i < plain.size(); ++i) bend = std::max(bend, double(std::abs(plain[i] - neutral[i])) * 1000.0);
+        report.insert("poseMaxAxisDisplacementMm", bend);
+        std::sort(d.begin(), d.end());
+        double sum = 0; int over1 = 0, over5 = 0;
+        for (double v : d) { sum += v; over1 += v > 1.0; over5 += v > 5.0; }
+        report.insert("vertices", int(d.size()));
+        report.insert("maxDisplacementMm", d.empty() ? 0.0 : d.back());
+        report.insert("meanDisplacementMm", d.empty() ? 0.0 : sum / double(d.size()));
+        report.insert("p99DisplacementMm", d.empty() ? 0.0 : d[size_t(double(d.size() - 1) * 0.99)]);
+        report.insert("verticesMovedOver1mm", over1);
+        report.insert("verticesMovedOver5mm", over5);
+    } else {
+        mgr->setEnabled(!noCorrectives);
+        mgr->evaluateNow();
+    }
+    const QVariantMap st = mgr->statsMap(entityName);
+    for (auto it = st.cbegin(); it != st.cend(); ++it) report.insert(it.key(), it.value());
+
+    if (!out.isEmpty() && out.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        // A 4-view strip (front, side, back, side) of the posed character. The
+        // renderer drives frames through the scene, so the corrective manager's
+        // per-frame hook evaluates exactly as it does in the viewport.
+        TurntableOptions to;
+        to.width = 512; to.height = 768; to.frameCount = 4; to.elevationDegrees = 5.0f; to.studio = true;
+        QList<QImage> frames;
+        QString rerr;
+        if (!ModelTurntableRenderer::renderToImages({entity}, to, &frames, &rerr) || frames.isEmpty()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: render failed: %1\n").arg(rerr));
+            return 1;
+        }
+        QImage strip(to.width * frames.size(), to.height, QImage::Format_ARGB32);
+        strip.fill(Qt::black);
+        QPainter pt(&strip);
+        for (int i = 0; i < frames.size(); ++i) pt.drawImage(i * to.width, 0, frames[i]);
+        pt.end();
+        if (!strip.save(QFileInfo(out).absoluteFilePath())) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: could not write %1\n").arg(out));
+            return 1;
+        }
+        report.insert("output", QFileInfo(out).absoluteFilePath());
+    } else if (!out.isEmpty()) {
+        if (MeshImporterExporter::exportCurrentPose(entity, QFileInfo(out).absoluteFilePath()) != 0) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: export failed: %1\n").arg(out));
+            return 1;
+        }
+        report.insert("output", QFileInfo(out).absoluteFilePath());
+    }
+
+    if (json) {
+        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
+    } else {
+        QString t = QStringLiteral("Pose applied (%1).\n").arg(noCorrectives ? "plain skinning" : "with correctives");
+        if (compare)
+            t += QStringLiteral("Pose moved vertices by up to %1 mm (plain skinning vs neutral)\n")
+                     .arg(report["poseMaxAxisDisplacementMm"].toDouble(), 0, 'f', 1);
+        if (compare)
+            t += QStringLiteral("Corrected vs plain skinning: max %1 mm, mean %2 mm, p99 %3 mm; %4 of %5 vertices move >1 mm, %6 >5 mm\n")
+                     .arg(report["maxDisplacementMm"].toDouble(), 0, 'f', 2).arg(report["meanDisplacementMm"].toDouble(), 0, 'f', 3)
+                     .arg(report["p99DisplacementMm"].toDouble(), 0, 'f', 2).arg(report["verticesMovedOver1mm"].toInt())
+                     .arg(report["vertices"].toInt()).arg(report["verticesMovedOver5mm"].toInt());
+        t += QStringLiteral("%1 driver bones, %2 corrective bones evaluated (%3 not in skeleton), RigLogic %4 ms\n")
+                 .arg(report["driverBones"].toInt()).arg(report["correctiveBones"].toInt())
+                 .arg(report["correctiveJointsMissing"].toInt()).arg(report["rigLogicMs"].toDouble(), 0, 'f', 2);
+        if (!out.isEmpty()) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
+        CLIPipeline::writeOutput(t);
+    }
+    return 0;
 }
+
+}  // namespace DnaCLI
+}  // namespace Dna
