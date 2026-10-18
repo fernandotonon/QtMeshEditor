@@ -25,6 +25,17 @@ QString bodyDna()
     return QFileInfo::exists(ue) ? ue : QString();
 }
 
+QString faceDna()
+{
+    const QByteArray env = qgetenv("QTMESH_TEST_DNA_FACE");
+    if (!env.isEmpty() && QFileInfo::exists(QString::fromLocal8Bit(env)))
+        return QString::fromLocal8Bit(env);
+    const QString ue = QStringLiteral(
+        "/Users/Shared/Epic Games/UE_5.7/Engine/Plugins/MetaHuman/MetaHumanCoreTechLib/Content/"
+        "ArchetypeDNA/SKM_Face.dna");
+    return QFileInfo::exists(ue) ? ue : QString();
+}
+
 double quatDot(const std::array<double, 4>& a, const std::array<double, 4>& b)
 {
     return std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
@@ -81,6 +92,33 @@ TEST(DnaRigEvaluator, NeutralPoseMatchesTheReaderSkeleton)
         ++checked;
     }
     EXPECT_GT(checked, 200);
+}
+
+TEST(DnaRigEvaluator, FaceRestPoseMatchesTheReaderSkeletonIncludingScaleAndIsFinite)
+{
+    const QString path = faceDna();
+    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman face DNA available";
+    QString err;
+    auto ev = RigEvaluator::create(path, ReadOptions(), &err);
+    ASSERT_NE(ev, nullptr) << err.toStdString();
+    ev->resetControls();
+    ev->calculate();
+    ReadOptions o;
+    o.loadGeometry = false;
+    const ReadResult r = read(path, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    int bad = 0;
+    for (int j = 0; j < ev->jointCount(); ++j) {
+        const JointPose p = ev->jointPose(j);
+        const Joint& jt = r.rig.joints[size_t(j)];
+        for (int a = 0; a < 3; ++a) {
+            if (!std::isfinite(p.translation[size_t(a)]) || !std::isfinite(p.scale[size_t(a)])) ++bad;
+            if (std::abs(p.translation[size_t(a)] - jt.translation[size_t(a)]) > 1e-4) ++bad;
+            if (std::abs(p.scale[size_t(a)] - 1.0) > 1e-4) ++bad;      // neutral scale is 1
+        }
+        if (quatDot(p.orientation, jt.orientation) < 0.9999) ++bad;
+    }
+    EXPECT_EQ(bad, 0) << "evaluator rest pose differs from the importer skeleton";
 }
 
 TEST(DnaRigEvaluator, EveryRbfPoseTargetReproducesTheDnasOwnCorrective)

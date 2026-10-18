@@ -41,6 +41,11 @@ struct MorphPoseSlice {
 // Animation. Undo removes both. Intended use is "save current edit
 // delta as new target" — the manager computes the offsets, this
 // command persists them.
+/// Build the poses + shape animation for `name` directly on a mesh that has NO
+/// entity yet (what the importers do). Safer than adding poses to a live entity
+/// of a skinned mesh, which needs a re-initialise.
+void attachMorphPosesToMesh(Ogre::Mesh* mesh, const QString& name, const std::vector<MorphPoseSlice>& slices);
+
 class AddMorphTargetCommand : public QUndoCommand
 {
 public:
