@@ -2964,6 +2964,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 } else {
                     for (const QString& w : dnaReport.warnings)
                         Ogre::LogManager::getSingleton().logWarning(("DNA import: " + w).toStdString());
+                    // Frame the new character like every other import path does,
+                    // otherwise the viewport keeps its previous (or default) camera.
+                    for (auto* obj : dnaNode->getAttachedObjects())
+                        if (obj && obj->getMovableType() == "Entity") {
+                            configureCamera(static_cast<const Ogre::Entity*>(obj));
+                            break;
+                        }
                 }
                 continue;
             }

@@ -4,6 +4,8 @@
 #include "../Manager.h"
 #include "../PartOpsMesh.h"
 #include "../SentryReporter.h"
+#include "DnaCorrectiveManager.h"
+#include "DnaRigLogic.h"
 #include "../commands/MorphCommands.h"
 
 #include <QFileInfo>
@@ -82,7 +84,12 @@ Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
             int best = -1;
             for (size_t i = 0; i < used.size(); ++i) {
                 if (!used[i] || children[i] != 0 || rig.joints[i].parent < 0) continue;
-                if (best < 0 || total[i] < total[size_t(best)]) best = int(i);
+                // Rig-driven joints (drivers + correctives) go last; within a
+                // class the least-weighted leaf goes first.
+                const bool prot = i < rig.protectedJoint.size() && rig.protectedJoint[i];
+                const bool bestProt = best >= 0 && size_t(best) < rig.protectedJoint.size()
+                                      && rig.protectedJoint[size_t(best)];
+                if (best < 0 || (prot != bestProt ? !prot : total[i] < total[size_t(best)])) best = int(i);
             }
             if (best < 0) break;
             const int par = rig.joints[size_t(best)].parent;
@@ -150,7 +157,8 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
 }  // namespace
 
 Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
-                                  ImportReport* report, QString* error)
+                                  ImportReport* report, QString* error,
+                                  std::shared_ptr<RigEvaluator> evaluator)
 {
     ImportReport local;
     ImportReport& rep = report ? *report : local;
@@ -167,6 +175,22 @@ Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
     try {
         Ogre::SceneNode* n = importRigImpl(rig, baseName, &rep, error);
         rep.warnings = pruneNotes + rep.warnings;
+        if (n && evaluator) {
+            DnaCorrectiveManager* mgr = DnaCorrectiveManager::instance();
+            const QString entityName = QString::fromStdString(n->getName());
+            if (mgr->attach(entityName, evaluator)) {
+                mgr->evaluateNow();   // populate the stats the report quotes
+                const DnaCorrectiveManager::Stats st = mgr->statsFor(entityName);
+                rep.correctivesAttached = true;
+                rep.correctiveJoints = st.driven;
+                rep.correctiveJointsFolded = st.missingDriven;
+                if (st.missingDriven > 0)
+                    rep.warnings << QStringLiteral(
+                        "%1 of %2 rig-driven corrective joints do not fit Ogre's %3-bone limit and are not "
+                        "evaluated; the other %4 are.").arg(st.missingDriven).arg(st.driven + st.missingDriven)
+                        .arg(kOgreMaxBones).arg(st.driven);
+            }
+        }
         return n;
     } catch (const Ogre::Exception& e) {
         if (error) *error = QStringLiteral("Ogre error while building the DNA character: %1")
@@ -361,7 +385,28 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
     ReadResult rr = read(path, options);
     if (!rr.ok)
         return fail(error, rr.error);
-    return importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error);
+
+    // A DNA with rig-logic behaviour (a MetaHuman body) gets live correctives.
+    // The evaluator also tells the importer which joints the rig reads or moves,
+    // so a skeleton that must be cut down to Ogre's bone limit folds those last.
+    // A rig without quaternion drivers (a head) is still imported, just static.
+    std::shared_ptr<RigEvaluator> evaluator;
+    if (available()) {
+        QString evErr;
+        evaluator = std::shared_ptr<RigEvaluator>(RigEvaluator::create(path, options, &evErr).release());
+        if (evaluator && !evaluator->driverJoints().isEmpty() && !evaluator->drivenJoints().empty()) {
+            rr.rig.protectedJoint.assign(rr.rig.joints.size(), 0);
+            for (const QString& d : evaluator->driverJoints()) {
+                const int j = evaluator->jointIndex(d);
+                if (j >= 0 && size_t(j) < rr.rig.protectedJoint.size()) rr.rig.protectedJoint[size_t(j)] = 1;
+            }
+            for (const int j : evaluator->drivenJoints())
+                if (j >= 0 && size_t(j) < rr.rig.protectedJoint.size()) rr.rig.protectedJoint[size_t(j)] = 1;
+        } else {
+            evaluator.reset();
+        }
+    }
+    return importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator);
 }
 
 }  // namespace Dna

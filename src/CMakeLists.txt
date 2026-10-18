@@ -231,6 +231,8 @@ AlembicImporter.cpp
 DNA/DnaReader.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
+DNA/DnaRigLogic.cpp
+DNA/DnaCorrectiveManager.cpp
 Mocap/VideoFrameSource.cpp
 Mocap/OneEuroFilter.cpp
 Mocap/FaceCapMapper.cpp

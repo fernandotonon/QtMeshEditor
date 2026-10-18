@@ -1,8 +1,8 @@
-# MetaHuman DNA / OpenRigLogic (epic #1095) — Phase 1 feasibility + import
+# MetaHuman DNA / OpenRigLogic (epic #1095) — import + body correctives
 
-Status: **Phase 1 spike implemented** (DNA import). Phases 2–4 are tracked as
-child issues; this document records what the spike verified and the gaps that
-shape them.
+Status: **Phase 1 (DNA import) and Phase 2 (body correctives) implemented.**
+Phases 3–4 are tracked as child issues; this document records what was verified
+and the gaps that shape them.
 
 ## What shipped
 
@@ -98,3 +98,96 @@ from its dominant joint in world space. Findings:
 3. Facial controls, ARKit/Audio2Face mapping, baking.
 4. Body mesh fitting and generic RBF correctives.
 Follow-up (separate issue): image-based body prediction.
+
+
+---
+
+# Phase 2 — body correctives (#1096)
+
+A MetaHuman body DNA carries a pose-space rig: 44 **driver joints** (clavicle,
+upper arm, thigh, calf, hand, foot, every finger joint…) feed their rotation into
+72 **RBF solvers** (215 poses), whose blend weights drive ~234 **corrective
+joints** (`_in_/_out_/_fwd_/_bck_`, bulge, twist) that fix elbows, knees,
+shoulders and hips as the limbs bend. `DnaCorrectiveManager` evaluates that rig
+every frame on top of the skeleton's animation.
+
+| Piece | Where |
+|---|---|
+| RigLogic wrapper (pure data) | `src/DNA/DnaRigLogic.{h,cpp}` — `RigEvaluator` |
+| Live evaluation + toggle | `src/DNA/DnaCorrectiveManager.{h,cpp}` (QML singleton, `SceneManager::Listener`) |
+| Inspector | Animation mode → **DNA Correctives** (checkbox + live cost) — `qml/DnaCorrectivesPanel.qml` |
+| MCP | `get_dna_correctives`, `set_dna_correctives {enabled}` |
+| CLI | `qtmesh dna pose <body.dna> --set calf_l=z:-90 [--compare] [--no-correctives] [-o out.png/.stl/.glb] [--json]` |
+
+## Conventions (verified on Epic's SKM_Body.dna)
+
+* Raw control `"<joint>.qx|qy|qz|qw"` is the joint's rotation **relative to its
+  neutral pose, in its own local frame** (identity at rest). The manager reads
+  `neutral⁻¹ · current` from the posed Ogre bone (`Bone::getInitialOrientation`).
+* RigLogic joint outputs are **deltas** laid out `joint*9 + attribute` (tx ty tz,
+  rx ry rz, sx sy sz): cm and Euler degrees in the descriptor's sequence. The
+  final local rotation is `eulerToQuaternion(neutral + delta)`, **not** a
+  quaternion product.
+* **Evaluation order / no double transform:** animation clips write only the
+  driver/skeleton joints (the corrective joints have no tracks). Each frame, after
+  the skeleton is posed from its clips (`setAnimationState` resets every bone, the
+  corrective ones included, to neutral), the manager overwrites the corrective
+  joints with the rig's **absolute** local transforms and marks the state set
+  dirty (so a paused clip still shows the result). A corrective can therefore
+  never stack on itself.
+
+## Validation
+
+* **Against RigLogic's own data, every pose:** for each of the 72 solvers and
+  every interpolating RBF pose, feeding that pose's authored target quaternion
+  reproduces the DNA's stored corrective output to < 0.002 (`DnaRigEvaluator.
+  EveryRbfPoseTargetReproducesTheDnasOwnCorrective`; measured max error 1e-5 on
+  the probe).
+* **Rest pose is identical to the importer's skeleton** (`NeutralPoseMatchesThe
+  ReaderSkeleton`) — otherwise applying correctives would shove bones off the
+  bind pose.
+* **Scene level** with a fake rig (`DnaCorrectiveManager_test.cpp`): driver
+  read-out relative to neutral, absolute corrective writes without accumulation,
+  toggle restoring plain skinning while keeping a preview pose, missing joints,
+  destroyed entities.
+* **Not done:** a comparison against *Unreal's* rendered output of the same pose.
+  The RigLogic maths is the same library Unreal uses, but skinning differs (see
+  limits), so this is a plausibility check, not visual parity.
+
+### What the correctives change (Epic SKM_Body, corrected vs plain skinning)
+
+| Pose | Vertices moved by the pose (max) | Corrective adds (max / p99) | Vertices >1 mm / >5 mm |
+|---|---|---|---|
+| calf_l z −90° | 588 mm | 36.8 mm / 14.2 mm | 1466 / 696 of 32 334 |
+| calf_l z −100° + thigh_l y −60° | 720 mm | 39.3 mm / 21.4 mm | 3023 / 2105 |
+| upperarm_l z −80° | 557 mm | 51.0 mm / 16.3 mm | 1093 / 710 |
+| upperarm_l y +70° | 636 mm | 14.9 mm / 5.4 mm | 771 / 347 |
+| clavicle_l z +25° | 233 mm | 33.6 mm / 9.0 mm | 987 / 623 |
+
+(`qtmesh dna pose body.dna --set … --compare`.) Posed renders show smooth
+shoulders/knees/hips with no tearing or collapse.
+
+## Performance (Apple M-series, body LOD 0, 255-bone skeleton)
+
+RigLogic **0.004 ms** + bone writes **0.04 ms** per frame for 44 drivers and 179
+corrective bones — negligible next to rendering. Software-skinned reads for the
+`--compare` metric are the only expensive part and are CLI-only.
+
+## Limits that matter
+
+1. **The 256-bone Ogre limit still bites.** Of the 234 corrective joints, **55 are
+   not in the imported skeleton** (the base skeleton plus the skinned correctives
+   exceeds 256 even before folding), so their corrections are not evaluated; 179
+   are. The importer now folds *unprotected* leaf joints first and rig-driven
+   ones last, and `get_dna_correctives` / the Inspector report the missing count.
+   Full fidelity needs the skeleton limit lifted (Ogre) or a split-palette
+   approach — see the epic's follow-up.
+2. **4 skin influences** (MetaHuman uses up to 11) still approximate the weights
+   the correctives were authored against.
+3. **ConstraintManager + corrective manager on the same entity:** both re-pose
+   from the clips before writing, so the later listener discards the earlier
+   one's writes.
+4. Head DNAs (no quaternion drivers) import as before and are **not** evaluated —
+   facial controls are Phase 3.
+5. Corrective *blend shapes* and animated maps are not driven yet (the body has
+   none; the face does).

@@ -468,6 +468,8 @@ private:
     QJsonObject toolBakeGenerator(const QJsonObject &args);
     QJsonObject toolRemoveGenerator(const QJsonObject &args);
     QJsonObject toolListConstraints(const QJsonObject &args);
+    QJsonObject toolGetDnaCorrectives(const QJsonObject &args);
+    QJsonObject toolSetDnaCorrectives(const QJsonObject &args);
     QJsonObject toolAddConstraint(const QJsonObject &args);
     QJsonObject toolSetConstraint(const QJsonObject &args);
     QJsonObject toolMoveConstraint(const QJsonObject &args);
