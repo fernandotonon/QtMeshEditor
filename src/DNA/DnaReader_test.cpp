@@ -11,11 +11,11 @@
 
 #ifdef ENABLE_OPENRIGLOGIC
 #include "DnaTestFixtures.h"
-
-namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
 #endif
 
 using namespace Dna;
+
+namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
 
 namespace {
 double dot4(const std::array<double, 4>& a, const std::array<double, 4>& b)

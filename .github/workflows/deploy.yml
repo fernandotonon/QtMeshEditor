@@ -1460,7 +1460,8 @@ jobs:
             -DENABLE_ONNX=ON \
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
-            -DENABLE_DRACO=ON
+            -DENABLE_DRACO=ON \
+            -DENABLE_OPENRIGLOGIC=ON
 
     - name: Run build-wrapper
       env:
