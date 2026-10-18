@@ -260,6 +260,12 @@ static int runPose(int argc, char* argv[])
         mgr->setEnabled(true);
         mgr->evaluateNow();
         const std::vector<float> corrected = DnaCorrectiveManager::skinnedPositions(entity);
+        // Leave the character in the state the caller asked for, because any
+        // -o export below reads the live pose.
+        if (noCorrectives) {
+            mgr->setEnabled(false);
+            mgr->evaluateNow();
+        }
         std::vector<double> d;
         if (plain.size() == corrected.size()) {
             for (size_t i = 0; i + 2 < plain.size(); i += 3) {
@@ -305,7 +311,10 @@ static int runPose(int argc, char* argv[])
         QPainter pt(&strip);
         for (int i = 0; i < frames.size(); ++i) pt.drawImage(i * to.width, 0, frames[i]);
         pt.end();
-        strip.save(QFileInfo(out).absoluteFilePath());
+        if (!strip.save(QFileInfo(out).absoluteFilePath())) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: could not write %1\n").arg(out));
+            return 1;
+        }
         report.insert("output", QFileInfo(out).absoluteFilePath());
     } else if (!out.isEmpty()) {
         if (MeshImporterExporter::exportCurrentPose(entity, QFileInfo(out).absoluteFilePath()) != 0) {

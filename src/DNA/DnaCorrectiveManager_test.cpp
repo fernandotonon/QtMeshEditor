@@ -236,6 +236,17 @@ TEST_F(DnaCorrectiveSceneTest, ADestroyedEntityIsDroppedNotDereferenced)
     EXPECT_EQ(m->characterCount(), 0);
 }
 
+TEST_F(DnaCorrectiveSceneTest, ADestroyedEntityIsDroppedEvenWhileCorrectivesAreOff)
+{
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    m->setEnabled(false);
+    Manager::getSingleton()->getSceneMgr()->destroyAllEntities();
+    entity = nullptr;
+    m->evaluateNow();
+    EXPECT_EQ(m->characterCount(), 0);
+}
+
 TEST_F(DnaCorrectiveSceneTest, SkinnedPositionsFollowTheBentDriver)
 {
     auto* m = DnaCorrectiveManager::instance();

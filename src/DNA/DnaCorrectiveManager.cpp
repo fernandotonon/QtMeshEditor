@@ -240,6 +240,14 @@ bool DnaCorrectiveManager::applyTo(const QString& name, Character& c, bool corre
 
 bool DnaCorrectiveManager::evaluateNow()
 {
+    // A deleted entity must be forgotten even while correctives are off, or the
+    // panel and the MCP status would keep reporting a character that is gone.
+    bool pruned = false;
+    for (auto it = m_chars.begin(); it != m_chars.end();) {
+        if (!entityByName(it.key())) { it = m_chars.erase(it); pruned = true; }
+        else ++it;
+    }
+    if (pruned) emit changed();
     if (m_evaluating || m_chars.isEmpty() || (!m_enabled && !anyOverrides())) return false;
     m_evaluating = true;
     bool any = false;
