@@ -237,6 +237,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaReader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaScene.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
@@ -674,6 +677,11 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
     endif()
     if(ENABLE_ALEMBIC)
         list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_alembic)
+    endif()
+    # epic #1095: DnaReader.cpp links OpenRigLogic when ENABLE_OPENRIGLOGIC is set
+    # (the importer in MeshImporterExporter.cpp pulls it into every test binary).
+    if(ENABLE_OPENRIGLOGIC)
+        list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_openriglogic)
     endif()
     # #506: MeshDracoEncoder.cpp (compiled into this common lib, and called from
     # CLIPipeline.cpp) links Draco when ENABLE_DRACO is set — the QML component
