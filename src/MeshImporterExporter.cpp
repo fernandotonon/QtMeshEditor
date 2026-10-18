@@ -28,6 +28,7 @@ THE SOFTWARE.
 
 #include "MeshImporterExporter.h"
 #include "AlembicImporter.h"
+#include "DNA/DnaScene.h"
 #include "FeedbackReportHelper.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
@@ -2926,6 +2927,24 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 }
                 continue;
             }
+            else if(!file.suffix().compare("dna",Qt::CaseInsensitive))
+            {
+                // MetaHuman DNA (epic #1095 Phase 1): builds skeleton + mesh +
+                // morph targets itself; a build without ENABLE_OPENRIGLOGIC
+                // reports a clear error instead of falling through to Assimp.
+                QString dnaErr;
+                Dna::ImportReport dnaReport;
+                Ogre::SceneNode* dnaNode = Dna::importToScene(
+                    file.absoluteFilePath(), Dna::ReadOptions(), &dnaReport, &dnaErr);
+                if (!dnaNode) {
+                    Ogre::LogManager::getSingleton().logError(
+                        "DNA import failed: " + dnaErr.toStdString());
+                } else {
+                    for (const QString& w : dnaReport.warnings)
+                        Ogre::LogManager::getSingleton().logWarning(("DNA import: " + w).toStdString());
+                }
+                continue;
+            }
             else if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
                 tryLoadSidecarMaterialScript(file);
@@ -3564,6 +3583,7 @@ QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
         {"Biovision BVH (*.bvh)",          {".bvh"}},
         {"LightWave (*.lwo *.lws *.lxo)",  {".lwo", ".lws", ".lxo"}},
         {"Alembic vertex cache (*.abc)",   {".abc"}},
+        {"MetaHuman DNA (*.dna)",          {".dna"}},
         {"PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)", {".rsd", ".tmd", ".ply"}},
     };
 

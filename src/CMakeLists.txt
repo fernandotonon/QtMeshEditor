@@ -228,6 +228,9 @@ NodeAnimationManager.cpp
 PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
+DNA/DnaReader.cpp
+DNA/DnaScene.cpp
+DNA/DnaCLI.cpp
 Mocap/VideoFrameSource.cpp
 Mocap/OneEuroFilter.cpp
 Mocap/FaceCapMapper.cpp
@@ -879,6 +882,10 @@ if(ENABLE_ALEMBIC)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_alembic)
 endif()
 
+if(ENABLE_OPENRIGLOGIC)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_openriglogic)
+endif()
+
 if(ENABLE_DRACO AND QTMESH_DRACO_FOUND)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_draco)
 endif()
@@ -1117,6 +1124,10 @@ if(BUILD_TESTS)
 
     if(ENABLE_ALEMBIC)
         target_link_libraries(UnitTests qtmesh_alembic)
+    endif()
+
+    if(ENABLE_OPENRIGLOGIC)
+        target_link_libraries(UnitTests qtmesh_openriglogic)
     endif()
 
     if(ENABLE_DRACO AND QTMESH_DRACO_FOUND)
