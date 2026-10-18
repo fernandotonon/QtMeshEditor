@@ -161,6 +161,7 @@ bool parseRotation(const QString& spec, std::array<double, 4>* q)
     std::array<double, 3> a{0, 0, 0};
     if (spec.contains(QLatin1Char(':'))) {
         const QStringList p = spec.split(QLatin1Char(':'));
+        if (p.size() != 2) return false;   // "x:10:20" is not "x:10"
         const QString ax = p[0].toLower();
         bool ok = false;
         const double deg = p.value(1).toDouble(&ok);
