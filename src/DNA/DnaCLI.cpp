@@ -164,7 +164,9 @@ bool parseRotation(const QString& spec, std::array<double, 4>* q)
         const QString ax = p[0].toLower();
         bool ok = false;
         const double deg = p.value(1).toDouble(&ok);
-        if (!ok || ax.size() != 1 || !QStringLiteral("xyz").contains(ax)) return false;
+        // QString::toDouble accepts "nan" / "inf": a non-finite angle would put NaN
+        // into the rig controls, so refuse it here.
+        if (!ok || !std::isfinite(deg) || ax.size() != 1 || !QStringLiteral("xyz").contains(ax)) return false;
         a[size_t(ax[0].unicode() - 'x')] = deg;
     } else {
         const QStringList p = spec.split(QLatin1Char(','));
@@ -172,7 +174,7 @@ bool parseRotation(const QString& spec, std::array<double, 4>* q)
         for (int i = 0; i < 3; ++i) {
             bool ok = false;
             a[size_t(i)] = p[i].toDouble(&ok);
-            if (!ok) return false;
+            if (!ok || !std::isfinite(a[size_t(i)])) return false;
         }
     }
     *q = eulerToQuaternion(a, QStringLiteral("xyz"), true);

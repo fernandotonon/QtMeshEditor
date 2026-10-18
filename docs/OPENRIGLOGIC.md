@@ -76,8 +76,8 @@ from its dominant joint in world space. Findings:
    Ogre hardware skinning takes 4. The importer keeps the 4 strongest,
    renormalises and **reports the count of truncated vertices**. Phase 2 must
    decide between more influences (custom skinning path) and baking.
-2. **No rig evaluation yet:** Phase 1 imports the neutral pose only. Corrective
-   joints/blend shapes driven by RigLogic are Phase 2.
+2. ~~**No rig evaluation yet**~~ — resolved for body correctives in Phase 2 (below).
+   Facial controls and corrective blend shapes/animated maps are still open (Phase 3).
 3. **Reference validation:** joint space, Euler order and coordinate conversion are now checked against Epic's real DNA (vertex↔dominant-joint distance), but not yet against RigLogic's own evaluated output; Phase 2 must compare posed frames with a trusted reference. The repo ships no distributable MetaHuman, so this needs a user-supplied asset.
 4. **Textures/materials:** DNA contains no textures. The DCC export ships them
    separately; the importer assigns `BaseWhite`. Texture + material binding is
@@ -94,7 +94,6 @@ from its dominant joint in world space. Findings:
 
 ## Phases still open
 
-2. Body correctives (RigLogic evaluation + skinning-vs-corrected toggle).
 3. Facial controls, ARKit/Audio2Face mapping, baking.
 4. Body mesh fitting and generic RBF correctives.
 Follow-up (separate issue): image-based body prediction.

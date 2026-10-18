@@ -10701,7 +10701,11 @@ QJsonObject MCPServer::toolGetDnaCorrectives(const QJsonObject& args)
         return makeErrorResult(QStringLiteral(
             "Error: no MetaHuman DNA body is loaded. Import a body .dna (load_mesh) in a build with "
             "ENABLE_OPENRIGLOGIC; a head DNA has no body rig."));
-    const QJsonObject content = QJsonObject::fromVariantMap(mgr->statsMap(args.value("entity_name").toString()));
+    const QString requested = args.value("entity_name").toString();
+    if (!requested.isEmpty() && !mgr->isAttached(requested))
+        return makeErrorResult(QStringLiteral("Error: '%1' is not a loaded DNA character (omit entity_name for the first)")
+                                   .arg(requested));
+    const QJsonObject content = QJsonObject::fromVariantMap(mgr->statsMap(requested));
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 

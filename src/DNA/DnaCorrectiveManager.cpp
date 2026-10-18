@@ -292,12 +292,20 @@ bool DnaCorrectiveManager::setPoseOverride(const QString& entityName, const QStr
 
 void DnaCorrectiveManager::clearPoseOverrides(const QString& entityName)
 {
+    // Collect first: evaluateNow() may erase dead characters, which must not
+    // happen while a hash iterator is live.
+    QStringList touched;
     for (auto it = m_chars.begin(); it != m_chars.end(); ++it)
-        if (entityName.isEmpty() || it.key() == entityName) it.value()->overrides.clear();
-    for (auto it = m_chars.cbegin(); it != m_chars.cend(); ++it)
         if (entityName.isEmpty() || it.key() == entityName) {
-            if (m_enabled) { evaluateNow(); } else { restorePlain(it.key()); }
+            it.value()->overrides.clear();
+            touched << it.key();
         }
+    if (touched.isEmpty()) return;
+    if (m_enabled) {
+        evaluateNow();
+    } else {
+        for (const QString& n : touched) restorePlain(n);
+    }
 }
 
 std::vector<float> DnaCorrectiveManager::skinnedPositions(Ogre::Entity* entity)
