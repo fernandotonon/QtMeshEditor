@@ -48,8 +48,8 @@ A build without the flag compiles; every entry point reports
 |---|---|
 | Units | cm → metres by default (`--keep-units` / `Units::Preserve`); glTF is metre-based and the viewport grid expects ~1-unit characters |
 | Coordinates | converted by the library to right-handed, Y up, character facing +Z (`x=left y=up z=front` in DNA naming — a 180° turn about Y from MetaHuman's authored `x=right y=up z=back`, which faces −Z) |
-| Euler → quaternion | per-axis rotations multiplied in sequence order (`xyz` ⇒ Rx·Ry·Rz), same as OpenRigLogic's `tdm::euler_to_quat` |
-| Neutral joint space | **assumed WORLD** and converted to parent-relative (`NeutralSpace::World`). Geometry shares that space, which is what makes bind skinning work. **Unverified against a real MetaHuman export** — see gaps |
+| Euler → quaternion | Maya rotate order: first letter applied first (`xyz` ⇒ X, then Y, then Z; column-vector product Rz·Ry·Rx) — equal to OpenRigLogic's row-vector `Rx*Ry*Rz`. The first cut multiplied the other way round and produced a scrambled skeleton |
+| Neutral joint space | **PARENT-RELATIVE** (verified on Epic's real DNA; `NeutralSpace::World` is only for producers that write world transforms). The root joint carries a −90° X orientation that turns the data's Z-up joint axes into Y-up |
 | UVs | V flipped (DNA bottom-left → Ogre/glTF top-left) |
 | Faces | n-gons fan-triangulated; invalid indices dropped and reported, never dereferenced |
 | LODs | one LOD imported (default 0); meshes that exist only at other LODs are reported |
@@ -58,8 +58,9 @@ A build without the flag compiles; every entry point reports
 ## Verified on Epic's own archetype DNA (UE 5.7 `SKM_Body.dna` / `SKM_Face.dna`)
 
 Not redistributed — read from a local Unreal install. Both import; the head sits directly
-above the body in the shared space (which supports the world-space neutral-joint
-assumption), and the character faces +Z after the coordinate conversion. Findings:
+above the body in the shared space, the character faces +Z after the coordinate conversion,
+and the skeleton agrees with the skin: the median vertex lies 3.9 cm (body) / 1.0 cm (face)
+from its dominant joint in world space. Findings:
 
 * **Ogre's 256-bone limit is a hard wall.** Body = 342 joints, face = 870 (almost all
   skinned: twist/corrective joints). The importer drops joints with no skin weights, then
@@ -77,11 +78,7 @@ assumption), and the character faces +Z after the coordinate conversion. Finding
    decide between more influences (custom skinning path) and baking.
 2. **No rig evaluation yet:** Phase 1 imports the neutral pose only. Corrective
    joints/blend shapes driven by RigLogic are Phase 2.
-3. **Joint-space assumption** (above) and the **Euler convention** need a
-   golden comparison against a real DCC-exported character and Epic's own
-   output before Phase 2 relies on them. The repo ships no distributable
-   MetaHuman, so Phase 2 validation needs a user-supplied asset or a
-   synthetic rig with known RigLogic outputs.
+3. **Reference validation:** joint space, Euler order and coordinate conversion are now checked against Epic's real DNA (vertex↔dominant-joint distance), but not yet against RigLogic's own evaluated output; Phase 2 must compare posed frames with a trusted reference. The repo ships no distributable MetaHuman, so this needs a user-supplied asset.
 4. **Textures/materials:** DNA contains no textures. The DCC export ships them
    separately; the importer assigns `BaseWhite`. Texture + material binding is
    a follow-up.

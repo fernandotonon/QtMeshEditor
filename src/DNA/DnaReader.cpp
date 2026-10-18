@@ -77,9 +77,11 @@ std::array<double, 4> eulerToQuaternion(const std::array<double, 3>& angles,
     // authored string in the descriptor, and identity-with-wrong-order beats a
     // refusal to import a character at all.
     const QString order = (seq.size() == 3) ? seq : QStringLiteral("xyz");
+    // Maya/RigLogic "xyz" means rotate about X first, then Y, then Z. With
+    // column vectors that is Rz*Ry*Rx, so each later axis PRE-multiplies.
     for (const QChar ch : order) {
         const int a = (ch == 'x') ? 0 : (ch == 'y') ? 1 : 2;
-        q = mul(q, axisQuat(ch.toLatin1(), angles[a] * k, signs[a]));
+        q = mul(axisQuat(ch.toLatin1(), angles[a] * k, signs[a]), q);
     }
     return normalised(q);
 }

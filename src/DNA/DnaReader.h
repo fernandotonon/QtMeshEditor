@@ -44,13 +44,12 @@ enum class ErrorCode {
 enum class Units { Preserve, Meters };
 
 /// Space the DNA's neutral joint transforms are expressed in. MetaHuman DNA
-/// stores the neutral pose in WORLD space (its geometry is in the same space,
-/// which is what makes bind-pose skinning work without accumulating a
-/// hierarchy), and the DNA-viewer/DCC importers convert to parent-relative
-/// themselves. `ParentRelative` exists so a producer that already stores local
-/// transforms can be read correctly. Recorded as an assumption in
-/// docs/OPENRIGLOGIC.md — to be confirmed against a real export in Phase 2.
-enum class NeutralSpace { World, ParentRelative };
+/// stores them PARENT-RELATIVE (verified on Epic's SKM_Body/SKM_Face: a hand is
+/// 0.007 from its parent, a thigh 0.096 from the pelvis; accumulating them down
+/// the hierarchy reproduces the mesh's pose). The root joint carries a -90deg X
+/// orientation that turns the data's Z-up joint axes into Y-up. `World` exists
+/// for a producer that writes world transforms.
+enum class NeutralSpace { ParentRelative, World };
 
 struct ReadOptions {
     int lod = 0;                         ///< LOD whose meshes/joints the result exposes (0 = highest)
@@ -58,7 +57,7 @@ struct ReadOptions {
     bool loadBehavior = false;           ///< count rig-logic data (controls, PSD, RBF, …) — info/Phase 2
     Units units = Units::Meters;         ///< cm -> m for the MetaHuman default
     bool convertCoordinateSystem = true; ///< library-side transform to right-handed, Y-up, character facing +Z
-    NeutralSpace neutralSpace = NeutralSpace::World;
+    NeutralSpace neutralSpace = NeutralSpace::ParentRelative;
     bool flipV = true;                   ///< DNA UVs are bottom-left origin; Ogre/glTF are top-left
 };
 

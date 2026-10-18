@@ -50,6 +50,16 @@ TEST(DnaMath, SignFlipsDirection)
     EXPECT_NEAR(p[3], -n[3], 1e-12);
 }
 
+TEST(DnaMath, FirstLetterIsAppliedFirst)
+{
+    // xyz: rotate about X first (+90: Y->Z), then about Y (+90: Z->X) => Y maps to +X.
+    const auto q = eulerToQuaternion({90, 90, 0}, "xyz", true);
+    const double w = q[0], x = q[1], y = q[2], z = q[3];
+    // rotate (0,1,0)
+    const double vx = (1 - 2 * (y * y + z * z)) * 0 + 2 * (x * y - z * w) * 1;
+    EXPECT_NEAR(vx, 1.0, 1e-9);
+}
+
 TEST(DnaMath, SequenceOrderMatters)
 {
     const auto a = eulerToQuaternion({90, 90, 0}, "xyz", true);
@@ -257,6 +267,7 @@ TEST(DnaReader, SyntheticRoundTripDescriptorAndJoints)
     ASSERT_TRUE(available());
     ReadOptions opt;
     opt.convertCoordinateSystem = false;
+    opt.neutralSpace = NeutralSpace::World;  // the synthetic joints are authored as world positions
     const ReadResult r = readFromBuffer(makeSyntheticDna(), opt);
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     const Rig& g = r.rig;
@@ -299,14 +310,13 @@ TEST(DnaReader, PreserveUnitsKeepsCentimetres)
     opt.units = Units::Preserve;
     const ReadResult r = readFromBuffer(makeSyntheticDna(), opt);
     ASSERT_TRUE(r.ok);
-    EXPECT_NEAR(r.rig.joints[1].translation[1], 100.0, 1e-3);
+    EXPECT_NEAR(r.rig.joints[1].translation[1], 100.0, 1e-3);  // parent-relative (default): taken verbatim
 }
 
-TEST(DnaReader, ParentRelativeSpaceIsNotAccumulated)
+TEST(DnaReader, ParentRelativeIsTheDefaultAndNotAccumulated)
 {
     ReadOptions opt;
     opt.convertCoordinateSystem = false;
-    opt.neutralSpace = NeutralSpace::ParentRelative;
     const ReadResult r = readFromBuffer(makeSyntheticDna(), opt);
     ASSERT_TRUE(r.ok);
     EXPECT_NEAR(r.rig.joints[2].translation[1], 1.5, 1e-5);  // taken verbatim
