@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <QCryptographicHash>
+#include <QApplication>
 #include <QFileDialog>
 #include <QImage>
 #include <QTimer>
@@ -196,6 +197,8 @@ QString MeshImporterExporter::exportTextureName(const QString& originalName)
 
 namespace {
 
+QString s_lastImportError;
+
 void showImportProblem(const QString& title,
                        const QString& text,
                        const QString& format,
@@ -302,6 +305,9 @@ void forEachNamedTexture(const Ogre::MaterialPtr& material, Fn&& fn)
 }
 
 } // namespace
+
+QString MeshImporterExporter::lastImportError() { return s_lastImportError; }
+void MeshImporterExporter::clearLastImportError() { s_lastImportError.clear(); }
 
 void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, const QFileInfo& file)
 {
@@ -2936,9 +2942,25 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 Dna::ImportReport dnaReport;
                 Ogre::SceneNode* dnaNode = Dna::importToScene(
                     file.absoluteFilePath(), Dna::ReadOptions(), &dnaReport, &dnaErr);
+                s_lastImportError.clear();
                 if (!dnaNode) {
+                    s_lastImportError = dnaErr;
                     Ogre::LogManager::getSingleton().logError(
                         "DNA import failed: " + dnaErr.toStdString());
+                    // The Ogre log is suppressed in CLI mode outside --verbose, and
+                    // the generic "Failed to load file" hides the actionable reason
+                    // (rebuild flag / unsupported version / corrupt): qCritical
+                    // always reaches the CLI's stderr.
+                    qCritical().noquote() << "DNA import failed:" << dnaErr;
+                    // A modal dialog would hang a headless run, so only show one
+                    // when a window is actually on screen.
+                    bool haveWindow = false;
+                    for (const QWidget* w : QApplication::topLevelWidgets())
+                        if (w && w->isVisible()) { haveWindow = true; break; }
+                    if (haveWindow)
+                        showImportProblem(QStringLiteral("MetaHuman DNA"),
+                                          QStringLiteral("Could not import %1: %2").arg(file.fileName(), dnaErr),
+                                          QStringLiteral("dna"), dnaErr);
                 } else {
                     for (const QString& w : dnaReport.warnings)
                         Ogre::LogManager::getSingleton().logWarning(("DNA import: " + w).toStdString());

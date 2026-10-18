@@ -32,12 +32,24 @@ int run(int argc, char* argv[])
     ReadOptions opt;
     opt.loadBehavior = true;
     bool sawInfo = false;
-    for (int i = 2; i < argc; ++i) {
+    bool sawDna = false;
+    // CLIPipeline::run forwards the full argv and accepts global flags before
+    // the subcommand (`--cli dna info x.dna`), so scan from 1 and skip them.
+    for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
-        if (a == "info") sawInfo = true;
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (a == "info" && !sawInfo) sawInfo = true;
         else if (a == "--json") json = true;
         else if (a == "--keep-units") opt.units = Units::Preserve;
-        else if (a == "--lod" && i + 1 < argc) opt.lod = QString::fromLocal8Bit(argv[++i]).toInt();
+        else if (a == "--lod" && i + 1 < argc) {
+            bool ok = false;
+            opt.lod = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || opt.lod < 0) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --lod expects a non-negative integer\n"));
+                return 2;
+            }
+        }
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else if (!a.startsWith('-') && path.isEmpty()) path = a;
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }

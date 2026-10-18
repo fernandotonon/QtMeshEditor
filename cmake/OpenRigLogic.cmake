@@ -48,6 +48,12 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(qtmesh_openriglogic_src)
 
+# MIT requires the notice to accompany copies: ship it with every package the
+# way the QuadriFlow helper's licences travel (cmake/QuadriFlow.cmake).
+install(FILES "${qtmesh_openriglogic_src_SOURCE_DIR}/LICENSE"
+        DESTINATION ${CMAKE_INSTALL_PREFIX}
+        RENAME OpenRigLogic.LICENSE)
+
 # Upstream forces C++11 only when CMAKE_CXX_STANDARD is unset, so it follows ours.
 add_library(qtmesh_openriglogic INTERFACE)
 target_link_libraries(qtmesh_openriglogic INTERFACE RigLogic::riglogic4)

@@ -37,7 +37,7 @@ Ogre::SceneNode* fail(QString* error, const QString& msg)
 
 namespace {
 
-constexpr int kOgreMaxBones = 256;  // OGRE_MAX_NUM_BONES: handles must be < this
+constexpr int kOgreMaxBones = 256;  // OGRE_MAX_NUM_BONES: handles 0..255 are valid, i.e. 256 bones fit
 
 // Keep only the joints that deform the imported meshes (skinned joints and
 // their ancestors). MetaHuman skeletons carry hundreds of driver/helper joints
@@ -69,7 +69,7 @@ Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
     std::vector<int> fold(rig.joints.size());  // joint -> kept joint it now maps to
     for (size_t i = 0; i < fold.size(); ++i) fold[i] = int(i);
     size_t folded = 0;
-    if (kept >= size_t(kOgreMaxBones)) {
+    if (kept > size_t(kOgreMaxBones)) {
         std::vector<double> total(rig.joints.size(), 0.0);
         for (const Mesh& m : rig.meshes)
             for (const auto& inf : m.skin)
@@ -78,7 +78,7 @@ Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
         std::vector<int> children(rig.joints.size(), 0);
         for (size_t i = 0; i < used.size(); ++i)
             if (used[i] && rig.joints[i].parent >= 0) ++children[size_t(rig.joints[i].parent)];
-        while (kept >= size_t(kOgreMaxBones)) {
+        while (kept > size_t(kOgreMaxBones)) {
             int best = -1;
             for (size_t i = 0; i < used.size(); ++i) {
                 if (!used[i] || children[i] != 0 || rig.joints[i].parent < 0) continue;
@@ -140,7 +140,7 @@ Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
         rep.warnings << QStringLiteral("LOSSY: Ogre allows at most %1 bones per skeleton, so %2 further "
                                        "low-influence leaf joints (twist/corrective joints) were folded into "
                                        "their parents. Deformation differs slightly from the DNA rig.")
-                            .arg(kOgreMaxBones - 1).arg(folded);
+                            .arg(kOgreMaxBones).arg(folded);
     return out;
 }
 
@@ -156,11 +156,11 @@ Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
     ImportReport& rep = report ? *report : local;
     rep = ImportReport();
     const Rig rig = pruneToDeformers(input, rep);
-    if (static_cast<int>(rig.joints.size()) >= kOgreMaxBones) {
+    if (static_cast<int>(rig.joints.size()) > kOgreMaxBones) {
         if (error)
             *error = QStringLiteral("The skeleton still has %1 joints after dropping non-deforming ones; "
                                     "Ogre supports at most %2 bones per skeleton.")
-                         .arg(rig.joints.size()).arg(kOgreMaxBones - 1);
+                         .arg(rig.joints.size()).arg(kOgreMaxBones);
         return nullptr;
     }
     const QStringList pruneNotes = rep.warnings;
@@ -216,8 +216,10 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
     // ---- geometry -----------------------------------------------------------
     std::vector<EditableSubMesh> subs;
     std::vector<QString> names;
+    std::vector<size_t> builtMeshIndex;  // rig.meshes index of each built submesh
     std::vector<ExpandedMesh> expanded;
-    for (const Mesh& m : rig.meshes) {
+    for (size_t mi = 0; mi < rig.meshes.size(); ++mi) {
+        const Mesh& m = rig.meshes[mi];
         ExpandedMesh ex = expand(m, rig.flipV);
         if (ex.indices.empty()) {
             rep.warnings << QStringLiteral("Mesh '%1' has no valid triangles and was skipped.").arg(m.name);
@@ -264,6 +266,7 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
         rep.skippedFaces += ex.skippedFaces;
         subs.push_back(std::move(es));
         names.push_back(m.name);
+        builtMeshIndex.push_back(mi);
         expanded.push_back(std::move(ex));
     }
     if (subs.empty())
@@ -307,11 +310,8 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
     // ---- morph targets: DNA channel -> one named pose per mesh slice ---------
     if (entity && !rig.blendShapeChannels.isEmpty()) {
         std::map<int, std::vector<MorphPoseSlice>> byChannel;
-        size_t sub = 0;
-        for (const Mesh& m : rig.meshes) {
-            // keep the sub index aligned with `subs` (skipped meshes have no entry)
-            const bool built = std::find(names.begin(), names.end(), m.name) != names.end();
-            if (!built) continue;
+        for (size_t sub = 0; sub < builtMeshIndex.size(); ++sub) {
+            const Mesh& m = rig.meshes[builtMeshIndex[sub]];
             const ExpandedMesh& ex = expanded[sub];
             std::vector<std::vector<uint32_t>> verticesOfPosition;
             for (uint32_t v = 0; v < ex.positionOf.size(); ++v) {
@@ -333,7 +333,6 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
                 if (!slice.offsets.empty())
                     byChannel[bt.channel].push_back(std::move(slice));
             }
-            ++sub;
         }
         for (auto& [channel, slices] : byChannel) {
             AddMorphTargetCommand cmd(entity, rig.blendShapeChannels[channel], slices);
