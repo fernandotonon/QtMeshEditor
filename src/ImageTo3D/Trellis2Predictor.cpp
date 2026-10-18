@@ -19,7 +19,9 @@
 #include <QTemporaryDir>
 #include "AppStorage.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 
@@ -932,26 +934,44 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (src.triangleCount > cap)
             gr.targetTriangles = cap;
     }
-    // Voxel-scale weld (the upstream reference uses 1/(res*8)): the raw
-    // dual-grid mesh is non-manifold at sub-voxel scale and unsimplifiable
-    // without it.
+    // Sub-voxel weld at voxelSize/64. The upstream reference welds at /8, but
+    // measured on real generations the raw dual-grid mesh is already closed
+    // (0 boundary edges, ~1-2k non-manifold edges of ~10M) and a /8 weld is
+    // what CREATES the non-manifold edges: 1.8k -> 20k on one 512-res asset,
+    // plus extra floating components, and one asset over-collapsed to 19.6k
+    // tris against a 25k target. /64 still merges the coincident seam
+    // vertices; non-manifold edges after simplify: 7.5k -> 1.2k, 12k -> 3k.
     if (src.voxelSize > 0.0f)
-        gr.weldEpsilonAbsolute = src.voxelSize / 8.0f;
+        gr.weldEpsilonAbsolute = src.voxelSize / 64.0f;
     // Pre-smooth: voxel decodes of fuzzy subjects (fur/hair) carry sub-voxel
     // micro-pits that render as dark pepper speckle and derail QEM on thin
     // double-walled features (ear lace). Volume-preserving, so real shape
     // survives; only sub-voxel noise flattens.
     gr.taubinIterations = 5;
+    // Manifold remesh (see Options::manifoldRemesh). Grid sized from the
+    // budget: ~1.6*sqrt(target) cells along the longest axis (25k tris -> 253).
+    // Keyed on the USER's budget (opts.targetTriangles), not gr.targetTriangles:
+    // for "Original" density + bake the latter is an implicit 150k/300k cap, and
+    // a user who asked to keep the raw density must not get a marching-cubes
+    // rebuild.
+    if (opts.manifoldRemesh && opts.targetTriangles > 0
+        && src.triangleCount > gr.targetTriangles * 4
+        && qEnvironmentVariableIntValue("QTMESH_TRELLIS2_NO_REMESH") == 0) {
+        gr.remeshResolution = std::clamp(
+            static_cast<int>(1.6 * std::sqrt(double(gr.targetTriangles))),
+            128, 320);
+    }
     const Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(src.positions, src.indices, gr);
     if (!processed.ok)
         return failResult(QStringLiteral("trellis2: %1").arg(processed.error));
     fprintf(stderr,
             "[trellis2] game-ready: %d -> %d tris (welded %d, dropped %d comps, "
-            "simplify err %.4f)\n",
+            "simplify err %.4f%s)\n",
             processed.inputTriangles, processed.outputTriangles,
             processed.weldedVertices, processed.removedComponents,
-            processed.simplifyError);
+            processed.simplifyError,
+            processed.remeshed ? ", manifold remesh" : "");
 
     Trellis2Bake::SparseVolumeSampler volume;
     if (src.voxelCount > 0)

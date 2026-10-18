@@ -54,6 +54,12 @@ public:
         // targetTriangles is a hard ceiling (Roblox-style upload limit), not
         // a budget — see Trellis2Bake::GameReadyOptions::strictTriangleBudget.
         bool strictTriangleBudget = false;
+        // Rebuild the generation as a closed manifold surface (voxel remesh +
+        // link-condition-preserving simplify) before the budget is applied:
+        // 0 non-manifold edges instead of ~1k-12k, at ~0.2% of the model
+        // diagonal of surface drift. Only used when a triangle budget applies.
+        // Env QTMESH_TRELLIS2_NO_REMESH=1 disables it.
+        bool manifoldRemesh = true;
         bool bakeTexture   = true;  // false → per-vertex colours only
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
