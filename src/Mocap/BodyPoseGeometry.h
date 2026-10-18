@@ -155,7 +155,34 @@ inline Pose solve(const float* world, const float* visibility = nullptr,
                 out.mask |= 1u << role;
         };
         if (upperOk) aim(ch.upperRole, upper);
-        if (lowerOk) aim(ch.lowerRole, lower);
+        // Arms: the forearm INHERITS the upper arm's roll (parallel-transported
+        // onto the forearm direction), so the elbow is a pure hinge with zero
+        // twist. Aiming the forearm on its own against the pelvis-forward
+        // reference goes degenerate whenever it points toward the camera (arms
+        // crossed over the chest) and snaps the roll by ~90 degrees.
+        if (!leg && upperOk && lowerOk && out.resolved(ch.upperRole)
+            && upper.squaredLength() > 1e-10f && lower.squaredLength() > 1e-10f) {
+            const Ogre::Vector3 upperDir = upper.normalisedCopy();
+            const Ogre::Vector3 lowerDir = lower.normalisedCopy();
+            Ogre::Quaternion swing = upperDir.getRotationTo(lowerDir);
+            // A fully folded elbow makes the two directions antiparallel, where
+            // the shortest-arc axis is arbitrary and landmark noise would flip
+            // the forearm roll. Blend toward a rotation about the elbow hinge
+            // (the upper arm frame's Z axis, perpendicular to its bone axis).
+            const float cosine = std::clamp(upperDir.dotProduct(lowerDir), -1.f, 1.f);
+            const float fold = std::clamp((-cosine - 0.9f) / 0.09f, 0.f, 1.f);
+            if (fold > 0.f) {
+                const Ogre::Vector3 hinge =
+                    out.orientations[ch.upperRole] * Ogre::Vector3::UNIT_Z;
+                const Ogre::Quaternion about(Ogre::Radian(std::acos(cosine)), hinge);
+                swing = Ogre::Quaternion::Slerp(fold, swing, about, true);
+            }
+            out.orientations[ch.lowerRole] = swing * out.orientations[ch.upperRole];
+            out.orientations[ch.lowerRole].normalise();
+            out.mask |= 1u << ch.lowerRole;
+        } else if (lowerOk) {
+            aim(ch.lowerRole, lower);
+        }
     }
     for (const auto& foot : {std::array<int, 3>{PoseIK::LFoot, 27, 31},
                             std::array<int, 3>{PoseIK::RFoot, 28, 32}})

@@ -89,6 +89,17 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
   `--face --body` run together).
 - `--frames-dir DIR`: use an image sequence instead of a video (headless
   debugging/CI; no video decode involved).
+- `--key-interval SEC` / `--key-times t0,t1,...` (with `--frames-dir` and
+  `--body`): **pose keyframes from still images**. Each image (sprite-sheet
+  frame, photo) is an independent pose keyed at its own time and the rig is
+  interpolated between keys, instead of treating the folder as continuous
+  video. Images sort naturally (`pose2` before `pose10`); `--key-interval`
+  spaces them evenly (0.5 s default), `--key-times` gives one time per image
+  (strictly ascending; the first key is re-based to t=0). Pose tracking and
+  smoothing are reset per image, root motion is off unless `--root-motion`,
+  and the first image is the calibration pose (use a neutral/standing one
+  first). Images with no detectable person are skipped with a warning.
+  `qtmesh mocap --body --mesh rig.fbx --frames-dir poses/ --key-interval 0.4 -o out.glb`
 - Model base URL override: `QTMESH_MOCAP_MODEL_BASE_URL` /
   `QSettings ai/mocapModelBaseUrl`; offline guard `QTMESH_MOCAP_NO_DOWNLOAD`.
 
