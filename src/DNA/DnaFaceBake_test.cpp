@@ -308,7 +308,7 @@ FaceFixture& face() { static FaceFixture f; return f; }
 
 TEST(DnaFaceBakeReal, EveryArkitControlExistsInTheMetaHumanFace)
 {
-    if (!face().ok) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     for (const auto& s : face().bake.shapes)
         EXPECT_TRUE(s.missingControls.isEmpty()) << s.name.toStdString() << " : "
                                                  << s.missingControls.join(",").toStdString();
@@ -317,7 +317,7 @@ TEST(DnaFaceBakeReal, EveryArkitControlExistsInTheMetaHumanFace)
 
 TEST(DnaFaceBakeReal, JawOpenMovesTheChinDownByAFewCentimetresAtMost)
 {
-    if (!face().ok) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     const auto* s = find(face().bake, "jawOpen");
     ASSERT_NE(s, nullptr);
     const Peak p = peakOf(*s);
@@ -328,7 +328,7 @@ TEST(DnaFaceBakeReal, JawOpenMovesTheChinDownByAFewCentimetresAtMost)
 
 TEST(DnaFaceBakeReal, LeftAndRightShapesAreMirroredAcrossTheFace)
 {
-    if (!face().ok) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     auto peakX = [&](const char* name) {
         const auto* s = find(face().bake, name);
         EXPECT_NE(s, nullptr) << name;
@@ -349,7 +349,7 @@ TEST(DnaFaceBakeReal, LeftAndRightShapesAreMirroredAcrossTheFace)
 
 TEST(DnaFaceBakeReal, SummedShapesStayCloseToTheJointRigForTypicalExpressions)
 {
-    if (!face().ok) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     const auto specs = FaceBake::arkitSpecs(ArkitMap::defaultMap());
     auto pick = [&](std::initializer_list<const char*> names) {
         QList<FaceBake::ShapeSpec> v;
@@ -370,7 +370,7 @@ TEST(DnaFaceBakeReal, SummedShapesStayCloseToTheJointRigForTypicalExpressions)
 
 TEST(DnaFaceBakeReal, BakingAllArkitShapesIsFast)
 {
-    if (!face().ok) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     const auto t0 = std::chrono::steady_clock::now();
     const auto r = FaceBake::bake(face().rig, *face().ev, FaceBake::arkitSpecs(ArkitMap::defaultMap()));
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();

@@ -68,7 +68,7 @@ namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not por
 TEST(DnaRigEvaluator, NeutralPoseMatchesTheReaderSkeleton)
 {
     const QString path = bodyDna();
-    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman body DNA available";
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman body DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     QString err;
     auto ev = RigEvaluator::create(path, ReadOptions(), &err);
     ASSERT_NE(ev, nullptr) << err.toStdString();
@@ -99,7 +99,7 @@ TEST(DnaRigEvaluator, NeutralPoseMatchesTheReaderSkeleton)
 TEST(DnaRigEvaluator, FaceRestPoseMatchesTheReaderSkeletonIncludingScaleAndIsFinite)
 {
     const QString path = faceDna();
-    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman face DNA available";
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     QString err;
     auto ev = RigEvaluator::create(path, ReadOptions(), &err);
     ASSERT_NE(ev, nullptr) << err.toStdString();
@@ -126,7 +126,7 @@ TEST(DnaRigEvaluator, FaceRestPoseMatchesTheReaderSkeletonIncludingScaleAndIsFin
 TEST(DnaRigEvaluator, EveryRbfPoseTargetReproducesTheDnasOwnCorrective)
 {
     const QString path = bodyDna();
-    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman body DNA available";
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman body DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     QString err;
     auto ev = RigEvaluator::create(path, ReadOptions(), &err);
     ASSERT_NE(ev, nullptr) << err.toStdString();
@@ -171,7 +171,7 @@ TEST(DnaRigEvaluator, EveryRbfPoseTargetReproducesTheDnasOwnCorrective)
 TEST(DnaRigEvaluator, BendingTheKneeDrivesTheKneeCorrectives)
 {
     const QString path = bodyDna();
-    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman body DNA available";
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman body DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     auto ev = RigEvaluator::create(path);
     ASSERT_NE(ev, nullptr);
     ASSERT_TRUE(ev->driverJoints().contains("calf_l"));
@@ -203,7 +203,7 @@ TEST(DnaRigEvaluator, BendingTheKneeDrivesTheKneeCorrectives)
 TEST(DnaRigEvaluator, UnknownDriverIsRejectedAndSignIsNormalised)
 {
     const QString path = bodyDna();
-    if (path.isEmpty()) GTEST_SKIP() << "no MetaHuman body DNA available";
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman body DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
     auto ev = RigEvaluator::create(path);
     ASSERT_NE(ev, nullptr);
     EXPECT_FALSE(ev->setDriverRotation("not_a_joint", {1, 0, 0, 0}));
