@@ -73,10 +73,9 @@ struct GameReadyOptions {
     // (0 disables the epsilon and welds bit-identical positions only).
     float weldEpsilonFraction = 1e-5f;
     // Absolute weld tolerance — overrides the fraction when > 0. The TRELLIS
-    // dual-grid callers set voxelSize/8 (the upstream reference weld): raw
-    // dual-grid output is non-manifold seam soup at sub-voxel scale, and
-    // without a voxel-scale weld the topology-preserving simplifier can get
-    // stuck millions of triangles above the requested budget.
+    // dual-grid callers set voxelSize/64 (see Trellis2Predictor). Keep
+    // it SMALL: the raw output is already closed, and a coarse (voxelSize/8)
+    // weld creates non-manifold edges and floating fragments.
     float weldEpsilonAbsolute = 0.0f;
     // Disconnected components smaller than BOTH thresholds are dropped
     // (floating debris from the sparse-voxel extraction). The largest
@@ -100,6 +99,15 @@ struct GameReadyOptions {
     // fuzzy subjects (fur/hair) decode with sub-voxel micro-pits that render
     // as dark speckle and derail QEM on thin double-walled features.
     int   taubinIterations = 0;
+    // > 0: rebuild the welded mesh as a CLOSED MANIFOLD surface before
+    // simplification — voxelize at this resolution (cells along the longest
+    // bbox axis), flood-fill the exterior, blur the solid mask and run
+    // marching cubes. Removes every non-manifold edge (thin double walls fuse
+    // into one slab) at the cost of detail below ~1/remeshResolution of the
+    // model size; the dense source still feeds the detail-normal bake.
+    // 0 = off. Falls back to the unmodified mesh when the remesh is empty or
+    // not manifold.
+    int   remeshResolution = 0;
 };
 
 struct GameReadyResult {
@@ -112,12 +120,42 @@ struct GameReadyResult {
     int weldedVertices = 0;       // vertices merged by the weld
     int removedComponents = 0;    // debris islands dropped
     int removedTriangles = 0;     // triangles dropped with them (+degenerates)
+    bool remeshed = false;        // voxel remesh replaced the mesh
+    int remeshedFromTriangles = 0;
     float simplifyError = 0.0f;   // meshopt result_error (0 when not simplified)
 };
 
 GameReadyResult makeGameReady(const std::vector<float>& positions,
                               const std::vector<uint32_t>& indices,
                               const GameReadyOptions& opts);
+
+// Edge-topology census of an indexed triangle mesh (positions are not read —
+// connectivity is by index, so weld first). Used to tell WHERE holes come
+// from: a closed surface has boundaryEdges == 0 and nonManifoldEdges == 0.
+struct TopologyStats {
+    int triangles = 0;
+    int boundaryEdges = 0;      // edges used by exactly one face (hole rims)
+    int nonManifoldEdges = 0;   // edges used by 3+ faces
+    int flippedEdges = 0;       // 2-face edges whose faces disagree on winding
+    int components = 0;         // connected components (vertex-connected)
+    int smallComponents = 0;    // components under 1% of the triangles
+};
+TopologyStats topologyStats(size_t vertexCount,
+                            const std::vector<uint32_t>& indices);
+
+// Voxel remesh (see GameReadyOptions::remeshResolution). Exposed for tests.
+// Returns false (outputs untouched) when the input is degenerate or the
+// result is empty.
+bool remeshManifold(const std::vector<float>& positions,
+                    const std::vector<uint32_t>& indices, int resolution,
+                    std::vector<float>& outPositions,
+                    std::vector<uint32_t>& outIndices);
+
+// Quadric edge-collapse simplification that enforces the link condition, so a
+// closed manifold mesh stays manifold. Collapses until `targetTriangles`
+// remain or no legal collapse is left. Returns true (outputs always valid).
+bool simplifyManifold(std::vector<float>& positions,
+                      std::vector<uint32_t>& indices, size_t targetTriangles);
 
 // Unify triangle winding (exposed for unit tests; makeGameReady runs it).
 // Raw TRELLIS dual-grid output arrives with large patches of flipped

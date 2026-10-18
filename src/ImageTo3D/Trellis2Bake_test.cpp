@@ -506,3 +506,238 @@ TEST(Trellis2BakeTest, UnifyWindingFixesFlippedPatchesAndOrientsOutward)
     }
     EXPECT_GT(vol, 0.0);
 }
+
+namespace {
+// UV sphere of radius r (closed, outward winding), appended to pos/idx.
+void appendSphere(std::vector<float>& pos, std::vector<uint32_t>& idx, float r,
+                  int rings = 40, int segs = 56)
+{
+    const uint32_t base = static_cast<uint32_t>(pos.size() / 3);
+    pos.insert(pos.end(), {0.f, r, 0.f});
+    for (int i = 1; i < rings; ++i) {
+        const float phi = float(M_PI) * i / rings;
+        for (int s = 0; s < segs; ++s) {
+            const float th = 2.f * float(M_PI) * s / segs;
+            pos.insert(pos.end(), {r * std::sin(phi) * std::cos(th), r * std::cos(phi),
+                                   r * std::sin(phi) * std::sin(th)});
+        }
+    }
+    pos.insert(pos.end(), {0.f, -r, 0.f});
+    const uint32_t south = uint32_t(pos.size() / 3 - 1);
+    auto v = [&](int i, int s) { return base + uint32_t(1 + (i - 1) * segs + (s % segs)); };
+    for (int s = 0; s < segs; ++s) {
+        idx.insert(idx.end(), {base, v(1, s + 1), v(1, s)});
+        idx.insert(idx.end(), {south, v(rings - 1, s), v(rings - 1, s + 1)});
+    }
+    for (int i = 1; i < rings - 1; ++i)
+        for (int s = 0; s < segs; ++s) {
+            idx.insert(idx.end(), {v(i, s), v(i, s + 1), v(i + 1, s)});
+            idx.insert(idx.end(), {v(i, s + 1), v(i + 1, s + 1), v(i + 1, s)});
+        }
+}
+} // namespace
+
+TEST(Trellis2BakeTest, RemeshMakesDoubleWalledShellManifold)
+{
+    // Two concentric spheres closer than a voxel: a pinched double wall.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f);
+    appendSphere(pos, idx, 0.995f);
+    std::vector<float> rp;
+    std::vector<uint32_t> ri;
+    ASSERT_TRUE(Trellis2Bake::remeshManifold(pos, idx, 64, rp, ri));
+    const auto s = Trellis2Bake::topologyStats(rp.size() / 3, ri);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.flippedEdges, 0);
+    EXPECT_EQ(s.components, 1);
+    // outward winding: signed volume positive and close to the sphere's
+    double vol = 0;
+    for (size_t t = 0; t + 2 < ri.size(); t += 3) {
+        const float* a = &rp[ri[t] * 3]; const float* b = &rp[ri[t + 1] * 3];
+        const float* c = &rp[ri[t + 2] * 3];
+        vol += (a[0] * (b[1] * c[2] - b[2] * c[1]) - a[1] * (b[0] * c[2] - b[2] * c[0])
+                + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0;
+    }
+    EXPECT_NEAR(vol, 4.0 / 3.0 * M_PI, 0.5);   // + ~half a voxel of outward bias
+}
+
+TEST(Trellis2BakeTest, RemeshKeepsThinSheetAsClosedSlab)
+{
+    // A flat 1x1 sheet (no thickness) must survive the remesh as a thin closed
+    // slab instead of vanishing under the iso level.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    const int n = 32;
+    for (int y = 0; y <= n; ++y)
+        for (int x = 0; x <= n; ++x)
+            pos.insert(pos.end(), {float(x) / n, 0.0f, float(y) / n});
+    // the sheet is open, which the flood fill tolerates (it only needs the
+    // exterior to stay connected around it)
+    for (int y = 0; y < n; ++y)
+        for (int x = 0; x < n; ++x) {
+            const uint32_t a = uint32_t(y * (n + 1) + x), b = a + 1, c = a + n + 1, d = c + 1;
+            idx.insert(idx.end(), {a, c, b, b, c, d});
+        }
+    std::vector<float> rp;
+    std::vector<uint32_t> ri;
+    ASSERT_TRUE(Trellis2Bake::remeshManifold(pos, idx, 48, rp, ri));
+    const auto s = Trellis2Bake::topologyStats(rp.size() / 3, ri);
+    EXPECT_GT(s.triangles, 100);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+}
+
+TEST(Trellis2BakeTest, SimplifyManifoldKeepsClosedManifold)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f, 60, 80);
+    ASSERT_TRUE(Trellis2Bake::simplifyManifold(pos, idx, 800));
+    const auto s = Trellis2Bake::topologyStats(pos.size() / 3, idx);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.flippedEdges, 0);
+    EXPECT_EQ(s.components, 1);
+    EXPECT_LE(s.triangles, 820);
+    EXPECT_GE(s.triangles, 400);
+}
+
+TEST(Trellis2BakeTest, GameReadyRemeshOptionYieldsManifold)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f, 80, 100);
+    appendSphere(pos, idx, 0.995f, 80, 100);   // double wall
+    Trellis2Bake::GameReadyOptions o;
+    o.targetTriangles = 1500;
+    o.remeshResolution = 96;
+    const auto r = Trellis2Bake::makeGameReady(pos, idx, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_TRUE(r.remeshed);
+    const auto s = Trellis2Bake::topologyStats(r.positions.size() / 3, r.indices);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_LE(r.outputTriangles, 1600);
+}
+
+// Diagnostic (env-gated, needs a real generation): where do the holes come
+// from? Census the raw source vs. the game-ready output.
+//   QTMESH_T2_SOURCE=/path/x_source.qtm3d QTMESH_T2_TARGET=25000 UnitTests \
+//     --gtest_filter=Trellis2BakeTest.RealSourceTopologyCensus
+#include "Trellis2Interchange.h"
+#include <cstdlib>
+#include <unordered_map>
+#include <algorithm>
+TEST(Trellis2BakeTest, RealSourceTopologyCensus)
+{
+    const char* path = std::getenv("QTMESH_T2_SOURCE");
+    if (!path) GTEST_SKIP() << "QTMESH_T2_SOURCE not set";
+    const auto read = Trellis2Interchange::read(QString::fromUtf8(path));
+    ASSERT_TRUE(read.ok) << read.error.toStdString();
+    const auto& d = read.data;
+    auto print = [](const char* what, size_t nv,
+                    const std::vector<uint32_t>& idx) {
+        const auto s = Trellis2Bake::topologyStats(nv, idx);
+        fprintf(stderr, "[census] %-22s tris=%d boundary=%d nonManifold=%d flipped=%d comps=%d small=%d\n",
+                what, s.triangles, s.boundaryEdges, s.nonManifoldEdges, s.flippedEdges, s.components, s.smallComponents);
+    };
+    print("raw", d.positions.size() / 3, d.indices);
+    const char* t = std::getenv("QTMESH_T2_TARGET");
+    for (int target : {0, t ? std::atoi(t) : 25000}) {
+        Trellis2Bake::GameReadyOptions gr;
+        gr.targetTriangles = target;
+        gr.weldEpsilonAbsolute = d.voxelSize / (std::getenv("QTMESH_T2_WELDDIV") ? float(std::atof(std::getenv("QTMESH_T2_WELDDIV"))) : 8.0f);
+        gr.taubinIterations = 5;
+        if (const char* rr = std::getenv("QTMESH_T2_REMESH")) gr.remeshResolution = std::atoi(rr);
+        const auto r = Trellis2Bake::makeGameReady(d.positions, d.indices, gr);
+        ASSERT_TRUE(r.ok) << r.error.toStdString();
+        char label[64];
+        snprintf(label, sizeof label, "gameReady t=%d%s", target, r.remeshed ? " REMESH" : "");
+        print(label, r.positions.size() / 3, r.indices);
+        if (target > 0) {
+            // fidelity: distance from each output vertex to the nearest of a
+            // subsample of the raw source vertices, as % of the bbox diagonal.
+            const size_t nv = d.positions.size() / 3;
+            const size_t stride = std::max<size_t>(1, nv / 3000000);
+            float mn[3] = {1e30f, 1e30f, 1e30f}, mx[3] = {-1e30f, -1e30f, -1e30f};
+            for (size_t v = 0; v < nv; ++v)
+                for (int k = 0; k < 3; ++k) {
+                    mn[k] = std::min(mn[k], d.positions[v * 3 + k]);
+                    mx[k] = std::max(mx[k], d.positions[v * 3 + k]);
+                }
+            const float diag = std::sqrt((mx[0]-mn[0])*(mx[0]-mn[0]) + (mx[1]-mn[1])*(mx[1]-mn[1]) + (mx[2]-mn[2])*(mx[2]-mn[2]));
+            const float cell = diag / 200.0f;
+            auto key = [&](int x, int y, int z) {
+                return (uint64_t(x + 1024) << 40) | (uint64_t(y + 1024) << 20) | uint64_t(z + 1024);
+            };
+            std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+            for (size_t v = 0; v < nv; v += stride)
+                grid[key(int(std::floor((d.positions[v*3]-mn[0])/cell)), int(std::floor((d.positions[v*3+1]-mn[1])/cell)), int(std::floor((d.positions[v*3+2]-mn[2])/cell)))].push_back(uint32_t(v));
+            std::vector<float> dist;
+            const size_t on = r.positions.size() / 3;
+            for (size_t v = 0; v < on; v += std::max<size_t>(1, on / 20000)) {
+                const float* p = &r.positions[v * 3];
+                const int cx = int(std::floor((p[0]-mn[0])/cell)), cy = int(std::floor((p[1]-mn[1])/cell)), cz = int(std::floor((p[2]-mn[2])/cell));
+                float best = 1e30f;
+                for (int rr = 1; rr <= 6 && best > 1e29f; ++rr)
+                    for (int x = cx-rr; x <= cx+rr; ++x) for (int y = cy-rr; y <= cy+rr; ++y) for (int z = cz-rr; z <= cz+rr; ++z) {
+                        auto it = grid.find(key(x, y, z));
+                        if (it == grid.end()) continue;
+                        for (uint32_t s : it->second) {
+                            const float* q = &d.positions[s * 3];
+                            const float dd = (p[0]-q[0])*(p[0]-q[0]) + (p[1]-q[1])*(p[1]-q[1]) + (p[2]-q[2])*(p[2]-q[2]);
+                            best = std::min(best, dd);
+                        }
+                    }
+                if (best < 1e29f) dist.push_back(std::sqrt(best) / diag * 100.0f);
+            }
+            std::sort(dist.begin(), dist.end());
+            if (!dist.empty()) {
+                double sum = 0; for (float x : dist) sum += x;
+                fprintf(stderr, "[fidelity] %s mean=%.3f%% p95=%.3f%% max=%.3f%% of diag (n=%zu)\n",
+                        label, sum / dist.size(), dist[size_t(dist.size() * 0.95)], dist.back(), dist.size());
+            }
+        }
+    }
+}
+
+TEST(Trellis2BakeTest, SimplifiedClosedMeshStaysClosedAndConsistent)
+{
+    // A closed UV sphere simplified hard must come out with no open rims, no
+    // winding conflicts and no floating fragments (post-simplify repair, 5b).
+    const int rings = 48, segs = 64;
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    pos.insert(pos.end(), {0.f, 1.f, 0.f});
+    for (int r = 1; r < rings; ++r) {
+        const float phi = float(M_PI) * r / rings;
+        for (int s = 0; s < segs; ++s) {
+            const float th = 2.f * float(M_PI) * s / segs;
+            pos.insert(pos.end(), {std::sin(phi) * std::cos(th), std::cos(phi),
+                                   std::sin(phi) * std::sin(th)});
+        }
+    }
+    pos.insert(pos.end(), {0.f, -1.f, 0.f});
+    const uint32_t south = static_cast<uint32_t>(pos.size() / 3 - 1);
+    auto v = [&](int r, int s) { return uint32_t(1 + (r - 1) * segs + (s % segs)); };
+    for (int s = 0; s < segs; ++s) {
+        idx.insert(idx.end(), {0u, v(1, s + 1), v(1, s)});
+        idx.insert(idx.end(), {south, v(rings - 1, s), v(rings - 1, s + 1)});
+    }
+    for (int r = 1; r < rings - 1; ++r)
+        for (int s = 0; s < segs; ++s) {
+            idx.insert(idx.end(), {v(r, s), v(r, s + 1), v(r + 1, s)});
+            idx.insert(idx.end(), {v(r, s + 1), v(r + 1, s + 1), v(r + 1, s)});
+        }
+
+    Trellis2Bake::GameReadyOptions opts;
+    opts.targetTriangles = 600;
+    const auto r = Trellis2Bake::makeGameReady(pos, idx, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    const auto s = Trellis2Bake::topologyStats(r.positions.size() / 3, r.indices);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.flippedEdges, 0);
+    EXPECT_EQ(s.components, 1);
+}

@@ -1,5 +1,6 @@
 #include "Trellis2Bake.h"
 #include "MeshRefine.h"
+#include "MarchingCubes.h"
 #include <array>
 
 #include "MeshSegmenter.h"   // connectedComponents (pure-data union-find)
@@ -14,6 +15,8 @@
 #include <cstring>
 #include <limits>
 #include <thread>
+#include <queue>
+#include <iterator>
 
 namespace Trellis2Bake {
 
@@ -786,6 +789,487 @@ int unifyWinding(const std::vector<float>& positions,
     return flipped;
 }
 
+// ---- remeshManifold ------------------------------------------------------------
+namespace {
+// Akenine-Möller triangle/box overlap. Box centred at c with half-size h.
+bool triBoxOverlap(const float c[3], float h, const float v0[3],
+                   const float v1[3], const float v2[3])
+{
+    float a[3][3];
+    for (int k = 0; k < 3; ++k) {
+        a[0][k] = v0[k] - c[k];
+        a[1][k] = v1[k] - c[k];
+        a[2][k] = v2[k] - c[k];
+    }
+    // box axes
+    for (int k = 0; k < 3; ++k) {
+        const float mn = std::min({a[0][k], a[1][k], a[2][k]});
+        const float mx = std::max({a[0][k], a[1][k], a[2][k]});
+        if (mn > h || mx < -h)
+            return false;
+    }
+    const float e[3][3] = {
+        {a[1][0] - a[0][0], a[1][1] - a[0][1], a[1][2] - a[0][2]},
+        {a[2][0] - a[1][0], a[2][1] - a[1][1], a[2][2] - a[1][2]},
+        {a[0][0] - a[2][0], a[0][1] - a[2][1], a[0][2] - a[2][2]}};
+    // triangle plane
+    float n[3];
+    cross3(e[0], e[1], n);
+    const float d = n[0] * a[0][0] + n[1] * a[0][1] + n[2] * a[0][2];
+    const float r = h * (std::fabs(n[0]) + std::fabs(n[1]) + std::fabs(n[2]));
+    if (std::fabs(d) > r)
+        return false;
+    // 9 edge cross-product axes
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            float axis[3] = {0, 0, 0};
+            float u[3] = {0, 0, 0};
+            u[j] = 1.0f;
+            cross3(u, e[i], axis);
+            const float len2 = axis[0] * axis[0] + axis[1] * axis[1]
+                             + axis[2] * axis[2];
+            if (len2 < 1e-24f)
+                continue;
+            float p0 = 0, p1 = 0, p2 = 0;
+            for (int k = 0; k < 3; ++k) {
+                p0 += axis[k] * a[0][k];
+                p1 += axis[k] * a[1][k];
+                p2 += axis[k] * a[2][k];
+            }
+            const float mn = std::min({p0, p1, p2});
+            const float mx = std::max({p0, p1, p2});
+            const float rad = h * (std::fabs(axis[0]) + std::fabs(axis[1])
+                                   + std::fabs(axis[2]));
+            if (mn > rad || mx < -rad)
+                return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
+bool remeshManifold(const std::vector<float>& positions,
+                    const std::vector<uint32_t>& indices, int resolution,
+                    std::vector<float>& outPositions,
+                    std::vector<uint32_t>& outIndices)
+{
+    const size_t nv = positions.size() / 3;
+    if (nv == 0 || indices.size() < 3)
+        return false;
+    resolution = std::clamp(resolution, 32, 400);
+    float mn[3] = {positions[0], positions[1], positions[2]};
+    float mx[3] = {mn[0], mn[1], mn[2]};
+    for (size_t v = 0; v < nv; ++v)
+        for (int k = 0; k < 3; ++k) {
+            mn[k] = std::min(mn[k], positions[v * 3 + k]);
+            mx[k] = std::max(mx[k], positions[v * 3 + k]);
+        }
+    const float ext = std::max({mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]});
+    if (!(ext > 0.0f))
+        return false;
+    const float cell = ext / float(resolution);
+    constexpr int kPad = 3;   // empty border so the exterior is connected
+    int dim[3];
+    for (int k = 0; k < 3; ++k)
+        dim[k] = int(std::ceil((mx[k] - mn[k]) / cell)) + 2 * kPad + 1;
+    const size_t total = size_t(dim[0]) * dim[1] * dim[2];
+    auto at = [&](int x, int y, int z) {
+        return (size_t(z) * dim[1] + y) * dim[0] + x;
+    };
+    // grid origin: cell (0,0,0) lower corner
+    const float org[3] = {mn[0] - kPad * cell, mn[1] - kPad * cell,
+                          mn[2] - kPad * cell};
+
+    // 1. conservative surface voxelization
+    std::vector<uint8_t> state(total, 0);   // 0 unknown, 1 surface, 2 exterior
+    // conservative: a hair larger than the cell so a triangle lying exactly on
+    // a cell boundary (axis-aligned sheet) is not lost to a float tie
+    const float half = cell * 0.5f * 1.001f;
+    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        const float* p0 = &positions[indices[t] * 3];
+        const float* p1 = &positions[indices[t + 1] * 3];
+        const float* p2 = &positions[indices[t + 2] * 3];
+        int lo[3], hi[3];
+        for (int k = 0; k < 3; ++k) {
+            const float a = std::min({p0[k], p1[k], p2[k]});
+            const float b = std::max({p0[k], p1[k], p2[k]});
+            lo[k] = std::max(0, int(std::floor((a - org[k]) / cell)));
+            hi[k] = std::min(dim[k] - 1, int(std::floor((b - org[k]) / cell)));
+        }
+        const bool single = lo[0] == hi[0] && lo[1] == hi[1] && lo[2] == hi[2];
+        for (int z = lo[2]; z <= hi[2]; ++z)
+            for (int y = lo[1]; y <= hi[1]; ++y)
+                for (int x = lo[0]; x <= hi[0]; ++x) {
+                    uint8_t& s = state[at(x, y, z)];
+                    if (s == 1)
+                        continue;
+                    if (!single) {
+                        const float c[3] = {org[0] + (x + 0.5f) * cell,
+                                            org[1] + (y + 0.5f) * cell,
+                                            org[2] + (z + 0.5f) * cell};
+                        if (!triBoxOverlap(c, half, p0, p1, p2))
+                            continue;
+                    }
+                    s = 1;
+                }
+    }
+
+    // 2. flood-fill the exterior from the padded corner (6-connectivity)
+    std::vector<uint32_t> stack;
+    stack.push_back(0);
+    state[0] = 2;
+    while (!stack.empty()) {
+        const uint32_t i = stack.back();
+        stack.pop_back();
+        const int x = int(i % dim[0]);
+        const int y = int((i / dim[0]) % dim[1]);
+        const int z = int(i / (size_t(dim[0]) * dim[1]));
+        const int nb[6][3] = {{x - 1, y, z}, {x + 1, y, z}, {x, y - 1, z},
+                              {x, y + 1, z}, {x, y, z - 1}, {x, y, z + 1}};
+        for (const auto& q : nb) {
+            if (q[0] < 0 || q[1] < 0 || q[2] < 0 || q[0] >= dim[0]
+                || q[1] >= dim[1] || q[2] >= dim[2])
+                continue;
+            uint8_t& s = state[at(q[0], q[1], q[2])];
+            if (s != 0)
+                continue;
+            s = 2;
+            stack.push_back(static_cast<uint32_t>(at(q[0], q[1], q[2])));
+        }
+    }
+
+    // 3. solid mask (everything not exterior) -> separable 3-tap box blur ->
+    //    scalar field in [0,1]. Blurring turns the staircase into a smooth
+    //    field so MC places vertices sub-voxel instead of on cell faces.
+    std::vector<uint8_t> a(total), b(total);
+    for (size_t i = 0; i < total; ++i)
+        a[i] = state[i] == 2 ? 0 : 1;
+    auto blurAxis = [&](const std::vector<uint8_t>& src,
+                        std::vector<uint8_t>& dst, int axis) {
+        for (int z = 0; z < dim[2]; ++z)
+            for (int y = 0; y < dim[1]; ++y)
+                for (int x = 0; x < dim[0]; ++x) {
+                    int sum = 0;
+                    for (int d = -1; d <= 1; ++d) {
+                        int q[3] = {x, y, z};
+                        q[axis] += d;
+                        if (q[axis] < 0 || q[axis] >= dim[axis])
+                            continue;
+                        sum += src[at(q[0], q[1], q[2])];
+                    }
+                    dst[at(x, y, z)] = static_cast<uint8_t>(sum);
+                }
+    };
+    // pass 1 yields 0..3, pass 2 0..9, pass 3 0..27 (fits uint8)
+    std::vector<uint8_t> tmp(total);
+    blurAxis(a, b, 0);
+    blurAxis(b, tmp, 1);
+    blurAxis(tmp, b, 2);
+    a.clear(); a.shrink_to_fit();
+    tmp.clear(); tmp.shrink_to_fit();
+    std::vector<float> field(total);
+    for (size_t i = 0; i < total; ++i) {
+        field[i] = float(b[i]) / 27.0f;
+        // A one-voxel-thick sheet (leaf, cloth, hair card) blurs to ~0.33 and
+        // would fall under the 0.5 iso level and vanish. Every voxel the
+        // surface actually touches stays solid, so thin parts survive as a
+        // one-voxel slab (still closed + manifold).
+        if (state[i] == 1)
+            field[i] = std::max(field[i], 0.52f);
+    }
+    b.clear(); b.shrink_to_fit();
+    state.clear(); state.shrink_to_fit();
+
+    // 4. marching cubes. Sample corner (i,j,k) sits at the CENTRE of cell
+    //    (i,j,k): world = org + (i+0.5)*cell.
+    const std::array<float, 3> gmin = {org[0] + 0.5f * cell, org[1] + 0.5f * cell,
+                                       org[2] + 0.5f * cell};
+    const std::array<float, 3> gmax = {
+        org[0] + (dim[0] - 0.5f) * cell, org[1] + (dim[1] - 0.5f) * cell,
+        org[2] + (dim[2] - 0.5f) * cell};
+    MarchingCubes::Mesh m = MarchingCubes::extract(
+        field.data(), dim[0], dim[1], dim[2], 0.5f, gmin, gmax, total);
+    if (m.triangleCount <= 0)
+        return false;
+    // extract() already emits outward-facing winding for an inside-positive
+    // field (it flips v1/v2 internally).
+    outPositions = std::move(m.positions);
+    outIndices = std::move(m.indices);
+    return true;
+}
+
+// ---- simplifyManifold ----------------------------------------------------------
+// Garland-Heckbert quadric edge collapse with the LINK CONDITION enforced, so a
+// closed manifold input stays a closed manifold (meshopt_simplify does not
+// check it: on thin sheets it pinches edges shared by 3+ faces).
+namespace {
+struct Quadric {
+    double a[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};   // xx xy xz xw yy yz yw zz zw ww
+    void add(const Quadric& o) { for (int i = 0; i < 10; ++i) a[i] += o.a[i]; }
+    void addPlane(double nx, double ny, double nz, double d, double w) {
+        a[0] += w * nx * nx; a[1] += w * nx * ny; a[2] += w * nx * nz; a[3] += w * nx * d;
+        a[4] += w * ny * ny; a[5] += w * ny * nz; a[6] += w * ny * d;
+        a[7] += w * nz * nz; a[8] += w * nz * d;  a[9] += w * d * d;
+    }
+    double eval(const double v[3]) const {
+        return a[0] * v[0] * v[0] + 2 * a[1] * v[0] * v[1] + 2 * a[2] * v[0] * v[2]
+             + 2 * a[3] * v[0] + a[4] * v[1] * v[1] + 2 * a[5] * v[1] * v[2]
+             + 2 * a[6] * v[1] + a[7] * v[2] * v[2] + 2 * a[8] * v[2] + a[9];
+    }
+};
+} // namespace
+
+bool simplifyManifold(std::vector<float>& positions,
+                      std::vector<uint32_t>& indices, size_t targetTriangles)
+{
+    const size_t nv = positions.size() / 3;
+    const size_t nf = indices.size() / 3;
+    if (nv == 0 || nf == 0 || nf <= targetTriangles)
+        return true;
+    std::vector<double> P(nv * 3);
+    for (size_t i = 0; i < nv * 3; ++i)
+        P[i] = positions[i];
+    std::vector<uint32_t> F(indices);
+    std::vector<char> faceAlive(nf, 1), vertAlive(nv, 1);
+    std::vector<std::vector<uint32_t>> vf(nv);
+    for (size_t f = 0; f < nf; ++f)
+        for (int k = 0; k < 3; ++k)
+            vf[F[f * 3 + k]].push_back(static_cast<uint32_t>(f));
+    std::vector<Quadric> Q(nv);
+    auto faceNormal = [&](uint32_t f, double n[3], const double* ov = nullptr,
+                          uint32_t replaceV = UINT32_MAX) {
+        double p[3][3];
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = F[f * 3 + k];
+            const double* s = (v == replaceV && ov) ? ov : &P[v * 3];
+            p[k][0] = s[0]; p[k][1] = s[1]; p[k][2] = s[2];
+        }
+        const double e1[3] = {p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]};
+        const double e2[3] = {p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]};
+        n[0] = e1[1] * e2[2] - e1[2] * e2[1];
+        n[1] = e1[2] * e2[0] - e1[0] * e2[2];
+        n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+    };
+    for (size_t f = 0; f < nf; ++f) {
+        double n[3];
+        faceNormal(static_cast<uint32_t>(f), n);
+        const double len = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (len < 1e-30)
+            continue;
+        const double area = 0.5 * len;
+        const double ux = n[0] / len, uy = n[1] / len, uz = n[2] / len;
+        const double* p0 = &P[F[f * 3] * 3];
+        const double d = -(ux * p0[0] + uy * p0[1] + uz * p0[2]);
+        for (int k = 0; k < 3; ++k)
+            Q[F[f * 3 + k]].addPlane(ux, uy, uz, d, area);
+    }
+
+    std::vector<uint32_t> version(nv, 0);
+    struct Cand { double cost; uint32_t a, b, va, vb; double pos[3]; };
+    struct Cmp { bool operator()(const Cand& x, const Cand& y) const { return x.cost > y.cost; } };
+    std::priority_queue<Cand, std::vector<Cand>, Cmp> heap;
+
+    auto evalEdge = [&](uint32_t a, uint32_t b, Cand& out) {
+        Quadric q = Q[a];
+        q.add(Q[b]);
+        const double* pa = &P[a * 3];
+        const double* pb = &P[b * 3];
+        const double mid[3] = {(pa[0] + pb[0]) * 0.5, (pa[1] + pb[1]) * 0.5,
+                               (pa[2] + pb[2]) * 0.5};
+        const double elen2 = (pa[0] - pb[0]) * (pa[0] - pb[0])
+                           + (pa[1] - pb[1]) * (pa[1] - pb[1])
+                           + (pa[2] - pb[2]) * (pa[2] - pb[2]);
+        double best[3] = {mid[0], mid[1], mid[2]};
+        double bestCost = q.eval(mid);
+        for (const double* cand : {pa, pb}) {
+            const double cc = q.eval(cand);
+            if (cc < bestCost) { bestCost = cc; best[0] = cand[0]; best[1] = cand[1]; best[2] = cand[2]; }
+        }
+        // optimal position: solve A x = -b, accept only near the edge
+        const double A00 = q.a[0], A01 = q.a[1], A02 = q.a[2], A11 = q.a[4],
+                     A12 = q.a[5], A22 = q.a[7];
+        const double det = A00 * (A11 * A22 - A12 * A12) - A01 * (A01 * A22 - A12 * A02)
+                         + A02 * (A01 * A12 - A11 * A02);
+        if (std::fabs(det) > 1e-18) {
+            const double b0 = -q.a[3], b1 = -q.a[6], b2 = -q.a[8];
+            const double x = (b0 * (A11 * A22 - A12 * A12) - A01 * (b1 * A22 - A12 * b2)
+                              + A02 * (b1 * A12 - A11 * b2)) / det;
+            const double y = (A00 * (b1 * A22 - A12 * b2) - b0 * (A01 * A22 - A12 * A02)
+                              + A02 * (A01 * b2 - b1 * A02)) / det;
+            const double z = (A00 * (A11 * b2 - b1 * A12) - A01 * (A01 * b2 - b1 * A02)
+                              + b0 * (A01 * A12 - A11 * A02)) / det;
+            const double opt[3] = {x, y, z};
+            const double dx = x - mid[0], dy = y - mid[1], dz = z - mid[2];
+            if (dx * dx + dy * dy + dz * dz < elen2) {
+                const double oc = q.eval(opt);
+                if (oc <= bestCost) { bestCost = oc; best[0] = x; best[1] = y; best[2] = z; }
+            }
+        }
+        out.cost = std::max(0.0, bestCost);
+        out.a = a; out.b = b; out.va = version[a]; out.vb = version[b];
+        out.pos[0] = best[0]; out.pos[1] = best[1]; out.pos[2] = best[2];
+    };
+    for (size_t f = 0; f < nf; ++f)
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t a = F[f * 3 + k], b = F[f * 3 + (k + 1) % 3];
+            if (a < b) {   // each undirected edge once per incident face pair
+                Cand cd; evalEdge(a, b, cd); heap.push(cd);
+            } else {
+                // push when b<a only if the opposite face does not exist: for
+                // a closed manifold every edge appears as a<b in one face.
+            }
+        }
+
+    auto neighbours = [&](uint32_t v, std::vector<uint32_t>& out) {
+        out.clear();
+        for (uint32_t f : vf[v])
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t w = F[f * 3 + k];
+                if (w != v) out.push_back(w);
+            }
+        std::sort(out.begin(), out.end());
+        out.erase(std::unique(out.begin(), out.end()), out.end());
+    };
+    size_t alive = nf;
+    std::vector<uint32_t> na, nb, common, shared;
+    while (alive > targetTriangles && !heap.empty()) {
+        Cand cd = heap.top();
+        heap.pop();
+        const uint32_t a = cd.a, b = cd.b;
+        if (!vertAlive[a] || !vertAlive[b] || version[a] != cd.va || version[b] != cd.vb)
+            continue;
+        // faces containing both a and b
+        shared.clear();
+        for (uint32_t f : vf[a])
+            if (faceAlive[f] && (F[f * 3] == b || F[f * 3 + 1] == b || F[f * 3 + 2] == b))
+                shared.push_back(f);
+        if (shared.size() != 2)
+            continue;   // boundary / non-manifold edge: never collapse
+        neighbours(a, na);
+        neighbours(b, nb);
+        common.clear();
+        std::set_intersection(na.begin(), na.end(), nb.begin(), nb.end(),
+                              std::back_inserter(common));
+        if (common.size() != 2)
+            continue;   // LINK CONDITION violated: collapse would pinch
+        // flip / degeneracy check on the surviving faces
+        bool ok = true;
+        for (int side = 0; side < 2 && ok; ++side) {
+            const uint32_t v = side == 0 ? a : b;
+            const uint32_t other = side == 0 ? b : a;
+            for (uint32_t f : vf[v]) {
+                if (!faceAlive[f])
+                    continue;
+                if (F[f * 3] == other || F[f * 3 + 1] == other || F[f * 3 + 2] == other)
+                    continue;
+                double n0[3], n1[3];
+                faceNormal(f, n0);
+                faceNormal(f, n1, cd.pos, v);
+                const double l0 = std::sqrt(n0[0] * n0[0] + n0[1] * n0[1] + n0[2] * n0[2]);
+                const double l1 = std::sqrt(n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]);
+                if (l1 < 1e-24 || l0 < 1e-24
+                    || (n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]) / (l0 * l1) < 0.1) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if (!ok)
+            continue;
+        // collapse a -> b at cd.pos
+        for (uint32_t f : shared) {
+            faceAlive[f] = 0;
+            --alive;
+        }
+        P[b * 3] = cd.pos[0]; P[b * 3 + 1] = cd.pos[1]; P[b * 3 + 2] = cd.pos[2];
+        std::vector<uint32_t> nvf;
+        nvf.reserve(vf[a].size() + vf[b].size());
+        for (uint32_t f : vf[b])
+            if (faceAlive[f]) nvf.push_back(f);
+        for (uint32_t f : vf[a]) {
+            if (!faceAlive[f]) continue;
+            for (int k = 0; k < 3; ++k)
+                if (F[f * 3 + k] == a) F[f * 3 + k] = b;
+            nvf.push_back(f);
+        }
+        vf[b].swap(nvf);
+        vf[a].clear();
+        vertAlive[a] = 0;
+        Q[b].add(Q[a]);
+        ++version[b];
+        neighbours(b, nb);
+        for (uint32_t w : nb) {
+            Cand nc;
+            if (w < b) evalEdge(w, b, nc); else evalEdge(b, w, nc);
+            heap.push(nc);
+        }
+    }
+
+    // write back, compacting
+    std::vector<uint32_t> remap(nv, UINT32_MAX);
+    std::vector<float> outP;
+    std::vector<uint32_t> outI;
+    outI.reserve(alive * 3);
+    for (size_t f = 0; f < nf; ++f) {
+        if (!faceAlive[f]) continue;
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t v = F[f * 3 + k];
+            if (remap[v] == UINT32_MAX) {
+                remap[v] = static_cast<uint32_t>(outP.size() / 3);
+                outP.push_back(static_cast<float>(P[v * 3]));
+                outP.push_back(static_cast<float>(P[v * 3 + 1]));
+                outP.push_back(static_cast<float>(P[v * 3 + 2]));
+            }
+            outI.push_back(remap[v]);
+        }
+    }
+    positions.swap(outP);
+    indices.swap(outI);
+    return true;
+}
+
+// ---- topologyStats -------------------------------------------------------------
+TopologyStats topologyStats(size_t vertexCount,
+                            const std::vector<uint32_t>& indices)
+{
+    TopologyStats s;
+    s.triangles = static_cast<int>(indices.size() / 3);
+    // lo<hi key -> {use count, mask of directions seen (1 = lo->hi, 2 = hi->lo)}
+    struct Use { uint32_t n = 0; uint32_t same = 0; uint8_t dirs[2] = {0, 0}; };
+    std::unordered_map<uint64_t, Use> uses;
+    uses.reserve(indices.size());
+    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t a = indices[t + k];
+            const uint32_t b = indices[t + (k + 1) % 3];
+            if (a == b)
+                continue;
+            const uint32_t lo = std::min(a, b), hi = std::max(a, b);
+            Use& u = uses[(static_cast<uint64_t>(lo) << 32) | hi];
+            if (u.n < 2)
+                u.dirs[u.n] = a < b ? 1 : 2;
+            ++u.n;
+        }
+    }
+    for (const auto& kv : uses) {
+        const Use& u = kv.second;
+        if (u.n == 1) ++s.boundaryEdges;
+        else if (u.n > 2) ++s.nonManifoldEdges;
+        else if (u.dirs[0] == u.dirs[1]) ++s.flippedEdges;
+    }
+    std::vector<int> islandId;
+    s.components = MeshSegmenter::connectedComponents(
+        static_cast<int>(vertexCount), indices.data(),
+        static_cast<int>(indices.size()), islandId);
+    std::vector<int> per(static_cast<size_t>(std::max(s.components, 0)), 0);
+    for (size_t t = 0; t + 2 < indices.size(); t += 3)
+        ++per[islandId[indices[t]]];
+    const int limit = std::max(1, s.triangles / 100);
+    for (int n : per)
+        if (n < limit) ++s.smallComponents;
+    return s;
+}
+
 // ---- makeGameReady -----------------------------------------------------------
 GameReadyResult makeGameReady(const std::vector<float>& positions,
                               const std::vector<uint32_t>& indices,
@@ -867,18 +1351,21 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     }
 
     // ---- 3. drop tiny disconnected components -------------------------------
-    std::vector<int> islandId;
-    const int islands = MeshSegmenter::connectedComponents(
-        static_cast<int>(weldedCount), idx.data(),
-        static_cast<int>(idx.size()), islandId);
-    if (islands > 1) {
+    // (also re-run after simplification — see 5b)
+    auto cullDebris = [&](std::vector<uint32_t>& indicesIo, size_t vertexCount) {
+        std::vector<int> islandId;
+        const int islands = MeshSegmenter::connectedComponents(
+            static_cast<int>(vertexCount), indicesIo.data(),
+            static_cast<int>(indicesIo.size()), islandId);
+        if (islands <= 1)
+            return;
         std::vector<int> triPerIsland(islands, 0);
-        for (size_t t = 0; t + 2 < idx.size(); t += 3)
-            ++triPerIsland[islandId[idx[t]]];
+        for (size_t t = 0; t + 2 < indicesIo.size(); t += 3)
+            ++triPerIsland[islandId[indicesIo[t]]];
         const int largest = static_cast<int>(
             std::max_element(triPerIsland.begin(), triPerIsland.end())
             - triPerIsland.begin());
-        const int totalTris = static_cast<int>(idx.size() / 3);
+        const int totalTris = static_cast<int>(indicesIo.size() / 3);
         const int threshold = std::max(
             opts.minComponentTriangles,
             static_cast<int>(opts.minComponentFraction * totalTris));
@@ -886,18 +1373,19 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
         for (int i = 0; i < islands; ++i)
             keep[i] = (i == largest || triPerIsland[i] >= threshold) ? 1 : 0;
         size_t w2 = 0;
-        for (size_t t = 0; t + 2 < idx.size(); t += 3) {
-            if (!keep[islandId[idx[t]]])
+        for (size_t t = 0; t + 2 < indicesIo.size(); t += 3) {
+            if (!keep[islandId[indicesIo[t]]])
                 continue;
-            idx[w2++] = idx[t];
-            idx[w2++] = idx[t + 1];
-            idx[w2++] = idx[t + 2];
+            indicesIo[w2++] = indicesIo[t];
+            indicesIo[w2++] = indicesIo[t + 1];
+            indicesIo[w2++] = indicesIo[t + 2];
         }
         for (int i = 0; i < islands; ++i)
             if (!keep[i]) ++r.removedComponents;
-        r.removedTriangles += static_cast<int>((idx.size() - w2) / 3);
-        idx.resize(w2);
-    }
+        r.removedTriangles += static_cast<int>((indicesIo.size() - w2) / 3);
+        indicesIo.resize(w2);
+    };
+    cullDebris(idx, weldedCount);
 
     // ---- 3b. unify winding ----------------------------------------------------
     // Must run before normals/culling ever see the mesh — raw dual-grid
@@ -927,6 +1415,24 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     };
     compact(pos, idx);
 
+    // ---- 4a. optional voxel remesh -> closed manifold surface ---------------
+    if (opts.remeshResolution > 0) {
+        std::vector<float> rp;
+        std::vector<uint32_t> ri;
+        if (remeshManifold(pos, idx, opts.remeshResolution, rp, ri)) {
+            const TopologyStats ts = topologyStats(rp.size() / 3, ri);
+            if (ts.boundaryEdges == 0 && ts.nonManifoldEdges == 0) {
+                r.remeshedFromTriangles = static_cast<int>(idx.size() / 3);
+                pos.swap(rp);
+                idx.swap(ri);
+                unifyWinding(pos, idx);
+                r.remeshed = true;
+                cullDebris(idx, pos.size() / 3);
+                compact(pos, idx);
+            }
+        }
+    }
+
     // ---- 4b. optional Taubin pre-smooth --------------------------------------
     // Voxel decodes of fuzzy subjects (fur, hair, foliage) carry sub-voxel
     // micro-pits and wisps that read as dark "pepper" speckle in renders and
@@ -937,6 +1443,15 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     // clean geometry).
     if (opts.taubinIterations > 0)
         MeshRefine::taubinSmooth(pos, idx, opts.taubinIterations);
+
+    // ---- 5a. manifold-preserving simplify (remeshed input only) ---------------
+    if (r.remeshed && opts.targetTriangles > 0
+        && static_cast<int>(idx.size() / 3) > opts.targetTriangles) {
+        simplifyManifold(pos, idx, static_cast<size_t>(opts.targetTriangles));
+        cullDebris(idx, pos.size() / 3);
+        compact(pos, idx);
+        unifyWinding(pos, idx);
+    }
 
     // ---- 5. simplify toward the target --------------------------------------
     if (opts.targetTriangles > 0
@@ -1012,6 +1527,20 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
         idx.swap(simplified);
         r.simplifyError = resultError;
         compact(pos, idx);
+
+        // ---- 5b. repair what simplification broke ----------------------------
+        // Measured on real TRELLIS.2 generations (every raw source and every
+        // pre-simplify mesh is CLOSED — 0 boundary edges — so this is where
+        // the artefacts come from): the topology-free/non-manifold-tolerant
+        // collapses (a) FLIP triangles (hundreds of edges whose two faces
+        // disagree on winding → holes under backface culling, bad smooth
+        // normals) and (b) pinch thin double-walled parts off into small
+        // floating fragments (1 → 13 components, 11 of them < 1% of the
+        // mesh). Steps 3/3b only ran BEFORE simplification, so neither was
+        // ever cleaned afterwards.
+        cullDebris(idx, pos.size() / 3);
+        compact(pos, idx);
+        unifyWinding(pos, idx);
     }
 
     // ---- 6. cache-friendly ordering ------------------------------------------
