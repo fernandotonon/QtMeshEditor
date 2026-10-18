@@ -2325,6 +2325,7 @@ jobs:
             -DQTMESH_ONNX_GPU=OFF \
             -DENABLE_MOCAP=ON \
             -DENABLE_DRACO=ON \
+            -DENABLE_OPENRIGLOGIC=ON \
             -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \

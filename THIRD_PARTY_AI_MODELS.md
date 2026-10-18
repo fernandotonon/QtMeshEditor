@@ -613,3 +613,22 @@ for #410 — non-commercial — in favour of synthetic bone-weight-derived label
   **FLUX.2-dev is NOT an option** despite being the obvious quality jump: it
   is non-commercial, which fails the redistribution bar (Homebrew / Snap /
   WinGet / Docker) that klein's Apache-2.0 release was chosen to clear.
+
+## OpenRigLogic — MetaHuman DNA reader / RigLogic (epic #1095)
+
+- **Library (code, not a model):** [EpicGames/OpenRigLogic](https://github.com/EpicGames/OpenRigLogic),
+  **MIT** (verified 2026-10-17 via the GitHub API and the repo `LICENSE`).
+  Built from source by `cmake/OpenRigLogic.cmake` behind `-DENABLE_OPENRIGLOGIC=ON`
+  (default OFF), pinned to the `5.8` stable-branch commit
+  `55756aca0c4c55adc56ad68a796bcc1c0bf6fa5a` (RigLogic 13.2.9). The `main`
+  branch is documented upstream as experimental and is not used.
+- **Attribution:** MIT requires the copyright notice to accompany copies. The
+  static library is linked into the binary; the upstream `LICENSE` text is
+  reproduced in the release licence bundle when the flag is on.
+- **Character / sample assets are separate and NOT redistributed.** The
+  upstream README states sample content ships via Fab under the **Fab
+  Standard License**, and MetaHuman characters carry Epic's MetaHuman terms.
+  QtMeshEditor bundles no DNA file: unit tests synthesise a tiny DNA with the
+  library's own writer, and users supply their own DCC-exported
+  `head.dna` / `body.dna`. Groom and clothing data are not part of the DCC
+  Export package (upstream README) — a separate pipeline input.

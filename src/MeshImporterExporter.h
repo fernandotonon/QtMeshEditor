@@ -50,6 +50,11 @@ private:
 public:
     static void configureCameraForTesting(const Ogre::Entity *en) { configureCamera(en); }
     static QString exportTextureName(const QString& originalName);
+    /// Last import failure reason set by an importer that produces an actionable
+    /// message (currently .dna). MCP/CLI read it because the Ogre log is
+    /// suppressed outside --verbose. Empty when the last import succeeded.
+    static QString lastImportError();
+    static void clearLastImportError();
     static void importer(const QStringList &_uriList, unsigned int additionalFlags = 0,
                          QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons = nullptr,
                          int* outUpAxis = nullptr);

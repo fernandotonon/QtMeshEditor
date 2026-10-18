@@ -338,6 +338,22 @@ else()
     message(STATUS "Alembic vertex-animation import disabled (VAT_POSE playback still available)")
 endif()
 ##############################################################
+#  OpenRigLogic — MetaHuman DNA import / rig evaluation (epic #1095)
+##############################################################
+# MIT-licensed Epic library (DNA reader + RigLogic), vendored by FetchContent at
+# a pinned 5.8-branch commit (cmake/OpenRigLogic.cmake). Default OFF: it adds a
+# first-time network fetch + a static lib to every build. Sample MetaHuman
+# characters are NOT bundled (Fab Standard License) — users supply their own DNA.
+option(ENABLE_OPENRIGLOGIC "Enable MetaHuman DNA import (OpenRigLogic)" OFF)
+
+if(ENABLE_OPENRIGLOGIC)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/OpenRigLogic.cmake)
+    add_definitions(-DENABLE_OPENRIGLOGIC)
+    message(STATUS "OpenRigLogic MetaHuman DNA import enabled")
+else()
+    message(STATUS "OpenRigLogic MetaHuman DNA import disabled")
+endif()
+##############################################################
 #  Draco — glTF mesh compression on export (#506)
 ##############################################################
 # Assimp's glTF2 EXPORTER has no Draco support (ASSIMP_BUILD_DRACO=ON only wires

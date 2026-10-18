@@ -1746,12 +1746,16 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     if (!QFile::exists(path)) {
         return makeErrorResult(QString("Error: File not found: %1").arg(path));
     }
+    MeshImporterExporter::clearLastImportError();
     try {
         mainWindow->importMeshs(QStringList{path});
     } catch (const Ogre::Exception& e) {
         return makeErrorResult(QStringLiteral("Ogre error: %1")
             .arg(QString::fromStdString(e.getFullDescription())));
     }
+    if (!MeshImporterExporter::lastImportError().isEmpty())
+        return makeErrorResult(QStringLiteral("Error: could not load %1: %2")
+            .arg(path, MeshImporterExporter::lastImportError()));
     // Frame the camera on what was just loaded so a subsequent take_screenshot
     // shows the mesh (headless MCP has no user to frame it manually). Done
     // OUTSIDE the import try + swallowing its own errors, so a framing failure
