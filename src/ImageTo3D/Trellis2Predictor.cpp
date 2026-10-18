@@ -950,7 +950,11 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     gr.taubinIterations = 5;
     // Manifold remesh (see Options::manifoldRemesh). Grid sized from the
     // budget: ~1.6*sqrt(target) cells along the longest axis (25k tris -> 253).
-    if (opts.manifoldRemesh && gr.targetTriangles > 0
+    // Keyed on the USER's budget (opts.targetTriangles), not gr.targetTriangles:
+    // for "Original" density + bake the latter is an implicit 150k/300k cap, and
+    // a user who asked to keep the raw density must not get a marching-cubes
+    // rebuild.
+    if (opts.manifoldRemesh && opts.targetTriangles > 0
         && src.triangleCount > gr.targetTriangles * 4
         && qEnvironmentVariableIntValue("QTMESH_TRELLIS2_NO_REMESH") == 0) {
         gr.remeshResolution = std::clamp(

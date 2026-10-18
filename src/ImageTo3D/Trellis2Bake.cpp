@@ -1122,17 +1122,26 @@ bool simplifyManifold(std::vector<float>& positions,
 
     auto neighbours = [&](uint32_t v, std::vector<uint32_t>& out) {
         out.clear();
-        for (uint32_t f : vf[v])
+        for (uint32_t f : vf[v]) {
+            // vf[] of the far vertices keeps faces killed by earlier collapses
+            // (they still name the dead vertex); counting them would inflate
+            // the common-neighbour count and reject legal collapses.
+            if (!faceAlive[f])
+                continue;
             for (int k = 0; k < 3; ++k) {
                 const uint32_t w = F[f * 3 + k];
                 if (w != v) out.push_back(w);
             }
+        }
         std::sort(out.begin(), out.end());
         out.erase(std::unique(out.begin(), out.end()), out.end());
     };
     size_t alive = nf;
     std::vector<uint32_t> na, nb, common, shared;
-    while (alive > targetTriangles && !heap.empty()) {
+    // Never collapse below a tetrahedron: for a closed 4-face component every
+    // edge passes the link test, yet the collapse leaves two coincident faces.
+    const size_t floorTris = std::max<size_t>(targetTriangles, 4);
+    while (alive > floorTris && !heap.empty()) {
         Cand cd = heap.top();
         heap.pop();
         const uint32_t a = cd.a, b = cd.b;
