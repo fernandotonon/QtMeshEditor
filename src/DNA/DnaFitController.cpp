@@ -161,6 +161,15 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
                               "Added as '%5' — Ctrl+Z removes it. Corrective data is not recalibrated.")
                    .arg(mode).arg(report.value("meanVertexShiftMm").toDouble(), 0, 'f', 0).arg(report.value("meanJointShiftMm").toDouble(), 0, 'f', 0)
                    .arg(worstStretchP99, 0, 'f', 2).arg(outcome->nodeName);
+    {
+        const QVariantMap reg = report.value("registration").toMap();
+        if (reg.contains("shouldersYawDeg"))
+            m_status += QStringLiteral("\nAlignment vs the target's skeleton (degrees): shoulders yaw %1 / roll %2, hips yaw %3 / roll %4, spine tilt %5; "
+                                       "joints %6 mm from its bones on average.")
+                            .arg(reg.value("shouldersYawDeg").toDouble(), 0, 'f', 1).arg(reg.value("shouldersRollDeg").toDouble(), 0, 'f', 1)
+                            .arg(reg.value("hipsYawDeg").toDouble(), 0, 'f', 1).arg(reg.value("hipsRollDeg").toDouble(), 0, 'f', 1)
+                            .arg(reg.value("spineTiltDeg").toDouble(), 0, 'f', 1).arg(reg.value("finalJointVsTargetBonesMeanMm").toDouble(), 0, 'f', 0);
+    }
     for (const QString& w : report.value("warnings").toStringList()) m_status += QStringLiteral("\n• ") + w;
     emit changed();
     return true;

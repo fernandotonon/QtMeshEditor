@@ -1000,6 +1000,31 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
                     sum += d; worst = std::max(worst, d);
                     rows << QVariantMap{{"joint", an.bodyJoint}, {"errMm", d}, {"dxMm", dx * 1000.0}, {"dyMm", dy * 1000.0}, {"dzMm", dz * 1000.0}};
                 }
+        // Alignment of the fitted body against the target's skeleton, in degrees: the yaw (about the vertical axis) and
+        // roll (in the frontal plane) of the shoulder line and the hip line, and the tilt of the spine. A tilted body
+        // shows up here as numbers instead of as an impression from a screenshot.
+        {
+            auto pos = [&](const QString& n, std::array<double, 3>& p) { for (size_t j = 0; j < fr.fitted.joints.size(); ++j) if (fr.fitted.joints[j].name == n) { p = jp[j]; return true; } return false; };
+            auto tgt = [&](const QString& n, std::array<double, 3>& p) { for (const Fit::JointAnchor& an : anchorTargets) if (an.bodyJoint == n) { p = an.target; return true; } return false; };
+            auto angle2 = [](double ax, double ay, double bx, double by) {   // signed angle a -> b in degrees
+                return std::atan2(ax * by - ay * bx, ax * bx + ay * by) * 180.0 / 3.14159265358979;
+            };
+            auto lineAngles = [&](const char* a, const char* b, const char* key) {
+                std::array<double, 3> fa, fb, ta, tb;
+                if (!pos(a, fa) || !pos(b, fb) || !tgt(a, ta) || !tgt(b, tb)) return;
+                const double fx = fb[0] - fa[0], fy = fb[1] - fa[1], fz = fb[2] - fa[2], tx = tb[0] - ta[0], ty = tb[1] - ta[1], tz = tb[2] - ta[2];
+                registration.insert(QString::fromLatin1(key) + "YawDeg", angle2(tx, tz, fx, fz));
+                registration.insert(QString::fromLatin1(key) + "RollDeg", angle2(tx, ty, fx, fy));
+            };
+            lineAngles("upperarm_l", "upperarm_r", "shoulders");
+            lineAngles("thigh_l", "thigh_r", "hips");
+            std::array<double, 3> fp, fn, tp, tn2;
+            if (pos("pelvis", fp) && pos("neck_01", fn) && tgt("pelvis", tp) && tgt("neck_01", tn2)) {
+                const double fx = fn[0] - fp[0], fy = fn[1] - fp[1], fz = fn[2] - fp[2], tx = tn2[0] - tp[0], ty = tn2[1] - tp[1], tz = tn2[2] - tp[2];
+                const double dot = fx * tx + fy * ty + fz * tz, nf = std::sqrt(fx * fx + fy * fy + fz * fz), nt = std::sqrt(tx * tx + ty * ty + tz * tz);
+                if (nf > 1e-9 && nt > 1e-9) registration.insert("spineTiltDeg", std::acos(std::max(-1.0, std::min(1.0, dot / (nf * nt)))) * 180.0 / 3.14159265358979);
+            }
+        }
         registration.insert("finalJointVsTargetBones", rows);
         registration.insert("finalJointVsTargetBonesMeanMm", rows.isEmpty() ? 0.0 : sum / double(rows.size()));
         registration.insert("finalJointVsTargetBonesMaxMm", worst);
