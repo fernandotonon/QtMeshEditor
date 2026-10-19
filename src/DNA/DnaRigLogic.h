@@ -56,7 +56,7 @@ public:
 
     virtual int jointCount() const;
     virtual QString jointName(int joint) const;
-    int jointIndex(const QString& name) const;          ///< -1 if absent
+    virtual int jointIndex(const QString& name) const;          ///< -1 if absent
 
     virtual int rawControlCount() const;
     virtual QString rawControlName(int index) const;

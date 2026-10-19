@@ -101,6 +101,41 @@ std::vector<std::vector<float>> evaluatePositions(const Rig& rig, RigEvaluator& 
     return skin(rig, neutral, posed);
 }
 
+std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvaluator& ev,
+                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations)
+{
+    applyControls(ev, {}, nullptr);
+    const std::vector<Aff> neutral = worldPose(rig, ev);
+    ev.resetControls();
+    for (const auto& r : rotations) ev.setDriverRotation(r.first, r.second);
+    ev.calculate();
+    const size_t n = rig.joints.size();
+    std::vector<Aff> local(n), world(n);
+    for (size_t j = 0; j < n; ++j) {
+        JointPose p = ev.jointPose(int(j));
+        for (const auto& r : rotations)
+            if (ev.jointIndex(r.first) == int(j)) {
+                const auto& a = p.orientation;
+                const auto& d = r.second;
+                p.orientation = {a[0] * d[0] - a[1] * d[1] - a[2] * d[2] - a[3] * d[3], a[0] * d[1] + a[1] * d[0] + a[2] * d[3] - a[3] * d[2],
+                                 a[0] * d[2] - a[1] * d[3] + a[2] * d[0] + a[3] * d[1], a[0] * d[3] + a[1] * d[2] - a[2] * d[1] + a[3] * d[0]};
+            }
+        local[j] = compose(p.translation, p.orientation, p.scale);
+    }
+    std::vector<char> done(n, 0);
+    std::function<void(size_t)> go = [&](size_t j) {
+        if (done[j]) return;
+        done[j] = 1;
+        const int par = rig.joints[j].parent;
+        if (par < 0 || size_t(par) >= n || size_t(par) == j) { world[j] = local[j]; return; }
+        go(size_t(par));
+        world[j] = mul(world[size_t(par)], local[j]);
+    };
+    for (size_t j = 0; j < n; ++j) go(j);
+    return skin(rig, neutral, world);
+}
+
+
 Result bake(const Rig& rig, RigEvaluator& ev, const QList<ShapeSpec>& specs, const Options& options)
 {
     Result res;

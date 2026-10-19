@@ -74,6 +74,13 @@ std::vector<std::vector<float>> evaluatePositions(const Rig& rig, RigEvaluator& 
                                                   const QList<QPair<QString, double>>& controls,
                                                   QStringList* missing = nullptr);
 
+/// Ground truth for a BODY pose: the full skeleton and every skin influence, with each named driver
+/// joint rotated by `rotations` (joint name -> w,x,y,z, relative to its neutral orientation, composed
+/// after it) and every rig-driven (corrective) joint taken from RigLogic. `rig` must be the UNPRUNED
+/// rig the evaluator's joint indices refer to.
+std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvaluator& ev,
+                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations);
+
 /// Bake `specs` against the neutral pose.
 Result bake(const Rig& rig, RigEvaluator& ev, const QList<ShapeSpec>& specs, const Options& options = Options());
 

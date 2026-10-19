@@ -165,6 +165,15 @@ std::unique_ptr<RigEvaluator> RigEvaluator::create(const QString& path, const Re
     for (std::uint16_t g = 0; g < d.reader->getJointGroupCount(); ++g)
         for (const std::uint16_t out : d.reader->getJointGroupOutputIndices(g))
             if (out / kAttr < jc) isDriven[out / kAttr] = 1;
+    // Twist and swing setups drive joints too (thigh_twist_*, upperarm_twist_* …) — RigLogic writes
+    // their outputs like any other, and leaving them out of the driven set left the twist joints
+    // at rest under a bent limb (the largest error against the full rig).
+    for (std::uint16_t t = 0; t < d.reader->getTwistCount(); ++t)
+        for (const std::uint16_t out : d.reader->getTwistOutputJointIndices(t))
+            if (out < jc) isDriven[out] = 1;
+    for (std::uint16_t t = 0; t < d.reader->getSwingCount(); ++t)
+        for (const std::uint16_t out : d.reader->getSwingOutputJointIndices(t))
+            if (out < jc) isDriven[out] = 1;
     for (std::uint16_t j = 0; j < jc; ++j)
         if (isDriven[j]) d.driven.push_back(j);
 

@@ -93,6 +93,33 @@ from its dominant joint in world space. Findings:
 8. **LOD propagation / lower-LOD skeleton pruning:** the full skeleton is
    imported at every LOD; `Rig::lodJointIndices` records the per-LOD subset.
 
+## Validation against the full rig (`qtmesh dna pose --compare --vs-rig`)
+
+The imported character is a compromise: Ogre allows 256 bones (the body has 342 joints, 333 of
+them skinned) and 4 influences per vertex. `--vs-rig` measures what that costs — the imported,
+corrected character against the FULL skeleton (every joint, every influence, all correctives)
+evaluated by RigLogic and skinned on the CPU (`FaceBake::evaluatePositionsPosed`):
+
+| Pose | Before (max / mean / p99, mm) | After |
+|---|---|---|
+| calf_l z -90 | 54.6 / 0.50 / 18.8 | 11.9 / 0.13 / 5.8 |
+| thigh_l x 60 | 88.0 / 2.79 / 67.2 | 7.4 / 0.024 / 0.83 |
+| upperarm_l z 70 | 30.5 / 0.39 / 14.8 | 10.8 / 0.053 / 1.64 |
+| lowerarm_l y 90 | 17.1 / 0.18 / 7.3 | 2.5 / 0.010 / 0.27 |
+| clavicle_l z 20 | — | 14.2 / 0.076 / 2.43 |
+| spine_03 x 30, finger/hand/foot bends | — | max <= 3.7 mm |
+
+The whole improvement came from one bug, not from the bone budget: **twist and swing setups drive
+joints too** (`thigh_twist_*`, `upperarm_twist_*` …). The evaluator's driven set was built from
+joint groups only, so those joints stayed at rest under a bent limb. `RigEvaluator` now also takes
+`getTwistOutputJointIndices` / `getSwingOutputJointIndices`; the invariant "every joint RigLogic moves
+is in the driven set" is pinned by a real-asset test. Still 61 of the ~258 driven joints do not fit
+in Ogre's 256 bones (folded into their parents); what remains of the error is mostly those, plus the
+4-influence clip. An experiment replaced the rest-weight fold criterion with a MEASURED cost (how far
+a joint's vertices move if they follow the parent, over every driver bent about each axis): the folded
+set differs (mostly finger helpers) but the errors were equal within noise (limbs identical, finger
+poses within 1 mm either way), so it was dropped as complexity without a benefit.
+
 ## Phases still open
 
 4. Body mesh fitting: prototype done (`DNA_FITTING.md`); in-editor preview/undo and corrective recalibration remain.

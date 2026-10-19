@@ -81,11 +81,25 @@ constexpr int kOgreMaxBones = 256;  // OGRE_MAX_NUM_BONES: handles 0..255 are va
 // that do not move any vertex.
 Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
 {
+    // Only a vertex's STRONGEST kMaxInfluences influences survive the import (Ogre's hardware
+    // skinning limit), so a joint that is never among any vertex's top few carries no weight in
+    // the result and does not need to be a bone at all. Counting the unclipped list kept every
+    // MetaHuman corrective joint "used" and pushed the body over the 256-bone limit for nothing.
+    auto topInfluences = [](const std::vector<SkinInfluence>& inf) {
+        std::vector<SkinInfluence> v;
+        for (const SkinInfluence& i : inf) if (i.weight > 0.0f) v.push_back(i);
+        if (v.size() > kMaxInfluences) {
+            std::partial_sort(v.begin(), v.begin() + std::ptrdiff_t(kMaxInfluences), v.end(),
+                              [](const SkinInfluence& a, const SkinInfluence& b) { return a.weight > b.weight; });
+            v.resize(kMaxInfluences);
+        }
+        return v;
+    };
     std::vector<char> used(rig.joints.size(), 0);
     for (const Mesh& m : rig.meshes)
         for (const auto& inf : m.skin)
-            for (const SkinInfluence& i : inf)
-                if (i.joint < used.size() && i.weight > 0.0f) used[i.joint] = 1;
+            for (const SkinInfluence& i : topInfluences(inf))
+                if (i.joint < used.size()) used[i.joint] = 1;
     for (size_t i = 0; i < used.size(); ++i) {
         if (!used[i]) continue;
         for (int p = rig.joints[i].parent; p >= 0 && static_cast<size_t>(p) < used.size() && !used[size_t(p)];
@@ -109,7 +123,7 @@ Rig pruneToDeformers(const Rig& rig, ImportReport& rep)
         std::vector<double> total(rig.joints.size(), 0.0);
         for (const Mesh& m : rig.meshes)
             for (const auto& inf : m.skin)
-                for (const SkinInfluence& i : inf)
+                for (const SkinInfluence& i : topInfluences(inf))
                     if (i.joint < total.size()) total[i.joint] += i.weight;
         std::vector<int> children(rig.joints.size(), 0);
         for (size_t i = 0; i < used.size(); ++i)

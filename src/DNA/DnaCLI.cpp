@@ -46,7 +46,7 @@ void usage()
     CLIPipeline::writeOutput(QStringLiteral(
         "Usage: qtmesh dna info <file.dna> [--lod N] [--json] [--keep-units]\n"
         "       qtmesh dna pose <body.dna> --set <joint>=<axis>:<deg>|<rx,ry,rz> [--set ...]\n"
-        "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
+        "                       [--compare [--vs-rig]] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
         "                      [--register-joints [--no-align-limbs] | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
@@ -220,7 +220,7 @@ static int runPose(int argc, char* argv[])
 {
     QString path, out;
     QList<QPair<QString, QString>> sets;
-    bool json = false, compare = false, noCorrectives = false;
+    bool json = false, compare = false, noCorrectives = false, vsRig = false;
     bool sawDna = false, sawPose = false;
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -230,6 +230,7 @@ static int runPose(int argc, char* argv[])
         if (a == "--json") json = true;
         else if (a == "--compare") compare = true;
         else if (a == "--no-correctives") noCorrectives = true;
+        else if (a == "--vs-rig") vsRig = true;
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--set" && i + 1 < argc) {
             const QString kv = QString::fromLocal8Bit(argv[++i]);
@@ -322,6 +323,57 @@ static int runPose(int argc, char* argv[])
         report.insert("p99DisplacementMm", d.empty() ? 0.0 : d[size_t(double(d.size() - 1) * 0.99)]);
         report.insert("verticesMovedOver1mm", over1);
         report.insert("verticesMovedOver5mm", over5);
+        if (vsRig) {
+            // Ground truth: the FULL skeleton (every joint, every influence, all correctives) evaluated
+            // by RigLogic and skinned on the CPU — what the import trades away to fit Ogre's 256 bones
+            // and 4 influences per vertex.
+            ReadOptions gro;
+            gro.loadBehavior = true;
+            const ReadResult full = read(QFileInfo(path).absoluteFilePath(), gro);
+            QString gerr;
+            auto gev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), gro, &gerr);
+            if (!full.ok || !gev) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --vs-rig could not read the full rig: %1\n").arg(full.ok ? gerr : full.error));
+                return 1;
+            }
+            QList<QPair<QString, std::array<double, 4>>> rots;
+            for (const auto& kv : sets) {
+                std::array<double, 4> q;
+                parseRotation(kv.second, &q);
+                rots << qMakePair(kv.first, q);
+            }
+            const auto truth = FaceBake::evaluatePositionsPosed(full.rig, *gev, rots);
+            const std::vector<size_t> imported = Fit::importedMeshIndices(full.rig, full.rig.flipV);
+            { double tm = 0; for (size_t mi : imported) for (size_t i = 0; i < truth[mi].size(); ++i) tm = std::max(tm, double(std::abs(truth[mi][i] - full.rig.meshes[mi].positions[i])) * 1000.0); report.insert("vsRigTruthMovedMm", tm); }
+            std::vector<double> err;
+            size_t ev0 = 0;
+            double worst = 0; size_t worstMesh = 0, worstPos = 0;
+            for (size_t mi : imported) {
+                const ExpandedMesh ex = expand(full.rig.meshes[mi], full.rig.flipV);
+                for (size_t v = 0; v < ex.positionOf.size(); ++v, ++ev0) {
+                    if (ev0 * 3 + 2 >= corrected.size()) break;
+                    const size_t p = ex.positionOf[v];
+                    const double dx = corrected[ev0 * 3] - truth[mi][p * 3], dy = corrected[ev0 * 3 + 1] - truth[mi][p * 3 + 1], dz = corrected[ev0 * 3 + 2] - truth[mi][p * 3 + 2];
+                    const double e = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                    err.push_back(e);
+                    if (e > worst) { worst = e; worstMesh = mi; worstPos = p; }
+                }
+            }
+            std::sort(err.begin(), err.end());
+            double esum = 0; int e1 = 0, e5 = 0;
+            for (double v : err) { esum += v; e1 += v > 1.0; e5 += v > 5.0; }
+            report.insert("vsRigMaxMm", err.empty() ? 0.0 : err.back());
+            report.insert("vsRigMeanMm", err.empty() ? 0.0 : esum / double(err.size()));
+            report.insert("vsRigP99Mm", err.empty() ? 0.0 : err[size_t(double(err.size() - 1) * 0.99)]);
+            report.insert("vsRigOver1mm", e1);
+            report.insert("vsRigOver5mm", e5);
+            if (!err.empty() && worstMesh < full.rig.meshes.size() && worstPos < full.rig.meshes[worstMesh].skin.size()) {
+                float bw = 0; QString bn;
+                for (const auto& inf : full.rig.meshes[worstMesh].skin[worstPos])
+                    if (inf.weight > bw && inf.joint < full.rig.joints.size()) { bw = inf.weight; bn = full.rig.joints[inf.joint].name; }
+                report.insert("vsRigWorstVertexDominantJoint", bn);
+            }
+        }
     } else {
         mgr->setEnabled(!noCorrectives);
         mgr->evaluateNow();
@@ -366,6 +418,11 @@ static int runPose(int argc, char* argv[])
         if (compare)
             t += QStringLiteral("Pose moved vertices by up to %1 mm (plain skinning vs neutral)\n")
                      .arg(report["poseMaxAxisDisplacementMm"].toDouble(), 0, 'f', 1);
+        if (compare && vsRig)
+            t += QStringLiteral("Imported (<=256 bones, 4 influences) vs the FULL DNA rig: max %1 mm, mean %2 mm, p99 %3 mm; %4 vertices >1 mm, %5 >5 mm (worst vertex: %6)\n")
+                     .arg(report["vsRigMaxMm"].toDouble(), 0, 'f', 2).arg(report["vsRigMeanMm"].toDouble(), 0, 'f', 3)
+                     .arg(report["vsRigP99Mm"].toDouble(), 0, 'f', 2).arg(report["vsRigOver1mm"].toInt()).arg(report["vsRigOver5mm"].toInt())
+                     .arg(report["vsRigWorstVertexDominantJoint"].toString());
         if (compare)
             t += QStringLiteral("Corrected vs plain skinning: max %1 mm, mean %2 mm, p99 %3 mm; %4 of %5 vertices move >1 mm, %6 >5 mm\n")
                      .arg(report["maxDisplacementMm"].toDouble(), 0, 'f', 2).arg(report["meanDisplacementMm"].toDouble(), 0, 'f', 3)
