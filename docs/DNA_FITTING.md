@@ -139,7 +139,32 @@ budget issue), and an in-editor RBF without DNA (our own pose-space solver drivi
 existing morph targets) may be the better product for game assets. Recommendation:
 prototype the DNA-free pose-space version first.
 
-## 9. Known limits / follow-ups
+## 9. Fitting to a character with its own topology (`--register-joints`, `--register`)
+
+`dna fit` needs one target position per source vertex, which only a same-topology target
+provides. Two ways to build that for an arbitrary character were prototyped and measured on
+`officer_rigged.glb` (a stylised, T-posed chibi: big head, short limbs, 53-bone Mixamo-style rig):
+
+| Route | Flag | Result |
+|---|---|---|
+| Surface registration: pre-align by height, then the face rig's Amberg optimal-step NRICP drapes the body on the target | `--register` | **Rejected.** Residual looks excellent (mean 0.12 %, p95 0.34 % of the target size) but the render shows the bare body collapsed into the silhouette of the clothes (a thin vase torso, spindly arms). A low surface residual says nothing about whether the result is a plausible body. |
+| Skeleton-anchored warp: pair the target's bones with the MetaHuman joints by name (Mixamo / generic biped tables), build a smooth affine + RBF warp from those correspondences, carry the body and skeleton through it | `--register-joints` | **Works as a prototype.** The body takes the officer's proportions (wide stance, short legs, arms out); reference-pose stretch p99 <= 0.38, worst edge <= 1.9x. |
+
+Two traps the joint route hit, both pinned by tests: a T-posed target's joints are
+(nearly) **coplanar**, so a warp fitted to them has no depth information and squashes the body
+to a sheet (first render: a zero-thickness sliver) — fixed with helper points offset along depth
+and scaled by the similarity factor; and name pairing must be case-insensitive and tolerate the
+`mixamorig:` prefix, with unmatched joints reported rather than silently dropped (at least 6 pairs
+are required).
+
+What it still is **not**: the result is the *MetaHuman body with the officer's skeleton
+proportions*, not a body shaped like the officer's clothes or head (the body DNA has no head, and
+the warp is smooth, so hands/feet detail does not follow). Arms droop slightly because the
+MetaHuman rest pose is an A-pose and the target a T-pose — a pose pre-alignment (rotating the
+limbs to the target's bone directions before the warp) is the next improvement, and the surface
+route would need that pre-pose plus landmarks before it could be trusted.
+
+## 10. Known limits / follow-ups
 
 1. Corrective data is not recalibrated (section 6).
 2. No in-editor preview/undo (section 7).

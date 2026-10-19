@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "DnaFit.h"
+#include "DnaRegister.h"
 #include "DnaReader.h"
 #include "DnaRigLogic.h"
 
@@ -547,6 +548,100 @@ TEST(DnaFitWrite, RefusesToOverwriteTheSourceThroughASymlink)
     EXPECT_TRUE(wr.error.contains("overwrite")) << wr.error.toStdString();
     EXPECT_EQ(QFileInfo(srcPath).size(), before);   // the source is untouched
 #endif
+}
+
+
+// ---- registration onto another character --------------------------------------------
+
+namespace {
+// A stick rig with MetaHuman body-joint names, all children of the pelvis, plus the tube mesh.
+Rig stickRig(std::vector<std::array<double, 3>>& world)
+{
+    Rig rig = tubeRig();
+    const std::vector<std::pair<const char*, std::array<double, 3>>> j = {
+        {"pelvis", {0, 1.0, 0}}, {"spine_03", {0, 1.4, 0.05}}, {"spine_05", {0, 1.6, 0.05}}, {"neck_01", {0, 1.75, 0.04}},
+        {"head", {0, 1.85, 0.06}}, {"upperarm_l", {0.2, 1.6, 0}}, {"upperarm_r", {-0.2, 1.6, 0}},
+        {"hand_l", {0.7, 1.5, 0.1}}, {"hand_r", {-0.7, 1.5, 0.1}}, {"thigh_l", {0.1, 0.95, 0}}, {"thigh_r", {-0.1, 0.95, 0}},
+        {"foot_l", {0.1, 0.05, 0.05}}, {"foot_r", {-0.1, 0.05, 0.05}}};
+    rig.joints.clear();
+    world.clear();
+    for (size_t i = 0; i < j.size(); ++i) {
+        Joint jt;
+        jt.name = j[i].first;
+        jt.parent = i == 0 ? -1 : 0;
+        jt.translation = i == 0 ? j[i].second : std::array<double, 3>{j[i].second[0] - j[0].second[0], j[i].second[1] - j[0].second[1], j[i].second[2] - j[0].second[2]};
+        rig.joints.push_back(jt);
+        world.push_back(j[i].second);
+    }
+    for (auto& v : rig.meshes[0].skin) v = {{0, 1.f}};   // everything on the pelvis; skinning is not under test
+    return rig;
+}
+}  // namespace
+
+TEST(DnaRegister, JointNamesAreMatchedAcrossConventionsAndTheRestReported)
+{
+    std::vector<std::pair<QString, std::array<double, 3>>> bones = {
+        {"Hips", {0, 1, 0}}, {"mixamorig:LeftArm", {1, 2, 0}}, {"RIGHTHAND", {-2, 2, 0}}, {"Head", {0, 3, 0}}, {"prop_sword", {9, 9, 9}}};
+    QStringList unmatched;
+    const auto a = matchJointAnchors(bones, &unmatched);
+    ASSERT_EQ(a.size(), 4u);
+    EXPECT_TRUE(unmatched.contains("foot_l"));
+    EXPECT_FALSE(unmatched.contains("pelvis"));
+    bool sawHand = false;
+    for (const auto& x : a) if (x.bodyJoint == "hand_r") { sawHand = true; EXPECT_EQ(x.target[0], -2.0); }   // case-insensitive
+    EXPECT_TRUE(sawHand);
+}
+
+TEST(DnaRegister, TooFewAnchorsIsRefusedWithAnActionableMessage)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    const JointRegisterResult r = registerByJoints(rig, {{"pelvis", {0, 1, 0}}, {"head", {0, 2, 0}}});
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains("at least 6")) << r.error.toStdString();
+}
+
+TEST(DnaRegister, AUniformlyScaledCoplanarTargetKeepsItsDepth)
+{
+    // The target skeleton is flat (T-pose, every joint at z = 0): without depth anchors the
+    // warp has no depth information and squashes the body to a sheet.
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {1.5 * w[i][0], 1.5 * w[i][1], 0.0}});
+    const JointRegisterResult r = registerByJoints(rig, anchors);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.positions[0].empty());
+    double zmin = 1e9, zmax = -1e9, ymax = -1e9;
+    const auto& P = r.positions[0];
+    for (size_t i = 0; i + 2 < P.size(); i += 3) { zmin = std::min(zmin, double(P[i + 2])); zmax = std::max(zmax, double(P[i + 2])); ymax = std::max(ymax, double(P[i + 1])); }
+    const double depth = zmax - zmin;          // source tube is 0.6 deep -> ~0.9 after a 1.5x scale
+    EXPECT_GT(depth, 0.6) << "depth collapsed: " << depth;
+    EXPECT_NEAR(ymax, 1.5 * 2.5, 0.35);        // height followed the scale (tube top at y = 2.5)
+}
+
+TEST(DnaRegister, SurfaceRegistrationLandsOnTheTargetSurface)
+{
+    // Register the tube onto a copy of itself scaled 1.3x taller/wider: the fit should land on
+    // the surface (residual tiny) and report the pre-align scale it used.
+    const Rig rig = tubeRig();
+    const Mesh& m = rig.meshes[0];
+    std::vector<float> tv;
+    for (float v : m.positions) tv.push_back(v * 1.3f);
+    std::vector<int> tf;
+    for (const auto& f : m.faces)
+        for (size_t k = 1; k + 1 < f.size(); ++k) { tf.push_back(int(m.layouts[f[0]].position)); tf.push_back(int(m.layouts[f[k]].position)); tf.push_back(int(m.layouts[f[k + 1]].position)); }
+    const RegisterResult r = registerToSurface(rig, tv, tf);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_NEAR(r.alignScale, 1.3, 1e-6);
+    EXPECT_LT(r.meanResidualPct, 0.5);
+}
+
+TEST(DnaRegister, AnEmptyOrBrokenTargetSurfaceIsRefused)
+{
+    const Rig rig = tubeRig();
+    EXPECT_FALSE(registerToSurface(rig, {}, {}).ok);
+    EXPECT_FALSE(registerToSurface(rig, {0, 0, 0, 1, 0, 0, 0, 1, 0}, {0, 1, 7}).ok);   // index out of range
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

@@ -9,6 +9,7 @@
 #include "DnaArkitMap.h"
 #include "DnaFaceBake.h"
 #include "DnaFit.h"
+#include "DnaRegister.h"
 #include "DnaRigLogic.h"
 #include "DnaScene.h"
 #include "../ModelTurntableRenderer.h"
@@ -48,7 +49,8 @@ void usage()
         "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
-        "                      [--uniform-scale S] [--write-dna fitted.dna] [-o fitted.glb] [--json]\n"
+        "                      [--register-joints | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
+        "                      [-o fitted.glb] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
         "\n"
@@ -556,6 +558,38 @@ static int runFace(int argc, char* argv[])
 namespace {
 
 // Bind-pose (undeformed) vertex positions of every submesh, in submesh order.
+
+// Merge every submesh of an entity into one surface (positions + triangle indices).
+bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
+{
+    const Ogre::MeshPtr mesh = e->getMesh();
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
+        if (!vd || !sm->indexData || sm->operationType != Ogre::RenderOperation::OT_TRIANGLE_LIST) continue;
+        const Ogre::VertexElement* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        if (!pe) continue;
+        const int base = int(pos.size() / 3);
+        Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
+        auto* vbase = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (size_t v = 0; v < vd->vertexCount; ++v) {
+            float* p = nullptr;
+            pe->baseVertexPointerToElement(vbase + v * vb->getVertexSize(), &p);
+            pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
+        }
+        vb->unlock();
+        Ogre::HardwareIndexBufferSharedPtr ib = sm->indexData->indexBuffer;
+        const size_t n = sm->indexData->indexCount;
+        void* ip = ib->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
+        const bool wide = ib->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+        for (size_t k = 0; k + 2 < n; k += 3)
+            for (int c = 0; c < 3; ++c)
+                tris.push_back(base + int(wide ? static_cast<uint32_t*>(ip)[k + size_t(c)] : static_cast<uint16_t*>(ip)[k + size_t(c)]));
+        ib->unlock();
+    }
+    return !tris.empty();
+}
+
 std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
 {
     std::vector<Fit::ImportedSubmesh> out;
@@ -615,7 +649,7 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 static int runFit(int argc, char* argv[])
 {
     QString path, targetPath, writeDna, out;
-    bool json = false, poses = false, lods = false;
+    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false;
     double uniformScale = 0.0;
     bool sawDna = false, sawFit = false;
     for (int i = 1; i < argc; ++i) {
@@ -626,6 +660,8 @@ static int runFit(int argc, char* argv[])
         if (a == "--json") json = true;
         else if (a == "--poses") poses = true;
         else if (a == "--lods") lods = true;
+        else if (a == "--register") doRegister = true;
+        else if (a == "--register-joints") registerJoints = true;
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
@@ -659,6 +695,7 @@ static int runFit(int argc, char* argv[])
     double seamMm = 0, matchedFraction = 1.0;
     bool matchedByUv = false, flippedV = false;
     int ambiguous = 0;
+    QVariantMap registration;
     if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
         if (!tr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
@@ -680,6 +717,45 @@ static int runFit(int argc, char* argv[])
                                            .arg(targetPath, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
             return 1;
         }
+        if (registerJoints) {
+            // pair the target's skeleton with the MetaHuman joints and warp the body onto its proportions
+            std::vector<std::pair<QString, std::array<double, 3>>> bones;
+            if (te->hasSkeleton()) {
+                Ogre::SkeletonInstance* sk = te->getSkeleton();
+                sk->setBindingPose();
+                for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
+                    Ogre::Bone* bone = sk->getBone(b);
+                    bone->_update(true, false);
+                    const Ogre::Vector3 p = bone->_getDerivedPosition();
+                    bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
+                }
+            }
+            if (bones.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
+            QStringList unmatched;
+            const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
+            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors);
+            if (!jr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
+            target = jr.positions;
+            registration.insert("mode", "joints");
+            registration.insert("anchorsUsed", jr.anchorsUsed);
+            registration.insert("anchorResidualMm", jr.anchorResidualMm);
+            registration.insert("unmatchedJoints", unmatched);
+            registration.insert("warnings", jr.warnings);
+        } else if (doRegister) {
+            std::vector<float> tpos;
+            std::vector<int> ttri;
+            if (!surfaceOf(te, tpos, ttri)) { CLIPipeline::writeCliError(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
+            const Fit::RegisterResult rr = Fit::registerToSurface(src.rig, tpos, ttri);
+            if (!rr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: registration: %1\n").arg(rr.error)); return 1; }
+            target = rr.positions;
+            registration.insert("alignScale", rr.alignScale);
+            registration.insert("templateVertices", rr.templateVertices);
+            registration.insert("meanResidualPct", rr.meanResidualPct);
+            registration.insert("p95ResidualPct", rr.p95ResidualPct);
+            registration.insert("maxResidualPct", rr.maxResidualPct);
+            registration.insert("warnings", rr.warnings);
+            matchedFraction = 1.0;
+        } else {
         const Fit::Correspondence c = Fit::matchImported(src.rig, bindPositionsOf(te));
         if (!c.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
         target = c.positions;
@@ -688,6 +764,7 @@ static int runFit(int argc, char* argv[])
         matchedFraction = c.matchedFraction;
         ambiguous = c.ambiguousVertices;
         flippedV = c.flippedV;
+        }
     }
 
     const Fit::Result fr = Fit::fit(src.rig, target);
@@ -706,6 +783,7 @@ static int runFit(int argc, char* argv[])
     report.insert("matchedFraction", matchedFraction);
     report.insert("ambiguousVertices", ambiguous);
     report.insert("targetVFlipped", flippedV);
+    if (doRegister || registerJoints) report.insert("registration", registration);
     report.insert("joints", int(fr.fitted.joints.size()));
     report.insert("warnings", fr.warnings);
 

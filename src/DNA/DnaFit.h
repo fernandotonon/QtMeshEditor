@@ -85,6 +85,9 @@ struct Result {
 /// empty array means "not part of the field": that mesh simply follows the warp.
 Result fit(const Rig& rig, const std::vector<std::vector<float>>& target, const Options& options = Options());
 
+/// World position of every joint at the neutral pose (rig units).
+std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig);
+
 // ---- correspondence -----------------------------------------------------------
 
 /// The entries of rig.meshes that the importer turns into submeshes (meshes with no

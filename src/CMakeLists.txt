@@ -235,6 +235,7 @@ DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
 DNA/DnaFit.cpp
+DNA/DnaRegister.cpp
 DNA/DnaFitWrite.cpp
 DNA/DnaCorrectiveManager.cpp
 Mocap/VideoFrameSource.cpp

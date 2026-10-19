@@ -212,6 +212,14 @@ Warp buildWarp(const std::vector<V3>& source, const std::vector<V3>& target, con
 
 // ---- fit ----------------------------------------------------------------------
 
+std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig)
+{
+    const std::vector<Aff> w = worldMatrices(rig);
+    std::vector<std::array<double, 3>> out(w.size());
+    for (size_t j = 0; j < w.size(); ++j) out[j] = {w[j].t[0], w[j].t[1], w[j].t[2]};
+    return out;
+}
+
 Result fit(const Rig& rig, const std::vector<std::vector<float>>& target, const Options& opt)
 {
     Result r;
