@@ -78,8 +78,18 @@ std::vector<std::vector<float>> evaluatePositions(const Rig& rig, RigEvaluator& 
 /// joint rotated by `rotations` (joint name -> w,x,y,z, relative to its neutral orientation, composed
 /// after it) and every rig-driven (corrective) joint taken from RigLogic. `rig` must be the UNPRUNED
 /// rig the evaluator's joint indices refer to.
+///
+/// `withCorrectives=false` leaves every rig-driven joint at its neutral local pose, i.e. PLAIN skinning
+/// of the same driver rotations (what the viewport shows with the corrective toggle off).
 std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvaluator& ev,
-                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations);
+                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations,
+                                                       bool withCorrectives = true);
+
+/// The blended 3x3 (row-major) skinning matrix of every vertex at that pose — what a REST-space corrective
+/// must be carried through. Same arguments as evaluatePositionsPosed.
+std::vector<std::vector<std::array<float, 9>>> evaluateBlendedLinear(
+    const Rig& rig, RigEvaluator& ev, const QList<QPair<QString, std::array<double, 4>>>& rotations,
+    bool withCorrectives = false);
 
 /// Bake `specs` against the neutral pose.
 Result bake(const Rig& rig, RigEvaluator& ev, const QList<ShapeSpec>& specs, const Options& options = Options());

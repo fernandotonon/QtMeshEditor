@@ -228,12 +228,14 @@ NodeAnimationManager.cpp
 PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
+PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
+DNA/DnaPsdBake.cpp
 DNA/DnaFit.cpp
 DNA/DnaRegister.cpp
 DNA/DnaFitWrite.cpp
