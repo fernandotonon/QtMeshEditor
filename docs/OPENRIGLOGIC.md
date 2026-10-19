@@ -84,7 +84,7 @@ from its dominant joint in world space. Findings:
 5. **Groom and clothing** are not in the DNA/DCC package. They are separate
    pipeline inputs (import as ordinary meshes and bind to the DNA skeleton);
    not handled automatically.
-6. **JSON DNA** is not read (binary only).
+6. **JSON DNA** is read (`.json` extension or a `{` first byte; `read()`, `RigEvaluator::create`, every `qtmesh dna` command) by re-serialising it as a binary DNA in memory, so the library's unit / coordinate / rotation conversions apply exactly as for binary. Needs `DNA_BUILD_WITH_JSON_SUPPORT` on the library (set in `cmake/OpenRigLogic.cmake`). `dna fit --write-dna` still needs a binary SOURCE. The editor's file dialog / MCP `load_mesh` import only `.dna` (a JSON DNA saved with that extension is detected by content).
 7. **Export:** the only DNA writer is `qtmesh dna fit --write-dna` (Phase 4):
    it rewrites joint neutral translations and mesh positions of a *fitted* rig
    and must read back and load in RigLogic, else the file is removed. DNA

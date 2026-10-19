@@ -55,6 +55,7 @@ constexpr int kAttr = 9;  // tx ty tz rx ry rz sx sy sz
 
 struct RigEvaluator::Impl {
     pma::ScopedPtr<trio::FileStream> stream;
+    pma::ScopedPtr<dna::MemoryStream> memStream;   // a JSON DNA, re-serialised as binary
     pma::ScopedPtr<dna::BinaryStreamReader> reader;
     pma::ScopedPtr<rl4::RigLogic> logic;
     pma::ScopedPtr<rl4::RigInstance> instance;
@@ -91,16 +92,25 @@ std::unique_ptr<RigEvaluator> RigEvaluator::create(const QString& path, const Re
 
     std::unique_ptr<RigEvaluator> ev(new RigEvaluator);
     Impl& d = *ev->d;
-    const QByteArray p = QFile::encodeName(fi.absoluteFilePath());
-    d.stream = pma::makeScoped<dna::FileStream>(p.constData(), dna::FileStream::AccessMode::Read,
-                                                dna::FileStream::OpenMode::Binary);
-    if (!d.stream)
-        return fail(QStringLiteral("Could not open %1.").arg(fi.fileName()));
+    const bool json = detail::isJsonDnaFile(fi.absoluteFilePath());
+    if (json) {
+        d.memStream = pma::makeScoped<dna::MemoryStream>();
+        if (!d.memStream) return fail(QStringLiteral("Could not allocate a memory stream."));
+        const QString jerr = detail::jsonToBinaryStream(fi.absoluteFilePath(), *d.memStream);
+        if (!jerr.isEmpty()) return fail(jerr);
+    } else {
+        const QByteArray p = QFile::encodeName(fi.absoluteFilePath());
+        d.stream = pma::makeScoped<dna::FileStream>(p.constData(), dna::FileStream::AccessMode::Read,
+                                                    dna::FileStream::OpenMode::Binary);
+        if (!d.stream)
+            return fail(QStringLiteral("Could not open %1.").arg(fi.fileName()));
+    }
 
     ReadOptions o = options;
     o.loadGeometry = false;   // evaluation needs no vertices
     o.loadBehavior = true;
-    d.reader = pma::makeScoped<dna::BinaryStreamReader>(d.stream.get(), detail::makeConfig(o));
+    d.reader = json ? pma::makeScoped<dna::BinaryStreamReader>(d.memStream.get(), detail::makeConfig(o))
+               : pma::makeScoped<dna::BinaryStreamReader>(d.stream.get(), detail::makeConfig(o));
     d.reader->read();
     if (!sc::Status::isOk())
         return fail(QStringLiteral("Failed to read %1 for rig evaluation: %2")

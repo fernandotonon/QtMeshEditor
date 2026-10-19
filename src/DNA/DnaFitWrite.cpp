@@ -85,6 +85,8 @@ WriteResult writeFittedDna(const QString& sourcePath, const Rig& original, const
         return fail(QStringLiteral("the fitted rig does not match the original (joint / mesh counts differ)"));
     if (!warp.valid) return fail(QStringLiteral("no valid warp"));
     const QFileInfo src(sourcePath);
+    if (src.suffix().compare(QStringLiteral("json"), Qt::CaseInsensitive) == 0)
+        return fail(QStringLiteral("writing a fitted DNA needs a binary .dna source (a JSON DNA can be read but not rewritten here)"));
     if (!src.exists()) return fail(QStringLiteral("source DNA not found: %1").arg(sourcePath));
     {
         // same file by identity, not by spelling: symlinks, hard links, and case-only aliases

@@ -7,7 +7,9 @@
 
 #ifdef ENABLE_OPENRIGLOGIC
 
+#include <dna/BinaryStreamReader.h>
 #include <dna/BinaryStreamWriter.h>
+#include <dna/JSONStreamWriter.h>
 #include <dna/Writer.h>
 #include <trio/streams/MemoryStream.h>
 
@@ -96,6 +98,26 @@ inline std::vector<uint8_t> makeSyntheticDna(bool withGeometry = true, uint16_t 
     stream->seek(0);
     stream->read(reinterpret_cast<char*>(bytes.data()), n);
     return bytes;
+}
+
+/// The same synthetic character as the library's JSON text format.
+inline std::string makeSyntheticDnaJson(bool withGeometry = true, uint16_t lodCount = 1)
+{
+    const std::vector<uint8_t> bin = makeSyntheticDna(withGeometry, lodCount);
+    auto in = pma::makeScoped<dna::MemoryStream>();
+    in->write(reinterpret_cast<const char*>(bin.data()), bin.size());
+    in->seek(0);
+    auto reader = pma::makeScoped<dna::BinaryStreamReader>(in.get());
+    reader->read();
+    auto out = pma::makeScoped<dna::MemoryStream>();
+    auto writer = pma::makeScoped<dna::JSONStreamWriter>(out.get(), 4);
+    writer->setFrom(reader.get());
+    writer->write();
+    const std::size_t n = out->size();
+    std::string text(n, '\0');
+    out->seek(0);
+    out->read(&text[0], n);
+    return text;
 }
 
 }  // namespace DnaTest

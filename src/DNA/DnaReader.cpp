@@ -532,6 +532,15 @@ ReadResult read(const QString& path, const ReadOptions& options)
         return failure(ErrorCode::FileNotFound,
             QStringLiteral("DNA file not found: %1").arg(path));
 
+    if (detail::isJsonDnaFile(fi.absoluteFilePath())) {
+        auto mem = pma::makeScoped<dna::MemoryStream>();
+        if (!mem) return failure(ErrorCode::Other, QStringLiteral("Could not allocate a memory stream."));
+        const QString jerr = detail::jsonToBinaryStream(fi.absoluteFilePath(), *mem);
+        if (!jerr.isEmpty()) return failure(ErrorCode::NotDna, jerr);
+        auto jreader = pma::makeScoped<dna::BinaryStreamReader>(mem.get(), detail::makeConfig(options));
+        if (!jreader) return failure(ErrorCode::Other, QStringLiteral("Could not create a DNA reader."));
+        return build(jreader.get(), options, fi.fileName());
+    }
     const QByteArray p = QFile::encodeName(fi.absoluteFilePath());
     auto stream = pma::makeScoped<dna::FileStream>(p.constData(), dna::FileStream::AccessMode::Read,
                                                    dna::FileStream::OpenMode::Binary);
