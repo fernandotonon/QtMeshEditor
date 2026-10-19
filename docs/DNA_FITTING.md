@@ -218,10 +218,16 @@ layout (`DnaRegister.SmoothWrapRecoversAKnownEditOnAReMeshedTarget`).
 surface mesh it used 74 of 900 allowed centres (the original Phase 4 fit!). It now steers toward the budget
 (~85 %); the same-topology body fit uses 657 centres and the warp residual drops from the old 3.5 mm.
 
-**On the stylised officer** the smooth wrap no longer collapses (it follows the trousers/shirt volume into a
-wide-hipped body) but it does not match the T-pose — pose matching exists only in the skeleton route
-(`--register-joints`). Combining the two (pose/proportions from the skeleton, then a surface wrap for shape) is
-the obvious next step.
+**On the stylised officer** the surface wrap alone no longer collapses (it follows the trousers/shirt volume
+into a wide-hipped body) but it does not match the T-pose. The two routes are complementary, so they are now
+combined: `--register-joints --refine-surface` (MCP mode `joints+surface`, `registerJointsThenSurface`) runs the
+skeleton route first — facing, limb pose (T-pose arms), proportions — and then the smooth surface wrap
+starting from that, so the skeleton supplies pose and proportions the surface cannot recover and the surface
+supplies the volume (clothes, hips, belly) the skeleton cannot. On officer_rigged the arms come out in the
+T-pose with the officer's volume, reference-pose stretch p99 <= 0.31 (worst hip edge 6.7x); the legs splay
+somewhat because the wrap follows the clothed silhouette (trousers and shoes), which a bare-body target would
+not do. A synthetic unit test pins the benefit: on an edited, re-meshed tube whose bulge no joint can express,
+joints-only leaves 2x+ the error of joints + surface.
 
 ## 10. Known limits / follow-ups
 

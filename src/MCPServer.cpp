@@ -10737,8 +10737,8 @@ QJsonObject MCPServer::toolFitDnaBody(const QJsonObject& args)
     if (!QFileInfo::exists(target)) return makeErrorResult(QStringLiteral("Error: target not found: %1").arg(target));
     Dna::DnaCLI::FitOptions o;
     o.mode = args.value("mode").toString();
-    if (!o.mode.isEmpty() && o.mode != QLatin1String("topology") && o.mode != QLatin1String("joints") && o.mode != QLatin1String("surface"))
-        return makeErrorResult(QStringLiteral("Error: 'mode' must be topology (default), joints or surface"));
+    if (!o.mode.isEmpty() && o.mode != QLatin1String("topology") && o.mode != QLatin1String("joints") && o.mode != QLatin1String("surface") && o.mode != QLatin1String("joints+surface"))
+        return makeErrorResult(QStringLiteral("Error: 'mode' must be topology (default), joints, surface or joints+surface"));
     if (args.contains("poses")) o.poses = args.value("poses").toBool(true);
     if (args.contains("lods")) o.lods = args.value("lods").toBool(false);
     if (args.contains("align_limbs")) o.alignLimbs = args.value("align_limbs").toBool(true);
@@ -14718,7 +14718,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["dna_path"] = QJsonObject{{"type", "string"}, {"description", "MetaHuman BODY .dna (binary or JSON) to fit."}};
         props["target_path"] = QJsonObject{{"type", "string"}, {"description", "What to fit it to: an edited mesh with the SAME topology/UVs (default mode), another body .dna, or — with mode joints/surface — a character with its own topology."}};
-        props["mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"topology", "joints", "surface"}}, {"description", "topology (default): same-topology edit, matched by UV. joints: pair the target's skeleton bones with the MetaHuman joints and warp the body onto its proportions (recommended for other characters; faces are matched by name, facing and limb pose are aligned). surface: wrap the body onto an arbitrary surface (smooth coarse-to-fine ICP) then fit; recovers a known edit of a re-meshed body to ~2-4 mm, does not match poses."}};
+        props["mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"topology", "joints", "surface", "joints+surface"}}, {"description", "topology (default): same-topology edit, matched by UV. joints: pair the target's skeleton bones with the MetaHuman joints and warp the body onto its proportions (recommended for other characters; faces are matched by name, facing and limb pose are aligned). joints+surface: the skeleton aligns facing/pose/proportions, then the surface wrap refines the shape (best for stylised characters). surface: wrap the body onto an arbitrary surface (smooth coarse-to-fine ICP) then fit; recovers a known edit of a re-meshed body to ~2-4 mm, does not match poses."}};
         props["poses"] = QJsonObject{{"type", "boolean"}, {"description", "Report reference-pose deformation quality (default true)."}};
         props["lods"] = QJsonObject{{"type", "boolean"}, {"description", "Report propagation to the lower LODs (default false; not with limb alignment)."}};
         props["align_limbs"] = QJsonObject{{"type", "boolean"}, {"description", "mode=joints: rotate the limbs onto the target's bone directions first (default true)."}};

@@ -815,4 +815,55 @@ TEST(DnaRegister, NricpRemainsAvailableAsAnOption)
     EXPECT_TRUE(r.ok) << r.error.toStdString();
 }
 
+TEST(DnaRegister, JointsThenSurfaceRecoversAnEditThatNeitherRouteAloneDoes)
+{
+    // The target is an edited, RE-MESHED tube plus a skeleton: the joints carry the proportions (a taller,
+    // wider body), the surface carries a bulge the joints cannot express. Skeleton first, then surface.
+    auto E = [](double x, double y, double z) {
+        const double t = (y + 0.5) / 3.0;
+        const double bulge = 1.0 + 0.30 * std::exp(-std::pow((t - 0.5) / 0.12, 2));   // not expressible by a few joints
+        return std::array<double, 3>{x * 1.2 * bulge, y * 1.1, z * bulge};
+    };
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) {
+        // joints sit on the axis: only the global proportions apply to them
+        const auto e = E(w[i][0], w[i][1], w[i][2]);
+        anchors.push_back({rig.joints[i].name, {w[i][0] * 1.2, w[i][1] * 1.1, w[i][2]}});
+        (void)e;
+    }
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(61, 40, tv, tf, E);
+    const JointRegisterResult jointsOnly = registerByJoints(rig, anchors, false);
+    const JointRegisterResult both = registerJointsThenSurface(rig, anchors, tv, tf, false, 6);
+    ASSERT_TRUE(jointsOnly.ok) << jointsOnly.error.toStdString();
+    ASSERT_TRUE(both.ok) << both.error.toStdString();
+    EXPECT_TRUE(both.surfaceRefined);
+    auto meanError = [&](const std::vector<float>& W) {
+        const auto& P = rig.meshes[0].positions;
+        double sum = 0;
+        for (size_t i = 0; i + 2 < P.size(); i += 3) {
+            const auto want = E(P[i], P[i + 1], P[i + 2]);
+            sum += std::sqrt(std::pow(W[i] - want[0], 2) + std::pow(W[i + 1] - want[1], 2) + std::pow(W[i + 2] - want[2], 2));
+        }
+        return sum / double(P.size() / 3);
+    };
+    const double e1 = meanError(jointsOnly.positions[0]), e2 = meanError(both.positions[0]);
+    EXPECT_LT(e2, e1 * 0.5) << "joints only " << e1 << ", joints + surface " << e2;
+    EXPECT_LT(e2, 0.03);
+}
+
+TEST(DnaRegister, JointsThenSurfaceRefusesAnEmptyTarget)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, w[i]});
+    const JointRegisterResult r = registerJointsThenSurface(rig, anchors, {}, {}, false);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains("empty")) << r.error.toStdString();
+}
+
 #endif  // ENABLE_OPENRIGLOGIC

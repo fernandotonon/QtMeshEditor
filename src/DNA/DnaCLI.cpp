@@ -54,7 +54,7 @@ void usage()
         "                       [--compare [--vs-rig]] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
-        "                      [--register-joints [--no-align-limbs] | --register [--register-method smooth|nricp]]\n"
+        "                      [--register-joints [--no-align-limbs] [--refine-surface] | --register [--register-method smooth|nricp]]\n"
         "                      [--reference same_topology_mesh]\n"
         "                      [--uniform-scale S] [--write-dna fitted.dna]\n"
         "                      [-o fitted.glb] [--json]\n"
@@ -719,6 +719,7 @@ struct FitArgs {
     QString path, targetPath, writeDna, out, referencePath;
     std::vector<double> stiffness;   ///< NRICP schedule override (empty = default)
     QString registerMethod;          ///< surface registration: "" / smooth | nricp
+    bool refineSurface = false;      ///< with registerJoints: refine the shape onto the target surface afterwards
     bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     bool headless = true;     ///< CLI process (may init Ogre, nothing to clean up) vs inside the editor (MCP)
     double uniformScale = 0.0;
@@ -822,7 +823,15 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             if (bones.empty()) { err(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
             QStringList unmatched;
             const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
-            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
+            Fit::JointRegisterResult jr;
+            if (a.refineSurface) {
+                std::vector<float> tpos;
+                std::vector<int> ttri;
+                if (!surfaceOf(te, tpos, ttri)) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
+                jr = Fit::registerJointsThenSurface(src.rig, anchors, tpos, ttri, !noAlignLimbs);
+            } else {
+                jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
+            }
             if (!jr.ok) { err(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
             target = jr.positions;
             baseRig = jr.alignedRig;
@@ -830,7 +839,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             registration.insert("yawDegrees", jr.yawDegrees);
             registration.insert("limbChainsAligned", jr.limbChainsAligned);
             registration.insert("limbAngles", jr.limbAngles);
-            registration.insert("mode", "joints");
+            registration.insert("mode", jr.surfaceRefined ? "joints+surface" : "joints");
             registration.insert("anchorsUsed", jr.anchorsUsed);
             registration.insert("anchorResidualMm", jr.anchorResidualMm);
             registration.insert("unmatchedJoints", unmatched);
@@ -1060,6 +1069,7 @@ static int runFit(int argc, char* argv[])
     QString path, targetPath, writeDna, out, referencePath;
     std::vector<double> stiffness;
     QString registerMethod;   // "" / smooth (default) | nricp
+    bool refineSurface = false;
     bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     double uniformScale = 0.0;
     bool sawDna = false, sawFit = false;
@@ -1072,6 +1082,7 @@ static int runFit(int argc, char* argv[])
         else if (a == "--poses") poses = true;
         else if (a == "--lods") lods = true;
         else if (a == "--register") doRegister = true;
+        else if (a == "--refine-surface") refineSurface = true;
         else if (a == "--register-method" && i + 1 < argc) registerMethod = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--stiffness" && i + 1 < argc) { for (const QString& t : QString::fromLocal8Bit(argv[++i]).split(',')) stiffness.push_back(t.toDouble()); }
         else if (a == "--reference" && i + 1 < argc) referencePath = QString::fromLocal8Bit(argv[++i]);
@@ -1098,11 +1109,12 @@ static int runFit(int argc, char* argv[])
         CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
         return 2;
     }
+    if (refineSurface && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --refine-surface only applies with --register-joints\n")); return 2; }
     if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
     FitArgs fa;
     fa.path = path; fa.targetPath = targetPath; fa.writeDna = writeDna; fa.out = out;
     fa.poses = poses; fa.lods = lods; fa.doRegister = doRegister; fa.registerJoints = registerJoints;
-    fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true; fa.referencePath = referencePath; fa.stiffness = stiffness; fa.registerMethod = registerMethod;
+    fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true; fa.referencePath = referencePath; fa.stiffness = stiffness; fa.registerMethod = registerMethod; fa.refineSurface = refineSurface;
     QVariantMap report;
     const int rc = fitCore(fa, report, [](const QString& m) { CLIPipeline::writeCliError(m); });
     if (rc != 0) return rc;
@@ -1155,7 +1167,8 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
     a.out = options.outputMesh;
     a.poses = options.poses;
     a.lods = options.lods;
-    a.registerJoints = options.mode == QLatin1String("joints");
+    a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
+    a.refineSurface = options.mode == QLatin1String("joints+surface");
     a.doRegister = options.mode == QLatin1String("surface");
     a.noAlignLimbs = !options.alignLimbs;
     // the same combinations the CLI refuses

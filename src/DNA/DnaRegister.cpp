@@ -125,20 +125,14 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
 
 }  // namespace
 
-RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                 const RegisterOptions& options)
-{
-    RegisterResult r;
-    if (targetV.size() < 9 || targetF.size() < 3) { r.error = QStringLiteral("the target surface is empty"); return r; }
-    for (float v : targetV) if (!std::isfinite(v)) { r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
-    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+namespace {
 
-    // ---- the template: every imported mesh's positions + triangles, concatenated ----
+// Every imported mesh's positions + triangles, concatenated (positions in rig frame). `offset[mi]` is where
+// mesh `mi` starts. Returns the imported mesh indices (empty = nothing to register).
+std::vector<size_t> buildTemplate(const Rig& rig, std::vector<float>& tv, std::vector<int>& tf, std::vector<size_t>& offset)
+{
     const std::vector<size_t> imported = importedMeshIndices(rig);
-    if (imported.empty()) { r.error = QStringLiteral("the rig has no mesh to register"); return r; }
-    std::vector<float> tv;
-    std::vector<int> tf;
-    std::vector<size_t> offset(rig.meshes.size(), 0);
+    offset.assign(rig.meshes.size(), 0);
     for (size_t mi : imported) {
         const Mesh& m = rig.meshes[mi];
         offset[mi] = tv.size() / 3;
@@ -152,6 +146,25 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
             for (size_t k = 1; k + 1 < face.size(); ++k) { tf.push_back(pos(0)); tf.push_back(pos(k)); tf.push_back(pos(k + 1)); }
         }
     }
+    return imported;
+}
+
+}  // namespace
+
+RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targetV, const std::vector<int>& targetF,
+                                 const RegisterOptions& options)
+{
+    RegisterResult r;
+    if (targetV.size() < 9 || targetF.size() < 3) { r.error = QStringLiteral("the target surface is empty"); return r; }
+    for (float v : targetV) if (!std::isfinite(v)) { r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
+    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+
+    // ---- the template: every imported mesh's positions + triangles, concatenated ----
+    std::vector<float> tv;
+    std::vector<int> tf;
+    std::vector<size_t> offset;
+    const std::vector<size_t> imported = buildTemplate(rig, tv, tf, offset);
+    if (imported.empty()) { r.error = QStringLiteral("the rig has no mesh to register"); return r; }
     r.templateVertices = int(tv.size() / 3);
     if (tf.empty()) { r.error = QStringLiteral("the rig mesh has no triangles"); return r; }
 
@@ -386,6 +399,44 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
         }
     }
     r.ok = true;
+    return r;
+}
+
+JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
+                                              const std::vector<float>& targetV, const std::vector<int>& targetF,
+                                              bool alignLimbPose, int rounds)
+{
+    // 1. skeleton: facing, limb pose and proportions (a smooth warp from matched joints)
+    JointRegisterResult r = registerByJoints(rig, anchors, alignLimbPose);
+    if (!r.ok) return r;
+    // 2. surface: refine the shape from that start. The template is the ALIGNED rig's meshes carried through
+    //    the joint warp; the ICP then pulls it onto the surface.
+    std::vector<float> X;
+    std::vector<int> tf;
+    std::vector<size_t> offset;
+    const std::vector<size_t> imported = buildTemplate(r.alignedRig, X, tf, offset);
+    if (imported.empty() || tf.empty()) { r.ok = false; r.error = QStringLiteral("the rig has no mesh to register"); return r; }
+    if (targetV.size() < 9 || targetF.size() < 3) { r.ok = false; r.error = QStringLiteral("the target surface is empty"); return r; }
+    for (float v : targetV) if (!std::isfinite(v)) { r.ok = false; r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
+    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.ok = false; r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+    // start from the joint-warped positions
+    for (size_t mi : imported) {
+        const auto& P = r.positions[mi];
+        if (P.size() != r.alignedRig.meshes[mi].positions.size()) { r.ok = false; r.error = QStringLiteral("internal: joint warp / mesh size mismatch"); return r; }
+        std::copy(P.begin(), P.end(), X.begin() + std::ptrdiff_t(offset[mi] * 3));
+    }
+    QString err;
+    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), &err)) {
+        r.ok = false;
+        r.error = QStringLiteral("surface refinement failed: %1").arg(err);
+        return r;
+    }
+    for (size_t mi : imported) {
+        const size_t np = r.alignedRig.meshes[mi].positions.size() / 3;
+        r.positions[mi].assign(X.begin() + std::ptrdiff_t(offset[mi] * 3), X.begin() + std::ptrdiff_t((offset[mi] + np) * 3));
+    }
+    r.surfaceRefined = true;
+    r.warnings << QStringLiteral("shape refined onto the target surface after the skeleton alignment");
     return r;
 }
 
