@@ -1209,10 +1209,11 @@ bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOpti
     a.targetEntity = target;
     a.fittedRigOut = fittedRig;
     a.poses = options.poses;
-    a.registerJoints = options.mode == QLatin1String("joints");
+    a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
+    a.refineSurface = options.mode == QLatin1String("joints+surface");
     a.doRegister = options.mode == QLatin1String("surface");
     a.noAlignLimbs = !options.alignLimbs;
-    if (!options.alignLimbs && !a.registerJoints) { if (error) *error = QStringLiteral("align_limbs=false only applies with mode joints"); return false; }
+    if (!options.alignLimbs && !a.registerJoints) { if (error) *error = QStringLiteral("align_limbs=false only applies with the skeleton modes"); return false; }
     a.headless = false;
     QString msg;
     QVariantMap local;

@@ -65,8 +65,8 @@ Column {
         ThemedComboBox {
             id: modeBox
             width: fitSection.width - 60; height: 22; font.pixelSize: 11
-            model: ["Auto", "Same topology", "Skeleton (joints)"]
-            readonly property var ids: ["auto", "topology", "joints"]
+            model: ["Auto", "Skeleton + surface", "Skeleton only", "Surface wrap", "Same topology"]
+            readonly property var ids: ["auto", "joints+surface", "joints", "surface", "topology"]
         }
     }
 

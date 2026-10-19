@@ -8,8 +8,10 @@
 #include "UndoManager.h"
 #include "commands/AddFittedDnaCharacterCommand.h"
 
-#include <QQmlEngine>
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QFileInfo>
+#include <QQmlEngine>
 
 #include <OgreAny.h>
 #include <OgreEntity.h>
@@ -102,8 +104,8 @@ void DnaFitController::refresh()
     else if (!p.dna) m_hint = QStringLiteral("Select the MetaHuman body (the imported .dna) and the character to fit it to.");
     else if (!p.target || p.entities != 2) m_hint = QStringLiteral("Also select the character to fit it to (Ctrl+click) — exactly two entities.");
     else m_hint = p.target->hasSkeleton()
-        ? QStringLiteral("Ready: the body will be fitted to the target's skeleton proportions (joints mode).")
-        : QStringLiteral("Ready: the target has no skeleton, so it must have the same topology and UVs as the body (an edit of it).");
+        ? QStringLiteral("Ready: the body takes the target's pose and proportions from its skeleton, then its shape from its surface (skeleton + surface).")
+        : QStringLiteral("Ready: the target has no skeleton. Same topology/UVs as the body (an edit of it) fits exactly; any other mesh is wrapped onto the body (surface).");
     if (wasCan != m_canFit || wasHas != m_hasDna || wasHint != m_hint) emit changed();
 }
 
@@ -116,9 +118,13 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
         return false;
     }
     QString mode = modeIn;
-    if (mode.isEmpty() || mode == QLatin1String("auto")) mode = p.target->hasSkeleton() ? QStringLiteral("joints") : QStringLiteral("topology");
+    if (mode.isEmpty() || mode == QLatin1String("auto")) mode = p.target->hasSkeleton() ? QStringLiteral("joints+surface") : QStringLiteral("topology");
     const QString src = sourcePathOf(p.dna);
     SentryReporter::addBreadcrumb("ui.action", QStringLiteral("dna fit mode=%1").arg(mode));
+
+    m_status = QStringLiteral("Fitting (%1)… the editor is busy for a few seconds.").arg(mode);
+    emit changed();
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);   // let the status paint before the solver blocks
 
     Dna::DnaCLI::FitOptions o;
     o.mode = mode;
