@@ -102,6 +102,22 @@ struct JointRegisterResult {
 /// neutral world positions to their targets; every mesh position follows it.
 JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnchor>& anchors, bool alignLimbPose = true);
 
+// ---- body parts -----------------------------------------------------------------
+// A surface ICP lets any body vertex match any target triangle, so where limbs are close (legs side by side,
+// an arm against the torso) one limb grabs the other's surface and the legs end up crossed. The skeletons say
+// which part each vertex belongs to: a vertex that follows the left thigh may only match target surface that
+// follows the target's left leg.
+enum BodyGroup { GroupTorso = 0, GroupLeftArm, GroupRightArm, GroupLeftLeg, GroupRightLeg, BodyGroupCount };
+
+/// The limb a MetaHuman joint belongs to, by name and ancestry (a twist/corrective/finger joint belongs to the
+/// limb it hangs from); GroupTorso for everything else.
+int bodyGroupOfJoint(const Rig& rig, int joint);
+
+/// Group of every bone of a TARGET skeleton: bones whose names match the MetaHuman joint table get that joint's
+/// group, every other bone inherits its parent's (a finger or toe bone follows its hand or foot), roots default
+/// to the torso. `parent[i]` is bone i's parent index or -1.
+std::vector<int> targetBoneGroups(const std::vector<QString>& boneNames, const std::vector<int>& parent);
+
 /// Skeleton first, then shape: registerByJoints (facing, limb pose, proportions), then the smooth surface
 /// wrap starting from that. This is what a stylised character needs — the skeleton carries pose and
 /// proportions the surface cannot recover, the surface carries the volume (clothes, hips, belly) the
@@ -109,7 +125,8 @@ JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnch
 /// TARGET frame and `alignedRig` is the rig Fit::fit must start from, exactly as for registerByJoints.
 JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
                                               const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                              bool alignLimbPose = true, int rounds = 8, int detailRounds = 6);
+                                              bool alignLimbPose = true, int rounds = 8, int detailRounds = 6,
+                                              const std::vector<int>* targetVertexGroup = nullptr);
 
 /// `targetV` / `targetF`: the target surface in the rig's axis convention (+Y up),
 /// x,y,z per vertex and triangle indices.

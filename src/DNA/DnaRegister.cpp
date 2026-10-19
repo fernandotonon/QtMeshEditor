@@ -23,6 +23,51 @@ struct Bounds {
 
 }  // namespace
 
+int bodyGroupOfJoint(const Rig& rig, int joint)
+{
+    for (int guard = 0; joint >= 0 && size_t(joint) < rig.joints.size() && guard < 256; ++guard) {
+        const QString n = rig.joints[size_t(joint)].name;
+        const bool left = n.endsWith(QStringLiteral("_l")), right = n.endsWith(QStringLiteral("_r"));
+        if (left || right) {
+            if (n.startsWith(QStringLiteral("thigh")) || n.startsWith(QStringLiteral("calf")) || n.startsWith(QStringLiteral("foot")) ||
+                n.startsWith(QStringLiteral("ball")))
+                return left ? GroupLeftLeg : GroupRightLeg;
+            if (n.startsWith(QStringLiteral("upperarm")) || n.startsWith(QStringLiteral("lowerarm")) || n.startsWith(QStringLiteral("hand")))
+                return left ? GroupLeftArm : GroupRightArm;
+        }
+        joint = rig.joints[size_t(joint)].parent;
+    }
+    return GroupTorso;
+}
+
+std::vector<int> targetBoneGroups(const std::vector<QString>& boneNames, const std::vector<int>& parent)
+{
+    const size_t n = boneNames.size();
+    std::vector<int> group(n, -1);
+    // bones named like a table joint
+    const auto table = defaultJointNameMap();
+    auto groupOfBodyJoint = [](const QString& j) {
+        const bool left = j.endsWith(QStringLiteral("_l")), right = j.endsWith(QStringLiteral("_r"));
+        if (left || right) {
+            if (j.startsWith(QStringLiteral("thigh")) || j.startsWith(QStringLiteral("calf")) || j.startsWith(QStringLiteral("foot"))) return left ? int(GroupLeftLeg) : int(GroupRightLeg);
+            if (j.startsWith(QStringLiteral("upperarm")) || j.startsWith(QStringLiteral("lowerarm")) || j.startsWith(QStringLiteral("hand"))) return left ? int(GroupLeftArm) : int(GroupRightArm);
+        }
+        return int(GroupTorso);
+    };
+    for (size_t b = 0; b < n; ++b)
+        for (const auto& entry : table)
+            for (const QString& cand : entry.second)
+                if (boneNames[b].compare(cand, Qt::CaseInsensitive) == 0) group[b] = groupOfBodyJoint(entry.first);
+    // everything else inherits from its parent chain (fingers/toes/twist bones), roots -> torso
+    for (size_t b = 0; b < n; ++b) {
+        if (group[b] >= 0) continue;
+        int p = parent[b], guard = 0;
+        while (p >= 0 && size_t(p) < n && group[size_t(p)] < 0 && guard++ < 256) p = parent[size_t(p)];
+        group[b] = (p >= 0 && size_t(p) < n && group[size_t(p)] >= 0) ? group[size_t(p)] : int(GroupTorso);
+    }
+    return group;
+}
+
 namespace {
 
 // Smooth coarse-to-fine ICP (see RegisterOptions::Method::Smooth). `X` holds the template positions
@@ -35,7 +80,8 @@ struct IcpAnchor {
 };
 
 bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vector<float>& targetV,
-               const std::vector<int>& targetF, int roundsPerLevel, int detailRounds, QString* err, std::vector<IcpAnchor>* anchors = nullptr)
+               const std::vector<int>& targetF, int roundsPerLevel, int detailRounds, QString* err, std::vector<IcpAnchor>* anchors = nullptr,
+               const std::vector<int>* tmplGroup = nullptr, const std::vector<int>* tgtGroup = nullptr)
 {
     std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
     QuadRemesh::SurfaceLocator loc;
@@ -56,6 +102,35 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
         if (l > 1e-20) for (double& k : n) k /= l;
         tn[t] = n;
     }
+    // Per-body-part locators: a vertex only sees target triangles of its own part (see BodyGroup). The locators
+    // keep pointers to their index vectors, so those live as long as this function.
+    std::vector<std::vector<uint32_t>> groupIdx(BodyGroupCount);
+    std::vector<std::vector<int>> groupTri(BodyGroupCount);      // group-local triangle -> global triangle
+    std::vector<QuadRemesh::SurfaceLocator> groupLoc(BodyGroupCount);
+    if (tmplGroup && tgtGroup && tgtGroup->size() * 3 == targetV.size()) {
+        for (size_t t = 0; t < tn.size(); ++t) {
+            const int g0 = (*tgtGroup)[size_t(targetF[t * 3])], g1 = (*tgtGroup)[size_t(targetF[t * 3 + 1])], g2 = (*tgtGroup)[size_t(targetF[t * 3 + 2])];
+            const int g = (g1 == g2) ? g1 : g0;   // majority of three (two agreeing, else the first)
+            if (g < 0 || g >= BodyGroupCount) continue;
+            for (int k = 0; k < 3; ++k) groupIdx[size_t(g)].push_back(uint32_t(targetF[t * 3 + size_t(k)]));
+            groupTri[size_t(g)].push_back(int(t));
+        }
+        for (int g = 0; g < BodyGroupCount; ++g)
+            if (groupIdx[size_t(g)].size() >= 3) groupLoc[size_t(g)].build(targetV, groupIdx[size_t(g)]);
+    }
+    // Closest target point for template vertex `v` at `p`, restricted to its body part when known.
+    auto closestFor = [&](size_t v, const float* p, int& tri, float bary[3], float q[3]) {
+        if (tmplGroup && v < tmplGroup->size()) {
+            const int g = (*tmplGroup)[v];
+            if (g >= 0 && g < BodyGroupCount && groupLoc[size_t(g)].valid()) {
+                int local;
+                if (!groupLoc[size_t(g)].closest(p, local, bary, q)) return false;
+                tri = groupTri[size_t(g)][size_t(local)];
+                return true;
+            }
+        }
+        return loc.closest(p, tri, bary, q);
+    };
     auto vertexNormals = [&](const std::vector<float>& P) {
         std::vector<std::array<double, 3>> n(nv, {0, 0, 0});
         for (size_t t = 0; t + 2 < tf.size(); t += 3) {
@@ -103,7 +178,7 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
         long pos = 0, neg = 0;
         for (size_t v = 0; v < nv; v += std::max<size_t>(1, nv / 4000)) {
             int tri; float bary[3], q[3];
-            if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+            if (!closestFor(v, &X[v * 3], tri, bary, q)) continue;
             const double d = vn0[v][0] * tn[size_t(tri)][0] + vn0[v][1] * tn[size_t(tri)][1] + vn0[v][2] * tn[size_t(tri)][2];
             if (d > 0.5) ++pos; else if (d < -0.5) ++neg;
         }
@@ -128,7 +203,7 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
             for (size_t v = 0; v < nv; ++v) {
                 if (skipVertex[v]) continue;
                 int tri; float bary[3], q[3];
-                if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+                if (!closestFor(v, &X[v * 3], tri, bary, q)) continue;
                 const auto& n = tn[size_t(tri)];
                 const double ndot = normalSign * (vn[v][0] * n[0] + vn[v][1] * n[1] + vn[v][2] * n[2]);
                 if (ndot < 0.5) continue;       // normals must agree (60 deg): rejects the wrong side of thin parts
@@ -195,7 +270,7 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
             for (size_t v = 0; v < nv; ++v) {
                 if (skipVertex[v]) continue;
                 int tri; float bary[3], q[3];
-                if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+                if (!closestFor(v, &X[v * 3], tri, bary, q)) continue;
                 const auto& n = tn[size_t(tri)];
                 if (normalSign * (vn[v][0] * n[0] + vn[v][1] * n[1] + vn[v][2] * n[2]) < 0.5) continue;
                 D[v] = {double(q[0]) - X[v * 3], double(q[1]) - X[v * 3 + 1], double(q[2]) - X[v * 3 + 2]};
@@ -522,7 +597,8 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
 
 JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
                                               const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                              bool alignLimbPose, int rounds, int detailRounds)
+                                              bool alignLimbPose, int rounds, int detailRounds,
+                                              const std::vector<int>* targetVertexGroup)
 {
     // 1. skeleton: facing, limb pose and proportions (a smooth warp from matched joints)
     JointRegisterResult r = registerByJoints(rig, anchors, alignLimbPose);
@@ -546,12 +622,22 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
     // The matched joints stay pinned to the target's bones through the refinement, so the surface can reshape
     // the body but not lift/shift it away from its skeleton (measured without this: the upper body ended
     // ~45 mm above the officer's bones, mean 40 mm joint drift).
+    // body part of every template vertex (dominant skin joint's limb) so limbs cannot grab each other
+    std::vector<int> tmplGroup(X.size() / 3, GroupTorso);
+    for (size_t mi : imported) {
+        const Mesh& m = r.alignedRig.meshes[mi];
+        for (size_t v = 0; v < m.positions.size() / 3 && v < m.skin.size(); ++v) {
+            uint16_t bj = 0; float bw = -1;
+            for (const SkinInfluence& inf : m.skin[v]) if (inf.weight > bw) { bw = inf.weight; bj = inf.joint; }
+            if (bw >= 0) tmplGroup[offset[mi] + v] = bodyGroupOfJoint(r.alignedRig, int(bj));
+        }
+    }
     std::vector<IcpAnchor> icpAnchors;
     for (const JointAnchor& an : anchors)
         for (size_t j = 0; j < r.alignedRig.joints.size() && j < r.warpedJointPositions.size(); ++j)
             if (r.alignedRig.joints[j].name == an.bodyJoint) { icpAnchors.push_back({r.warpedJointPositions[j], an.target}); break; }
     QString err;
-    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), detailRounds, &err, &icpAnchors)) {
+    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), detailRounds, &err, &icpAnchors, &tmplGroup, targetVertexGroup)) {
         r.ok = false;
         r.error = QStringLiteral("surface refinement failed: %1").arg(err);
         return r;
