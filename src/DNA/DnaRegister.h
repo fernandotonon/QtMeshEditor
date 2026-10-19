@@ -28,6 +28,15 @@ namespace Dna {
 namespace Fit {
 
 struct RegisterOptions {
+    /// Smooth (default): coarse-to-fine ICP whose deformation is a GLOBAL smooth RBF warp that gains
+    /// control points level by level — few degrees of freedom early, so correspondences cannot slide
+    /// along the surface. Nricp: the per-vertex-affine Amberg solver the face rig uses (kept for
+    /// comparison; it lands on the surface but drifts tangentially).
+    enum class Method { Smooth, Nricp };
+    Method method = Method::Smooth;
+    /// Smooth method: ICP rounds per resolution level (7 levels, 24 -> 1500 control points). Measured on a
+    /// re-meshed, edited MetaHuman body: 1 round = 8.7 mm mean joint error, 3 = 7.5, 6 = 6.1, 10 = 5.2.
+    int rounds = 8;
     bool alignHeight = true;          ///< uniform scale by Y extent + match feet / centre before the fit
     std::vector<double> stiffness;    ///< NRICP schedule (empty = the library default)
     /// Optional anchors: body joint name -> position in the TARGET's frame. The vertex

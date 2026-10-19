@@ -156,8 +156,13 @@ Warp buildWarp(const std::vector<V3>& source, const std::vector<V3>& target, con
     // Voxel-subsample: average the points (and displacements) of each occupied cell.
     struct Acc { V3 p{}, d{}; int n = 0; };
     std::map<std::array<long long, 3>, Acc> cells;
-    double cell = diag / std::cbrt(double(std::max(8, opt.maxControlPoints)) * 1.4);
-    for (int attempt = 0; attempt < 40; ++attempt) {
+    // Cell size: the points of a mesh lie on a SURFACE, so the cell count grows with the square of the
+    // resolution, not the cube (a volume-filling guess left the body fit with 74 of 900 allowed control
+    // points). Start from the volumetric guess and steer toward ~85 % of the budget, then make sure the
+    // budget is respected.
+    const int budget = std::max(8, opt.maxControlPoints);
+    double cell = diag / std::cbrt(double(budget) * 1.4);
+    auto fill = [&]() {
         cells.clear();
         for (size_t i = 0; i < source.size(); ++i) {
             const std::array<long long, 3> key{(long long)std::floor((source[i][0] - lo[0]) / cell),
@@ -170,8 +175,17 @@ Warp buildWarp(const std::vector<V3>& source, const std::vector<V3>& target, con
             }
             ++a.n;
         }
-        if (int(cells.size()) <= opt.maxControlPoints) break;
-        cell *= 1.15;
+    };
+    for (int attempt = 0; attempt < 10; ++attempt) {
+        fill();
+        const double count = double(cells.size());
+        if (count >= 0.6 * budget && count <= budget) break;
+        if (count < 0.6 * budget && int(cells.size()) >= int(source.size())) break;   // every point is its own cell already
+        cell *= std::sqrt(count / (0.85 * budget));   // surface: count ~ 1/cell^2
+    }
+    for (int attempt = 0; attempt < 60 && int(cells.size()) > budget; ++attempt) {
+        cell *= 1.1;
+        fill();
     }
     for (const auto& kv : cells) {
         const Acc& a = kv.second;
