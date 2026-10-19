@@ -37,6 +37,7 @@
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "DNA/DnaCLI.h"
 #include "DNA/DnaCorrectiveManager.h"
 #include "DNA/DnaReader.h"
 #include "MotionGraphManager.h"
@@ -802,6 +803,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
         {QStringLiteral("list_constraints"), &MCPServer::toolListConstraints},
         {QStringLiteral("get_dna_correctives"), &MCPServer::toolGetDnaCorrectives},
+        {QStringLiteral("fit_dna_body"), &MCPServer::toolFitDnaBody},
         {QStringLiteral("set_dna_correctives"), &MCPServer::toolSetDnaCorrectives},
         {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
         {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
@@ -895,6 +897,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_lipsync"),
+        QStringLiteral("fit_dna_body"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
@@ -10723,6 +10726,36 @@ QJsonObject MCPServer::toolSetDnaCorrectives(const QJsonObject& args)
                                  .arg(mgr->enabled() ? "ON — corrected deformation" : "OFF — plain skinning", mgr->summary()));
 }
 
+QJsonObject MCPServer::toolFitDnaBody(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "fit_dna_body");
+    const QString dna = args.value("dna_path").toString();
+    const QString target = args.value("target_path").toString();
+    if (dna.isEmpty() || target.isEmpty())
+        return makeErrorResult(QStringLiteral("Error: 'dna_path' (a MetaHuman body .dna) and 'target_path' are required"));
+    if (!QFileInfo::exists(dna)) return makeErrorResult(QStringLiteral("Error: DNA file not found: %1").arg(dna));
+    if (!QFileInfo::exists(target)) return makeErrorResult(QStringLiteral("Error: target not found: %1").arg(target));
+    Dna::DnaCLI::FitOptions o;
+    o.mode = args.value("mode").toString();
+    if (!o.mode.isEmpty() && o.mode != QLatin1String("topology") && o.mode != QLatin1String("joints") && o.mode != QLatin1String("surface"))
+        return makeErrorResult(QStringLiteral("Error: 'mode' must be topology (default), joints or surface"));
+    if (args.contains("poses")) o.poses = args.value("poses").toBool(true);
+    if (args.contains("lods")) o.lods = args.value("lods").toBool(false);
+    if (args.contains("align_limbs")) o.alignLimbs = args.value("align_limbs").toBool(true);
+    o.outputDna = args.value("output_dna").toString();
+    o.outputMesh = args.value("output_mesh").toString();
+    QVariantMap report;
+    QString err;
+    try {
+        if (!Dna::DnaCLI::fitReport(dna, target, o, &report, &err)) return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromStdString(e.getDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromUtf8(e.what())));
+    }
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "add_constraint");
@@ -14680,6 +14713,22 @@ QJsonArray MCPServer::buildToolsList()
                    "Status of the live MetaHuman body correctives: enabled, driver bones, corrective bones evaluated, "
                    "RigLogic and bone-write time per frame, RBF solver/pose counts. Needs a body .dna loaded.",
                    props);
+    }
+    {
+        QJsonObject props;
+        props["dna_path"] = QJsonObject{{"type", "string"}, {"description", "MetaHuman BODY .dna (binary or JSON) to fit."}};
+        props["target_path"] = QJsonObject{{"type", "string"}, {"description", "What to fit it to: an edited mesh with the SAME topology/UVs (default mode), another body .dna, or — with mode joints/surface — a character with its own topology."}};
+        props["mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"topology", "joints", "surface"}}, {"description", "topology (default): same-topology edit, matched by UV. joints: pair the target's skeleton bones with the MetaHuman joints and warp the body onto its proportions (recommended for other characters; faces are matched by name, facing and limb pose are aligned). surface: experimental non-rigid drape, collapses on stylised characters."}};
+        props["poses"] = QJsonObject{{"type", "boolean"}, {"description", "Report reference-pose deformation quality (default true)."}};
+        props["lods"] = QJsonObject{{"type", "boolean"}, {"description", "Report propagation to the lower LODs (default false; not with limb alignment)."}};
+        props["align_limbs"] = QJsonObject{{"type", "boolean"}, {"description", "mode=joints: rotate the limbs onto the target's bone directions first (default true)."}};
+        props["output_dna"] = QJsonObject{{"type", "string"}, {"description", "Write the fitted rig as a new .dna (never the source; read back and RigLogic-checked)."}};
+        props["output_mesh"] = QJsonObject{{"type", "string"}, {"description", "Export the fitted character (glb/fbx/...)."}};
+        appendTool("fit_dna_body",
+                   "Fit a MetaHuman body rig to an edited mesh or to another character: moves the skeleton and mesh onto the "
+                   "target and reports vertex/joint shift, reference-pose stretch and warp residual. OpenRigLogic has no "
+                   "calibration code, so this is an RBF-warp fit; corrective data is NOT recalibrated.",
+                   props, QJsonArray{"dna_path", "target_path"});
     }
     {
         QJsonObject props;
