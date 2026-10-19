@@ -714,6 +714,8 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 struct FitArgs {
     QString path, targetPath, writeDna, out;
     bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
+    Ogre::Entity* targetEntity = nullptr;   ///< fit to this live entity instead of importing targetPath
+    Rig* fittedRigOut = nullptr;            ///< receives the fitted rig (the limb-aligned base when the fit re-posed it)
     bool headless = true;     ///< CLI process (may init Ogre, nothing to clean up) vs inside the editor (MCP)
     double uniformScale = 0.0;
 };
@@ -784,16 +786,18 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         }
         for (const Mesh& m : tr.rig.meshes) target.push_back(m.positions);
     } else {
-        MeshImporterExporter::clearLastImportError();
-        // The target is the entity this import ADDS: inside the editor the scene already holds the
-        // user's meshes, and the traversal order is not the import order.
-        std::set<Ogre::Entity*> entitiesBefore;
-        for (auto* o : Manager::getSingleton()->getEntities())
-            if (o && o->getMovableType() == "Entity") entitiesBefore.insert(static_cast<Ogre::Entity*>(o));
-        MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
-        Ogre::Entity* te = nullptr;
-        for (auto* o : Manager::getSingleton()->getEntities())
-            if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
+        Ogre::Entity* te = a.targetEntity;
+        if (!te) {
+            MeshImporterExporter::clearLastImportError();
+            // The target is the entity this import ADDS: inside the editor the scene already holds the
+            // user's meshes, and the traversal order is not the import order.
+            std::set<Ogre::Entity*> entitiesBefore;
+            for (auto* o : Manager::getSingleton()->getEntities())
+                if (o && o->getMovableType() == "Entity") entitiesBefore.insert(static_cast<Ogre::Entity*>(o));
+            MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
+                for (auto* o : Manager::getSingleton()->getEntities())
+                if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
+        }
         if (!te) {
             const QString why = MeshImporterExporter::lastImportError();
             err(QStringLiteral("Error: could not import the target %1%2\n")
@@ -862,6 +866,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     }
     const Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { err(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
+    if (a.fittedRigOut) *a.fittedRigOut = fr.fitted;
 
     report.clear();
     report.insert("verticesMatched", fr.verticesMatched);
@@ -1039,6 +1044,28 @@ static int runFit(int argc, char* argv[])
         CLIPipeline::writeOutput(t);
     }
     return 0;
+}
+
+bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
+                     QVariantMap* report, QString* error)
+{
+    if (!target) { if (error) *error = QStringLiteral("no target entity"); return false; }
+    FitArgs a;
+    a.path = dnaPath;
+    a.targetEntity = target;
+    a.fittedRigOut = fittedRig;
+    a.poses = options.poses;
+    a.registerJoints = options.mode == QLatin1String("joints");
+    a.doRegister = options.mode == QLatin1String("surface");
+    a.noAlignLimbs = !options.alignLimbs;
+    if (!options.alignLimbs && !a.registerJoints) { if (error) *error = QStringLiteral("align_limbs=false only applies with mode joints"); return false; }
+    a.headless = false;
+    QString msg;
+    QVariantMap local;
+    const int rc = fitCore(a, local, [&](const QString& m) { msg += m; });
+    if (rc != 0) { if (error) *error = msg.trimmed().isEmpty() ? QStringLiteral("the fit failed") : msg.trimmed(); return false; }
+    if (report) *report = local;
+    return true;
 }
 
 bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptions& options, QVariantMap* report, QString* error)

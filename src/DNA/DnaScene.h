@@ -45,6 +45,9 @@ Ogre::SceneNode* importRigToScene(const Rig& rig, const QString& baseName,
                                   ImportReport* report = nullptr, QString* error = nullptr,
                                   std::shared_ptr<RigEvaluator> evaluator = nullptr);
 
+/// UserObjectBindings key (a std::string absolute path) set on every entity the DNA importer creates.
+static const char* const kSourcePathKey = "qtmesh.dna.source";
+
 /// What the importer builds on top of the neutral character.
 struct ImportOptions {
     /// A face DNA (it exposes expression controls) gets its rig baked into morph
