@@ -675,7 +675,7 @@ Rectangle {
                 title: "Fit DNA Body"
                 sectionVisible: root.modeToolSectionVisible(EditorModeController.ObjectMode, true)
                                 && DnaFitController.hasSelection
-                expanded: true
+                expanded: false
 
                 Component.onCompleted: content = dnaFitComponent
             }
