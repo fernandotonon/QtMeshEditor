@@ -148,35 +148,49 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
 {
     JointRegisterResult r;
     std::vector<JointAnchor> anchors = anchorsIn;
-    // Left/right can be mirrored between two skeletons (the character's "left" is on +X in one
-    // convention and -X in the other). Pairing by NAME then crosses the body; a symmetric mesh
-    // hides it in a position-only warp, but any rotation/direction step sees a ~180 degree twist.
-    // Decide by geometry: if the target's left-minus-right vector opposes the rig's, swap sides.
+    Rig rig = rigIn;
+    r.alignedRig = rigIn;
+    // The two characters may face different ways (a MetaHuman faces -Z; a glTF/Mixamo asset
+    // usually +Z). Left/right pair correctly BY NAME in both, but the body must be turned to the
+    // target's facing first or every direction step sees a ~180 degree twist. Facing is derived
+    // from the skeleton: left-minus-right is the lateral axis and facing = lateral x up (Y).
     {
+        auto facingOf = [](const std::vector<std::pair<std::array<double, 3>, std::array<double, 3>>>& pairs) {
+            std::array<double, 3> l{0, 0, 0};
+            for (const auto& p : pairs) for (int k = 0; k < 3; ++k) l[size_t(k)] += p.first[size_t(k)] - p.second[size_t(k)];
+            return std::array<double, 2>{-l[2], l[0]};   // (x, z) of lateral x Y
+        };
         const std::vector<std::array<double, 3>> jp0 = jointWorldPositions(rigIn);
         auto rigPos = [&](const QString& n, std::array<double, 3>& p) { for (size_t j = 0; j < rigIn.joints.size(); ++j) if (rigIn.joints[j].name == n) { p = jp0[j]; return true; } return false; };
         auto tgtPos = [&](const QString& n, std::array<double, 3>& p) { for (const auto& a : anchors) if (a.bodyJoint == n) { p = a.target; return true; } return false; };
-        double dotSum = 0;
+        std::vector<std::pair<std::array<double, 3>, std::array<double, 3>>> sp, tp;
         for (const char* base : {"upperarm", "hand", "thigh", "foot"}) {
             std::array<double, 3> sl, sr, tl, tr;
             if (!rigPos(QString::fromLatin1(base) + "_l", sl) || !rigPos(QString::fromLatin1(base) + "_r", sr) ||
                 !tgtPos(QString::fromLatin1(base) + "_l", tl) || !tgtPos(QString::fromLatin1(base) + "_r", tr)) continue;
-            for (int k = 0; k < 3; ++k) dotSum += (sl[size_t(k)] - sr[size_t(k)]) * (tl[size_t(k)] - tr[size_t(k)]);
+            sp.push_back({sl, sr});
+            tp.push_back({tl, tr});
         }
-        if (dotSum < 0) {
-            for (JointAnchor& a : anchors) {
-                if (a.bodyJoint.endsWith("_l")) a.bodyJoint.replace(a.bodyJoint.size() - 2, 2, "_r");
-                else if (a.bodyJoint.endsWith("_r")) a.bodyJoint.replace(a.bodyJoint.size() - 2, 2, "_l");
+        if (!sp.empty()) {
+            const auto fs = facingOf(sp), ft = facingOf(tp);
+            if (std::hypot(fs[0], fs[1]) > 1e-9 && std::hypot(ft[0], ft[1]) > 1e-9) {
+                // yaw about +Y taking fs onto ft: R(theta) maps (x,z) -> (x c + z s, -x s + z c)
+                const double theta = std::atan2(fs[0] * ft[1] - fs[1] * ft[0] , fs[0] * ft[0] + fs[1] * ft[1]);
+                const double deg = std::abs(theta) * 180.0 / 3.14159265358979;
+                if (deg > 30.0) {
+                    yawRig(rig, -theta);
+                    r.yawDegrees = -theta * 180.0 / 3.14159265358979;
+                    r.alignedRig = rig;
+                    r.warnings << QStringLiteral("the target faces %1 degrees away from the rig; the body was turned about Y to face it")
+                                      .arg(std::abs(r.yawDegrees), 0, 'f', 0);
+                }
             }
-            r.warnings << QStringLiteral("the target's left/right are mirrored relative to the rig (its 'left' bones sit on the rig's right); sides were paired by position, not by name");
         }
     }
-    Rig rig = rigIn;
-    r.alignedRig = rigIn;
     if (alignLimbPose) {
         std::vector<std::pair<QString, std::array<double, 3>>> tj;
         for (const JointAnchor& a : anchors) tj.push_back({a.bodyJoint, a.target});
-        LimbAlignment la = alignLimbs(rigIn, tj);
+        LimbAlignment la = alignLimbs(rig, tj);
         r.limbChainsAligned = la.chainsAligned;
         r.limbAngles = la.applied;
         if (la.chainsAligned > 0) { rig = la.rig; r.alignedRig = la.rig; }

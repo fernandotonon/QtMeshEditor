@@ -71,6 +71,8 @@ struct RigEvaluator::Impl {
     QString rotationSequence = QStringLiteral("xyz");
     bool degrees = true;
     int rbfSolvers = 0, rbfPoses = 0;
+    std::vector<char> isRoot;             // joints whose parent is themselves
+    double rootYaw = 0.0;                 // radians about +Y: the reader's default facing turn
 };
 
 RigEvaluator::RigEvaluator() : d(new Impl) {}
@@ -140,6 +142,12 @@ std::unique_ptr<RigEvaluator> RigEvaluator::create(const QString& path, const Re
     }
     const auto neutral = d.logic->getNeutralJointValues();
     d.neutral.assign(neutral.begin(), neutral.end());
+    // The reader turns the rig 180 degrees about Y by default (yawRig on the ROOT joints only);
+    // RigLogic's outputs are in the file's frame, so the roots must be turned the same way here.
+    d.rootYaw = (o.convertCoordinateSystem && !o.facePlusZ) ? 3.14159265358979323846 : 0.0;
+    d.isRoot.assign(d.reader->getJointCount(), 0);
+    for (std::uint16_t j = 0; j < d.reader->getJointCount(); ++j)
+        d.isRoot[j] = d.reader->getJointParentIndex(j) == j ? 1 : 0;
     d.degrees = d.reader->getRotationUnit() == dna::RotationUnit::degrees;
     {
         const auto seq = d.reader->getRotationSequence();
@@ -229,6 +237,16 @@ JointPose RigEvaluator::jointPose(int joint) const
     p.translation = {v(0) * d->unitScale, v(1) * d->unitScale, v(2) * d->unitScale};
     p.orientation = eulerToQuaternion({v(3), v(4), v(5)}, d->rotationSequence, d->degrees);
     p.scale = {v(6), v(7), v(8)};
+    if (d->rootYaw != 0.0 && size_t(joint) < d->isRoot.size() && d->isRoot[size_t(joint)]) {
+        const double c = std::cos(d->rootYaw), sn = std::sin(d->rootYaw);
+        const double x = p.translation[0], z = p.translation[2];
+        p.translation[0] = x * c + z * sn;
+        p.translation[2] = -x * sn + z * c;
+        const std::array<double, 4> qy{std::cos(d->rootYaw / 2), 0, std::sin(d->rootYaw / 2), 0};
+        const auto q = p.orientation;
+        p.orientation = {qy[0] * q[0] - qy[1] * q[1] - qy[2] * q[2] - qy[3] * q[3], qy[0] * q[1] + qy[1] * q[0] + qy[2] * q[3] - qy[3] * q[2],
+                         qy[0] * q[2] - qy[1] * q[3] + qy[2] * q[0] + qy[3] * q[1], qy[0] * q[3] + qy[1] * q[2] - qy[2] * q[1] + qy[3] * q[0]};
+    }
     return p;
 }
 

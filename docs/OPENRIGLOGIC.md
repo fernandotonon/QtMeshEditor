@@ -46,7 +46,7 @@ A build without the flag compiles; every entry point reports
 | Topic | Choice |
 |---|---|
 | Units | cm → metres by default (`--keep-units` / `Units::Preserve`); glTF is metre-based and the viewport grid expects ~1-unit characters |
-| Coordinates | converted by the library to right-handed, Y up, character facing +Z (`x=left y=up z=front` in DNA naming — a 180° turn about Y from MetaHuman's authored `x=right y=up z=back`, which faces −Z) |
+| Coordinates | converted by the library to right-handed, Y up, character facing **−Z** by default (the editor's viewport convention). The file itself is `x=left y=up z=front` (faces +Z, left on +X); the library is asked for that identity transform and `yawRig` turns the root joints + meshes 180° about Y afterwards, so RigLogic's joint-local outputs stay valid. `ReadOptions::facePlusZ` / `QTMESH_DNA_FACE_PLUS_Z=1` keep +Z (glTF/Mixamo) |
 | Euler → quaternion | Maya rotate order: first letter applied first (`xyz` ⇒ X, then Y, then Z; column-vector product Rz·Ry·Rx) — equal to OpenRigLogic's row-vector `Rx*Ry*Rz`. The first cut multiplied the other way round and produced a scrambled skeleton |
 | Neutral joint space | **PARENT-RELATIVE** (verified on Epic's real DNA; `NeutralSpace::World` is only for producers that write world transforms). The root joint carries a −90° X orientation that turns the data's Z-up joint axes into Y-up |
 | UVs | V flipped (DNA bottom-left → Ogre/glTF top-left) |
@@ -57,7 +57,7 @@ A build without the flag compiles; every entry point reports
 ## Verified on Epic's own archetype DNA (UE 5.7 `SKM_Body.dna` / `SKM_Face.dna`)
 
 Not redistributed — read from a local Unreal install. Both import; the head sits directly
-above the body in the shared space, the character faces +Z after the coordinate conversion,
+above the body in the shared space, the character faces −Z after the import turn (+Z with `facePlusZ`),
 and the skeleton agrees with the skin: the median vertex lies 3.9 cm (body) / 1.0 cm (face)
 from its dominant joint in world space. Findings:
 

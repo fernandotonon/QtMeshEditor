@@ -56,7 +56,12 @@ struct ReadOptions {
     bool loadGeometry = true;            ///< vertices, faces, skin weights, blend-shape targets
     bool loadBehavior = false;           ///< count rig-logic data (controls, PSD, RBF, …) — info/Phase 2
     Units units = Units::Meters;         ///< cm -> m for the MetaHuman default
-    bool convertCoordinateSystem = true; ///< library-side transform to right-handed, Y-up, character facing +Z
+    bool convertCoordinateSystem = true; ///< library-side transform to right-handed, Y-up
+    /// Facing after the conversion. Default (false): the character faces -Z, a MetaHuman's authored
+    /// orientation and what this editor's default viewport and Ogre-style assets expect (the character
+    /// looks AT the default camera). true: face +Z (glTF/Mixamo convention). The environment variable
+    /// QTMESH_DNA_FACE_PLUS_Z=1 sets the default for every read, including the GUI/MCP import.
+    bool facePlusZ = qEnvironmentVariableIntValue("QTMESH_DNA_FACE_PLUS_Z") != 0;
     NeutralSpace neutralSpace = NeutralSpace::ParentRelative;
     bool flipV = true;                   ///< DNA UVs are bottom-left origin; Ogre/glTF are top-left
 };
@@ -143,6 +148,7 @@ struct Rig {
     int lod = 0;
     bool flipV = true;                     ///< expand() should flip V (see ReadOptions::flipV)
     std::array<double, 3> unitScale{1, 1, 1};  ///< applied to translations/positions (informational)
+    bool facingTurned = false;             ///< the rig was turned 180 degrees about Y to face -Z (ReadOptions::facePlusZ = false)
     bool coordinateSystemConverted = false;
     QStringList warnings;                  ///< non-fatal gaps (dropped LOD data, unnamed meshes, …)
 };
@@ -177,6 +183,12 @@ std::array<double, 4> eulerToQuaternion(const std::array<double, 3>& angles,
 /// topological order, so any parent ordering is accepted. Returns false on a
 /// hierarchy cycle.
 bool worldToLocal(std::vector<Joint>& joints);
+
+/// Turn the whole rig about the world +Y axis through the origin by `radians` (right-handed:
+/// x' = x cos + z sin, z' = -x sin + z cos). Root joints, mesh positions, normals and blend-shape
+/// deltas rotate; everything else follows the hierarchy (joint-local transforms, skin weights and
+/// RigLogic's local outputs are unaffected).
+void yawRig(Rig& rig, double radians);
 
 /// Flat, GPU-ready expansion of a Mesh: one vertex per layout entry.
 struct ExpandedMesh {

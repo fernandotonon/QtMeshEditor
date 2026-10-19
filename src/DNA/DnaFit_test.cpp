@@ -680,29 +680,54 @@ TEST(DnaAlignLimbs, ArmChainRotatesOntoTheTargetDirectionsThroughAParentWithAnOr
     EXPECT_NEAR(dist(P0, 0, 7), dist(P1, 0, 7), 1e-5);   // rigid: pairwise distances preserved
 }
 
-TEST(DnaRegister, MirroredLeftRightIsPairedByPositionNotByName)
+TEST(DnaRegister, ATargetFacingTheOtherWayTurnsTheBodyInsteadOfCrossingSides)
 {
-    // The target's "left" bones sit on the rig's RIGHT. Pairing by name would cross the body
-    // (hidden by symmetry in a position warp, a ~180 degree twist for any direction step).
+    // The target is the rig turned 180 degrees about Y (it faces the other way, so its LEFT
+    // bones sit at -X): pairing by name stays right, but the body must be turned first.
     std::vector<std::array<double, 3>> w;
     const Rig rig = stickRig(w);
     std::vector<JointAnchor> anchors;
-    for (size_t i = 0; i < w.size(); ++i) {
-        QString n = rig.joints[i].name;
-        // mirror X AND swap the side suffix: the target calls the +X side "right"
-        if (n.endsWith("_l")) n.replace(n.size() - 2, 2, "_r"); else if (n.endsWith("_r")) n.replace(n.size() - 2, 2, "_l");
-        anchors.push_back({n, {w[i][0], w[i][1], w[i][2]}});   // positions are the rig's own
-    }
-    // anchors[i] names the OPPOSITE side of the joint at that position -> sides are mirrored
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {-w[i][0], w[i][1], -w[i][2]}});
     const JointRegisterResult r = registerByJoints(rig, anchors, /*alignLimbPose=*/false);
     ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_NEAR(std::abs(r.yawDegrees), 180.0, 1.0);
     bool warned = false;
-    for (const QString& m : r.warnings) if (m.contains("mirrored")) warned = true;
+    for (const QString& m : r.warnings) if (m.contains("turned about Y")) warned = true;
     EXPECT_TRUE(warned);
-    // pairing by position makes the identity target a (near) no-op: nothing moves
-    double maxMove = 0;
-    for (size_t i = 0; i < rig.meshes[0].positions.size(); ++i) maxMove = std::max(maxMove, double(std::abs(r.positions[0][i] - rig.meshes[0].positions[i])));
-    EXPECT_LT(maxMove, 0.05);
+    // the registered body is the source turned 180 degrees: (x, y, z) -> (-x, y, -z)
+    double maxErr = 0;
+    const auto& P0 = rig.meshes[0].positions; const auto& P1 = r.positions[0];
+    for (size_t i = 0; i + 2 < P0.size(); i += 3)
+        maxErr = std::max({maxErr, double(std::abs(P1[i] + P0[i])), double(std::abs(P1[i + 2] + P0[i + 2]))});
+    EXPECT_LT(maxErr, 0.05);
+    // and the aligned rig faces the same way: its left upper arm is now on -X
+    const auto jp = jointWorldPositions(r.alignedRig);
+    size_t ul = 0; for (size_t j = 0; j < rig.joints.size(); ++j) if (rig.joints[j].name == "upperarm_l") ul = j;
+    EXPECT_LT(jp[ul][0], 0.0);
+}
+
+TEST(DnaRegister, AlreadyFacingTheSameWayLeavesTheBodyAlone)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {w[i][0] * 1.2, w[i][1] * 1.2, w[i][2] * 1.2}});
+    const JointRegisterResult r = registerByJoints(rig, anchors, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.yawDegrees, 0.0);
+}
+
+TEST(DnaFitYaw, TurnsRootsMeshesAndNormalsAndIsInvertible)
+{
+    Rig rig = tubeRig();
+    const Rig before = rig;
+    yawRig(rig, 3.14159265358979);
+    EXPECT_NEAR(rig.meshes[0].positions[0], -before.meshes[0].positions[0], 1e-5f);
+    EXPECT_NEAR(rig.meshes[0].positions[1], before.meshes[0].positions[1], 1e-6f);   // height untouched
+    EXPECT_NEAR(rig.meshes[0].positions[2], -before.meshes[0].positions[2], 1e-5f);
+    yawRig(rig, -3.14159265358979);
+    for (size_t i = 0; i < before.meshes[0].positions.size(); ++i)
+        EXPECT_NEAR(rig.meshes[0].positions[i], before.meshes[0].positions[i], 1e-5f);
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

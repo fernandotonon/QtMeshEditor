@@ -25,12 +25,13 @@ inline dna::Configuration makeConfig(const ReadOptions& opt)
     cfg.layer = layer;
     cfg.unknownLayerPolicy = dna::UnknownLayerPolicy::Ignore;
     if (opt.convertCoordinateSystem) {
-        // Target: right-handed, Y up, character facing +Z (the glTF / Mixamo
-        // convention the turntable and exporters expect). DNA names the
-        // into-screen direction "front", and a MetaHuman faces "front" in its
-        // authored x=right,y=up,z=back system — i.e. toward -Z — so the target
-        // is x=left,y=up,z=front: a proper 180-degree turn about Y, still
-        // right-handed (x=right,y=up,z=front would be a mirror).
+        // Target: right-handed, Y up. The library is asked for the file's own system
+        // (x=left,y=up,z=front: a MetaHuman faces +Z there, left on +X) — an identity
+        // transform. The default FACING (-Z, what this editor's viewport and Ogre-style
+        // assets expect) is applied afterwards by yawRig on the root joints and meshes:
+        // RigLogic's outputs are joint-LOCAL deltas in the file's frame, so a library-side
+        // axis change would leave them inconsistent with the converted skeleton, whereas a
+        // root yaw leaves every non-root local transform untouched.
         cfg.coordinateSystemTransformPolicy = dna::CoordinateSystemTransformPolicy::Transform;
         cfg.coordinateSystem = {tdm::axis_dir::left, tdm::axis_dir::up, tdm::axis_dir::front};
         cfg.rotationSequence = dna::RotationSequence::xyz;

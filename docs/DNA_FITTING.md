@@ -165,11 +165,18 @@ legs 8 deg / 1-2 deg; the render shows a clean T-pose (no drooping arms) and ref
 drops to <= 0.07 (from <= 0.38 without it). `--lods` and `--write-dna` are refused with it because the
 written DNA keeps the original neutral orientations — use `--no-align-limbs` for those.
 
-**Mirrored left/right (found by this alignment).** The officer's "Left" bones sit on the rig's **right**
-(+X vs -X). Pairing by name crossed the body; the position-only warp hid it because a body is nearly
-symmetric, and the first alignment attempt exposed it as a 103 deg twist (a render of tangled legs and one
-missing arm). `registerByJoints` now compares the left-minus-right vectors of both skeletons and, if they
-oppose, pairs sides by position and says so in the warnings.
+**Facing (found by this alignment).** A first attempt showed the officer's "Left" bones on the rig's
+right and was mis-diagnosed as mirrored naming. It was a 180 deg difference in FACING: the importer
+turned MetaHumans to face +Z, while the editor's default viewport and the officer (a pipeline asset)
+face -Z. Two fixes came out of it: (1) the DNA importer now faces **-Z by default** — the file itself
+is `x=left y=up z=front`, i.e. faces +Z with left on +X, so the library is asked for an identity
+transform and `yawRig` turns the roots/meshes 180 deg afterwards (`ReadOptions::facePlusZ` or
+`QTMESH_DNA_FACE_PLUS_Z=1` keeps the glTF/Mixamo +Z convention). RigLogic's outputs are joint-LOCAL
+deltas in the file's frame, so a library-side axis change would have left them inconsistent with the
+converted skeleton; a root yaw does not touch any non-root local transform, and `RigEvaluator` applies
+the same yaw to root poses. (2) `registerByJoints` derives each skeleton's facing from its
+left-minus-right vector and turns the body about Y when they differ by more than 30 deg (reported in
+the warnings), instead of the earlier side swap, which was a reflection and not a rotation.
 
 What it still is **not**: the result is the *MetaHuman body with the officer's skeleton
 proportions*, not a body shaped like the officer's clothes or head (the body DNA has no head, and

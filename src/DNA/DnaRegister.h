@@ -77,6 +77,7 @@ struct JointRegisterResult {
     QStringList warnings;
     std::vector<std::vector<float>> positions;   ///< per rig mesh, per POSITION, warped onto the target proportions
     Rig alignedRig;                              ///< the rig after limb pose alignment (== input when none ran) — pass THIS to Fit::fit
+    double yawDegrees = 0;                       ///< turn applied so the body faces the target's way (0 = none)
     int limbChainsAligned = 0;
     QStringList limbAngles;                      ///< rotation applied per chain
     int anchorsUsed = 0;

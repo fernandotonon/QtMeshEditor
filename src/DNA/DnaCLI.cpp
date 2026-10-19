@@ -692,6 +692,7 @@ static int runFit(int argc, char* argv[])
     if (!src.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
 
     // ---- the target, as one position array per rig mesh ----
+    bool rigChanged = false;
     Rig baseRig = src.rig;   // replaced by the limb-aligned rig when --register-joints re-poses it
     std::vector<std::vector<float>> target;
     double seamMm = 0, matchedFraction = 1.0;
@@ -738,7 +739,9 @@ static int runFit(int argc, char* argv[])
             const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
             if (!jr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
             target = jr.positions;
-            if (jr.limbChainsAligned > 0) baseRig = jr.alignedRig;
+            baseRig = jr.alignedRig;
+            rigChanged = jr.limbChainsAligned > 0 || jr.yawDegrees != 0.0;
+            registration.insert("yawDegrees", jr.yawDegrees);
             registration.insert("limbChainsAligned", jr.limbChainsAligned);
             registration.insert("limbAngles", jr.limbAngles);
             registration.insert("mode", "joints");
@@ -772,10 +775,9 @@ static int runFit(int argc, char* argv[])
         }
     }
 
-    const bool aligned = registration.value("limbChainsAligned").toInt() > 0;
-    if (aligned && (lods || !writeDna.isEmpty())) {
+    if (rigChanged && (lods || !writeDna.isEmpty())) {
         CLIPipeline::writeCliError(QStringLiteral("Error: --lods and --write-dna are not supported together with limb pose alignment "
-                                                  "(the DNA keeps the original neutral orientations); add --no-align-limbs\n"));
+                                                  "(the DNA keeps the original neutral orientations and facing); add --no-align-limbs and use a target that already faces the same way\n"));
         return 2;
     }
     const Fit::Result fr = Fit::fit(baseRig, target);

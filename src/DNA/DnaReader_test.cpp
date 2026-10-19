@@ -252,14 +252,23 @@ TEST(DnaReader, BehaviourInventoryOnlyWhenRequested)
 
 TEST(DnaReader, CoordinateConversionKeepsYUpCharacterUpright)
 {
-    // Source is x=right y=up z=back (a MetaHuman faces -Z); the target faces +Z,
-    // a 180-degree turn about Y: X flips, height is untouched.
+    // Source is x=right y=up z=back (a MetaHuman faces -Z). The default keeps that orientation
+    // (what the editor's viewport expects); only the units change.
     const ReadResult r = readFromBuffer(makeSyntheticDna());
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     EXPECT_TRUE(r.rig.coordinateSystemConverted);
     EXPECT_NEAR(r.rig.meshes[0].positions[7], 1.5f, 1e-5f);
-    EXPECT_NEAR(r.rig.meshes[0].positions[0], 0.1f, 1e-5f);  // was -10 cm
-    EXPECT_NEAR(r.rig.meshes[0].positions[1 * 3], -0.1f, 1e-5f);
+    EXPECT_NEAR(r.rig.meshes[0].positions[0], -0.1f, 1e-5f);  // -10 cm, unflipped
+    EXPECT_NEAR(r.rig.meshes[0].positions[1 * 3], 0.1f, 1e-5f);
+
+    // facePlusZ asks for the glTF/Mixamo convention: a 180-degree turn about Y (X and Z flip).
+    ReadOptions plus;
+    plus.facePlusZ = true;
+    const ReadResult p = readFromBuffer(makeSyntheticDna(), plus);
+    ASSERT_TRUE(p.ok) << p.error.toStdString();
+    EXPECT_NEAR(p.rig.meshes[0].positions[7], 1.5f, 1e-5f);                       // height untouched
+    EXPECT_NEAR(p.rig.meshes[0].positions[0], 0.1f, 1e-5f);                        // X flipped
+    EXPECT_NEAR(p.rig.meshes[0].positions[2], -r.rig.meshes[0].positions[2], 1e-5f);  // Z flipped
 }
 
 TEST(DnaReader, InvalidLodIsRejectedWithRange)

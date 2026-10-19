@@ -353,11 +353,11 @@ TEST(DnaFaceBakeReal, LeftAndRightShapesAreMirroredAcrossTheFace)
         const Peak p = peakOf(*s);
         return face().rig.meshes[p.mesh].positions[size_t(p.vertex) * 3];
     };
-    // The character's left is +X (it faces +Z, Y up).
-    EXPECT_GT(peakX("mouthSmileLeft"), 0.0f);
-    EXPECT_LT(peakX("mouthSmileRight"), 0.0f);
-    EXPECT_GT(peakX("eyeBlinkLeft"), 0.0f);
-    EXPECT_LT(peakX("eyeBlinkRight"), 0.0f);
+    // The character faces -Z (Y up), so its left is -X.
+    EXPECT_LT(peakX("mouthSmileLeft"), 0.0f);
+    EXPECT_GT(peakX("mouthSmileRight"), 0.0f);
+    EXPECT_LT(peakX("eyeBlinkLeft"), 0.0f);
+    EXPECT_GT(peakX("eyeBlinkRight"), 0.0f);
     const auto* l = find(face().bake, "mouthSmileLeft");
     const auto* r = find(face().bake, "mouthSmileRight");
     ASSERT_TRUE(l && r);
