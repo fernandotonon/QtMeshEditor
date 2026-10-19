@@ -188,7 +188,7 @@ bool Set::fromJson(const QJsonObject& o, Set* out, QString* error)
             sm.rotations.push_back(q);
         }
         for (const auto& vv : so.value(QStringLiteral("vertices")).toArray()) {
-            double d; if (!number(vv, &d) || d < 0) return fail(QStringLiteral("a vertex index is invalid"));
+            double d; if (!number(vv, &d) || d < 0 || d > 4294967295.0 || d != std::floor(d)) return fail(QStringLiteral("a vertex index must be a whole number in 0..4294967295"));
             sm.vertices.push_back(uint32_t(d));
         }
         for (const auto& dv : so.value(QStringLiteral("deltas")).toArray()) {

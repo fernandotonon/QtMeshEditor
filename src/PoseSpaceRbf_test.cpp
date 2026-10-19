@@ -2,6 +2,7 @@
 
 #include "PoseSpaceRbf.h"
 
+#include <QJsonArray>
 #include <cmath>
 
 using namespace PoseSpace;
@@ -108,4 +109,28 @@ TEST(PoseSpaceRbf, JsonRoundTripKeepsTheBehaviour)
     QJsonObject bad = s.toJson();
     bad.insert(QStringLiteral("schema"), QStringLiteral("nope"));
     EXPECT_FALSE(Set::fromJson(bad, &back, &err));
+}
+
+TEST(PoseSpaceRbf, JsonRejectsFractionalOrOutOfRangeVertexIndices)
+{
+    Set s;
+    s.drivers = {QStringLiteral("a")};
+    Sample sm;
+    sm.rotations = {aboutZ(30)};
+    sm.vertices = {1};
+    sm.deltas = {0.f, 0.f, 0.f};
+    s.samples.push_back(sm);
+    ASSERT_TRUE(s.solve());
+    for (double bad : {1.5, 5e9, -1.0}) {
+        QJsonObject o = s.toJson();
+        QJsonArray samples = o.value(QStringLiteral("samples")).toArray();
+        QJsonObject so = samples[0].toObject();
+        so.insert(QStringLiteral("vertices"), QJsonArray{bad});
+        samples[0] = so;
+        o.insert(QStringLiteral("samples"), samples);
+        Set back;
+        QString err;
+        EXPECT_FALSE(Set::fromJson(o, &back, &err)) << bad;
+        EXPECT_FALSE(err.isEmpty());
+    }
 }

@@ -237,12 +237,14 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseSpaceRbf.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaReader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRigLogic.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaArkitMap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFaceBake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaPsdBake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFit.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRegister.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFitWrite.cpp
