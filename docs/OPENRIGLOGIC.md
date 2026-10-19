@@ -1,7 +1,6 @@
 # MetaHuman DNA / OpenRigLogic (epic #1095) — import + body correctives
 
-Status: **Phase 1 (DNA import), Phase 2 (body correctives) and Phase 3 (face → ARKit morph targets) implemented.**
-Phase 4 is tracked as a child issue; this document records what was verified
+Status: **Phases 1–3 implemented; Phase 4 (fitting) investigated with a working prototype — see `DNA_FITTING.md`.** this document records what was verified
 and the gaps that shape them.
 
 ## What shipped
@@ -94,7 +93,7 @@ from its dominant joint in world space. Findings:
 
 ## Phases still open
 
-4. Body mesh fitting and generic RBF correctives.
+4. Body mesh fitting: prototype done (`DNA_FITTING.md`); in-editor preview/undo and corrective recalibration remain.
 Follow-up (separate issue): image-based body prediction.
 
 
