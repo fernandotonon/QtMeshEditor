@@ -121,9 +121,11 @@ fidelity on edited bodies matters.
   written unless `-o` / `--write-dna` is given.
 * **Commit** is non-destructive: the fitted result goes to a *new* glb / DNA and the
   source is never overwritten (the writer refuses `out == source`).
-* **Not built:** an in-editor preview with an undo step. Moving a live entity's bind
-  pose means rebuilding its skinned mesh (the 256-bone and pose-buffer constraints
-  from Phases 2–3 apply), so it was left for a follow-up rather than faked.
+* **In the editor:** Object mode -> Inspector -> "Fit DNA Body" (select the imported body and the target
+  character). The report is the preview; the commit adds the fitted body as a NEW node next to the original and
+  Ctrl+Z removes it. It is deliberately not an in-place edit: moving a live entity's bind pose means rebuilding its
+  skinned mesh (the 256-bone and pose-buffer constraints from Phases 2-3 apply), whereas adding a node is trivially
+  reversible. The fit runs on the main thread (~5 s on the body).
 
 ## 8. Generic RBF corrective authoring (exploration)
 
@@ -183,10 +185,74 @@ proportions*, not a body shaped like the officer's clothes or head (the body DNA
 the warp is smooth, so hands/feet detail does not follow). The surface route would
 need the same pre-pose plus landmarks before it could be trusted.
 
+## 9b. The wrapping step — ground-truth test on a re-meshed MetaHuman
+
+Poly Hammer's "DNA Auto-Fitting" calibrates a DNA from a **wrapped mesh** (one conformed to the DNA's
+topology and UV layout) — which is what our same-topology mode already consumes. What was missing is
+producing that wrap from an arbitrary surface. `qtmesh dna fit --register` (MCP/GUI mode "surface") now does:
+a height/feet pre-align, then a **coarse-to-fine ICP whose deformation is a global smooth RBF warp**
+(`registerToSurface`, 7 levels from 24 to 1500 control points, `rounds` ICP rounds per level, closest points
+gated by normal agreement and an adaptive distance gate; the windings of the two meshes may disagree and are
+detected from the first correspondences). The per-vertex-affine NRICP of the face rig is kept as
+`--register-method nricp`.
+
+**Why not NRICP:** it lands on the surface (0.025 % residual) but slides vertices along it — against a
+known edit its vertices were 53 mm from where the edit put them, WORSE than doing nothing (41 mm). A surface
+residual says nothing about correspondence; the test below measures the thing that matters.
+
+**The test** (`--reference <same-topology edited mesh>` reports it): take the MetaHuman body, apply a known
+smooth edit with a lattice (wider hips/torso, bulged belly, 5 % taller), RE-MESH the edited body with
+QuadriFlow (new topology, new UVs), wrap the original body onto the re-meshed surface, and compare every
+original vertex with where the edit put it, and every joint with the joint the exact same-topology fit gives.
+
+| Re-mesh | Vertex error mean / p95 / max (mm) | Joint error mean / max (mm) | Unfitted: vertices / joints (mean mm) |
+|---|---|---|---|
+| NRICP, 9k faces | 53.5 / 136 / 188 | — | 41.4 / 51.0 |
+| smooth wrap, 9k faces | 3.5 / 11.6 / 15.6 | 5.1 / 13.8 | 41.4 / 51.0 |
+| smooth wrap, 30k faces | 2.1 / 5.9 / 11.5 | 2.5 / 6.2 | 41.4 / 51.0 |
+
+The worst regions are the fingertips (the re-mesh blobs them), not the body. More ICP rounds help with
+diminishing returns (joint mean error at 1 / 3 / 6 / 10 rounds: 8.7 / 7.5 / 6.1 / 5.2 mm); the default is 8
+(~12 s on the body). The unit tests pin the same property on a synthetic tube re-meshed with a different
+layout (`DnaRegister.SmoothWrapRecoversAKnownEditOnAReMeshedTarget`).
+
+**A bug found on the way:** `buildWarp` subsampled control points assuming a volume-filling cloud, so on a
+surface mesh it used 74 of 900 allowed centres (the original Phase 4 fit!). It now steers toward the budget
+(~85 %); the same-topology body fit uses 657 centres and the warp residual drops from the old 3.5 mm.
+
+**Body-part restriction (found on Mixamo's Rumba model).** With a plain closest-point ICP the legs came out
+CROSSED: where the target's legs are close, each body leg grabbed the other's surface. A skeleton-aware fix:
+every body vertex gets the limb of its dominant skin joint (`bodyGroupOfJoint`: torso / left-right arm /
+left-right leg, found through names and ancestry, so twist and finger joints follow their limb) and every
+target vertex the limb of its dominant bone (`targetBoneGroups`: bones named like the joint table, everything
+else inherits from its parent). A vertex then only matches target triangles of its own limb. The same run
+also shows the answer to "can it become a male or an ape?": on Rumba the torso takes the stout male body (belly,
+wide chest) — the shape comes from the target's surface, the female DNA mesh only supplies topology and
+weights — and the arm/leg lengths come from the skeleton route, so long-armed (ape-like) proportions are
+a matter of the target skeleton. Two honest limits: the target must be body-shaped (a CLOTHED character gives
+body-inside-clothes, not a bare male body), and the corrective data stays the female MetaHuman's.
+
+**Skeleton stays in charge.** Surface refinement alone pulled the fitted joints away from the target's bones
+(mean 40 mm, max 84 mm on the officer: the body looked shifted and stretched). The matched joints are now carried
+through every ICP round as strongly weighted correspondences (mean 17 mm, max 36 mm), open-boundary vertices
+(neckline, wrists, ankles of a headless body) are excluded from the correspondences, and a final per-vertex detail
+stage lets the body take shape finer than the warp's control spacing (ground truth: vertices 2.1 -> 1.9 mm).
+
+**On the stylised officer** the surface wrap alone no longer collapses (it follows the trousers/shirt volume
+into a wide-hipped body) but it does not match the T-pose. The two routes are complementary, so they are now
+combined: `--register-joints --refine-surface` (MCP mode `joints+surface`, `registerJointsThenSurface`) runs the
+skeleton route first — facing, limb pose (T-pose arms), proportions — and then the smooth surface wrap
+starting from that, so the skeleton supplies pose and proportions the surface cannot recover and the surface
+supplies the volume (clothes, hips, belly) the skeleton cannot. On officer_rigged the arms come out in the
+T-pose with the officer's volume, reference-pose stretch p99 <= 0.31 (worst hip edge 6.7x); the legs splay
+somewhat because the wrap follows the clothed silhouette (trousers and shoes), which a bare-body target would
+not do. A synthetic unit test pins the benefit: on an edited, re-meshed tube whose bulge no joint can express,
+joints-only leaves 2x+ the error of joints + surface.
+
 ## 10. Known limits / follow-ups
 
 1. Corrective data is not recalibrated (section 6).
-2. No in-editor preview/undo (section 7).
+2. The in-editor fit runs synchronously (UI blocks ~5 s) and adds a node rather than editing in place (section 7).
 3. Non-affine edits are followed only by their smooth part (reported as
    `warpResidualMm`; > 5 mm raises a warning).
 4. The target must come through the editor's importer as the same submesh structure;

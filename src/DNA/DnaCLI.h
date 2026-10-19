@@ -6,8 +6,12 @@
 // meshes, blend-shape channels, rig-logic inventory) without touching Ogre.
 // Importing/converting goes through the normal `qtmesh convert head.dna -o x.glb`.
 
+#include "DnaReader.h"
+
 #include <QString>
 #include <QVariantMap>
+
+namespace Ogre { class Entity; }
 
 namespace Dna {
 namespace DnaCLI {
@@ -26,6 +30,11 @@ struct FitOptions {
 };
 bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptions& options,
                QVariantMap* report, QString* error);
+
+/// The same fit against a LIVE entity (the editor's "Fit DNA body" action). `fittedRig` receives the
+/// fitted rig (when the fit re-posed the limbs it is the re-posed one). Nothing is added to the scene.
+bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
+                     QVariantMap* report, QString* error);
 }
 }
 

@@ -158,23 +158,41 @@ TEST_F(DnaCorrectiveSceneTest, DriverRotationIsReadRelativeToNeutral)
     EXPECT_GE(rig->calcs, 1);
 }
 
-TEST_F(DnaCorrectiveSceneTest, CorrectiveBoneIsWrittenAsAnAbsoluteLocalTransform)
+TEST_F(DnaCorrectiveSceneTest, CorrectiveBoneIsBindPlusTheRigsDeltaFromItsNeutral)
 {
     auto* m = DnaCorrectiveManager::instance();
     ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
-    // At rest the fake rig yields y = 0 — absolute, NOT neutral + 0.
+    // At rest the rig's output equals its neutral, so the bone stays at its BIND position (0.5): the
+    // corrective is a delta on the bone's own bind transform, not an absolute pose.
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.0f, 1e-5f);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5f, 1e-5f);
     ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5 + 0.1 * (kPi / 2), 1e-3);
     // Evaluating again must not accumulate (the skeleton is re-posed first).
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5 + 0.1 * (kPi / 2), 1e-3);
     // The driver itself carries neutral * delta.
     EXPECT_NEAR(std::abs(bone("Child")->getOrientation().Dot(
                     bone("Child")->getInitialOrientation() * Ogre::Quaternion(Ogre::Radian(kPi / 2), Ogre::Vector3::UNIT_Z))),
                 1.0f, 1e-4f);
+}
+
+TEST_F(DnaCorrectiveSceneTest, AFittedSkeletonKeepsItsOwnBindUnderTheCorrectives)
+{
+    // A FITTED character's bones have other bind transforms than the DNA's neutral (new proportions, re-posed
+    // limbs). Writing the DNA's absolute pose snapped every corrective joint back to the old skeleton (a fitted
+    // body showed forearms and ankles up to 129 mm off at REST). Move the corrective bone's bind, as a fit would:
+    auto* m = DnaCorrectiveManager::instance();
+    Ogre::Skeleton* skel = entity->getSkeleton();
+    skel->getBone("Corr")->setPosition(Ogre::Vector3(0.f, 0.9f, 0.f));
+    skel->setBindingPose();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    ASSERT_TRUE(m->evaluateNow());
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.9f, 1e-5f);                // at rest: exactly its own bind
+    ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
+    ASSERT_TRUE(m->evaluateNow());
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.9 + 0.1 * (kPi / 2), 1e-3);   // bind + the rig's delta
 }
 
 TEST_F(DnaCorrectiveSceneTest, DisablingRestoresPlainSkinningButKeepsThePreviewPose)

@@ -1,6 +1,10 @@
 #include "DnaCLI.h"
+#include <OgreMatrix4.h>
+#include <OgreBone.h>
 #include "../SelectionSet.h"
 #include <functional>
+#include <map>
+#include <cstring>
 #include <set>
 #include "DnaReader.h"
 
@@ -52,7 +56,9 @@ void usage()
         "                       [--compare [--vs-rig]] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
-        "                      [--register-joints [--no-align-limbs] | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
+        "                      [--register-joints [--no-align-limbs] [--refine-surface] | --register [--register-method smooth|nricp]]\n"
+        "                      [--reference same_topology_mesh]\n"
+        "                      [--uniform-scale S] [--write-dna fitted.dna]\n"
         "                      [-o fitted.glb] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
@@ -624,9 +630,23 @@ namespace {
 // Bind-pose (undeformed) vertex positions of every submesh, in submesh order.
 
 // Merge every submesh of an entity into one surface (positions + triangle indices).
-bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
+bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris, std::vector<int>* vertexGroup = nullptr)
 {
     const Ogre::MeshPtr mesh = e->getMesh();
+    // body part of each bone of the target skeleton, for the part-restricted surface matching
+    std::vector<int> boneGroup;
+    if (vertexGroup && e->hasSkeleton()) {
+        Ogre::SkeletonInstance* sk = e->getSkeleton();
+        std::vector<QString> names(sk->getNumBones());
+        std::vector<int> parent(sk->getNumBones(), -1);
+        for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
+            Ogre::Bone* bone = sk->getBone(b);
+            names[bone->getHandle() < names.size() ? bone->getHandle() : b] = QString::fromStdString(bone->getName());
+            if (auto* par = dynamic_cast<Ogre::Bone*>(bone->getParent()))
+                if (bone->getHandle() < parent.size()) parent[bone->getHandle()] = int(par->getHandle());
+        }
+        boneGroup = Fit::targetBoneGroups(names, parent);
+    }
     for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
         Ogre::SubMesh* sm = mesh->getSubMesh(i);
         Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
@@ -634,6 +654,17 @@ bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
         const Ogre::VertexElement* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
         if (!pe) continue;
         const int base = int(pos.size() / 3);
+        const size_t groupBase = vertexGroup ? vertexGroup->size() : 0;
+        if (vertexGroup) vertexGroup->resize(groupBase + vd->vertexCount, -1);
+        if (vertexGroup && !boneGroup.empty()) {
+            const auto& assignments = sm->useSharedVertices ? mesh->getBoneAssignments() : sm->getBoneAssignments();
+            std::vector<float> bestW(vd->vertexCount, -1.f);
+            for (const auto& kv : assignments)
+                if (kv.first < vd->vertexCount && kv.second.weight > bestW[kv.first] && kv.second.boneIndex < boneGroup.size()) {
+                    bestW[kv.first] = kv.second.weight;
+                    (*vertexGroup)[groupBase + kv.first] = boneGroup[kv.second.boneIndex];
+                }
+        }
         Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
         auto* vbase = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         // A VertexData / IndexData may select a window inside a shared buffer.
@@ -712,8 +743,13 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 }  // namespace
 
 struct FitArgs {
-    QString path, targetPath, writeDna, out;
+    QString path, targetPath, writeDna, out, referencePath;
+    std::vector<double> stiffness;   ///< NRICP schedule override (empty = default)
+    QString registerMethod;          ///< surface registration: "" / smooth | nricp
+    bool refineSurface = false;      ///< with registerJoints: refine the shape onto the target surface afterwards
     bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
+    Ogre::Entity* targetEntity = nullptr;   ///< fit to this live entity instead of importing targetPath
+    Rig* fittedRigOut = nullptr;            ///< receives the fitted rig (the limb-aligned base when the fit re-posed it)
     bool headless = true;     ///< CLI process (may init Ogre, nothing to clean up) vs inside the editor (MCP)
     double uniformScale = 0.0;
 };
@@ -774,6 +810,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     bool matchedByUv = false, flippedV = false;
     int ambiguous = 0;
     QVariantMap registration;
+    std::vector<Fit::JointAnchor> anchorTargets;
     if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
         if (!tr.ok) { err(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
@@ -784,16 +821,18 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         }
         for (const Mesh& m : tr.rig.meshes) target.push_back(m.positions);
     } else {
-        MeshImporterExporter::clearLastImportError();
-        // The target is the entity this import ADDS: inside the editor the scene already holds the
-        // user's meshes, and the traversal order is not the import order.
-        std::set<Ogre::Entity*> entitiesBefore;
-        for (auto* o : Manager::getSingleton()->getEntities())
-            if (o && o->getMovableType() == "Entity") entitiesBefore.insert(static_cast<Ogre::Entity*>(o));
-        MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
-        Ogre::Entity* te = nullptr;
-        for (auto* o : Manager::getSingleton()->getEntities())
-            if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
+        Ogre::Entity* te = a.targetEntity;
+        if (!te) {
+            MeshImporterExporter::clearLastImportError();
+            // The target is the entity this import ADDS: inside the editor the scene already holds the
+            // user's meshes, and the traversal order is not the import order.
+            std::set<Ogre::Entity*> entitiesBefore;
+            for (auto* o : Manager::getSingleton()->getEntities())
+                if (o && o->getMovableType() == "Entity") entitiesBefore.insert(static_cast<Ogre::Entity*>(o));
+            MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
+                for (auto* o : Manager::getSingleton()->getEntities())
+                if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
+        }
         if (!te) {
             const QString why = MeshImporterExporter::lastImportError();
             err(QStringLiteral("Error: could not import the target %1%2\n")
@@ -804,19 +843,38 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             // pair the target's skeleton with the MetaHuman joints and warp the body onto its proportions
             std::vector<std::pair<QString, std::array<double, 3>>> bones;
             if (te->hasSkeleton()) {
+                // The BIND pose, read without touching the entity: setBindingPose() would record whatever the
+                // character is doing right now (an animation, an edited bone) as its new rest pose — fine for a
+                // throw-away imported copy, destructive for a live one. Compose each bone's initial transform
+                // down the hierarchy instead.
                 Ogre::SkeletonInstance* sk = te->getSkeleton();
-                sk->setBindingPose();
+                std::map<unsigned short, Ogre::Matrix4> world;
+                std::function<const Ogre::Matrix4&(Ogre::Bone*)> bindWorld = [&](Ogre::Bone* bone) -> const Ogre::Matrix4& {
+                    auto it = world.find(bone->getHandle());
+                    if (it != world.end()) return it->second;
+                    Ogre::Matrix4 local;
+                    local.makeTransform(bone->getInitialPosition(), bone->getInitialScale(), bone->getInitialOrientation());
+                    auto* parent = dynamic_cast<Ogre::Bone*>(bone->getParent());
+                    return world[bone->getHandle()] = parent ? Ogre::Matrix4(bindWorld(parent) * local) : local;
+                };
                 for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
                     Ogre::Bone* bone = sk->getBone(b);
-                    bone->_update(true, false);
-                    const Ogre::Vector3 p = bone->_getDerivedPosition();
+                    const Ogre::Vector3 p = bindWorld(bone).getTrans();
                     bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
                 }
             }
             if (bones.empty()) { err(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
             QStringList unmatched;
             const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
-            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
+            Fit::JointRegisterResult jr;
+            if (a.refineSurface) {
+                std::vector<float> tpos;
+                std::vector<int> ttri, tgroup;
+                if (!surfaceOf(te, tpos, ttri, &tgroup)) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
+                jr = Fit::registerJointsThenSurface(src.rig, anchors, tpos, ttri, !noAlignLimbs, 8, 6, &tgroup);
+            } else {
+                jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
+            }
             if (!jr.ok) { err(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
             target = jr.positions;
             baseRig = jr.alignedRig;
@@ -824,7 +882,8 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             registration.insert("yawDegrees", jr.yawDegrees);
             registration.insert("limbChainsAligned", jr.limbChainsAligned);
             registration.insert("limbAngles", jr.limbAngles);
-            registration.insert("mode", "joints");
+            registration.insert("mode", jr.surfaceRefined ? "joints+surface" : "joints");
+            anchorTargets = anchors;
             registration.insert("anchorsUsed", jr.anchorsUsed);
             registration.insert("anchorResidualMm", jr.anchorResidualMm);
             registration.insert("unmatchedJoints", unmatched);
@@ -833,7 +892,10 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             std::vector<float> tpos;
             std::vector<int> ttri;
             if (!surfaceOf(te, tpos, ttri)) { err(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
-            const Fit::RegisterResult rr = Fit::registerToSurface(src.rig, tpos, ttri);
+            Fit::RegisterOptions ropt;
+            ropt.stiffness = a.stiffness;
+            if (a.registerMethod == QLatin1String("nricp")) ropt.method = Fit::RegisterOptions::Method::Nricp;
+            const Fit::RegisterResult rr = Fit::registerToSurface(src.rig, tpos, ttri, ropt);
             if (!rr.ok) { err(QStringLiteral("Error: registration: %1\n").arg(rr.error)); return 1; }
             target = rr.positions;
             registration.insert("alignScale", rr.alignScale);
@@ -860,8 +922,142 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
                                                   "(the DNA keeps the original neutral orientations and facing); add --no-align-limbs and use a target that already faces the same way\n"));
         return 2;
     }
+    std::vector<std::vector<float>> referencePositions;
+    if (!a.referencePath.isEmpty()) {
+        // Ground truth for the registration: a mesh that keeps the body's topology/UVs (the same edit before it was
+        // re-meshed). How far each body vertex's REGISTERED position is from where the reference puts it, in mm.
+        std::set<Ogre::Entity*> before;
+        for (auto* o : Manager::getSingleton()->getEntities())
+            if (o && o->getMovableType() == "Entity") before.insert(static_cast<Ogre::Entity*>(o));
+        MeshImporterExporter::importer({QFileInfo(a.referencePath).absoluteFilePath()});
+        Ogre::Entity* re = nullptr;
+        for (auto* o : Manager::getSingleton()->getEntities())
+            if (o && o->getMovableType() == "Entity" && !before.count(static_cast<Ogre::Entity*>(o))) re = static_cast<Ogre::Entity*>(o);
+        if (!re) { err(QStringLiteral("Error: could not import the reference %1\n").arg(a.referencePath)); return 1; }
+        const Fit::Correspondence rc = Fit::matchImported(src.rig, bindPositionsOf(re));
+        if (!rc.ok) { err(QStringLiteral("Error: reference: %1\n").arg(rc.error)); return 1; }
+        auto stats = [&](const std::vector<std::vector<float>>& pos, const char* key) {
+            std::vector<double> d;
+            for (size_t m = 0; m < pos.size() && m < rc.positions.size(); ++m) {
+                if (pos[m].empty() || pos[m].size() != rc.positions[m].size()) continue;
+                for (size_t i = 0; i + 2 < pos[m].size(); i += 3) {
+                    const double dx = pos[m][i] - rc.positions[m][i], dy = pos[m][i + 1] - rc.positions[m][i + 1], dz = pos[m][i + 2] - rc.positions[m][i + 2];
+                    d.push_back(std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0);
+                }
+            }
+            if (d.empty()) return;
+            if (std::strcmp(key, "errorVsReference") == 0) {
+                // where the error sits: mean per dominant skin joint, worst few
+                std::map<QString, std::pair<double, int>> byJoint;
+                for (size_t m = 0; m < pos.size() && m < rc.positions.size(); ++m) {
+                    if (pos[m].empty() || pos[m].size() != rc.positions[m].size() || m >= src.rig.meshes.size()) continue;
+                    const Mesh& mesh = src.rig.meshes[m];
+                    for (size_t i = 0; i + 2 < pos[m].size(); i += 3) {
+                        const size_t v = i / 3;
+                        if (v >= mesh.skin.size() || mesh.skin[v].empty()) continue;
+                        uint16_t bj = mesh.skin[v][0].joint; float bw = -1;
+                        for (const auto& inf : mesh.skin[v]) if (inf.weight > bw) { bw = inf.weight; bj = inf.joint; }
+                        const double dx = pos[m][i] - rc.positions[m][i], dy = pos[m][i + 1] - rc.positions[m][i + 1], dz = pos[m][i + 2] - rc.positions[m][i + 2];
+                        auto& e = byJoint[bj < src.rig.joints.size() ? src.rig.joints[bj].name : QString()];
+                        e.first += std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0; ++e.second;
+                    }
+                }
+                std::vector<std::pair<double, QString>> rows;
+                for (const auto& kv : byJoint) if (kv.second.second >= 50) rows.push_back({kv.second.first / kv.second.second, kv.first});
+                std::sort(rows.rbegin(), rows.rend());
+                QVariantList worst;
+                for (size_t i = 0; i < rows.size() && i < 8; ++i) worst << QVariantMap{{"joint", rows[i].second}, {"meanMm", rows[i].first}};
+                registration.insert("worstRegions", worst);
+            }
+            std::sort(d.begin(), d.end());
+            double sum = 0; for (double v : d) sum += v;
+            QVariantMap e;
+            e.insert("meanMm", sum / double(d.size()));
+            e.insert("p95Mm", d[size_t(double(d.size() - 1) * 0.95)]);
+            e.insert("maxMm", d.back());
+            e.insert("vertices", int(d.size()));
+            registration.insert(QString::fromLatin1(key), e);
+        };
+        std::vector<std::vector<float>> unfitted;
+        for (const Mesh& m : src.rig.meshes) unfitted.push_back(m.positions);
+        referencePositions = rc.positions;
+        stats(target, "errorVsReference");
+        stats(unfitted, "unfittedErrorVsReference");
+    }
     const Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { err(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
+    if (a.fittedRigOut) *a.fittedRigOut = fr.fitted;
+    if (!anchorTargets.empty()) {
+        // After the whole pipeline, where do the fitted joints sit relative to the target's own bones?
+        const auto jp = Fit::jointWorldPositions(fr.fitted);
+        QVariantList rows;
+        double sum = 0, worst = 0;
+        for (const Fit::JointAnchor& an : anchorTargets)
+            for (size_t j = 0; j < fr.fitted.joints.size(); ++j)
+                if (fr.fitted.joints[j].name == an.bodyJoint) {
+                    const double dx = jp[j][0] - an.target[0], dy = jp[j][1] - an.target[1], dz = jp[j][2] - an.target[2];
+                    const double d = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                    sum += d; worst = std::max(worst, d);
+                    rows << QVariantMap{{"joint", an.bodyJoint}, {"errMm", d}, {"dxMm", dx * 1000.0}, {"dyMm", dy * 1000.0}, {"dzMm", dz * 1000.0}};
+                }
+        // Alignment of the fitted body against the target's skeleton, in degrees: the yaw (about the vertical axis) and
+        // roll (in the frontal plane) of the shoulder line and the hip line, and the tilt of the spine. A tilted body
+        // shows up here as numbers instead of as an impression from a screenshot.
+        {
+            auto pos = [&](const QString& n, std::array<double, 3>& p) { for (size_t j = 0; j < fr.fitted.joints.size(); ++j) if (fr.fitted.joints[j].name == n) { p = jp[j]; return true; } return false; };
+            auto tgt = [&](const QString& n, std::array<double, 3>& p) { for (const Fit::JointAnchor& an : anchorTargets) if (an.bodyJoint == n) { p = an.target; return true; } return false; };
+            auto angle2 = [](double ax, double ay, double bx, double by) {   // signed angle a -> b in degrees
+                return std::atan2(ax * by - ay * bx, ax * bx + ay * by) * 180.0 / 3.14159265358979;
+            };
+            auto lineAngles = [&](const char* a, const char* b, const char* key) {
+                std::array<double, 3> fa, fb, ta, tb;
+                if (!pos(a, fa) || !pos(b, fb) || !tgt(a, ta) || !tgt(b, tb)) return;
+                const double fx = fb[0] - fa[0], fy = fb[1] - fa[1], fz = fb[2] - fa[2], tx = tb[0] - ta[0], ty = tb[1] - ta[1], tz = tb[2] - ta[2];
+                registration.insert(QString::fromLatin1(key) + "YawDeg", angle2(tx, tz, fx, fz));
+                registration.insert(QString::fromLatin1(key) + "RollDeg", angle2(tx, ty, fx, fy));
+            };
+            lineAngles("upperarm_l", "upperarm_r", "shoulders");
+            lineAngles("thigh_l", "thigh_r", "hips");
+            std::array<double, 3> fp, fn, tp, tn2;
+            if (pos("pelvis", fp) && pos("neck_01", fn) && tgt("pelvis", tp) && tgt("neck_01", tn2)) {
+                const double fx = fn[0] - fp[0], fy = fn[1] - fp[1], fz = fn[2] - fp[2], tx = tn2[0] - tp[0], ty = tn2[1] - tp[1], tz = tn2[2] - tp[2];
+                const double dot = fx * tx + fy * ty + fz * tz, nf = std::sqrt(fx * fx + fy * fy + fz * fz), nt = std::sqrt(tx * tx + ty * ty + tz * tz);
+                if (nf > 1e-9 && nt > 1e-9) registration.insert("spineTiltDeg", std::acos(std::max(-1.0, std::min(1.0, dot / (nf * nt)))) * 180.0 / 3.14159265358979);
+            }
+        }
+        registration.insert("finalJointVsTargetBones", rows);
+        registration.insert("finalJointVsTargetBonesMeanMm", rows.isEmpty() ? 0.0 : sum / double(rows.size()));
+        registration.insert("finalJointVsTargetBonesMaxMm", worst);
+    }
+    if (!referencePositions.empty() && !rigChanged) {
+        // The fit the reference itself would give (same-topology, exact) vs the fit from the registered wrap:
+        // how far each JOINT lands from where the true edit puts it.
+        const Fit::Result truth = Fit::fit(baseRig, referencePositions);
+        if (truth.ok) {
+            const auto jp = Fit::jointWorldPositions(fr.fitted), jt = Fit::jointWorldPositions(truth.fitted);
+            std::vector<double> d;
+            for (size_t j = 0; j < jp.size() && j < jt.size(); ++j) {
+                const double dx = jp[j][0] - jt[j][0], dy = jp[j][1] - jt[j][1], dz = jp[j][2] - jt[j][2];
+                d.push_back(std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0);
+            }
+            std::sort(d.begin(), d.end());
+            double sum = 0; for (double v : d) sum += v;
+            QVariantMap e;
+            e.insert("meanMm", sum / double(d.size()));
+            e.insert("p95Mm", d[size_t(double(d.size() - 1) * 0.95)]);
+            e.insert("maxMm", d.back());
+            registration.insert("jointErrorVsReference", e);
+            const auto j0 = Fit::jointWorldPositions(baseRig);
+            double s0 = 0, m0 = 0;
+            for (size_t j = 0; j < j0.size() && j < jt.size(); ++j) {
+                const double dx = j0[j][0] - jt[j][0], dy = j0[j][1] - jt[j][1], dz = j0[j][2] - jt[j][2];
+                const double e0 = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                s0 += e0; m0 = std::max(m0, e0);
+            }
+            registration.insert("unfittedJointErrorMeanMm", s0 / double(j0.size()));
+            registration.insert("unfittedJointErrorMaxMm", m0);
+        }
+    }
 
     report.clear();
     report.insert("verticesMatched", fr.verticesMatched);
@@ -957,7 +1153,10 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
 
 static int runFit(int argc, char* argv[])
 {
-    QString path, targetPath, writeDna, out;
+    QString path, targetPath, writeDna, out, referencePath;
+    std::vector<double> stiffness;
+    QString registerMethod;   // "" / smooth (default) | nricp
+    bool refineSurface = false;
     bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     double uniformScale = 0.0;
     bool sawDna = false, sawFit = false;
@@ -970,6 +1169,26 @@ static int runFit(int argc, char* argv[])
         else if (a == "--poses") poses = true;
         else if (a == "--lods") lods = true;
         else if (a == "--register") doRegister = true;
+        else if (a == "--refine-surface") refineSurface = true;
+        else if (a == "--register-method" && i + 1 < argc) {
+            registerMethod = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (registerMethod != QLatin1String("smooth") && registerMethod != QLatin1String("nricp")) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --register-method expects smooth or nricp\n"));
+                return 2;
+            }
+        }
+        else if (a == "--stiffness" && i + 1 < argc) {
+            for (const QString& t : QString::fromLocal8Bit(argv[++i]).split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                bool ok = false;
+                const double v = t.toDouble(&ok);
+                if (!ok || !std::isfinite(v) || v <= 0) {
+                    CLIPipeline::writeCliError(QStringLiteral("Error: --stiffness expects positive numbers, e.g. 50,20,8 (got '%1')\n").arg(t));
+                    return 2;
+                }
+                stiffness.push_back(v);
+            }
+        }
+        else if (a == "--reference" && i + 1 < argc) referencePath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--register-joints") registerJoints = true;
         else if (a == "--no-align-limbs") noAlignLimbs = true;
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
@@ -993,11 +1212,20 @@ static int runFit(int argc, char* argv[])
         CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
         return 2;
     }
+    if (!stiffness.empty() && !(doRegister && registerMethod == QLatin1String("nricp"))) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --stiffness is the NRICP schedule: use it with --register --register-method nricp\n"));
+        return 2;
+    }
+    if (!registerMethod.isEmpty() && !doRegister) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --register-method only applies with --register\n"));
+        return 2;
+    }
+    if (refineSurface && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --refine-surface only applies with --register-joints\n")); return 2; }
     if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
     FitArgs fa;
     fa.path = path; fa.targetPath = targetPath; fa.writeDna = writeDna; fa.out = out;
     fa.poses = poses; fa.lods = lods; fa.doRegister = doRegister; fa.registerJoints = registerJoints;
-    fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true;
+    fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true; fa.referencePath = referencePath; fa.stiffness = stiffness; fa.registerMethod = registerMethod; fa.refineSurface = refineSurface;
     QVariantMap report;
     const int rc = fitCore(fa, report, [](const QString& m) { CLIPipeline::writeCliError(m); });
     if (rc != 0) return rc;
@@ -1041,6 +1269,29 @@ static int runFit(int argc, char* argv[])
     return 0;
 }
 
+bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
+                     QVariantMap* report, QString* error)
+{
+    if (!target) { if (error) *error = QStringLiteral("no target entity"); return false; }
+    FitArgs a;
+    a.path = dnaPath;
+    a.targetEntity = target;
+    a.fittedRigOut = fittedRig;
+    a.poses = options.poses;
+    a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
+    a.refineSurface = options.mode == QLatin1String("joints+surface");
+    a.doRegister = options.mode == QLatin1String("surface");
+    a.noAlignLimbs = !options.alignLimbs;
+    if (!options.alignLimbs && !a.registerJoints) { if (error) *error = QStringLiteral("align_limbs=false only applies with the skeleton modes"); return false; }
+    a.headless = false;
+    QString msg;
+    QVariantMap local;
+    const int rc = fitCore(a, local, [&](const QString& m) { msg += m; });
+    if (rc != 0) { if (error) *error = msg.trimmed().isEmpty() ? QStringLiteral("the fit failed") : msg.trimmed(); return false; }
+    if (report) *report = local;
+    return true;
+}
+
 bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptions& options, QVariantMap* report, QString* error)
 {
     FitArgs a;
@@ -1050,7 +1301,8 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
     a.out = options.outputMesh;
     a.poses = options.poses;
     a.lods = options.lods;
-    a.registerJoints = options.mode == QLatin1String("joints");
+    a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
+    a.refineSurface = options.mode == QLatin1String("joints+surface");
     a.doRegister = options.mode == QLatin1String("surface");
     a.noAlignLimbs = !options.alignLimbs;
     // the same combinations the CLI refuses

@@ -247,6 +247,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRegister.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFitWrite.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCorrectiveManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFitController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AddFittedDnaCharacterCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AutoRigCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SplitMeshCommand.cpp
