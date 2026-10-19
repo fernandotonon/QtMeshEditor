@@ -259,3 +259,15 @@ joints-only leaves 2x+ the error of joints + surface.
    multi-mesh bodies (head/body combos) need every mesh present.
 5. Joint orientations are kept — a large limb-length change with the same rotations is
    what the stretch metric exists to flag.
+
+## 11. The head
+
+`SKM_Face.dna` is a separate 870-joint face rig and cannot be attached to the 342-joint body skeleton directly, but Epic's
+archetype folder also ships **`body_head_combined.dna`**: the body skeleton (342 joints, same driven setups) with the head
+mesh merged into the single skinned mesh (54 412 vertices). Fit that file instead of `SKM_Body.dna` and the head is fitted
+with the body — `qtmesh dna fit body_head_combined.dna --target <character> --register-joints --refine-surface`.
+
+The head is treated like the hands and feet: it is NOT matched to the target's surface (a target head is usually hair, a
+cap or a blocky stand-in; wrapping onto it flattened the top of the skull and squashed the face — measured on Rumba
+Dancing), it follows the skeleton alignment and the joint warp (size, position, facing), and it blends into the neck over
+the next few centimetres so there is no step where the neck grew.
