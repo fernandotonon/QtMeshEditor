@@ -803,6 +803,22 @@ TEST(DnaRegister, SmoothWrapBeatsDoingNothingByAWideMargin)
     EXPECT_LT(fitted, none * 0.25) << "fitted " << fitted << " vs unfitted " << none;
 }
 
+TEST(DnaRegister, OptionsOnlyNricpUnderstandsAreReportedNotDropped)
+{
+    const Rig rig = tubeRig();
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(41, 30, tv, tf, [](double x, double y, double z) { return std::array<double, 3>{x * 1.2, y, z}; });
+    RegisterOptions o;                     // smooth (default)
+    o.stiffness = {50, 20, 8};
+    o.jointAnchors.push_back({QStringLiteral("root"), {0, 0, 0}});
+    const RegisterResult r = registerToSurface(rig, tv, tf, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    int mentions = 0;
+    for (const QString& w : r.warnings) if (w.contains("NRICP")) ++mentions;
+    EXPECT_EQ(mentions, 2) << r.warnings.join(" | ").toStdString();
+}
+
 TEST(DnaRegister, NricpRemainsAvailableAsAnOption)
 {
     const Rig rig = tubeRig();

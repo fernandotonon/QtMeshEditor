@@ -1083,8 +1083,24 @@ static int runFit(int argc, char* argv[])
         else if (a == "--lods") lods = true;
         else if (a == "--register") doRegister = true;
         else if (a == "--refine-surface") refineSurface = true;
-        else if (a == "--register-method" && i + 1 < argc) registerMethod = QString::fromLocal8Bit(argv[++i]);
-        else if (a == "--stiffness" && i + 1 < argc) { for (const QString& t : QString::fromLocal8Bit(argv[++i]).split(',')) stiffness.push_back(t.toDouble()); }
+        else if (a == "--register-method" && i + 1 < argc) {
+            registerMethod = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (registerMethod != QLatin1String("smooth") && registerMethod != QLatin1String("nricp")) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --register-method expects smooth or nricp\n"));
+                return 2;
+            }
+        }
+        else if (a == "--stiffness" && i + 1 < argc) {
+            for (const QString& t : QString::fromLocal8Bit(argv[++i]).split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                bool ok = false;
+                const double v = t.toDouble(&ok);
+                if (!ok || !std::isfinite(v) || v <= 0) {
+                    CLIPipeline::writeCliError(QStringLiteral("Error: --stiffness expects positive numbers, e.g. 50,20,8 (got '%1')\n").arg(t));
+                    return 2;
+                }
+                stiffness.push_back(v);
+            }
+        }
         else if (a == "--reference" && i + 1 < argc) referencePath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--register-joints") registerJoints = true;
         else if (a == "--no-align-limbs") noAlignLimbs = true;
@@ -1107,6 +1123,14 @@ static int runFit(int argc, char* argv[])
     if (doRegister && registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --register and --register-joints are alternatives; pass one\n")); return 2; }
     if ((doRegister || registerJoints || noAlignLimbs) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
+        return 2;
+    }
+    if (!stiffness.empty() && !(doRegister && registerMethod == QLatin1String("nricp"))) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --stiffness is the NRICP schedule: use it with --register --register-method nricp\n"));
+        return 2;
+    }
+    if (!registerMethod.isEmpty() && !doRegister) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --register-method only applies with --register\n"));
         return 2;
     }
     if (refineSurface && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --refine-surface only applies with --register-joints\n")); return 2; }

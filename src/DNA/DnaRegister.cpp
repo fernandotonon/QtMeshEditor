@@ -188,6 +188,11 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
         for (int k = 0; k < 3; ++k) aligned[i + size_t(k)] = float(s * double(tv[i + size_t(k)]) + shift[size_t(k)]);
 
     const std::vector<std::array<double, 3>> jointPos = jointWorldPositions(rig);
+    // Options that only the NRICP method understands must not be dropped silently.
+    if (options.method == RegisterOptions::Method::Smooth) {
+        if (!options.stiffness.empty()) r.warnings << QStringLiteral("a stiffness schedule only applies to the NRICP method; the smooth wrap ignored it");
+        if (!options.jointAnchors.empty()) r.warnings << QStringLiteral("joint anchors only apply to the NRICP method; the smooth wrap ignored them");
+    }
     FaceRig::NricpOptions no;
     no.skipPrealign = options.alignHeight;   // our own feet/height/centre alignment is the start; do not undo it
     if (!options.stiffness.empty()) no.stiffness = options.stiffness;
