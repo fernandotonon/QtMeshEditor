@@ -68,6 +68,7 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
 
     const std::vector<std::array<double, 3>> jointPos = jointWorldPositions(rig);
     FaceRig::NricpOptions no;
+    no.skipPrealign = options.alignHeight;   // our own feet/height/centre alignment is the start; do not undo it
     if (!options.stiffness.empty()) no.stiffness = options.stiffness;
     for (const auto& a : options.jointAnchors) {
         int ji = -1;

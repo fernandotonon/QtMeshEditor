@@ -572,19 +572,20 @@ bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
         const int base = int(pos.size() / 3);
         Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
         auto* vbase = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        // A VertexData / IndexData may select a window inside a shared buffer.
         for (size_t v = 0; v < vd->vertexCount; ++v) {
             float* p = nullptr;
-            pe->baseVertexPointerToElement(vbase + v * vb->getVertexSize(), &p);
+            pe->baseVertexPointerToElement(vbase + (vd->vertexStart + v) * vb->getVertexSize(), &p);
             pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
         }
         vb->unlock();
         Ogre::HardwareIndexBufferSharedPtr ib = sm->indexData->indexBuffer;
-        const size_t n = sm->indexData->indexCount;
+        const size_t n = sm->indexData->indexCount, i0 = sm->indexData->indexStart;
         void* ip = ib->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
         const bool wide = ib->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
         for (size_t k = 0; k + 2 < n; k += 3)
             for (int c = 0; c < 3; ++c)
-                tris.push_back(base + int(wide ? static_cast<uint32_t*>(ip)[k + size_t(c)] : static_cast<uint16_t*>(ip)[k + size_t(c)]));
+                tris.push_back(base + int(wide ? static_cast<uint32_t*>(ip)[i0 + k + size_t(c)] : static_cast<uint16_t*>(ip)[i0 + k + size_t(c)]));
         ib->unlock();
     }
     return !tris.empty();
@@ -606,7 +607,7 @@ std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
                 auto* ubase = static_cast<unsigned char*>(ub->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
                 for (size_t v = 0; v < vd->vertexCount; ++v) {
                     float* p = nullptr;
-                    ue->baseVertexPointerToElement(ubase + v * ustride, &p);
+                    ue->baseVertexPointerToElement(ubase + (vd->vertexStart + v) * ustride, &p);
                     uvs.push_back(p[0]); uvs.push_back(p[1]);
                 }
                 ub->unlock();
@@ -618,7 +619,7 @@ std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
                 auto* base = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
                 for (size_t v = 0; v < vd->vertexCount; ++v) {
                     float* p = nullptr;
-                    pe->baseVertexPointerToElement(base + v * stride, &p);
+                    pe->baseVertexPointerToElement(base + (vd->vertexStart + v) * stride, &p);
                     pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
                 }
                 vb->unlock();
@@ -679,6 +680,12 @@ static int runFit(int argc, char* argv[])
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
     }
     if (path.isEmpty() || targetPath.isEmpty()) { usage(); return 2; }
+    if (doRegister && registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --register and --register-joints are alternatives; pass one\n")); return 2; }
+    if ((doRegister || registerJoints || noAlignLimbs) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
+        return 2;
+    }
+    if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
     if (!available()) {
         CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
