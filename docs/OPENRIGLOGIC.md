@@ -1,7 +1,6 @@
 # MetaHuman DNA / OpenRigLogic (epic #1095) — import + body correctives
 
-Status: **Phase 1 (DNA import), Phase 2 (body correctives) and Phase 3 (face → ARKit morph targets) implemented.**
-Phase 4 is tracked as a child issue; this document records what was verified
+Status: **Phases 1–3 implemented; Phase 4 (fitting) investigated with a working prototype — see `DNA_FITTING.md`.** This document records what was verified
 and the gaps that shape them.
 
 ## What shipped
@@ -86,15 +85,17 @@ from its dominant joint in world space. Findings:
    pipeline inputs (import as ordinary meshes and bind to the DNA skeleton);
    not handled automatically.
 6. **JSON DNA** is not read (binary only).
-7. **Export:** there is deliberately no DNA writer surface. DNA serialisation
-   is not rig recalibration; round-tripping must be validated before any
-   export is exposed (Phase 4).
+7. **Export:** the only DNA writer is `qtmesh dna fit --write-dna` (Phase 4):
+   it rewrites joint neutral translations and mesh positions of a *fitted* rig
+   and must read back and load in RigLogic, else the file is removed. DNA
+   serialisation is not rig recalibration — corrective data is not re-solved
+   (see `DNA_FITTING.md` section 6). There is no general DNA export.
 8. **LOD propagation / lower-LOD skeleton pruning:** the full skeleton is
    imported at every LOD; `Rig::lodJointIndices` records the per-LOD subset.
 
 ## Phases still open
 
-4. Body mesh fitting and generic RBF correctives.
+4. Body mesh fitting: prototype done (`DNA_FITTING.md`); in-editor preview/undo and corrective recalibration remain.
 Follow-up (separate issue): image-based body prediction.
 
 

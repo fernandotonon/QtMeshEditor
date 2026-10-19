@@ -8,6 +8,7 @@
 #include "../MorphAnimationManager.h"
 #include "DnaArkitMap.h"
 #include "DnaFaceBake.h"
+#include "DnaFit.h"
 #include "DnaRigLogic.h"
 #include "DnaScene.h"
 #include "../ModelTurntableRenderer.h"
@@ -16,10 +17,16 @@
 #include <QPainter>
 
 #include <OgreEntity.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreMesh.h>
+#include <OgreSubEntity.h>
+#include <OgreSubMesh.h>
+#include <OgreVertexIndexData.h>
 #include <OgreSceneNode.h>
 
 #include <algorithm>
 #include <cmath>
+#include <QFile>
 #include <QFileInfo>
 #include <QVariantMap>
 
@@ -40,9 +47,15 @@ void usage()
         "       qtmesh dna pose <body.dna> --set <joint>=<axis>:<deg>|<rx,ry,rz> [--set ...]\n"
         "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
+        "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
+        "                      [--uniform-scale S] [--write-dna fitted.dna] [-o fitted.glb] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
         "\n"
+        "fit moves the body skeleton to follow an EDITED body mesh of the SAME topology (a sculpt /\n"
+        "lattice edit of the imported character, or another MetaHuman body of the same LOD); arbitrary\n"
+        "topology is refused. --poses reports how the fitted rig deforms in reference poses against the\n"
+        "original; --write-dna serialises the result (behaviour data is NOT recalibrated).\n"
         "face bakes the face rig into ARKit-named morph targets (see below).\n"
         "pose bends driver joints (rotation relative to neutral, degrees, local axes) and\n"
         "evaluates the body correctives. --compare reports how far the corrected\n"
@@ -58,6 +71,7 @@ void usage()
 
 static int runPose(int argc, char* argv[]);
 static int runFace(int argc, char* argv[]);
+static int runFit(int argc, char* argv[]);
 
 int run(int argc, char* argv[])
 {
@@ -67,6 +81,9 @@ int run(int argc, char* argv[])
     for (int i = 1; i < argc; ++i)
         if (QString::fromLocal8Bit(argv[i]) == QLatin1String("face"))
             return runFace(argc, argv);
+    for (int i = 1; i < argc; ++i)
+        if (QString::fromLocal8Bit(argv[i]) == QLatin1String("fit"))
+            return runFit(argc, argv);
     QString path;
     bool json = false;
     ReadOptions opt;
@@ -531,6 +548,275 @@ static int runFace(int argc, char* argv[])
         }
         for (const QString& w : rep.warnings) t += QStringLiteral("  note: %1\n").arg(w);
         if (!out.isEmpty()) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
+        CLIPipeline::writeOutput(t);
+    }
+    return 0;
+}
+
+namespace {
+
+// Bind-pose (undeformed) vertex positions of every submesh, in submesh order.
+std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
+{
+    std::vector<Fit::ImportedSubmesh> out;
+    const Ogre::MeshPtr mesh = e->getMesh();
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
+        std::vector<float> pos, uvs;
+        if (vd) {
+            const Ogre::VertexElement* ue = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES, 0);
+            if (ue && ue->getType() == Ogre::VET_FLOAT2) {
+                Ogre::HardwareVertexBufferSharedPtr ub = vd->vertexBufferBinding->getBuffer(ue->getSource());
+                const size_t ustride = ub->getVertexSize();
+                auto* ubase = static_cast<unsigned char*>(ub->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (size_t v = 0; v < vd->vertexCount; ++v) {
+                    float* p = nullptr;
+                    ue->baseVertexPointerToElement(ubase + v * ustride, &p);
+                    uvs.push_back(p[0]); uvs.push_back(p[1]);
+                }
+                ub->unlock();
+            }
+            const Ogre::VertexElement* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+            if (pe) {
+                Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
+                const size_t stride = vb->getVertexSize();
+                auto* base = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (size_t v = 0; v < vd->vertexCount; ++v) {
+                    float* p = nullptr;
+                    pe->baseVertexPointerToElement(base + v * stride, &p);
+                    pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
+                }
+                vb->unlock();
+            }
+        }
+        out.push_back({std::move(pos), std::move(uvs)});
+    }
+    return out;
+}
+
+QVariantMap poseRows(const Fit::PoseReport& p)
+{
+    QVariantMap m;
+    m.insert("pose", p.name);
+    m.insert("jointsPresent", p.joints);
+    m.insert("movesMeshByMm", p.maxMovementMm);
+    m.insert("stretchDeltaMax", p.stretchMaxDelta);
+    m.insert("stretchDeltaP99", p.stretchP99Delta);
+    if (p.similarityMaxMm >= 0) {
+        m.insert("similarityErrorMaxMm", p.similarityMaxMm);
+        m.insert("similarityErrorMeanMm", p.similarityMeanMm);
+    }
+    return m;
+}
+
+}  // namespace
+
+static int runFit(int argc, char* argv[])
+{
+    QString path, targetPath, writeDna, out;
+    bool json = false, poses = false, lods = false;
+    double uniformScale = 0.0;
+    bool sawDna = false, sawFit = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (!sawFit && a == "fit") { sawFit = true; continue; }
+        if (a == "--json") json = true;
+        else if (a == "--poses") poses = true;
+        else if (a == "--lods") lods = true;
+        else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--uniform-scale" && i + 1 < argc) {
+            bool ok = false;
+            uniformScale = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || !std::isfinite(uniformScale) || uniformScale <= 0) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --uniform-scale expects a positive number\n"));
+                return 2;
+            }
+        }
+        else if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (!a.startsWith('-') && path.isEmpty()) path = a;
+        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
+    }
+    if (path.isEmpty() || targetPath.isEmpty()) { usage(); return 2; }
+    if (!available()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
+                                                  "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
+        return 1;
+    }
+    const bool needScene = !targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty();
+    if (needScene && !CLIPipeline::initOgreHeadless()) return 1;
+
+    ReadOptions ro;
+    const ReadResult src = read(QFileInfo(path).absoluteFilePath(), ro);
+    if (!src.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
+
+    // ---- the target, as one position array per rig mesh ----
+    std::vector<std::vector<float>> target;
+    double seamMm = 0, matchedFraction = 1.0;
+    bool matchedByUv = false, flippedV = false;
+    int ambiguous = 0;
+    if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
+        const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
+        if (!tr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
+        if (tr.rig.meshes.size() != src.rig.meshes.size()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: the target DNA has %1 meshes, the source %2 (a different "
+                                                      "topology is not supported)\n").arg(tr.rig.meshes.size()).arg(src.rig.meshes.size()));
+            return 1;
+        }
+        for (const Mesh& m : tr.rig.meshes) target.push_back(m.positions);
+    } else {
+        MeshImporterExporter::clearLastImportError();
+        MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
+        Ogre::Entity* te = nullptr;
+        for (auto* o : Manager::getSingleton()->getEntities())
+            if (o && o->getMovableType() == "Entity") te = static_cast<Ogre::Entity*>(o);
+        if (!te) {
+            const QString why = MeshImporterExporter::lastImportError();
+            CLIPipeline::writeCliError(QStringLiteral("Error: could not import the target %1%2\n")
+                                           .arg(targetPath, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
+            return 1;
+        }
+        const Fit::Correspondence c = Fit::matchImported(src.rig, bindPositionsOf(te));
+        if (!c.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
+        target = c.positions;
+        seamMm = c.maxSeamSplitMm;
+        matchedByUv = c.matchedByUv;
+        matchedFraction = c.matchedFraction;
+        ambiguous = c.ambiguousVertices;
+        flippedV = c.flippedV;
+    }
+
+    const Fit::Result fr = Fit::fit(src.rig, target);
+    if (!fr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
+
+    QVariantMap report;
+    report.insert("verticesMatched", fr.verticesMatched);
+    report.insert("controlPoints", fr.controlPoints);
+    report.insert("meanVertexShiftMm", fr.meanVertexShiftMm);
+    report.insert("maxVertexShiftMm", fr.maxVertexShiftMm);
+    report.insert("meanJointShiftMm", fr.meanJointShiftMm);
+    report.insert("maxJointShiftMm", fr.maxJointShiftMm);
+    report.insert("warpResidualMm", fr.warpResidualMm);
+    report.insert("seamSplitMaxMm", seamMm);
+    report.insert("matchedByUv", matchedByUv);
+    report.insert("matchedFraction", matchedFraction);
+    report.insert("ambiguousVertices", ambiguous);
+    report.insert("targetVFlipped", flippedV);
+    report.insert("joints", int(fr.fitted.joints.size()));
+    report.insert("warnings", fr.warnings);
+
+    if (poses) {
+        QVariantList rows;
+        for (const Fit::PoseReport& p : Fit::evaluatePoses(src.rig, fr.fitted, Fit::referencePoses(), uniformScale))
+            rows << poseRows(p);
+        report.insert("poses", rows);
+    }
+    if (lods) {
+        QVariantList rows;
+        for (int l = 1; l < src.rig.descriptor.lodCount; ++l) {
+            ReadOptions lo = ro;
+            lo.lod = l;
+            const ReadResult lr = read(QFileInfo(path).absoluteFilePath(), lo);
+            if (!lr.ok) continue;
+            const Fit::LodPropagation lp = Fit::evaluateLodPropagation(src.rig, fr.fitted, lr.rig, fr.warp);
+            QVariantMap row;
+            row.insert("lod", l);
+            row.insert("vertices", lp.vertices);
+            row.insert("meanGapMm", lp.meanGapMm);
+            row.insert("maxGapMm", lp.maxGapMm);
+            row.insert("baselineMeanGapMm", lp.baselineMeanGapMm);
+            rows << row;
+        }
+        report.insert("lodPropagation", rows);
+    }
+
+    if (!writeDna.isEmpty()) {
+        const Fit::WriteResult wr = Fit::writeFittedDna(QFileInfo(path).absoluteFilePath(), src.rig, fr.fitted, fr.warp,
+                                                        QFileInfo(writeDna).absoluteFilePath());
+        if (!wr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(wr.error)); return 1; }
+        // Read it back: serialisation is only trustworthy if it round-trips.
+        const ReadResult rb = read(QFileInfo(writeDna).absoluteFilePath(), ro);
+        QVariantMap v;
+        v.insert("file", QFileInfo(writeDna).absoluteFilePath());
+        v.insert("meshesWritten", wr.meshesWritten);
+        v.insert("lodMeshesWarped", wr.lodMeshesWarped);
+        v.insert("readsBack", rb.ok);
+        if (rb.ok && rb.rig.meshes.size() == fr.fitted.meshes.size()) {
+            double pm = 0, jm = 0;
+            for (size_t m = 0; m < rb.rig.meshes.size(); ++m)
+                for (size_t i = 0; i < rb.rig.meshes[m].positions.size() && i < fr.fitted.meshes[m].positions.size(); ++i)
+                    pm = std::max(pm, double(std::abs(rb.rig.meshes[m].positions[i] - fr.fitted.meshes[m].positions[i])));
+            for (size_t j = 0; j < rb.rig.joints.size(); ++j)
+                for (int k = 0; k < 3; ++k)
+                    jm = std::max(jm, std::abs(rb.rig.joints[j].translation[size_t(k)] - fr.fitted.joints[j].translation[size_t(k)]));
+            v.insert("roundTripMaxPositionMm", pm * 1000.0);
+            v.insert("roundTripMaxJointMm", jm * 1000.0);
+        }
+        QString evErr;
+        auto ev = RigEvaluator::create(QFileInfo(writeDna).absoluteFilePath(), ro, &evErr);
+        v.insert("rigLogicLoads", ev != nullptr);
+        if (!ev) v.insert("rigLogicError", evErr);
+        v.insert("notes", wr.notes);
+        report.insert("writtenDna", v);
+        if (!rb.ok || !ev) {
+            // an output that cannot be read back / evaluated is not a result: do not leave it behind
+            QFile::remove(QFileInfo(writeDna).absoluteFilePath());
+            CLIPipeline::writeCliError(QStringLiteral("Error: the written DNA failed validation (%1) and was removed\n")
+                                           .arg(!rb.ok ? QStringLiteral("it does not read back") : QStringLiteral("RigLogic cannot load it: %1").arg(evErr)));
+            return 1;
+        }
+    }
+
+    if (!out.isEmpty()) {
+        QString ierr;
+        Ogre::SceneNode* node = importRigToScene(fr.fitted, QFileInfo(out).completeBaseName() + QStringLiteral("_fitted"), nullptr, &ierr);
+        if (!node || MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(), CLIPipeline::formatForExtension(out)) != 0) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: could not export the fitted character%1\n")
+                                           .arg(ierr.isEmpty() ? QString() : QStringLiteral(": ") + ierr));
+            return 1;
+        }
+        report.insert("output", QFileInfo(out).absoluteFilePath());
+    }
+
+    if (json) {
+        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
+    } else {
+        QString t = QStringLiteral("Fitted %1 joints to %2 matched vertices (%3 RBF control points).\n"
+                                   "  mesh moved by mean %4 mm / max %5 mm; joints moved by mean %6 mm / max %7 mm; "
+                                   "warp misses a vertex by at most %8 mm\n")
+                        .arg(report["joints"].toInt()).arg(fr.verticesMatched).arg(fr.controlPoints)
+                        .arg(fr.meanVertexShiftMm, 0, 'f', 1).arg(fr.maxVertexShiftMm, 0, 'f', 1)
+                        .arg(fr.meanJointShiftMm, 0, 'f', 1).arg(fr.maxJointShiftMm, 0, 'f', 1).arg(fr.warpResidualMm, 0, 'f', 2);
+        for (const QVariant& v : report.value("poses").toList()) {
+            const QVariantMap m = v.toMap();
+            t += QStringLiteral("  pose %1: stretch delta max %2 (p99 %3)").arg(m["pose"].toString(), -24)
+                     .arg(m["stretchDeltaMax"].toDouble(), 0, 'f', 3).arg(m["stretchDeltaP99"].toDouble(), 0, 'f', 3);
+            if (m.contains("similarityErrorMaxMm"))
+                t += QStringLiteral("; vs ideal similarity: max %1 mm").arg(m["similarityErrorMaxMm"].toDouble(), 0, 'f', 3);
+            if (!m["jointsPresent"].toBool()) t += QStringLiteral(" (a joint of this pose is missing)");
+            t += QLatin1Char('\n');
+        }
+        for (const QVariant& v : report.value("lodPropagation").toList()) {
+            const QVariantMap m = v.toMap();
+            t += QStringLiteral("  LOD%1: warped vertices sit %2 mm (max %3) from the fitted LOD0 surface; unwarped baseline %4 mm\n")
+                     .arg(m["lod"].toInt()).arg(m["meanGapMm"].toDouble(), 0, 'f', 2).arg(m["maxGapMm"].toDouble(), 0, 'f', 2)
+                     .arg(m["baselineMeanGapMm"].toDouble(), 0, 'f', 2);
+        }
+        if (report.contains("writtenDna")) {
+            const QVariantMap w = report["writtenDna"].toMap();
+            t += QStringLiteral("  wrote %1 (%2 meshes, %3 LOD meshes warped); reads back: %4; round trip max %5 mm / joints %6 mm; "
+                                "RigLogic loads: %7\n")
+                     .arg(w["file"].toString()).arg(w["meshesWritten"].toInt()).arg(w["lodMeshesWarped"].toInt())
+                     .arg(w["readsBack"].toBool() ? "yes" : "NO").arg(w["roundTripMaxPositionMm"].toDouble(), 0, 'f', 4)
+                     .arg(w["roundTripMaxJointMm"].toDouble(), 0, 'f', 4).arg(w["rigLogicLoads"].toBool() ? "yes" : "NO");
+            for (const QString& n : w["notes"].toStringList()) t += QStringLiteral("  note: %1\n").arg(n);
+        }
+        for (const QString& w : fr.warnings) t += QStringLiteral("  warning: %1\n").arg(w);
+        if (report.contains("output")) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
         CLIPipeline::writeOutput(t);
     }
     return 0;
