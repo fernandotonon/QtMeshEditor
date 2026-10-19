@@ -9,6 +9,7 @@
 #include "DnaFaceBake.h"
 #include "DnaArkitMap.h"
 #include "DnaPsdBake.h"
+#include "DnaTextures.h"
 #include "../commands/MorphCommands.h"
 
 #include <QCryptographicHash>
@@ -453,7 +454,13 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
         io.faceMorphs = false;
     if (qEnvironmentVariable("QTMESH_DNA_PSD") == QLatin1String("1"))
         io.poseSpaceCorrectives = true;
-    return importToScene(path, options, io, report, error);
+    // QTMESH_DNA_LOD=N imports LOD N: its skeleton is pruned to the joints that LOD's meshes actually skin
+    // (pruneToDeformers), so a lower LOD is also a lighter rig (body: 342 -> 198 / 108 / 40 joints for LOD 1..3).
+    ReadOptions ro = options;
+    bool lodOk = false;
+    const int envLod = qEnvironmentVariable("QTMESH_DNA_LOD").toInt(&lodOk);
+    if (lodOk && envLod > 0 && ro.lod == 0) ro.lod = envLod;
+    return importToScene(path, ro, io, report, error);
 }
 
 Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options, const ImportOptions& import,
@@ -532,6 +539,24 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options, 
             Ogre::MovableObject* mo = it.getNext();
             if (mo && mo->getMovableType() == "Entity")
                 mo->getUserObjectBindings().setUserAny(kSourcePathKey, Ogre::Any(abs));
+        }
+        // DCC-exported textures sitting next to the DNA (matched by file name, see DnaTextures.h)
+        if (qEnvironmentVariable("QTMESH_DNA_TEXTURES") != QLatin1String("0")) {
+            for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
+                Ogre::MovableObject* mo = it.getNext();
+                if (!mo || mo->getMovableType() != "Entity") continue;
+                Ogre::Entity* ent = static_cast<Ogre::Entity*>(mo);
+                const Ogre::Mesh::SubMeshNameMap& nm = ent->getMesh()->getSubMeshNameMap();
+                QStringList names;
+                for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+                    QString n;
+                    for (const auto& kv : nm) if (kv.second == i) n = QString::fromStdString(kv.first);
+                    names << n;
+                }
+                QStringList texNotes;
+                bindCompanionTextures(ent, path, names, &texNotes);
+                bakeNotes << texNotes;
+            }
         }
     }
     if (node && report) {

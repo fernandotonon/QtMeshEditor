@@ -315,3 +315,22 @@ price of not shipping 870 joints.
    (~260): useful for authoring, heavy for the Inspector list.
 6. No GUI surface beyond the import itself; the targets appear in the normal
    Vertex Morph Animation list.
+
+
+## Follow-ups (#1099)
+
+- **Textures.** A DNA carries no textures; the DCC export sits next to it. The importer now matches companion images
+  in the DNA's folder (and a `textures/` subfolder) BY NAME (`src/DNA/DnaTextures.*`): a file belongs to a mesh when its
+  name contains the mesh's token (`head_lod0_mesh` → `head`), the map type comes from a whole-word keyword
+  (`basecolor|albedo|diffuse|color` → `diffuse_map`, `normal` → `normal_map` + tangents, `roughness` → `roughness`);
+  a character with one mesh also accepts generic names. Each submesh gets its OWN clone of `BaseWhite`, so the shared
+  material is never modified. Metallic and occlusion maps are reported, not bound: the editor packs them into one ORM
+  texture and a plain grayscale map in that slot would read the wrong channel. `QTMESH_DNA_TEXTURES=0` opts out.
+  Verified by importing a copy of SKM_Body.dna with a checker `SKM_Body_basecolor.png` beside it.
+- **Per-LOD skeleton.** The skeleton of an import is already pruned to the joints that skin the imported meshes, so a
+  lower LOD is a lighter rig with no extra code; what was missing was a way to ask for it. `QTMESH_DNA_LOD=N` imports
+  LOD N (body, joints skinned after the 256-bone cut: LOD0 256, LOD1 193, LOD2 105, LOD3 37). The `lodJointIndices` the
+  reader records (342 / 198 / 108 / 40) are the DNA's own per-LOD joint lists, kept for reporting.
+- **JSON DNA**, **CI on every platform**: done (see above).
+- **Hair / grooms / clothing** are still not bound to the DNA skeleton: that needs an authoring operation (transfer the
+  body's skin weights onto the garment by closest point and share the skeleton instance), not an importer option.
