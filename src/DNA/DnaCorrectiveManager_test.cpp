@@ -262,6 +262,19 @@ TEST_F(DnaCorrectiveSceneTest, DisablingKeepsAnAnimationSkipSomeoneElseHeld)
     EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
 }
 
+TEST_F(DnaCorrectiveSceneTest, DetachingANeverEvaluatedCharacterLeavesAnExternalHoldAlone)
+{
+    entity->setSkipAnimationStateUpdate(true);   // owned by someone else
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    // No evaluateNow(): the manager never took the flag, so it must not release it.
+    m->detach(entityName);
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+    m->attach(entityName, std::make_shared<FakeRig>());
+    m->clear();
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+}
+
 TEST_F(DnaCorrectiveSceneTest, ADetachedCharacterIsHandedBackToOgre)
 {
     auto* m = DnaCorrectiveManager::instance();

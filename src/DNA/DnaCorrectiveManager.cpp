@@ -161,7 +161,12 @@ void DnaCorrectiveManager::restorePlain(const QString& name)
 {
     Ogre::Entity* e = entityByName(name);
     auto it = m_chars.constFind(name);
-    if (it != m_chars.constEnd()) it.value()->skipping = false;
+    // Only undo what we actually did: a character that was attached but never
+    // evaluated never took the skip flag, so another subsystem's hold (PoseLibrary,
+    // mocap) must be left exactly as it is.
+    const bool tookControl = it != m_chars.constEnd() && it.value()->skipping;
+    if (!tookControl) return;
+    it.value()->skipping = false;
     if (!e || !e->hasSkeleton()) return;
     // Hand sampling back to Ogre and re-pose from the clips: with nothing
     // playing, no later frame would overwrite the last corrected pose.

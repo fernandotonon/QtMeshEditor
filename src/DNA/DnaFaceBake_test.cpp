@@ -285,7 +285,9 @@ TEST(DnaFaceBake, LinearityErrorSeesTheNonlinearityOfRotations)
 
 namespace {
 struct FaceFixture {
-    bool ok = false;
+    bool present = false;       // an asset path was found
+    bool ok = false;            // ... and it loaded, evaluated and baked
+    QString problem;
     Rig rig;
     std::unique_ptr<RigEvaluator> ev;
     FaceBake::Result bake;
@@ -293,22 +295,37 @@ struct FaceFixture {
     {
         const QString path = faceDna();
         if (path.isEmpty()) return;
+        present = true;
         ReadOptions o;
         const ReadResult r = read(path, o);
-        if (!r.ok) return;
+        if (!r.ok) { problem = QStringLiteral("read failed: ") + r.error; return; }
         rig = r.rig;
-        ev = RigEvaluator::create(path, o);
-        if (!ev) return;
+        QString err;
+        ev = RigEvaluator::create(path, o, &err);
+        if (!ev) { problem = QStringLiteral("evaluator failed: ") + err; return; }
         bake = FaceBake::bake(rig, *ev, FaceBake::arkitSpecs(ArkitMap::defaultMap()));
         ok = true;
     }
 };
 FaceFixture& face() { static FaceFixture f; return f; }
+
+// False (with a note) only when NO asset exists. An asset that is present but does
+// not load is a real failure, not a reason to pass quietly.
+bool haveFace()
+{
+    if (!face().present) {
+        SUCCEED() << "no MetaHuman face DNA available — Epic's asset is not redistributable; "
+                     "set QTMESH_TEST_DNA_FACE to run";
+        return false;
+    }
+    EXPECT_TRUE(face().ok) << face().problem.toStdString();
+    return face().ok;
+}
 }  // namespace
 
 TEST(DnaFaceBakeReal, EveryArkitControlExistsInTheMetaHumanFace)
 {
-    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    if (!haveFace()) return;
     for (const auto& s : face().bake.shapes)
         EXPECT_TRUE(s.missingControls.isEmpty()) << s.name.toStdString() << " : "
                                                  << s.missingControls.join(",").toStdString();
@@ -317,7 +334,7 @@ TEST(DnaFaceBakeReal, EveryArkitControlExistsInTheMetaHumanFace)
 
 TEST(DnaFaceBakeReal, JawOpenMovesTheChinDownByAFewCentimetresAtMost)
 {
-    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    if (!haveFace()) return;
     const auto* s = find(face().bake, "jawOpen");
     ASSERT_NE(s, nullptr);
     const Peak p = peakOf(*s);
@@ -328,7 +345,7 @@ TEST(DnaFaceBakeReal, JawOpenMovesTheChinDownByAFewCentimetresAtMost)
 
 TEST(DnaFaceBakeReal, LeftAndRightShapesAreMirroredAcrossTheFace)
 {
-    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    if (!haveFace()) return;
     auto peakX = [&](const char* name) {
         const auto* s = find(face().bake, name);
         EXPECT_NE(s, nullptr) << name;
@@ -349,7 +366,7 @@ TEST(DnaFaceBakeReal, LeftAndRightShapesAreMirroredAcrossTheFace)
 
 TEST(DnaFaceBakeReal, SummedShapesStayCloseToTheJointRigForTypicalExpressions)
 {
-    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    if (!haveFace()) return;
     const auto specs = FaceBake::arkitSpecs(ArkitMap::defaultMap());
     auto pick = [&](std::initializer_list<const char*> names) {
         QList<FaceBake::ShapeSpec> v;
@@ -370,7 +387,7 @@ TEST(DnaFaceBakeReal, SummedShapesStayCloseToTheJointRigForTypicalExpressions)
 
 TEST(DnaFaceBakeReal, BakingAllArkitShapesIsFast)
 {
-    if (!face().ok) { SUCCEED() << "no MetaHuman face DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    if (!haveFace()) return;
     const auto t0 = std::chrono::steady_clock::now();
     const auto r = FaceBake::bake(face().rig, *face().ev, FaceBake::arkitSpecs(ArkitMap::defaultMap()));
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
