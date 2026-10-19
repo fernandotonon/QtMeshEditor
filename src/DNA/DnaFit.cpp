@@ -396,7 +396,7 @@ Correspondence matchImported(const Rig& rig, const std::vector<ImportedSubmesh>&
 
     c.positions.assign(rig.meshes.size(), {});
     c.matchedByUv = true;
-    long long total = 0, matched = 0;
+    long long total = 0, matched = 0, srcTotal = 0, srcCovered = 0;
     double worstSeam = 0;
     for (size_t s = 0; s < subs.size(); ++s) {
         const Mesh& m = rig.meshes[imported[s]];
@@ -445,6 +445,7 @@ Correspondence matchImported(const Rig& rig, const std::vector<ImportedSubmesh>&
         std::vector<int> cnt(np, 0);
         std::vector<float> first(np * 3, 0.f);
         std::vector<char> have(np, 0);
+        std::vector<char> srcHit(nsrc, 0);
         std::vector<uint32_t> cand;
         for (size_t t = 0; t < ntgt; ++t) {
             ++total;
@@ -464,6 +465,7 @@ Correspondence matchImported(const Rig& rig, const std::vector<ImportedSubmesh>&
                     if (d < bd) { bd = d; best = sv; }
                 }
             }
+            srcHit[best] = 1;
             const size_t p = ex.positionOf[best];
             if (p >= np) continue;
             if (have[p]) {
@@ -476,6 +478,8 @@ Correspondence matchImported(const Rig& rig, const std::vector<ImportedSubmesh>&
             for (int k = 0; k < 3; ++k) sum[p * 3 + size_t(k)] += tp[k];
             ++cnt[p];
         }
+        srcTotal += (long long)nsrc;
+        for (size_t v = 0; v < nsrc; ++v) srcCovered += srcHit[v];
         auto& out = c.positions[imported[s]];
         out.assign(np * 3, 0.f);
         for (size_t p = 0; p < np; ++p) {
@@ -488,10 +492,17 @@ Correspondence matchImported(const Rig& rig, const std::vector<ImportedSubmesh>&
     }
     c.matchedFraction = total ? double(matched) / double(total) : 0.0;
     c.maxSeamSplitMm = worstSeam * unitToMm;
+    c.sourceCoverage = srcTotal ? double(srcCovered) / double(srcTotal) : 0.0;
     if (c.matchedFraction < 0.995) {
         c.error = QStringLiteral("only %1 % of the target's vertices could be matched to the character by UV — the UVs or the "
                                  "topology were changed, which is not supported (the target must be a position-only edit of the "
                                  "imported character)").arg(c.matchedFraction * 100.0, 0, 'f', 1);
+        return c;
+    }
+    if (c.sourceCoverage < 0.995) {
+        c.error = QStringLiteral("only %1 % of the character's vertices have a counterpart in the target — it looks decimated, "
+                                 "cut or otherwise changed in topology, which is not supported (missing vertices would silently "
+                                 "keep their unedited position)").arg(c.sourceCoverage * 100.0, 0, 'f', 1);
         return c;
     }
     c.ok = true;

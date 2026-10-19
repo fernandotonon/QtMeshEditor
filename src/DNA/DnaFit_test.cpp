@@ -345,6 +345,22 @@ TEST(DnaFitMatch, FailsInsteadOfGuessingWhenTheUvsWereChanged)
     EXPECT_TRUE(c.error.contains("UV")) << c.error.toStdString();
 }
 
+TEST(DnaFitMatch, RefusesADecimatedTargetThatKeepsTheOriginalUvs)
+{
+    const Rig rig = tubeRig();
+    ImportedSubmesh sub = importedOf(rig, true);
+    const size_t n = sub.positions.size() / 3;
+    // keep only the first 80 % of the vertices: every survivor still matches by UV, but a fifth of
+    // the character has no counterpart (those would silently keep their unedited position)
+    const size_t keep = n * 8 / 10;
+    sub.positions.resize(keep * 3);
+    sub.uvs.resize(keep * 2);
+    const Correspondence c = matchImported(rig, {sub});
+    EXPECT_FALSE(c.ok);
+    EXPECT_LT(c.sourceCoverage, 0.995);
+    EXPECT_TRUE(c.error.contains("counterpart")) << c.error.toStdString();
+}
+
 TEST(DnaFitMatch, SubmeshStructureAndOrderFallback)
 {
     const Rig rig = tubeRig();
@@ -503,6 +519,34 @@ TEST(DnaFitWrite, SyntheticDnaRoundTripsInTheFilesOwnUnits)
     for (size_t i = 0; i < back.rig.meshes[0].positions.size(); ++i)
         EXPECT_NEAR(back.rig.meshes[0].positions[i], fitted.meshes[0].positions[i], 1e-5f) << i;
     EXPECT_NEAR(back.rig.joints[1].translation[1], fitted.joints[1].translation[1], 1e-6);
+}
+
+TEST(DnaFitWrite, RefusesToOverwriteTheSourceThroughASymlink)
+{
+#ifndef Q_OS_WIN
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString srcPath = dir.filePath("src.dna");
+    {
+        const auto bytes = DnaTest::makeSyntheticDna();
+        QFile f(srcPath);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(reinterpret_cast<const char*>(bytes.data()), qint64(bytes.size()));
+    }
+    const qint64 before = QFileInfo(srcPath).size();
+    const QString link = dir.filePath("alias.dna");
+    ASSERT_TRUE(QFile::link(srcPath, link));      // QFile::link on unix makes a symlink
+    ReadOptions ro;
+    const ReadResult src = read(srcPath, ro);
+    ASSERT_TRUE(src.ok);
+    std::vector<std::array<double, 3>> a, b;
+    for (int i = 0; i < 27; ++i) { std::array<double, 3> p{double(i % 3), double((i / 3) % 3), double(i / 9)}; a.push_back(p); b.push_back(p); }
+    const Warp w = buildWarp(a, b, Options());
+    const WriteResult wr = writeFittedDna(srcPath, src.rig, src.rig, w, link);
+    EXPECT_FALSE(wr.ok);
+    EXPECT_TRUE(wr.error.contains("overwrite")) << wr.error.toStdString();
+    EXPECT_EQ(QFileInfo(srcPath).size(), before);   // the source is untouched
+#endif
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

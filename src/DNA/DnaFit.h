@@ -98,6 +98,7 @@ struct Correspondence {
     double maxSeamSplitMm = 0;                   ///< how far duplicates of one position disagree
     bool matchedByUv = false;                    ///< true when UVs (not vertex order) set the correspondence
     double matchedFraction = 1.0;                ///< share of target vertices that found their source vertex
+    double sourceCoverage = 1.0;                 ///< share of the character's vertices that received a target vertex
     int ambiguousVertices = 0;                   ///< target vertices whose UV had several candidates (nearest won)
     bool flippedV = false;                       ///< the target's V axis was inverted relative to the source
 };

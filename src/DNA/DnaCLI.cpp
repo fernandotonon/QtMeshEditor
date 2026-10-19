@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <QFile>
 #include <QFileInfo>
 #include <QVariantMap>
 
@@ -761,6 +762,13 @@ static int runFit(int argc, char* argv[])
         if (!ev) v.insert("rigLogicError", evErr);
         v.insert("notes", wr.notes);
         report.insert("writtenDna", v);
+        if (!rb.ok || !ev) {
+            // an output that cannot be read back / evaluated is not a result: do not leave it behind
+            QFile::remove(QFileInfo(writeDna).absoluteFilePath());
+            CLIPipeline::writeCliError(QStringLiteral("Error: the written DNA failed validation (%1) and was removed\n")
+                                           .arg(!rb.ok ? QStringLiteral("it does not read back") : QStringLiteral("RigLogic cannot load it: %1").arg(evErr)));
+            return 1;
+        }
     }
 
     if (!out.isEmpty()) {

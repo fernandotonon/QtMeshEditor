@@ -1,4 +1,7 @@
 #include "DnaFit.h"
+#ifndef Q_OS_WIN
+#include <sys/stat.h>
+#endif
 
 #ifdef ENABLE_OPENRIGLOGIC
 #include "DnaReaderInternal.h"
@@ -83,8 +86,21 @@ WriteResult writeFittedDna(const QString& sourcePath, const Rig& original, const
     if (!warp.valid) return fail(QStringLiteral("no valid warp"));
     const QFileInfo src(sourcePath);
     if (!src.exists()) return fail(QStringLiteral("source DNA not found: %1").arg(sourcePath));
-    if (QFileInfo(outPath).absoluteFilePath() == src.absoluteFilePath())
-        return fail(QStringLiteral("refusing to overwrite the source DNA — choose another output path"));
+    {
+        // same file by identity, not by spelling: symlinks, hard links, and case-only aliases
+        const QFileInfo dst(outPath);
+        const bool sameSpelling = dst.absoluteFilePath() == src.absoluteFilePath();
+        const bool sameCanonical = dst.exists() && dst.canonicalFilePath() == src.canonicalFilePath();
+        bool sameInode = false;
+#ifndef Q_OS_WIN
+        struct stat a{}, b{};
+        const QByteArray sa = QFile::encodeName(src.absoluteFilePath()), sb = QFile::encodeName(dst.absoluteFilePath());
+        sameInode = dst.exists() && ::stat(sa.constData(), &a) == 0 && ::stat(sb.constData(), &b) == 0 &&
+                    a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+#endif
+        if (sameSpelling || sameCanonical || sameInode)
+            return fail(QStringLiteral("refusing to overwrite the source DNA — choose another output path"));
+    }
 
     // The source, in its OWN frame and units (no coordinate transform).
     const QByteArray sp = QFile::encodeName(src.absoluteFilePath());
