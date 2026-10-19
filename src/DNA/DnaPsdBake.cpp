@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <random>
+#include <cstdint>
 
 namespace Dna {
 namespace Psd {
@@ -126,16 +126,27 @@ Validation validate(const Rig& rig, RigEvaluator& ev, const std::vector<PoseSpac
                     double maxAngleDeg, double unitToMillimetres)
 {
     Validation v;
-    std::mt19937 rng(seed);
-    std::uniform_real_distribution<double> ang(-maxAngleDeg, maxAngleDeg), pick(0.0, 1.0);
-    std::uniform_int_distribution<int> axisPick(0, 2);
+    // A fixed, seeded splitmix64 stream: the validation poses must be reproducible, and nothing here needs
+    // (or must claim) cryptographic randomness.
+    uint64_t state = uint64_t(seed) * 0x9E3779B97F4A7C15ULL + 1;
+    auto next01 = [&state]() {
+        state += 0x9E3779B97F4A7C15ULL;
+        uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+        z ^= z >> 31;
+        return double(z >> 11) / double(1ULL << 53);
+    };
+    auto ang = [&]() { return (next01() * 2.0 - 1.0) * maxAngleDeg; };
+    auto pick = [&]() { return next01(); };
+    auto axisPick = [&]() { return std::min(2, int(next01() * 3.0)); };
     const QStringList drivers = ev.driverJoints();
     std::vector<double> plainErr, psdErr;
     for (int p = 0; p < poses; ++p) {
         // a handful of drivers at once, each rotated about one random axis
         QList<QPair<QString, std::array<double, 4>>> rot;
         for (const QString& d : drivers)
-            if (pick(rng) < 0.25) rot.append({d, aboutAxis(axisPick(rng), ang(rng))});
+            if (pick() < 0.25) rot.append({d, aboutAxis(axisPick(), ang())});
         if (rot.isEmpty()) continue;
         const auto full = FaceBake::evaluatePositionsPosed(rig, ev, rot, true);
         const auto plain = FaceBake::evaluatePositionsPosed(rig, ev, rot, false);

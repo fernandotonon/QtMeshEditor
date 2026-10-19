@@ -284,12 +284,12 @@ of RigLogic, so it also works for hand-authored correctives on stylised characte
 rotated alone about its local axes (±30/60/90°) and the offset is `full rig − plain skinning`, carried into REST space
 through the inverse of the vertex's blended skinning matrix (Ogre applies a pose before skinning).
 
-Measured on SKM_Body.dna, 12 random held-out poses with ~25 % of the drivers rotated at once (±60°), millimetres:
+Measured on SKM_Body.dna, 12 seeded-random held-out poses (seed 1) with ~25 % of the drivers rotated at once (±60°), millimetres:
 
 | | mean | p95 | max |
 |---|---|---|---|
-| plain skinning vs the full rig | 1.59 | 11.15 | 76.7 |
-| plain + baked sets | 0.08 | 0.45 | 12.2 |
+| plain skinning vs the full rig | 1.02 | 5.85 | 78.3 |
+| plain + baked sets | 0.05 | 0.32 | 4.8 |
 
 `qtmesh dna fit … --bake-correctives sets.json` (with `--no-align-limbs`) bakes from the ORIGINAL rig and carries every
 offset through the fit warp's local linear part J = I + ∇displacement (`Psd::transferThroughWarp`): a uniform ×1.25 warp
