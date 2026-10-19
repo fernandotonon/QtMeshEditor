@@ -121,9 +121,11 @@ fidelity on edited bodies matters.
   written unless `-o` / `--write-dna` is given.
 * **Commit** is non-destructive: the fitted result goes to a *new* glb / DNA and the
   source is never overwritten (the writer refuses `out == source`).
-* **Not built:** an in-editor preview with an undo step. Moving a live entity's bind
-  pose means rebuilding its skinned mesh (the 256-bone and pose-buffer constraints
-  from Phases 2–3 apply), so it was left for a follow-up rather than faked.
+* **In the editor:** Object mode -> Inspector -> "Fit DNA Body" (select the imported body and the target
+  character). The report is the preview; the commit adds the fitted body as a NEW node next to the original and
+  Ctrl+Z removes it. It is deliberately not an in-place edit: moving a live entity's bind pose means rebuilding its
+  skinned mesh (the 256-bone and pose-buffer constraints from Phases 2-3 apply), whereas adding a node is trivially
+  reversible. The fit runs on the main thread (~5 s on the body).
 
 ## 8. Generic RBF corrective authoring (exploration)
 
@@ -186,7 +188,7 @@ need the same pre-pose plus landmarks before it could be trusted.
 ## 10. Known limits / follow-ups
 
 1. Corrective data is not recalibrated (section 6).
-2. No in-editor preview/undo (section 7).
+2. The in-editor fit runs synchronously (UI blocks ~5 s) and adds a node rather than editing in place (section 7).
 3. Non-affine edits are followed only by their smooth part (reported as
    `warpResidualMm`; > 5 mm raises a warning).
 4. The target must come through the editor's importer as the same submesh structure;
