@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <random>
 
 using namespace Dna;
@@ -728,6 +729,157 @@ TEST(DnaFitYaw, TurnsRootsMeshesAndNormalsAndIsInvertible)
     yawRig(rig, -3.14159265358979);
     for (size_t i = 0; i < before.meshes[0].positions.size(); ++i)
         EXPECT_NEAR(rig.meshes[0].positions[i], before.meshes[0].positions[i], 1e-5f);
+}
+
+namespace {
+// A cylinder (radius r, y in [y0,y1]) with a chosen ring/segment count — the SAME shape in a DIFFERENT
+// triangulation, outward-facing.
+void cylinder(int rings, int segs, std::vector<float>& v, std::vector<int>& f, const std::function<std::array<double, 3>(double, double, double)>& edit)
+{
+    const double r = 0.3, y0 = -0.5, y1 = 2.5;
+    for (int i = 0; i < rings; ++i) {
+        const double y = y0 + (y1 - y0) * i / (rings - 1);
+        for (int s = 0; s < segs; ++s) {
+            const double a = 2 * kPi * (s + 0.5 * (i % 2)) / segs;   // staggered rows: a different vertex layout
+            const auto p = edit(r * std::cos(a), y, r * std::sin(a));
+            v.insert(v.end(), {float(p[0]), float(p[1]), float(p[2])});
+        }
+    }
+    for (int i = 0; i + 1 < rings; ++i)
+        for (int s = 0; s < segs; ++s) {
+            const int a = i * segs + s, b = i * segs + (s + 1) % segs, c = (i + 1) * segs + s, d = (i + 1) * segs + (s + 1) % segs;
+            f.insert(f.end(), {a, c, b, b, c, d});
+        }
+}
+}  // namespace
+
+TEST(DnaRegister, SmoothWrapRecoversAKnownEditOnAReMeshedTarget)
+{
+    // Ground truth: the source tube, a smooth non-uniform edit, then the edited shape RE-MESHED (other ring
+    // and segment counts, staggered rows). A good wrap puts every ORIGINAL vertex where the edit put it —
+    // landing on the surface is not enough (a surface fit can slide along it; that was the first solver).
+    auto E = [](double x, double y, double z) {
+        const double t = (y + 0.5) / 3.0;
+        const double gx = 1.0 + 0.25 * std::exp(-std::pow((t - 0.5) / 0.2, 2));
+        return std::array<double, 3>{x * gx, y * 1.05, z * (1.0 + 0.1 * t)};
+    };
+    const Rig rig = tubeRig();
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(61, 40, tv, tf, E);
+    const RegisterResult r = registerToSurface(rig, tv, tf);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    const auto& P = rig.meshes[0].positions;
+    const auto& W = r.positions[0];
+    ASSERT_EQ(P.size(), W.size());
+    double sum = 0, worst = 0;
+    for (size_t i = 0; i + 2 < P.size(); i += 3) {
+        const auto want = E(P[i], P[i + 1], P[i + 2]);
+        const double d = std::sqrt(std::pow(W[i] - want[0], 2) + std::pow(W[i + 1] - want[1], 2) + std::pow(W[i + 2] - want[2], 2));
+        sum += d;
+        worst = std::max(worst, d);
+    }
+    const double mean = sum / double(P.size() / 3);
+    EXPECT_LT(mean, 0.03) << "mean error " << mean << " (radius 0.3, height 3.0)";
+    EXPECT_LT(worst, 0.12) << "worst error " << worst;
+}
+
+TEST(DnaRegister, SmoothWrapBeatsDoingNothingByAWideMargin)
+{
+    auto E = [](double x, double y, double z) { return std::array<double, 3>{x * 1.3, y, z * 0.9}; };
+    const Rig rig = tubeRig();
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(41, 30, tv, tf, E);
+    const RegisterResult r = registerToSurface(rig, tv, tf);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    const auto& P = rig.meshes[0].positions;
+    double fitted = 0, none = 0;
+    for (size_t i = 0; i + 2 < P.size(); i += 3) {
+        const auto want = E(P[i], P[i + 1], P[i + 2]);
+        fitted += std::sqrt(std::pow(r.positions[0][i] - want[0], 2) + std::pow(r.positions[0][i + 1] - want[1], 2) + std::pow(r.positions[0][i + 2] - want[2], 2));
+        none += std::sqrt(std::pow(P[i] - want[0], 2) + std::pow(P[i + 1] - want[1], 2) + std::pow(P[i + 2] - want[2], 2));
+    }
+    EXPECT_LT(fitted, none * 0.25) << "fitted " << fitted << " vs unfitted " << none;
+}
+
+TEST(DnaRegister, OptionsOnlyNricpUnderstandsAreReportedNotDropped)
+{
+    const Rig rig = tubeRig();
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(41, 30, tv, tf, [](double x, double y, double z) { return std::array<double, 3>{x * 1.2, y, z}; });
+    RegisterOptions o;                     // smooth (default)
+    o.stiffness = {50, 20, 8};
+    o.jointAnchors.push_back({QStringLiteral("root"), {0, 0, 0}});
+    const RegisterResult r = registerToSurface(rig, tv, tf, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    int mentions = 0;
+    for (const QString& w : r.warnings) if (w.contains("NRICP")) ++mentions;
+    EXPECT_EQ(mentions, 2) << r.warnings.join(" | ").toStdString();
+}
+
+TEST(DnaRegister, NricpRemainsAvailableAsAnOption)
+{
+    const Rig rig = tubeRig();
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(41, 30, tv, tf, [](double x, double y, double z) { return std::array<double, 3>{x * 1.2, y, z}; });
+    RegisterOptions o;
+    o.method = RegisterOptions::Method::Nricp;
+    const RegisterResult r = registerToSurface(rig, tv, tf, o);
+    EXPECT_TRUE(r.ok) << r.error.toStdString();
+}
+
+TEST(DnaRegister, JointsThenSurfaceRecoversAnEditThatNeitherRouteAloneDoes)
+{
+    // The target is an edited, RE-MESHED tube plus a skeleton: the joints carry the proportions (a taller,
+    // wider body), the surface carries a bulge the joints cannot express. Skeleton first, then surface.
+    auto E = [](double x, double y, double z) {
+        const double t = (y + 0.5) / 3.0;
+        const double bulge = 1.0 + 0.30 * std::exp(-std::pow((t - 0.5) / 0.12, 2));   // not expressible by a few joints
+        return std::array<double, 3>{x * 1.2 * bulge, y * 1.1, z * bulge};
+    };
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) {
+        // joints sit on the axis: only the global proportions apply to them
+        const auto e = E(w[i][0], w[i][1], w[i][2]);
+        anchors.push_back({rig.joints[i].name, {w[i][0] * 1.2, w[i][1] * 1.1, w[i][2]}});
+        (void)e;
+    }
+    std::vector<float> tv;
+    std::vector<int> tf;
+    cylinder(61, 40, tv, tf, E);
+    const JointRegisterResult jointsOnly = registerByJoints(rig, anchors, false);
+    const JointRegisterResult both = registerJointsThenSurface(rig, anchors, tv, tf, false, 6);
+    ASSERT_TRUE(jointsOnly.ok) << jointsOnly.error.toStdString();
+    ASSERT_TRUE(both.ok) << both.error.toStdString();
+    EXPECT_TRUE(both.surfaceRefined);
+    auto meanError = [&](const std::vector<float>& W) {
+        const auto& P = rig.meshes[0].positions;
+        double sum = 0;
+        for (size_t i = 0; i + 2 < P.size(); i += 3) {
+            const auto want = E(P[i], P[i + 1], P[i + 2]);
+            sum += std::sqrt(std::pow(W[i] - want[0], 2) + std::pow(W[i + 1] - want[1], 2) + std::pow(W[i + 2] - want[2], 2));
+        }
+        return sum / double(P.size() / 3);
+    };
+    const double e1 = meanError(jointsOnly.positions[0]), e2 = meanError(both.positions[0]);
+    EXPECT_LT(e2, e1 * 0.5) << "joints only " << e1 << ", joints + surface " << e2;
+    EXPECT_LT(e2, 0.03);
+}
+
+TEST(DnaRegister, JointsThenSurfaceRefusesAnEmptyTarget)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, w[i]});
+    const JointRegisterResult r = registerJointsThenSurface(rig, anchors, {}, {}, false);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains("empty")) << r.error.toStdString();
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

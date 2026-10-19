@@ -28,6 +28,15 @@ namespace Dna {
 namespace Fit {
 
 struct RegisterOptions {
+    /// Smooth (default): coarse-to-fine ICP whose deformation is a GLOBAL smooth RBF warp that gains
+    /// control points level by level — few degrees of freedom early, so correspondences cannot slide
+    /// along the surface. Nricp: the per-vertex-affine Amberg solver the face rig uses (kept for
+    /// comparison; it lands on the surface but drifts tangentially).
+    enum class Method { Smooth, Nricp };
+    Method method = Method::Smooth;
+    /// Smooth method: ICP rounds per resolution level (7 levels, 24 -> 1500 control points). Measured on a
+    /// re-meshed, edited MetaHuman body: 1 round = 8.7 mm mean joint error, 3 = 7.5, 6 = 6.1, 10 = 5.2.
+    int rounds = 8;
     bool alignHeight = true;          ///< uniform scale by Y extent + match feet / centre before the fit
     std::vector<double> stiffness;    ///< NRICP schedule (empty = the library default)
     /// Optional anchors: body joint name -> position in the TARGET's frame. The vertex
@@ -78,6 +87,7 @@ struct JointRegisterResult {
     std::vector<std::vector<float>> positions;   ///< per rig mesh, per POSITION, warped onto the target proportions
     Rig alignedRig;                              ///< the rig after limb pose alignment (== input when none ran) — pass THIS to Fit::fit
     double yawDegrees = 0;                       ///< turn applied so the body faces the target's way (0 = none)
+    bool surfaceRefined = false;                 ///< the surface wrap ran after the joint warp (registerJointsThenSurface)
     int limbChainsAligned = 0;
     QStringList limbAngles;                      ///< rotation applied per chain
     int anchorsUsed = 0;
@@ -87,6 +97,15 @@ struct JointRegisterResult {
 /// Needs at least 6 anchors that are not coplanar. The warp is built from the anchors'
 /// neutral world positions to their targets; every mesh position follows it.
 JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnchor>& anchors, bool alignLimbPose = true);
+
+/// Skeleton first, then shape: registerByJoints (facing, limb pose, proportions), then the smooth surface
+/// wrap starting from that. This is what a stylised character needs — the skeleton carries pose and
+/// proportions the surface cannot recover, the surface carries the volume (clothes, hips, belly) the
+/// skeleton cannot. `rounds` is registerToSurface's ICP rounds per level. The returned positions are in the
+/// TARGET frame and `alignedRig` is the rig Fit::fit must start from, exactly as for registerByJoints.
+JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
+                                              const std::vector<float>& targetV, const std::vector<int>& targetF,
+                                              bool alignLimbPose = true, int rounds = 8);
 
 /// `targetV` / `targetF`: the target surface in the rig's axis convention (+Y up),
 /// x,y,z per vertex and triangle indices.

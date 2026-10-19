@@ -185,6 +185,52 @@ proportions*, not a body shaped like the officer's clothes or head (the body DNA
 the warp is smooth, so hands/feet detail does not follow). The surface route would
 need the same pre-pose plus landmarks before it could be trusted.
 
+## 9b. The wrapping step — ground-truth test on a re-meshed MetaHuman
+
+Poly Hammer's "DNA Auto-Fitting" calibrates a DNA from a **wrapped mesh** (one conformed to the DNA's
+topology and UV layout) — which is what our same-topology mode already consumes. What was missing is
+producing that wrap from an arbitrary surface. `qtmesh dna fit --register` (MCP/GUI mode "surface") now does:
+a height/feet pre-align, then a **coarse-to-fine ICP whose deformation is a global smooth RBF warp**
+(`registerToSurface`, 7 levels from 24 to 1500 control points, `rounds` ICP rounds per level, closest points
+gated by normal agreement and an adaptive distance gate; the windings of the two meshes may disagree and are
+detected from the first correspondences). The per-vertex-affine NRICP of the face rig is kept as
+`--register-method nricp`.
+
+**Why not NRICP:** it lands on the surface (0.025 % residual) but slides vertices along it — against a
+known edit its vertices were 53 mm from where the edit put them, WORSE than doing nothing (41 mm). A surface
+residual says nothing about correspondence; the test below measures the thing that matters.
+
+**The test** (`--reference <same-topology edited mesh>` reports it): take the MetaHuman body, apply a known
+smooth edit with a lattice (wider hips/torso, bulged belly, 5 % taller), RE-MESH the edited body with
+QuadriFlow (new topology, new UVs), wrap the original body onto the re-meshed surface, and compare every
+original vertex with where the edit put it, and every joint with the joint the exact same-topology fit gives.
+
+| Re-mesh | Vertex error mean / p95 / max (mm) | Joint error mean / max (mm) | Unfitted: vertices / joints (mean mm) |
+|---|---|---|---|
+| NRICP, 9k faces | 53.5 / 136 / 188 | — | 41.4 / 51.0 |
+| smooth wrap, 9k faces | 3.5 / 11.6 / 15.6 | 5.1 / 13.8 | 41.4 / 51.0 |
+| smooth wrap, 30k faces | 2.1 / 5.9 / 11.5 | 2.5 / 6.2 | 41.4 / 51.0 |
+
+The worst regions are the fingertips (the re-mesh blobs them), not the body. More ICP rounds help with
+diminishing returns (joint mean error at 1 / 3 / 6 / 10 rounds: 8.7 / 7.5 / 6.1 / 5.2 mm); the default is 8
+(~12 s on the body). The unit tests pin the same property on a synthetic tube re-meshed with a different
+layout (`DnaRegister.SmoothWrapRecoversAKnownEditOnAReMeshedTarget`).
+
+**A bug found on the way:** `buildWarp` subsampled control points assuming a volume-filling cloud, so on a
+surface mesh it used 74 of 900 allowed centres (the original Phase 4 fit!). It now steers toward the budget
+(~85 %); the same-topology body fit uses 657 centres and the warp residual drops from the old 3.5 mm.
+
+**On the stylised officer** the surface wrap alone no longer collapses (it follows the trousers/shirt volume
+into a wide-hipped body) but it does not match the T-pose. The two routes are complementary, so they are now
+combined: `--register-joints --refine-surface` (MCP mode `joints+surface`, `registerJointsThenSurface`) runs the
+skeleton route first — facing, limb pose (T-pose arms), proportions — and then the smooth surface wrap
+starting from that, so the skeleton supplies pose and proportions the surface cannot recover and the surface
+supplies the volume (clothes, hips, belly) the skeleton cannot. On officer_rigged the arms come out in the
+T-pose with the officer's volume, reference-pose stretch p99 <= 0.31 (worst hip edge 6.7x); the legs splay
+somewhat because the wrap follows the clothed silhouette (trousers and shoes), which a bare-body target would
+not do. A synthetic unit test pins the benefit: on an edited, re-meshed tube whose bulge no joint can express,
+joints-only leaves 2x+ the error of joints + surface.
+
 ## 10. Known limits / follow-ups
 
 1. Corrective data is not recalibrated (section 6).

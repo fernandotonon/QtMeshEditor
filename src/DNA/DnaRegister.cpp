@@ -1,6 +1,7 @@
 #include "DnaRegister.h"
 
 #include "FaceRig/NonRigidICP.h"
+#include "QuadRemesh/QuadRemeshCore.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,20 +21,118 @@ struct Bounds {
 
 }  // namespace
 
-RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                 const RegisterOptions& options)
-{
-    RegisterResult r;
-    if (targetV.size() < 9 || targetF.size() < 3) { r.error = QStringLiteral("the target surface is empty"); return r; }
-    for (float v : targetV) if (!std::isfinite(v)) { r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
-    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+namespace {
 
-    // ---- the template: every imported mesh's positions + triangles, concatenated ----
+// Smooth coarse-to-fine ICP (see RegisterOptions::Method::Smooth). `X` holds the template positions
+// (x,y,z per vertex) and is deformed in place. Returns false with `err` set on failure.
+bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vector<float>& targetV,
+               const std::vector<int>& targetF, int roundsPerLevel, QString* err)
+{
+    std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
+    QuadRemesh::SurfaceLocator loc;
+    loc.build(targetV, tidx);
+    if (!loc.valid()) { *err = QStringLiteral("could not index the target surface"); return false; }
+    const size_t nv = X.size() / 3;
+    Bounds ub;
+    for (size_t i = 0; i + 2 < targetV.size(); i += 3) ub.add(&targetV[i]);
+    const double diag = ub.diag();
+
+    // target triangle normals
+    std::vector<std::array<double, 3>> tn(targetF.size() / 3);
+    for (size_t t = 0; t < tn.size(); ++t) {
+        const float *a = &targetV[size_t(targetF[t * 3]) * 3], *b = &targetV[size_t(targetF[t * 3 + 1]) * 3], *c = &targetV[size_t(targetF[t * 3 + 2]) * 3];
+        const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+        std::array<double, 3> n{uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx};
+        const double l = std::sqrt(n[0] * n[0] + n[1] * n[1] + n[2] * n[2]);
+        if (l > 1e-20) for (double& k : n) k /= l;
+        tn[t] = n;
+    }
+    auto vertexNormals = [&](const std::vector<float>& P) {
+        std::vector<std::array<double, 3>> n(nv, {0, 0, 0});
+        for (size_t t = 0; t + 2 < tf.size(); t += 3) {
+            const float *a = &P[size_t(tf[t]) * 3], *b = &P[size_t(tf[t + 1]) * 3], *c = &P[size_t(tf[t + 2]) * 3];
+            const double ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+            const std::array<double, 3> f{uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx};   // area-weighted
+            for (int k = 0; k < 3; ++k) for (int c3 = 0; c3 < 3; ++c3) n[size_t(tf[t + size_t(k)])][size_t(c3)] += f[size_t(c3)];
+        }
+        for (auto& v : n) { const double l = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]); if (l > 1e-20) for (double& k : v) k /= l; }
+        return n;
+    };
+
+    // Windings may disagree between the two meshes (different importers/tools): decide by the initial
+    // correspondences which sign makes the normals agree, instead of assuming outward-facing for both.
+    double normalSign = 1.0;
+    {
+        const std::vector<std::array<double, 3>> vn0 = vertexNormals(X);
+        long pos = 0, neg = 0;
+        for (size_t v = 0; v < nv; v += std::max<size_t>(1, nv / 4000)) {
+            int tri; float bary[3], q[3];
+            if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+            const double d = vn0[v][0] * tn[size_t(tri)][0] + vn0[v][1] * tn[size_t(tri)][1] + vn0[v][2] * tn[size_t(tri)][2];
+            if (d > 0.5) ++pos; else if (d < -0.5) ++neg;
+        }
+        if (neg > pos) normalSign = -1.0;
+    }
+
+    // control points per level, coarse -> fine; a few ICP rounds each
+    const int levels[] = {24, 48, 96, 192, 400, 900, 1500};
+    const double ridge[] = {1e-3, 5e-4, 1e-4, 5e-5, 1e-5, 1e-6, 1e-7};
+    const int nlev = 7;
+    for (int L = 0; L < nlev; ++L) {
+        for (int round = 0; round < roundsPerLevel; ++round) {
+            const std::vector<std::array<double, 3>> vn = vertexNormals(X);
+            std::vector<std::array<double, 3>> src, dst;
+            src.reserve(nv); dst.reserve(nv);
+            // adaptive outlier gate: pairs further than a multiple of the median are dropped
+            std::vector<double> dists;
+            dists.reserve(nv);
+            struct Pair { size_t v; float q[3]; double d; };
+            std::vector<Pair> pairs;
+            pairs.reserve(nv);
+            for (size_t v = 0; v < nv; ++v) {
+                int tri; float bary[3], q[3];
+                if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+                const auto& n = tn[size_t(tri)];
+                const double ndot = normalSign * (vn[v][0] * n[0] + vn[v][1] * n[1] + vn[v][2] * n[2]);
+                if (ndot < 0.5) continue;       // normals must agree (60 deg): rejects the wrong side of thin parts
+                const double dx = X[v * 3] - q[0], dy = X[v * 3 + 1] - q[1], dz = X[v * 3 + 2] - q[2];
+                const double d = std::sqrt(dx * dx + dy * dy + dz * dz);
+                pairs.push_back({v, {q[0], q[1], q[2]}, d});
+                dists.push_back(d);
+            }
+            if (pairs.size() < 20) { *err = QStringLiteral("too few compatible correspondences (the target does not resemble the body)"); return false; }
+            std::sort(dists.begin(), dists.end());
+            const double gate = std::max(3.0 * dists[dists.size() / 2], 0.002 * diag);
+            for (const Pair& p : pairs) {
+                if (p.d > gate) continue;
+                src.push_back({X[p.v * 3], X[p.v * 3 + 1], X[p.v * 3 + 2]});
+                dst.push_back({p.q[0], p.q[1], p.q[2]});
+            }
+            Options wo;
+            wo.maxControlPoints = levels[L];
+            wo.regularisation = ridge[L];
+            QString werr;
+            const Warp w = buildWarp(src, dst, wo, &werr);
+            if (!w.valid) { *err = QStringLiteral("smooth warp failed: %1").arg(werr); return false; }
+            for (size_t v = 0; v < nv; ++v) {
+                const auto d = w.displacement({double(X[v * 3]), double(X[v * 3 + 1]), double(X[v * 3 + 2])});
+                X[v * 3] += float(d[0]); X[v * 3 + 1] += float(d[1]); X[v * 3 + 2] += float(d[2]);
+            }
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+namespace {
+
+// Every imported mesh's positions + triangles, concatenated (positions in rig frame). `offset[mi]` is where
+// mesh `mi` starts. Returns the imported mesh indices (empty = nothing to register).
+std::vector<size_t> buildTemplate(const Rig& rig, std::vector<float>& tv, std::vector<int>& tf, std::vector<size_t>& offset)
+{
     const std::vector<size_t> imported = importedMeshIndices(rig);
-    if (imported.empty()) { r.error = QStringLiteral("the rig has no mesh to register"); return r; }
-    std::vector<float> tv;
-    std::vector<int> tf;
-    std::vector<size_t> offset(rig.meshes.size(), 0);
+    offset.assign(rig.meshes.size(), 0);
     for (size_t mi : imported) {
         const Mesh& m = rig.meshes[mi];
         offset[mi] = tv.size() / 3;
@@ -47,6 +146,25 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
             for (size_t k = 1; k + 1 < face.size(); ++k) { tf.push_back(pos(0)); tf.push_back(pos(k)); tf.push_back(pos(k + 1)); }
         }
     }
+    return imported;
+}
+
+}  // namespace
+
+RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targetV, const std::vector<int>& targetF,
+                                 const RegisterOptions& options)
+{
+    RegisterResult r;
+    if (targetV.size() < 9 || targetF.size() < 3) { r.error = QStringLiteral("the target surface is empty"); return r; }
+    for (float v : targetV) if (!std::isfinite(v)) { r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
+    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+
+    // ---- the template: every imported mesh's positions + triangles, concatenated ----
+    std::vector<float> tv;
+    std::vector<int> tf;
+    std::vector<size_t> offset;
+    const std::vector<size_t> imported = buildTemplate(rig, tv, tf, offset);
+    if (imported.empty()) { r.error = QStringLiteral("the rig has no mesh to register"); return r; }
     r.templateVertices = int(tv.size() / 3);
     if (tf.empty()) { r.error = QStringLiteral("the rig mesh has no triangles"); return r; }
 
@@ -70,6 +188,11 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
         for (int k = 0; k < 3; ++k) aligned[i + size_t(k)] = float(s * double(tv[i + size_t(k)]) + shift[size_t(k)]);
 
     const std::vector<std::array<double, 3>> jointPos = jointWorldPositions(rig);
+    // Options that only the NRICP method understands must not be dropped silently.
+    if (options.method == RegisterOptions::Method::Smooth) {
+        if (!options.stiffness.empty()) r.warnings << QStringLiteral("a stiffness schedule only applies to the NRICP method; the smooth wrap ignored it");
+        if (!options.jointAnchors.empty()) r.warnings << QStringLiteral("joint anchors only apply to the NRICP method; the smooth wrap ignored them");
+    }
     FaceRig::NricpOptions no;
     no.skipPrealign = options.alignHeight;   // our own feet/height/centre alignment is the start; do not undo it
     if (!options.stiffness.empty()) no.stiffness = options.stiffness;
@@ -87,7 +210,31 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
         if (bv >= 0) no.landmarks.push_back({bv, a.second});
     }
 
-    const FaceRig::NricpResult nr = FaceRig::fit(aligned, tf, targetV, targetF, no);
+    FaceRig::NricpResult nr;
+    if (options.method == RegisterOptions::Method::Smooth) {
+        std::vector<float> X = aligned;
+        QString serr;
+        if (!smoothIcp(X, tf, targetV, targetF, std::max(1, options.rounds), &serr)) { r.error = serr; return r; }
+        // residual to the target surface, for the report
+        std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
+        QuadRemesh::SurfaceLocator loc;
+        loc.build(targetV, tidx);
+        nr.fitted = X;
+        nr.diag = ub.diag();
+        double sum = 0;
+        for (size_t v = 0; v * 3 + 2 < X.size(); ++v) {
+            int tri; float bary[3], q[3];
+            double d = 0;
+            if (loc.closest(&X[v * 3], tri, bary, q)) d = std::sqrt(double(X[v*3]-q[0])*(X[v*3]-q[0]) + double(X[v*3+1]-q[1])*(X[v*3+1]-q[1]) + double(X[v*3+2]-q[2])*(X[v*3+2]-q[2]));
+            nr.residual.push_back(float(d));
+            sum += d;
+            nr.maxResidual = std::max(nr.maxResidual, d);
+        }
+        nr.meanResidual = nr.residual.empty() ? 0 : sum / double(nr.residual.size());
+        nr.ok = true;
+    } else {
+        nr = FaceRig::fit(aligned, tf, targetV, targetF, no);
+    }
     if (!nr.ok || nr.fitted.size() != tv.size()) { r.error = QStringLiteral("the non-rigid registration did not converge"); return r; }
 
     r.positions.assign(rig.meshes.size(), {});
@@ -257,6 +404,44 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
         }
     }
     r.ok = true;
+    return r;
+}
+
+JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
+                                              const std::vector<float>& targetV, const std::vector<int>& targetF,
+                                              bool alignLimbPose, int rounds)
+{
+    // 1. skeleton: facing, limb pose and proportions (a smooth warp from matched joints)
+    JointRegisterResult r = registerByJoints(rig, anchors, alignLimbPose);
+    if (!r.ok) return r;
+    // 2. surface: refine the shape from that start. The template is the ALIGNED rig's meshes carried through
+    //    the joint warp; the ICP then pulls it onto the surface.
+    std::vector<float> X;
+    std::vector<int> tf;
+    std::vector<size_t> offset;
+    const std::vector<size_t> imported = buildTemplate(r.alignedRig, X, tf, offset);
+    if (imported.empty() || tf.empty()) { r.ok = false; r.error = QStringLiteral("the rig has no mesh to register"); return r; }
+    if (targetV.size() < 9 || targetF.size() < 3) { r.ok = false; r.error = QStringLiteral("the target surface is empty"); return r; }
+    for (float v : targetV) if (!std::isfinite(v)) { r.ok = false; r.error = QStringLiteral("the target surface has non-finite positions"); return r; }
+    for (int i : targetF) if (i < 0 || size_t(i) * 3 + 2 >= targetV.size()) { r.ok = false; r.error = QStringLiteral("the target surface has an out-of-range triangle index"); return r; }
+    // start from the joint-warped positions
+    for (size_t mi : imported) {
+        const auto& P = r.positions[mi];
+        if (P.size() != r.alignedRig.meshes[mi].positions.size()) { r.ok = false; r.error = QStringLiteral("internal: joint warp / mesh size mismatch"); return r; }
+        std::copy(P.begin(), P.end(), X.begin() + std::ptrdiff_t(offset[mi] * 3));
+    }
+    QString err;
+    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), &err)) {
+        r.ok = false;
+        r.error = QStringLiteral("surface refinement failed: %1").arg(err);
+        return r;
+    }
+    for (size_t mi : imported) {
+        const size_t np = r.alignedRig.meshes[mi].positions.size() / 3;
+        r.positions[mi].assign(X.begin() + std::ptrdiff_t(offset[mi] * 3), X.begin() + std::ptrdiff_t((offset[mi] + np) * 3));
+    }
+    r.surfaceRefined = true;
+    r.warnings << QStringLiteral("shape refined onto the target surface after the skeleton alignment");
     return r;
 }
 
