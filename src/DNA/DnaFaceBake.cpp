@@ -107,13 +107,21 @@ std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvalua
     applyControls(ev, {}, nullptr);
     const std::vector<Aff> neutral = worldPose(rig, ev);
     ev.resetControls();
-    for (const auto& r : rotations) ev.setDriverRotation(r.first, r.second);
+    // One rotation per joint: a joint named twice would otherwise be set twice (last write wins in
+    // RigLogic's controls) but composed twice into the local pose below.
+    QList<QPair<QString, std::array<double, 4>>> unique;
+    for (const auto& r : rotations) {
+        bool dup = false;
+        for (auto& u : unique) if (u.first == r.first) { u.second = r.second; dup = true; break; }
+        if (!dup) unique.append(r);
+    }
+    for (const auto& r : unique) ev.setDriverRotation(r.first, r.second);
     ev.calculate();
     const size_t n = rig.joints.size();
     std::vector<Aff> local(n), world(n);
     for (size_t j = 0; j < n; ++j) {
         JointPose p = ev.jointPose(int(j));
-        for (const auto& r : rotations)
+        for (const auto& r : unique)
             if (ev.jointIndex(r.first) == int(j)) {
                 const auto& a = p.orientation;
                 const auto& d = r.second;

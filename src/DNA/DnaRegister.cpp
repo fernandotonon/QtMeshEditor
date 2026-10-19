@@ -40,6 +40,9 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
         tv.insert(tv.end(), m.positions.begin(), m.positions.end());
         for (const auto& face : m.faces) {
             if (face.size() < 3) continue;
+            bool valid = true;
+            for (uint32_t li : face) valid = valid && li < m.layouts.size() && m.layouts[li].position < m.positions.size() / 3;
+            if (!valid) continue;   // a corrupt face must not take the registration down with it
             auto pos = [&](size_t k) { return int(offset[mi] + m.layouts[face[k]].position); };
             for (size_t k = 1; k + 1 < face.size(); ++k) { tf.push_back(pos(0)); tf.push_back(pos(k)); tf.push_back(pos(k + 1)); }
         }

@@ -243,6 +243,10 @@ static int runPose(int argc, char* argv[])
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
     }
     if (path.isEmpty() || sets.isEmpty()) { usage(); return 2; }
+    if (vsRig && !compare) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --vs-rig is a part of --compare (it adds the full-rig ground truth to that report); pass both\n"));
+        return 2;
+    }
     if (!available()) {
         CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
