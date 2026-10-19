@@ -7,17 +7,19 @@
 
 using namespace PoseSpace;
 
+namespace { constexpr double kPi = 3.14159265358979323846; }
+
 namespace {
 Quat aboutZ(double deg)
 {
-    const double h = deg * M_PI / 360.0;
+    const double h = deg * kPi / 360.0;
     return {std::cos(h), 0, 0, std::sin(h)};
 }
 }  // namespace
 
 TEST(PoseSpaceRbf, AngleBetweenIsSignIndependentAndGeodesic)
 {
-    EXPECT_NEAR(angleBetween(aboutZ(0), aboutZ(90)), M_PI / 2, 1e-9);
+    EXPECT_NEAR(angleBetween(aboutZ(0), aboutZ(90)), kPi / 2, 1e-9);
     const Quat a = aboutZ(40);
     const Quat neg{-a[0], -a[1], -a[2], -a[3]};   // the same rotation
     EXPECT_NEAR(angleBetween(a, neg), 0.0, 1e-9);

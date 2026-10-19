@@ -13,7 +13,7 @@ using PoseSpace::Quat;
 
 Quat aboutAxis(int axis, double deg)
 {
-    const double h = deg * M_PI / 360.0;
+    const double h = deg * 3.14159265358979323846 / 360.0;
     Quat q{std::cos(h), 0, 0, 0};
     q[size_t(1 + axis)] = std::sin(h);
     return q;

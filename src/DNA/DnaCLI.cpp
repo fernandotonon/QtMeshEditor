@@ -1263,7 +1263,12 @@ static int runPsd(int argc, char* argv[])
         report.insert("psdMaxMm", v.psdMaxMm);
     }
     if (json) CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
-    else for (auto it = report.begin(); it != report.end(); ++it) CLIPipeline::writeOutput(QStringLiteral("%1: %2\n").arg(it.key(), it.value().toString()));
+    else for (auto it = report.begin(); it != report.end(); ++it) {
+        // a QStringList only converts to text when it has exactly one element
+        const QString v = it.value().typeId() == QMetaType::QStringList ? it.value().toStringList().join(QStringLiteral("; "))
+                                                                        : it.value().toString();
+        CLIPipeline::writeOutput(QStringLiteral("%1: %2\n").arg(it.key(), v));
+    }
     return 0;
 }
 

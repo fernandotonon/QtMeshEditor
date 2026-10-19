@@ -280,7 +280,7 @@ offsets on the MESH — `delta(q) = Σ w_i(q)·delta_i`, with Gaussian RBF weigh
 own offsets exactly, the bind pose as an implicit zero sample, and a ridge term for near-duplicate poses. It is independent
 of RigLogic, so it also works for hand-authored correctives on stylised characters (`qtmesh-pose-correctives-v1` JSON).
 
-`qtmesh dna psd body.dna --bake sets.json --validate` bakes one set per driver joint (44 on the body): each driver is
+`qtmesh dna psd body.dna --bake sets.json --validate --poses 12` bakes one set per driver joint (44 on the body): each driver is
 rotated alone about its local axes (±30/60/90°) and the offset is `full rig − plain skinning`, carried into REST space
 through the inverse of the vertex's blended skinning matrix (Ogre applies a pose before skinning).
 
