@@ -81,7 +81,8 @@ struct IcpAnchor {
 
 bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vector<float>& targetV,
                const std::vector<int>& targetF, int roundsPerLevel, int detailRounds, QString* err, std::vector<IcpAnchor>* anchors = nullptr,
-               const std::vector<int>* tmplGroup = nullptr, const std::vector<int>* tgtGroup = nullptr)
+               const std::vector<int>* tmplGroup = nullptr, const std::vector<int>* tgtGroup = nullptr,
+               const std::vector<char>* extraSkip = nullptr)
 {
     std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
     QuadRemesh::SurfaceLocator loc;
@@ -169,6 +170,8 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
             skipVertex = std::move(next);
         }
     }
+
+    if (extraSkip) for (size_t v = 0; v < nv && v < extraSkip->size(); ++v) if ((*extraSkip)[v]) skipVertex[v] = 1;
 
     // Windings may disagree between the two meshes (different importers/tools): decide by the initial
     // correspondences which sign makes the normals agree, instead of assuming outward-facing for both.
@@ -544,7 +547,17 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
     // A T-posed character's joints are (nearly) coplanar, so a warp fitted to them alone
     // has no depth information and squashes the body flat. Constrain depth to the overall
     // similarity scale with ghost points offset along the depth axis (Z) of every anchor.
+    // Only when the target's joints really ARE (nearly) planar: a skeleton with genuine depth offsets (Mixamo's
+    // knees and spine) would be dragged back toward a uniform depth scale by the ghosts, and the lower body ended
+    // up 2-3 cm behind the target's legs.
+    double dstYRange = 0, dstZRange = 0;
     {
+        double ylo = 1e300, yhi = -1e300, zlo = 1e300, zhi = -1e300;
+        for (const auto& p : dst) { ylo = std::min(ylo, p[1]); yhi = std::max(yhi, p[1]); zlo = std::min(zlo, p[2]); zhi = std::max(zhi, p[2]); }
+        dstYRange = yhi - ylo; dstZRange = zhi - zlo;
+    }
+    const bool planarTarget = dstZRange < 0.06 * std::max(dstYRange, 1e-9);
+    if (planarTarget) {
         std::array<double, 3> sc{0, 0, 0}, dc{0, 0, 0};
         for (size_t i = 0; i < src.size(); ++i) for (int k = 0; k < 3; ++k) { sc[size_t(k)] += src[i][size_t(k)] / double(src.size()); dc[size_t(k)] += dst[i][size_t(k)] / double(src.size()); }
         double ss = 0, ds = 0, ymin = 1e300, ymax = -1e300;
@@ -632,12 +645,27 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
             if (bw >= 0) tmplGroup[offset[mi] + v] = bodyGroupOfJoint(r.alignedRig, int(bj));
         }
     }
+    // Hands and feet are not matched to the surface: a target's shoes and gloves are clothing, and pulling a bare
+    // foot onto a boot bends and swells it. They follow the skeleton alignment (and the warp) instead.
+    std::vector<char> extremity(X.size() / 3, 0);
+    for (size_t mi : imported) {
+        const Mesh& m = r.alignedRig.meshes[mi];
+        for (size_t v = 0; v < m.positions.size() / 3 && v < m.skin.size(); ++v) {
+            uint16_t bj = 0; float bw = -1;
+            for (const SkinInfluence& inf : m.skin[v]) if (inf.weight > bw) { bw = inf.weight; bj = inf.joint; }
+            if (bw < 0) continue;
+            for (int j = int(bj), guard = 0; j >= 0 && size_t(j) < r.alignedRig.joints.size() && guard < 64; j = r.alignedRig.joints[size_t(j)].parent, ++guard) {
+                const QString n = r.alignedRig.joints[size_t(j)].name;
+                if (n.startsWith(QStringLiteral("hand")) || n.startsWith(QStringLiteral("foot")) || n.startsWith(QStringLiteral("ball"))) { extremity[offset[mi] + v] = 1; break; }
+            }
+        }
+    }
     std::vector<IcpAnchor> icpAnchors;
     for (const JointAnchor& an : anchors)
         for (size_t j = 0; j < r.alignedRig.joints.size() && j < r.warpedJointPositions.size(); ++j)
             if (r.alignedRig.joints[j].name == an.bodyJoint) { icpAnchors.push_back({r.warpedJointPositions[j], an.target}); break; }
     QString err;
-    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), detailRounds, &err, &icpAnchors, &tmplGroup, targetVertexGroup)) {
+    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), detailRounds, &err, &icpAnchors, &tmplGroup, targetVertexGroup, &extremity)) {
         r.ok = false;
         r.error = QStringLiteral("surface refinement failed: %1").arg(err);
         return r;
