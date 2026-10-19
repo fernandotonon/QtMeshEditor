@@ -157,12 +157,24 @@ and scaled by the similarity factor; and name pairing must be case-insensitive a
 `mixamorig:` prefix, with unmatched joints reported rather than silently dropped (at least 6 pairs
 are required).
 
+**Limb pose alignment (default on; `--no-align-limbs` to skip).** Before the warp, each limb chain
+(upper arm -> forearm -> hand, thigh -> calf -> foot, both sides) is rotated by the shortest arc
+onto the target's bone direction, root to leaf, and the body is linear-blend-skinned into that new
+bind pose (`alignLimbs`; correctives are not applied). On the officer: arms rotated 29 deg / 35-38 deg,
+legs 8 deg / 1-2 deg; the render shows a clean T-pose (no drooping arms) and reference-pose stretch p99
+drops to <= 0.07 (from <= 0.38 without it). `--lods` and `--write-dna` are refused with it because the
+written DNA keeps the original neutral orientations — use `--no-align-limbs` for those.
+
+**Mirrored left/right (found by this alignment).** The officer's "Left" bones sit on the rig's **right**
+(+X vs -X). Pairing by name crossed the body; the position-only warp hid it because a body is nearly
+symmetric, and the first alignment attempt exposed it as a 103 deg twist (a render of tangled legs and one
+missing arm). `registerByJoints` now compares the left-minus-right vectors of both skeletons and, if they
+oppose, pairs sides by position and says so in the warnings.
+
 What it still is **not**: the result is the *MetaHuman body with the officer's skeleton
 proportions*, not a body shaped like the officer's clothes or head (the body DNA has no head, and
-the warp is smooth, so hands/feet detail does not follow). Arms droop slightly because the
-MetaHuman rest pose is an A-pose and the target a T-pose — a pose pre-alignment (rotating the
-limbs to the target's bone directions before the warp) is the next improvement, and the surface
-route would need that pre-pose plus landmarks before it could be trusted.
+the warp is smooth, so hands/feet detail does not follow). The surface route would
+need the same pre-pose plus landmarks before it could be trusted.
 
 ## 10. Known limits / follow-ups
 

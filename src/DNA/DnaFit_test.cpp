@@ -644,4 +644,65 @@ TEST(DnaRegister, AnEmptyOrBrokenTargetSurfaceIsRefused)
     EXPECT_FALSE(registerToSurface(rig, {0, 0, 0, 1, 0, 0, 0, 1, 0}, {0, 1, 7}).ok);   // index out of range
 }
 
+TEST(DnaAlignLimbs, ArmChainRotatesOntoTheTargetDirectionsThroughAParentWithAnOrientation)
+{
+    Rig rig = tubeRig();
+    auto J = [&](const char* n, int parent, std::array<double, 3> t, std::array<double, 4> q = {1, 0, 0, 0}) {
+        Joint j; j.name = n; j.parent = parent; j.translation = t; j.orientation = q; rig.joints.push_back(j); return int(rig.joints.size() - 1);
+    };
+    rig.joints.clear();
+    const double h = std::sqrt(0.5);
+    const int pel = J("pelvis", -1, {0, 1, 0}, {h, 0, h, 0});            // rooted frame turned 90 deg about Y
+    const int ua = J("upperarm_l", pel, {0.0, 0.6, 0.2}, {h, h, 0, 0});  // with its own orientation too
+    const int la = J("lowerarm_l", ua, {0.0, 0.3, 0.0});
+    J("hand_l", la, {0.0, 0.3, 0.0});
+    for (auto& v : rig.meshes[0].skin) v = {{uint16_t(ua), 1.f}};
+    const auto before = jointWorldPositions(rig);
+    // target: a straight arm along +X from the upper-arm position
+    const std::vector<std::pair<QString, std::array<double, 3>>> tj = {
+        {"upperarm_l", {before[size_t(ua)][0], before[size_t(ua)][1], before[size_t(ua)][2]}},
+        {"lowerarm_l", {before[size_t(ua)][0] + 0.3, before[size_t(ua)][1], before[size_t(ua)][2]}},
+        {"hand_l", {before[size_t(ua)][0] + 0.6, before[size_t(ua)][1], before[size_t(ua)][2]}}};
+    const LimbAlignment la2 = alignLimbs(rig, tj);
+    EXPECT_EQ(la2.chainsAligned, 2);
+    const auto after = jointWorldPositions(la2.rig);
+    auto dir = [&](int a, int b) { std::array<double, 3> d{after[size_t(b)][0] - after[size_t(a)][0], after[size_t(b)][1] - after[size_t(a)][1], after[size_t(b)][2] - after[size_t(a)][2]}; double l = std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]); for (double& x : d) x /= l; return d; };
+    const auto d1 = dir(ua, la), d2 = dir(la, la + 1);
+    EXPECT_NEAR(d1[0], 1.0, 1e-6) << d1[0] << "," << d1[1] << "," << d1[2];
+    EXPECT_NEAR(d2[0], 1.0, 1e-6) << d2[0] << "," << d2[1] << "," << d2[2];
+    // bone lengths and the upper-arm joint position are untouched; the pelvis does not move
+    EXPECT_NEAR(std::abs(after[size_t(la)][0] - after[size_t(ua)][0]), 0.3, 1e-6);
+    EXPECT_NEAR(after[size_t(ua)][1], before[size_t(ua)][1], 1e-9);
+    // skin follows: a vertex weighted 100 % to the upper arm moved rigidly with that bone
+    const auto& P0 = rig.meshes[0].positions; const auto& P1 = la2.rig.meshes[0].positions;
+    ASSERT_EQ(P0.size(), P1.size());
+    auto dist = [&](const std::vector<float>& P, size_t a, size_t b) { return std::sqrt(std::pow(P[a*3]-P[b*3],2)+std::pow(P[a*3+1]-P[b*3+1],2)+std::pow(P[a*3+2]-P[b*3+2],2)); };
+    EXPECT_NEAR(dist(P0, 0, 7), dist(P1, 0, 7), 1e-5);   // rigid: pairwise distances preserved
+}
+
+TEST(DnaRegister, MirroredLeftRightIsPairedByPositionNotByName)
+{
+    // The target's "left" bones sit on the rig's RIGHT. Pairing by name would cross the body
+    // (hidden by symmetry in a position warp, a ~180 degree twist for any direction step).
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) {
+        QString n = rig.joints[i].name;
+        // mirror X AND swap the side suffix: the target calls the +X side "right"
+        if (n.endsWith("_l")) n.replace(n.size() - 2, 2, "_r"); else if (n.endsWith("_r")) n.replace(n.size() - 2, 2, "_l");
+        anchors.push_back({n, {w[i][0], w[i][1], w[i][2]}});   // positions are the rig's own
+    }
+    // anchors[i] names the OPPOSITE side of the joint at that position -> sides are mirrored
+    const JointRegisterResult r = registerByJoints(rig, anchors, /*alignLimbPose=*/false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    bool warned = false;
+    for (const QString& m : r.warnings) if (m.contains("mirrored")) warned = true;
+    EXPECT_TRUE(warned);
+    // pairing by position makes the identity target a (near) no-op: nothing moves
+    double maxMove = 0;
+    for (size_t i = 0; i < rig.meshes[0].positions.size(); ++i) maxMove = std::max(maxMove, double(std::abs(r.positions[0][i] - rig.meshes[0].positions[i])));
+    EXPECT_LT(maxMove, 0.05);
+}
+
 #endif  // ENABLE_OPENRIGLOGIC

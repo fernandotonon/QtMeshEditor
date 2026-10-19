@@ -212,6 +212,96 @@ Warp buildWarp(const std::vector<V3>& source, const std::vector<V3>& target, con
 
 // ---- fit ----------------------------------------------------------------------
 
+
+namespace {
+// Rotation matrix (row-major 3x3) -> unit quaternion (w,x,y,z).
+std::array<double, 4> matToQuat(const double* m)
+{
+    const double tr = m[0] + m[4] + m[8];
+    std::array<double, 4> q;
+    if (tr > 0) {
+        const double sq = std::sqrt(tr + 1.0) * 2;
+        q = {0.25 * sq, (m[7] - m[5]) / sq, (m[2] - m[6]) / sq, (m[3] - m[1]) / sq};
+    } else if (m[0] > m[4] && m[0] > m[8]) {
+        const double sq = std::sqrt(1.0 + m[0] - m[4] - m[8]) * 2;
+        q = {(m[7] - m[5]) / sq, 0.25 * sq, (m[1] + m[3]) / sq, (m[2] + m[6]) / sq};
+    } else if (m[4] > m[8]) {
+        const double sq = std::sqrt(1.0 + m[4] - m[0] - m[8]) * 2;
+        q = {(m[2] - m[6]) / sq, (m[1] + m[3]) / sq, 0.25 * sq, (m[5] + m[7]) / sq};
+    } else {
+        const double sq = std::sqrt(1.0 + m[8] - m[0] - m[4]) * 2;
+        q = {(m[3] - m[1]) / sq, (m[2] + m[6]) / sq, (m[5] + m[7]) / sq, 0.25 * sq};
+    }
+    const double n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    for (double& v : q) v /= n;
+    return q;
+}
+}  // namespace
+
+LimbAlignment alignLimbs(const Rig& rig, const std::vector<std::pair<QString, std::array<double, 3>>>& targetJoints)
+{
+    LimbAlignment out;
+    out.rig = rig;
+    auto indexOf = [&](const QString& n) { for (size_t j = 0; j < rig.joints.size(); ++j) if (rig.joints[j].name == n) return int(j); return -1; };
+    auto targetOf = [&](const QString& n, std::array<double, 3>& p) { for (const auto& t : targetJoints) if (t.first == n) { p = t.second; return true; } return false; };
+
+    std::map<int, std::array<double, 4>> deltas;
+    const char* sides[2] = {"_l", "_r"};
+    const char* chains[4][2] = {{"upperarm", "lowerarm"}, {"lowerarm", "hand"}, {"thigh", "calf"}, {"calf", "foot"}};
+    for (const char* sd : sides) {
+        for (auto& ch : chains) {
+            const QString pj = QString::fromLatin1(ch[0]) + sd, cj = QString::fromLatin1(ch[1]) + sd;
+            const int pi = indexOf(pj), ci = indexOf(cj);
+            std::array<double, 3> tp, tc;
+            if (pi < 0 || ci < 0 || !targetOf(pj, tp) || !targetOf(cj, tc)) { out.skipped << pj + "->" + cj; continue; }
+            const std::vector<Aff> w = worldMatrices(rig, deltas);
+            double ds[3] = {w[size_t(ci)].t[0] - w[size_t(pi)].t[0], w[size_t(ci)].t[1] - w[size_t(pi)].t[1], w[size_t(ci)].t[2] - w[size_t(pi)].t[2]};
+            double dt[3] = {tc[0] - tp[0], tc[1] - tp[1], tc[2] - tp[2]};
+            const double ls = std::sqrt(ds[0] * ds[0] + ds[1] * ds[1] + ds[2] * ds[2]), lt = std::sqrt(dt[0] * dt[0] + dt[1] * dt[1] + dt[2] * dt[2]);
+            if (ls < 1e-9 || lt < 1e-9) { out.skipped << pj + "->" + cj; continue; }
+            for (int k = 0; k < 3; ++k) { ds[k] /= ls; dt[k] /= lt; }
+            // shortest-arc rotation ds -> dt as a matrix (Rodrigues)
+            const double ax[3] = {ds[1] * dt[2] - ds[2] * dt[1], ds[2] * dt[0] - ds[0] * dt[2], ds[0] * dt[1] - ds[1] * dt[0]};
+            const double c = ds[0] * dt[0] + ds[1] * dt[1] + ds[2] * dt[2];
+            const double s2 = ax[0] * ax[0] + ax[1] * ax[1] + ax[2] * ax[2];
+            if (c < -0.9999) continue;   // a 180 degree flip has no unique arc; leave it
+            double R[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+            if (s2 > 1e-18) {
+                const double k = (1 - c) / s2;
+                const double K[9] = {0, -ax[2], ax[1], ax[2], 0, -ax[0], -ax[1], ax[0], 0};
+                double K2[9];
+                for (int r = 0; r < 3; ++r) for (int cc = 0; cc < 3; ++cc) K2[r * 3 + cc] = K[r * 3] * K[cc] + K[r * 3 + 1] * K[3 + cc] + K[r * 3 + 2] * K[6 + cc];
+                for (int i = 0; i < 9; ++i) R[i] += K[i] + k * K2[i];
+            }
+            // D = Wj^T * R * Wj  (post-multiplied local delta producing the world rotation R)
+            const double* W = w[size_t(pi)].a;
+            double RW[9], D[9];
+            for (int r = 0; r < 3; ++r) for (int cc = 0; cc < 3; ++cc) RW[r * 3 + cc] = R[r * 3] * W[cc] + R[r * 3 + 1] * W[3 + cc] + R[r * 3 + 2] * W[6 + cc];
+            for (int r = 0; r < 3; ++r) for (int cc = 0; cc < 3; ++cc) D[r * 3 + cc] = W[r] * RW[cc] + W[3 + r] * RW[3 + cc] + W[6 + r] * RW[6 + cc];
+            const auto it = deltas.find(pi);
+            std::array<double, 4> dq = matToQuat(D);
+            if (it != deltas.end()) {   // compose after an earlier delta on the same joint (a joint is a parent in only one chain, so this is a guard)
+                const auto& a = it->second;
+                dq = {a[0] * dq[0] - a[1] * dq[1] - a[2] * dq[2] - a[3] * dq[3], a[0] * dq[1] + a[1] * dq[0] + a[2] * dq[3] - a[3] * dq[2],
+                      a[0] * dq[2] - a[1] * dq[3] + a[2] * dq[0] + a[3] * dq[1], a[0] * dq[3] + a[1] * dq[2] - a[2] * dq[1] + a[3] * dq[0]};
+            }
+            deltas[pi] = dq;
+            ++out.chainsAligned;
+            out.applied << QStringLiteral("%1->%2: %3 deg").arg(pj, cj).arg(std::acos(std::max(-1.0, std::min(1.0, c))) * 180.0 / 3.14159265358979, 0, 'f', 1);
+        }
+    }
+    // new neutral orientations = neutral * delta; meshes skinned into that pose
+    for (const auto& d : deltas) {
+        const auto& q = rig.joints[size_t(d.first)].orientation;
+        const auto& a = d.second;
+        out.rig.joints[size_t(d.first)].orientation = {q[0] * a[0] - q[1] * a[1] - q[2] * a[2] - q[3] * a[3], q[0] * a[1] + q[1] * a[0] + q[2] * a[3] - q[3] * a[2],
+                                                       q[0] * a[2] - q[1] * a[3] + q[2] * a[0] + q[3] * a[1], q[0] * a[3] + q[1] * a[2] - q[2] * a[1] + q[3] * a[0]};
+    }
+    const auto posed = skinPositions(rig, worldMatrices(rig), worldMatrices(rig, deltas));
+    for (size_t m = 0; m < out.rig.meshes.size(); ++m) out.rig.meshes[m].positions = posed[m];
+    return out;
+}
+
 std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig)
 {
     const std::vector<Aff> w = worldMatrices(rig);

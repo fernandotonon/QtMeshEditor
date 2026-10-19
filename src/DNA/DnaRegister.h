@@ -76,13 +76,16 @@ struct JointRegisterResult {
     QString error;
     QStringList warnings;
     std::vector<std::vector<float>> positions;   ///< per rig mesh, per POSITION, warped onto the target proportions
+    Rig alignedRig;                              ///< the rig after limb pose alignment (== input when none ran) — pass THIS to Fit::fit
+    int limbChainsAligned = 0;
+    QStringList limbAngles;                      ///< rotation applied per chain
     int anchorsUsed = 0;
     double anchorResidualMm = 0;                 ///< worst anchor the warp fails to reproduce (rig units * 1000)
 };
 
 /// Needs at least 6 anchors that are not coplanar. The warp is built from the anchors'
 /// neutral world positions to their targets; every mesh position follows it.
-JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnchor>& anchors);
+JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnchor>& anchors, bool alignLimbPose = true);
 
 /// `targetV` / `targetF`: the target surface in the rig's axis convention (+Y up),
 /// x,y,z per vertex and triangle indices.

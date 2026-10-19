@@ -144,9 +144,43 @@ std::vector<JointAnchor> matchJointAnchors(const std::vector<std::pair<QString, 
     return out;
 }
 
-JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnchor>& anchors)
+JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAnchor>& anchorsIn, bool alignLimbPose)
 {
     JointRegisterResult r;
+    std::vector<JointAnchor> anchors = anchorsIn;
+    // Left/right can be mirrored between two skeletons (the character's "left" is on +X in one
+    // convention and -X in the other). Pairing by NAME then crosses the body; a symmetric mesh
+    // hides it in a position-only warp, but any rotation/direction step sees a ~180 degree twist.
+    // Decide by geometry: if the target's left-minus-right vector opposes the rig's, swap sides.
+    {
+        const std::vector<std::array<double, 3>> jp0 = jointWorldPositions(rigIn);
+        auto rigPos = [&](const QString& n, std::array<double, 3>& p) { for (size_t j = 0; j < rigIn.joints.size(); ++j) if (rigIn.joints[j].name == n) { p = jp0[j]; return true; } return false; };
+        auto tgtPos = [&](const QString& n, std::array<double, 3>& p) { for (const auto& a : anchors) if (a.bodyJoint == n) { p = a.target; return true; } return false; };
+        double dotSum = 0;
+        for (const char* base : {"upperarm", "hand", "thigh", "foot"}) {
+            std::array<double, 3> sl, sr, tl, tr;
+            if (!rigPos(QString::fromLatin1(base) + "_l", sl) || !rigPos(QString::fromLatin1(base) + "_r", sr) ||
+                !tgtPos(QString::fromLatin1(base) + "_l", tl) || !tgtPos(QString::fromLatin1(base) + "_r", tr)) continue;
+            for (int k = 0; k < 3; ++k) dotSum += (sl[size_t(k)] - sr[size_t(k)]) * (tl[size_t(k)] - tr[size_t(k)]);
+        }
+        if (dotSum < 0) {
+            for (JointAnchor& a : anchors) {
+                if (a.bodyJoint.endsWith("_l")) a.bodyJoint.replace(a.bodyJoint.size() - 2, 2, "_r");
+                else if (a.bodyJoint.endsWith("_r")) a.bodyJoint.replace(a.bodyJoint.size() - 2, 2, "_l");
+            }
+            r.warnings << QStringLiteral("the target's left/right are mirrored relative to the rig (its 'left' bones sit on the rig's right); sides were paired by position, not by name");
+        }
+    }
+    Rig rig = rigIn;
+    r.alignedRig = rigIn;
+    if (alignLimbPose) {
+        std::vector<std::pair<QString, std::array<double, 3>>> tj;
+        for (const JointAnchor& a : anchors) tj.push_back({a.bodyJoint, a.target});
+        LimbAlignment la = alignLimbs(rigIn, tj);
+        r.limbChainsAligned = la.chainsAligned;
+        r.limbAngles = la.applied;
+        if (la.chainsAligned > 0) { rig = la.rig; r.alignedRig = la.rig; }
+    }
     const std::vector<std::array<double, 3>> jp = jointWorldPositions(rig);
     std::vector<std::array<double, 3>> src, dst;
     for (const JointAnchor& a : anchors) {

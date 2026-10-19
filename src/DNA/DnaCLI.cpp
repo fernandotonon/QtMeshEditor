@@ -49,7 +49,7 @@ void usage()
         "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
-        "                      [--register-joints | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
+        "                      [--register-joints [--no-align-limbs] | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
         "                      [-o fitted.glb] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
@@ -649,7 +649,7 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 static int runFit(int argc, char* argv[])
 {
     QString path, targetPath, writeDna, out;
-    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false;
+    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     double uniformScale = 0.0;
     bool sawDna = false, sawFit = false;
     for (int i = 1; i < argc; ++i) {
@@ -662,6 +662,7 @@ static int runFit(int argc, char* argv[])
         else if (a == "--lods") lods = true;
         else if (a == "--register") doRegister = true;
         else if (a == "--register-joints") registerJoints = true;
+        else if (a == "--no-align-limbs") noAlignLimbs = true;
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
@@ -691,6 +692,7 @@ static int runFit(int argc, char* argv[])
     if (!src.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
 
     // ---- the target, as one position array per rig mesh ----
+    Rig baseRig = src.rig;   // replaced by the limb-aligned rig when --register-joints re-poses it
     std::vector<std::vector<float>> target;
     double seamMm = 0, matchedFraction = 1.0;
     bool matchedByUv = false, flippedV = false;
@@ -733,9 +735,12 @@ static int runFit(int argc, char* argv[])
             if (bones.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
             QStringList unmatched;
             const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
-            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors);
+            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
             if (!jr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
             target = jr.positions;
+            if (jr.limbChainsAligned > 0) baseRig = jr.alignedRig;
+            registration.insert("limbChainsAligned", jr.limbChainsAligned);
+            registration.insert("limbAngles", jr.limbAngles);
             registration.insert("mode", "joints");
             registration.insert("anchorsUsed", jr.anchorsUsed);
             registration.insert("anchorResidualMm", jr.anchorResidualMm);
@@ -767,7 +772,13 @@ static int runFit(int argc, char* argv[])
         }
     }
 
-    const Fit::Result fr = Fit::fit(src.rig, target);
+    const bool aligned = registration.value("limbChainsAligned").toInt() > 0;
+    if (aligned && (lods || !writeDna.isEmpty())) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --lods and --write-dna are not supported together with limb pose alignment "
+                                                  "(the DNA keeps the original neutral orientations); add --no-align-limbs\n"));
+        return 2;
+    }
+    const Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
 
     QVariantMap report;
@@ -789,7 +800,7 @@ static int runFit(int argc, char* argv[])
 
     if (poses) {
         QVariantList rows;
-        for (const Fit::PoseReport& p : Fit::evaluatePoses(src.rig, fr.fitted, Fit::referencePoses(), uniformScale))
+        for (const Fit::PoseReport& p : Fit::evaluatePoses(baseRig, fr.fitted, Fit::referencePoses(), uniformScale))
             rows << poseRows(p);
         report.insert("poses", rows);
     }
