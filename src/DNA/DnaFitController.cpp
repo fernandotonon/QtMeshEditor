@@ -39,7 +39,19 @@ Pair selectedPair()
     Pair p;
     for (auto* o : Manager::getSingleton()->getEntities())
         if (o && o->getMovableType() == "Entity" && !sourcePathOf(static_cast<Ogre::Entity*>(o)).isEmpty()) p.dnaInScene = true;
-    const QList<Ogre::Entity*> sel = SelectionSet::getSingleton()->getEntitiesSelectionList();
+    // The editor keeps selected NODES and selected ENTITIES in separate lists, and clicking in the
+    // viewport / scene tree selects nodes: gather the entities from both (deduplicated, in order).
+    QList<Ogre::Entity*> sel = SelectionSet::getSingleton()->getEntitiesSelectionList();
+    for (Ogre::SceneNode* n : SelectionSet::getSingleton()->getNodesSelectionList()) {
+        if (!n) continue;
+        for (auto it = n->getAttachedObjectIterator(); it.hasMoreElements();) {
+            Ogre::MovableObject* mo = it.getNext();
+            if (mo && mo->getMovableType() == "Entity") {
+                Ogre::Entity* e = static_cast<Ogre::Entity*>(mo);
+                if (!sel.contains(e)) sel.append(e);
+            }
+        }
+    }
     for (Ogre::Entity* e : sel) {
         ++p.entities;
         if (!sourcePathOf(e).isEmpty() && !p.dna) p.dna = e;

@@ -103,6 +103,26 @@ TEST_F(DnaFitControllerTest, GatesOnTheSelectionAndSaysWhy)
     EXPECT_FALSE(c->status().isEmpty());
 }
 
+TEST_F(DnaFitControllerTest, ANodeSelectionCountsLikeAnEntitySelection)
+{
+    // Clicking a mesh in the viewport / scene tree selects its NODE; the action must see that too.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    Ogre::SceneNode* dnaNode = importToScene(writeSynthetic(dir), ReadOptions(), nullptr, nullptr);
+    ASSERT_NE(dnaNode, nullptr);
+    Ogre::SceneNode* other = importToScene(writeSynthetic(dir), ReadOptions(), nullptr, nullptr);   // a second character
+    ASSERT_NE(other, nullptr);
+    SelectionSet::getSingleton()->clearList();
+    SelectionSet::getSingleton()->append(dnaNode);
+    auto* c = DnaFitController::instance();
+    c->refresh();
+    EXPECT_TRUE(c->hint().contains("Also select")) << c->hint().toStdString();   // one node = one entity, not zero
+    EXPECT_FALSE(c->canFit());
+    SelectionSet::getSingleton()->append(other);   // two NODES selected: body + target
+    c->refresh();
+    EXPECT_TRUE(c->canFit()) << c->hint().toStdString();
+}
+
 TEST_F(DnaFitControllerTest, CommitAddsANewNodeAndUndoRemovesItWithoutTouchingTheOriginal)
 {
     QTemporaryDir dir;
