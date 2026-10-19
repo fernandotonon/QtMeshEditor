@@ -657,7 +657,7 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
             if (bw < 0) continue;
             for (int j = int(bj), guard = 0; j >= 0 && size_t(j) < r.alignedRig.joints.size() && guard < 64; j = r.alignedRig.joints[size_t(j)].parent, ++guard) {
                 const QString n = r.alignedRig.joints[size_t(j)].name;
-                if (n.startsWith(QStringLiteral("hand")) || n.startsWith(QStringLiteral("foot")) || n.startsWith(QStringLiteral("ball"))) { extremity[offset[mi] + v] = 1; break; }
+                if (n.startsWith(QStringLiteral("hand")) || n.startsWith(QStringLiteral("foot")) || n.startsWith(QStringLiteral("ball")) || n == QStringLiteral("head") || n.startsWith(QStringLiteral("neck"))) { extremity[offset[mi] + v] = 1; break; }
             }
         }
     }
