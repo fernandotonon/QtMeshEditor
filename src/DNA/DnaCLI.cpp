@@ -1,4 +1,5 @@
 #include "DnaCLI.h"
+#include "../SelectionSet.h"
 #include <functional>
 #include <set>
 #include "DnaReader.h"
@@ -737,9 +738,28 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     // Nodes the fit creates (the imported target, the exported fitted character) are removed again when
     // running inside the editor (MCP): the CLI process exits, the editor must not keep them.
     struct NodeCleanup {
-        bool active; std::set<QString> before;
-        explicit NodeCleanup(bool on) : active(on) { if (on) for (auto* n : Manager::getSingleton()->getSceneNodes()) before.insert(QString::fromStdString(n->getName())); }
-        ~NodeCleanup() { if (!active) return; QList<Ogre::SceneNode*> add; for (auto* n : Manager::getSingleton()->getSceneNodes()) if (!before.count(QString::fromStdString(n->getName()))) add << n; for (auto* n : add) Manager::getSingleton()->destroySceneNode(n); }
+        bool active;
+        std::set<QString> before;            // scene-node names that existed before
+        std::vector<QString> selected;       // the user's selection, restored afterwards (addSceneNode selects)
+        explicit NodeCleanup(bool on) : active(on)
+        {
+            if (!on) return;
+            for (auto* n : Manager::getSingleton()->getSceneNodes()) before.insert(QString::fromStdString(n->getName()));
+            for (auto* n : SelectionSet::getSingleton()->getNodesSelectionList()) selected.push_back(QString::fromStdString(n->getName()));
+        }
+        ~NodeCleanup()
+        {
+            if (!active) return;
+            QList<Ogre::SceneNode*> add;
+            for (auto* n : Manager::getSingleton()->getSceneNodes()) if (!before.count(QString::fromStdString(n->getName()))) add << n;
+            auto* sel = SelectionSet::getSingleton();
+            sel->clearList();   // the temporary nodes are about to be destroyed: no dangling selection
+            for (auto* n : add) Manager::getSingleton()->destroySceneNode(n);
+            sel->clear();
+            for (const QString& name : selected)
+                for (auto* n : Manager::getSingleton()->getSceneNodes())
+                    if (QString::fromStdString(n->getName()) == name) { sel->append(n); break; }
+        }
     } cleanup(!a.headless && needScene);
 
     ReadOptions ro;
@@ -765,10 +785,15 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         for (const Mesh& m : tr.rig.meshes) target.push_back(m.positions);
     } else {
         MeshImporterExporter::clearLastImportError();
+        // The target is the entity this import ADDS: inside the editor the scene already holds the
+        // user's meshes, and the traversal order is not the import order.
+        std::set<Ogre::Entity*> entitiesBefore;
+        for (auto* o : Manager::getSingleton()->getEntities())
+            if (o && o->getMovableType() == "Entity") entitiesBefore.insert(static_cast<Ogre::Entity*>(o));
         MeshImporterExporter::importer({QFileInfo(targetPath).absoluteFilePath()});
         Ogre::Entity* te = nullptr;
         for (auto* o : Manager::getSingleton()->getEntities())
-            if (o && o->getMovableType() == "Entity") te = static_cast<Ogre::Entity*>(o);
+            if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
         if (!te) {
             const QString why = MeshImporterExporter::lastImportError();
             err(QStringLiteral("Error: could not import the target %1%2\n")
@@ -1028,6 +1053,15 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
     a.registerJoints = options.mode == QLatin1String("joints");
     a.doRegister = options.mode == QLatin1String("surface");
     a.noAlignLimbs = !options.alignLimbs;
+    // the same combinations the CLI refuses
+    if ((a.registerJoints || a.doRegister) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
+        if (error) *error = QStringLiteral("mode '%1' applies to a mesh target with its own skeleton; a .dna target has the same topology — use mode topology").arg(options.mode);
+        return false;
+    }
+    if (!options.alignLimbs && !a.registerJoints) {
+        if (error) *error = QStringLiteral("align_limbs=false only applies with mode joints");
+        return false;
+    }
     a.headless = false;   // inside the editor: Ogre is up, and created nodes are cleaned afterwards
     QString msg;
     QVariantMap local;

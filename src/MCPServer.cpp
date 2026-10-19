@@ -10746,7 +10746,13 @@ QJsonObject MCPServer::toolFitDnaBody(const QJsonObject& args)
     o.outputMesh = args.value("output_mesh").toString();
     QVariantMap report;
     QString err;
-    if (!Dna::DnaCLI::fitReport(dna, target, o, &report, &err)) return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    try {
+        if (!Dna::DnaCLI::fitReport(dna, target, o, &report, &err)) return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    } catch (const Ogre::Exception& e) {
+        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromStdString(e.getDescription())));
+    } catch (const std::exception& e) {
+        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromUtf8(e.what())));
+    }
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
 }
 
