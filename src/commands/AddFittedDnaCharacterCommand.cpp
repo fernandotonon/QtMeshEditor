@@ -40,12 +40,15 @@ void AddFittedDnaCharacterCommand::redo()
     Ogre::SceneNode* node = Dna::importRigToScene(*m_rig, name, &report, &err, ev);
     if (!node) {
         m_error = err;
+        m_outcome->error = err;
         setObsolete(true);
         SentryReporter::addBreadcrumb("ai.assist.dna_fit", QStringLiteral("commit failed: %1").arg(err));
         return;
     }
     m_nodeName = QString::fromStdString(node->getName());
     m_created = true;
+    m_outcome->created = true;
+    m_outcome->nodeName = m_nodeName;
     SelectionSet::getSingleton()->selectOne(node);
     SentryReporter::addBreadcrumb("ai.assist.dna_fit", QStringLiteral("fitted character added: %1").arg(m_nodeName));
 }
@@ -60,4 +63,5 @@ void AddFittedDnaCharacterCommand::undo()
             break;
         }
     m_created = false;
+    m_outcome->created = false;
 }

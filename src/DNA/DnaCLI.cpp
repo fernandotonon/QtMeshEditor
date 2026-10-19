@@ -1,4 +1,6 @@
 #include "DnaCLI.h"
+#include <OgreMatrix4.h>
+#include <OgreBone.h>
 #include "../SelectionSet.h"
 #include <functional>
 #include <set>
@@ -808,12 +810,23 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             // pair the target's skeleton with the MetaHuman joints and warp the body onto its proportions
             std::vector<std::pair<QString, std::array<double, 3>>> bones;
             if (te->hasSkeleton()) {
+                // The BIND pose, read without touching the entity: setBindingPose() would record whatever the
+                // character is doing right now (an animation, an edited bone) as its new rest pose — fine for a
+                // throw-away imported copy, destructive for a live one. Compose each bone's initial transform
+                // down the hierarchy instead.
                 Ogre::SkeletonInstance* sk = te->getSkeleton();
-                sk->setBindingPose();
+                std::map<unsigned short, Ogre::Matrix4> world;
+                std::function<const Ogre::Matrix4&(Ogre::Bone*)> bindWorld = [&](Ogre::Bone* bone) -> const Ogre::Matrix4& {
+                    auto it = world.find(bone->getHandle());
+                    if (it != world.end()) return it->second;
+                    Ogre::Matrix4 local;
+                    local.makeTransform(bone->getInitialPosition(), bone->getInitialScale(), bone->getInitialOrientation());
+                    auto* parent = dynamic_cast<Ogre::Bone*>(bone->getParent());
+                    return world[bone->getHandle()] = parent ? Ogre::Matrix4(bindWorld(parent) * local) : local;
+                };
                 for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
                     Ogre::Bone* bone = sk->getBone(b);
-                    bone->_update(true, false);
-                    const Ogre::Vector3 p = bone->_getDerivedPosition();
+                    const Ogre::Vector3 p = bindWorld(bone).getTrans();
                     bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
                 }
             }

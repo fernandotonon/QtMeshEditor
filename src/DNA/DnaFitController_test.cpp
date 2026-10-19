@@ -133,10 +133,11 @@ TEST_F(DnaFitControllerTest, CommitAddsANewNodeAndUndoRemovesItWithoutTouchingTh
     auto rig = std::make_shared<Rig>(rr.rig);
     const size_t before = Manager::getSingleton()->getSceneNodes().size();
     auto* cmd = new AddFittedDnaCharacterCommand(rig, QString(), "fitted_test");
+    const auto outcome = cmd->outcome();   // the command may be deleted by push() when it fails
     UndoManager::getSingleton()->push(cmd);
-    ASSERT_TRUE(cmd->created()) << cmd->error().toStdString();
+    ASSERT_TRUE(outcome->created) << outcome->error.toStdString();
     EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), before + 1);
-    const QString name = cmd->nodeName();
+    const QString name = outcome->nodeName;
     EXPECT_FALSE(name.isEmpty());
 
     UndoManager::getSingleton()->undo();

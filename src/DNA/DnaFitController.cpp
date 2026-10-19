@@ -139,9 +139,13 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
         return false;
     }
     auto* cmd = new AddFittedDnaCharacterCommand(rig, src, QFileInfo(src).completeBaseName() + QStringLiteral("_fitted"));
+    // push() runs redo() and deletes a command that marked itself obsolete (a failed build): read the shared
+    // outcome, never the command, afterwards.
+    const auto outcome = cmd->outcome();
     UndoManager::getSingleton()->push(cmd);
-    if (!cmd->created()) {
-        m_status = QStringLiteral("The fit worked but the fitted character could not be built: %1").arg(cmd->error());
+    cmd = nullptr;
+    if (!outcome->created) {
+        m_status = QStringLiteral("The fit worked but the fitted character could not be built: %1").arg(outcome->error);
         emit changed();
         return false;
     }
@@ -150,7 +154,7 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     m_status = QStringLiteral("Fitted (%1): body moved by mean %2 mm, joints by mean %3 mm; reference-pose stretch p99 <= %4. "
                               "Added as '%5' — Ctrl+Z removes it. Corrective data is not recalibrated.")
                    .arg(mode).arg(report.value("meanVertexShiftMm").toDouble(), 0, 'f', 0).arg(report.value("meanJointShiftMm").toDouble(), 0, 'f', 0)
-                   .arg(worstStretchP99, 0, 'f', 2).arg(cmd->nodeName());
+                   .arg(worstStretchP99, 0, 'f', 2).arg(outcome->nodeName);
     for (const QString& w : report.value("warnings").toStringList()) m_status += QStringLiteral("\n• ") + w;
     emit changed();
     return true;

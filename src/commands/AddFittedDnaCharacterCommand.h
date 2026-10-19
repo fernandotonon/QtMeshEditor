@@ -26,6 +26,14 @@ public:
     void redo() override;
     void undo() override;
 
+    /** The outcome, shared with the caller: QUndoStack::push() runs redo() and DELETES a command that marked
+     *  itself obsolete, so the caller must not read the command after pushing — it reads this instead. */
+    struct Outcome {
+        bool created = false;
+        QString nodeName, error;
+    };
+    std::shared_ptr<Outcome> outcome() const { return m_outcome; }
+
     QString nodeName() const { return m_nodeName; }
     /** false when the first redo could not build the character (the command then does nothing). */
     bool created() const { return m_created; }
@@ -36,6 +44,7 @@ private:
     QString m_sourcePath, m_baseName, m_nodeName, m_error;
     bool m_created = false;
     int m_revision = 0;
+    std::shared_ptr<Outcome> m_outcome = std::make_shared<Outcome>();
 };
 
 #endif
