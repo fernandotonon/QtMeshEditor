@@ -271,3 +271,30 @@ The head is treated like the hands and feet: it is NOT matched to the target's s
 cap or a blocky stand-in; wrapping onto it flattened the top of the skull and squashed the face — measured on Rumba
 Dancing), it follows the skeleton alignment and the joint warp (size, position, facing), and it blends into the neck over
 the next few centimetres so there is no step where the neck grew.
+
+## 12. Generic pose-space correctives (RBF)
+
+The DNA drives its corrective BONES from RBF solvers whose data assumes the original proportions, so a fitted body keeps
+correctives for the wrong body. `PoseSpace::Set` (`src/PoseSpaceRbf.{h,cpp}`, pure data) holds the same idea as per-vertex
+offsets on the MESH — `delta(q) = Σ w_i(q)·delta_i`, with Gaussian RBF weights solved so every sample pose reproduces its
+own offsets exactly, the bind pose as an implicit zero sample, and a ridge term for near-duplicate poses. It is independent
+of RigLogic, so it also works for hand-authored correctives on stylised characters (`qtmesh-pose-correctives-v1` JSON).
+
+`qtmesh dna psd body.dna --bake sets.json --validate` bakes one set per driver joint (44 on the body): each driver is
+rotated alone about its local axes (±30/60/90°) and the offset is `full rig − plain skinning`, carried into REST space
+through the inverse of the vertex's blended skinning matrix (Ogre applies a pose before skinning).
+
+Measured on SKM_Body.dna, 12 random held-out poses with ~25 % of the drivers rotated at once (±60°), millimetres:
+
+| | mean | p95 | max |
+|---|---|---|---|
+| plain skinning vs the full rig | 1.59 | 11.15 | 76.7 |
+| plain + baked sets | 0.08 | 0.45 | 12.2 |
+
+`qtmesh dna fit … --bake-correctives sets.json` (with `--no-align-limbs`) bakes from the ORIGINAL rig and carries every
+offset through the fit warp's local linear part J = I + ∇displacement (`Psd::transferThroughWarp`): a uniform ×1.25 warp
+scales every offset by exactly 1.25 (unit test), and a limb that grew thicker gets a proportionally bigger bulge.
+
+Not done yet: evaluating the sets in the viewport (they need Ogre poses attached to the mesh before the entity exists, the
+same constraint as the face morph targets), a binary format (the JSON of the body is ~32 MB), a GUI, and fits that re-pose
+the rig (limb alignment rotates the driver axes, so the offsets would have to be rotated with it).

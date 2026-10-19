@@ -101,11 +101,16 @@ std::vector<std::vector<float>> evaluatePositions(const Rig& rig, RigEvaluator& 
     return skin(rig, neutral, posed);
 }
 
-std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvaluator& ev,
-                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations)
+namespace {
+// World matrices of every joint with the driver `rotations` applied (+ the rig's corrective outputs when asked),
+// plus the neutral world matrices.
+void posedWorlds(const Rig& rig, RigEvaluator& ev, const QList<QPair<QString, std::array<double, 4>>>& rotations,
+                 bool withCorrectives, std::vector<Aff>& neutral, std::vector<Aff>& world)
 {
     applyControls(ev, {}, nullptr);
-    const std::vector<Aff> neutral = worldPose(rig, ev);
+    neutral = worldPose(rig, ev);
+    std::vector<JointPose> neutralPose;
+    if (!withCorrectives) for (size_t j = 0; j < rig.joints.size(); ++j) neutralPose.push_back(ev.jointPose(int(j)));
     ev.resetControls();
     // One rotation per joint: a joint named twice would otherwise be set twice (last write wins in
     // RigLogic's controls) but composed twice into the local pose below.
@@ -118,9 +123,10 @@ std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvalua
     for (const auto& r : unique) ev.setDriverRotation(r.first, r.second);
     ev.calculate();
     const size_t n = rig.joints.size();
-    std::vector<Aff> local(n), world(n);
+    std::vector<Aff> local(n);
+    world.assign(n, Aff());
     for (size_t j = 0; j < n; ++j) {
-        JointPose p = ev.jointPose(int(j));
+        JointPose p = withCorrectives ? ev.jointPose(int(j)) : neutralPose[j];
         for (const auto& r : unique)
             if (ev.jointIndex(r.first) == int(j)) {
                 const auto& a = p.orientation;
@@ -140,9 +146,46 @@ std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvalua
         world[j] = mul(world[size_t(par)], local[j]);
     };
     for (size_t j = 0; j < n; ++j) go(j);
+}
+}  // namespace
+
+std::vector<std::vector<float>> evaluatePositionsPosed(const Rig& rig, RigEvaluator& ev,
+                                                       const QList<QPair<QString, std::array<double, 4>>>& rotations,
+                                                       bool withCorrectives)
+{
+    std::vector<Aff> neutral, world;
+    posedWorlds(rig, ev, rotations, withCorrectives, neutral, world);
     return skin(rig, neutral, world);
 }
 
+std::vector<std::vector<std::array<float, 9>>> evaluateBlendedLinear(const Rig& rig, RigEvaluator& ev,
+                                                                    const QList<QPair<QString, std::array<double, 4>>>& rotations,
+                                                                    bool withCorrectives)
+{
+    std::vector<Aff> neutral, world;
+    posedWorlds(rig, ev, rotations, withCorrectives, neutral, world);
+    const size_t nj = rig.joints.size();
+    std::vector<Aff> skinM(nj);
+    for (size_t j = 0; j < nj; ++j) skinM[j] = mul(world[j], inverse(neutral[j]));
+    std::vector<std::vector<std::array<float, 9>>> out;
+    for (const Mesh& m : rig.meshes) {
+        std::vector<std::array<float, 9>> lin(m.positions.size() / 3, std::array<float, 9>{1, 0, 0, 0, 1, 0, 0, 0, 1});
+        for (size_t v = 0; v < lin.size() && v < m.skin.size(); ++v) {
+            double sum = 0;
+            for (const SkinInfluence& i : m.skin[v]) if (i.joint < nj) sum += i.weight;
+            if (sum <= 1e-12) continue;
+            std::array<double, 9> acc{};
+            for (const SkinInfluence& i : m.skin[v]) {
+                if (i.joint >= nj) continue;
+                const double w = i.weight / sum;
+                for (int k = 0; k < 9; ++k) acc[size_t(k)] += w * skinM[i.joint].a[size_t(k)];
+            }
+            for (int k = 0; k < 9; ++k) lin[v][size_t(k)] = float(acc[size_t(k)]);
+        }
+        out.push_back(std::move(lin));
+    }
+    return out;
+}
 
 Result bake(const Rig& rig, RigEvaluator& ev, const QList<ShapeSpec>& specs, const Options& options)
 {

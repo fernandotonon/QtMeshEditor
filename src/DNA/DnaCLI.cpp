@@ -16,12 +16,14 @@
 #include "DnaArkitMap.h"
 #include "DnaFaceBake.h"
 #include "DnaFit.h"
+#include "DnaPsdBake.h"
 #include "DnaRegister.h"
 #include "DnaRigLogic.h"
 #include "DnaScene.h"
 #include "../ModelTurntableRenderer.h"
 
 #include <QImage>
+#include <QSaveFile>
 #include <QPainter>
 
 #include <OgreEntity.h>
@@ -58,8 +60,9 @@ void usage()
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
         "                      [--register-joints [--no-align-limbs] [--refine-surface] | --register [--register-method smooth|nricp]]\n"
         "                      [--reference same_topology_mesh]\n"
-        "                      [--uniform-scale S] [--write-dna fitted.dna]\n"
+        "                      [--uniform-scale S] [--write-dna fitted.dna] [--bake-correctives sets.json]\n"
         "                      [-o fitted.glb] [--json]\n"
+        "       qtmesh dna psd <body.dna> [--bake correctives.json] [--validate [--poses N]] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
         "\n"
@@ -68,6 +71,9 @@ void usage()
         "topology is refused. --poses reports how the fitted rig deforms in reference poses against the\n"
         "original; --write-dna serialises the result (behaviour data is NOT recalibrated).\n"
         "face bakes the face rig into ARKit-named morph targets (see below).\n"
+        "psd bakes the rig's correctives into generic pose-space RBF sets (per-vertex offsets that live on the\n"
+        "mesh, independent of RigLogic); --validate compares plain skinning and plain+sets against the full rig\n"
+        "over random multi-joint poses (millimetres).\n"
         "pose bends driver joints (rotation relative to neutral, degrees, local axes) and\n"
         "evaluates the body correctives. --compare reports how far the corrected\n"
         "deformation moves the skinned vertices versus plain skinning (millimetres).\n"
@@ -83,6 +89,7 @@ void usage()
 static int runPose(int argc, char* argv[]);
 static int runFace(int argc, char* argv[]);
 static int runFit(int argc, char* argv[]);
+static int runPsd(int argc, char* argv[]);
 
 int run(int argc, char* argv[])
 {
@@ -95,6 +102,9 @@ int run(int argc, char* argv[])
     for (int i = 1; i < argc; ++i)
         if (QString::fromLocal8Bit(argv[i]) == QLatin1String("fit"))
             return runFit(argc, argv);
+    for (int i = 1; i < argc; ++i)
+        if (QString::fromLocal8Bit(argv[i]) == QLatin1String("psd"))
+            return runPsd(argc, argv);
     QString path;
     bool json = false;
     ReadOptions opt;
@@ -743,7 +753,7 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 }  // namespace
 
 struct FitArgs {
-    QString path, targetPath, writeDna, out, referencePath;
+    QString path, targetPath, writeDna, out, referencePath, bakeCorrectives;
     std::vector<double> stiffness;   ///< NRICP schedule override (empty = default)
     QString registerMethod;          ///< surface registration: "" / smooth | nricp
     bool refineSurface = false;      ///< with registerJoints: refine the shape onto the target surface afterwards
@@ -1101,6 +1111,35 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         report.insert("lodPropagation", rows);
     }
 
+    if (!a.bakeCorrectives.isEmpty()) {
+        // Generic pose-space correctives for the FITTED body: bake the original rig's corrective behaviour as
+        // per-vertex offsets and carry them through the fit warp (see Psd::transferThroughWarp).
+        if (rigChanged) {
+            err(QStringLiteral("Error: --bake-correctives needs the fit to keep the rig's pose (add --no-align-limbs): "
+                               "the offsets are expressed along the original joint axes\n"));
+            return 1;
+        }
+        QString evErr;
+        auto bev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &evErr);
+        if (!bev) { err(QStringLiteral("Error: --bake-correctives: %1\n").arg(evErr)); return 1; }
+        Psd::BakeResult pb = Psd::bake(src.rig, *bev);
+        Psd::transferThroughWarp(pb.sets, src.rig, fr.warp);
+        QJsonArray arr;
+        for (auto& s : pb.sets) { QString serr; if (!s.solve(&serr)) continue; arr.append(s.toJson()); }
+        QJsonObject doc;
+        doc.insert(QStringLiteral("schema"), QStringLiteral("qtmesh-pose-correctives-collection-v1"));
+        doc.insert(QStringLiteral("sets"), arr);
+        QSaveFile f(a.bakeCorrectives);
+        if (!f.open(QIODevice::WriteOnly) || f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact)) < 0 || !f.commit()) {
+            err(QStringLiteral("Error: cannot write %1\n").arg(a.bakeCorrectives));
+            return 1;
+        }
+        QVariantMap cv;
+        cv.insert("file", QFileInfo(a.bakeCorrectives).absoluteFilePath());
+        cv.insert("sets", int(arr.size()));
+        report.insert("bakedCorrectives", cv);
+    }
+
     if (!writeDna.isEmpty()) {
         const Fit::WriteResult wr = Fit::writeFittedDna(QFileInfo(path).absoluteFilePath(), src.rig, fr.fitted, fr.warp,
                                                         QFileInfo(writeDna).absoluteFilePath());
@@ -1151,9 +1190,86 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     return 0;
 }
 
+static int runPsd(int argc, char* argv[])
+{
+    QString path, bakeOut;
+    bool json = false, validate = false;
+    int poses = 24;
+    bool sawDna = false, sawPsd = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (!sawPsd && a == "psd") { sawPsd = true; continue; }
+        if (a == "--json") json = true;
+        else if (a == "--validate") validate = true;
+        else if (a == "--poses" && i + 1 < argc) {
+            bool ok = false;
+            poses = QString::fromLocal8Bit(argv[++i]).toInt(&ok);
+            if (!ok || poses < 1 || poses > 500) { CLIPipeline::writeCliError(QStringLiteral("Error: --poses expects 1..500\n")); return 2; }
+        }
+        else if (a == "--bake" && i + 1 < argc) bakeOut = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (!a.startsWith('-') && path.isEmpty()) path = a;
+        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
+    }
+    if (path.isEmpty() || (!validate && bakeOut.isEmpty())) { usage(); return 2; }
+    if (!available()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
+                                                  "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
+        return 1;
+    }
+    ReadOptions ro;
+    ro.loadBehavior = true;
+    const ReadResult full = read(QFileInfo(path).absoluteFilePath(), ro);
+    QString err;
+    auto ev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &err);
+    if (!full.ok || !ev) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(full.ok ? err : full.error));
+        return 1;
+    }
+    const Psd::BakeResult b = Psd::bake(full.rig, *ev);
+    QVariantMap report;
+    report.insert("drivers", int(ev->driverJoints().size()));
+    report.insert("setsBaked", b.driversBaked);
+    report.insert("driversWithoutEffect", b.driversWithoutEffect);
+    int samples = 0;
+    long long entries = 0;
+    for (const auto& s : b.sets) { samples += int(s.samples.size()); for (const auto& sm : s.samples) entries += qlonglong(sm.vertices.size()); }
+    report.insert("samples", samples);
+    report.insert("sparseVertexEntries", entries);
+    if (!b.warnings.isEmpty()) report.insert("warnings", b.warnings);
+    if (!bakeOut.isEmpty()) {
+        QJsonArray arr;
+        for (const auto& s : b.sets) arr.append(s.toJson());
+        QJsonObject doc;
+        doc.insert(QStringLiteral("schema"), QStringLiteral("qtmesh-pose-correctives-collection-v1"));
+        doc.insert(QStringLiteral("sets"), arr);
+        QSaveFile f(bakeOut);
+        if (!f.open(QIODevice::WriteOnly) || f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact)) < 0 || !f.commit()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: cannot write %1\n").arg(bakeOut));
+            return 1;
+        }
+        report.insert("written", bakeOut);
+    }
+    if (validate) {
+        const Psd::Validation v = Psd::validate(full.rig, *ev, b.sets, poses);
+        report.insert("validationPoses", v.poses);
+        report.insert("plainMeanMm", v.plainMeanMm);
+        report.insert("plainP95Mm", v.plainP95Mm);
+        report.insert("plainMaxMm", v.plainMaxMm);
+        report.insert("psdMeanMm", v.psdMeanMm);
+        report.insert("psdP95Mm", v.psdP95Mm);
+        report.insert("psdMaxMm", v.psdMaxMm);
+    }
+    if (json) CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
+    else for (auto it = report.begin(); it != report.end(); ++it) CLIPipeline::writeOutput(QStringLiteral("%1: %2\n").arg(it.key(), it.value().toString()));
+    return 0;
+}
+
 static int runFit(int argc, char* argv[])
 {
-    QString path, targetPath, writeDna, out, referencePath;
+    QString path, targetPath, writeDna, out, referencePath, bakeCorrectives;
     std::vector<double> stiffness;
     QString registerMethod;   // "" / smooth (default) | nricp
     bool refineSurface = false;
@@ -1193,6 +1309,7 @@ static int runFit(int argc, char* argv[])
         else if (a == "--no-align-limbs") noAlignLimbs = true;
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--bake-correctives" && i + 1 < argc) bakeCorrectives = QString::fromLocal8Bit(argv[++i]);
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--uniform-scale" && i + 1 < argc) {
             bool ok = false;
@@ -1225,6 +1342,7 @@ static int runFit(int argc, char* argv[])
     FitArgs fa;
     fa.path = path; fa.targetPath = targetPath; fa.writeDna = writeDna; fa.out = out;
     fa.poses = poses; fa.lods = lods; fa.doRegister = doRegister; fa.registerJoints = registerJoints;
+    fa.bakeCorrectives = bakeCorrectives;
     fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true; fa.referencePath = referencePath; fa.stiffness = stiffness; fa.registerMethod = registerMethod; fa.refineSurface = refineSurface;
     QVariantMap report;
     const int rc = fitCore(fa, report, [](const QString& m) { CLIPipeline::writeCliError(m); });
