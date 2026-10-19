@@ -85,6 +85,23 @@ struct Result {
 /// empty array means "not part of the field": that mesh simply follows the warp.
 Result fit(const Rig& rig, const std::vector<std::vector<float>>& target, const Options& options = Options());
 
+/// Re-pose the rig so that limb bones point where the target's do (A-pose -> T-pose, say):
+/// for each chain (upperarm->lowerarm->hand, thigh->calf->foot, both sides) whose joints
+/// appear in `targetJoints` (name -> position in ANY frame; only directions matter), the
+/// parent joint is rotated by the shortest arc, root to leaf. The returned rig is the
+/// original with new neutral ORIENTATIONS (local translations unchanged) and its meshes
+/// linear-blend-skinned into that pose — i.e. a new bind pose. Correctives are not applied.
+struct LimbAlignment {
+    Rig rig;
+    int chainsAligned = 0;
+    QStringList applied;     ///< "parent->child: N deg" per aligned chain
+    QStringList skipped;     ///< chains that could not be aligned (a joint missing on either side)
+};
+LimbAlignment alignLimbs(const Rig& rig, const std::vector<std::pair<QString, std::array<double, 3>>>& targetJoints);
+
+/// World position of every joint at the neutral pose (rig units).
+std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig);
+
 // ---- correspondence -----------------------------------------------------------
 
 /// The entries of rig.meshes that the importer turns into submeshes (meshes with no

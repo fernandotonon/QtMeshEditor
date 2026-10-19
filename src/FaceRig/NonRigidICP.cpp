@@ -284,7 +284,7 @@ NricpResult fit(const std::vector<float>& tmplV, const std::vector<int>& tmplF,
     std::vector<Vec3> vhat(Nt), X(Nt);
     for (int i = 0; i < Nt; ++i) {
         vhat[i] = at(tmplV, i);
-        X[i] = vadd(vscale(vsub(vhat[i], tc), s), uc);   // pre-aligned start
+        X[i] = opts.skipPrealign ? vhat[i] : vadd(vscale(vsub(vhat[i], tc), s), uc);   // pre-aligned start
     }
 
     // user triangle geometry + centroid KD-tree

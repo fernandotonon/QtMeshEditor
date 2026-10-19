@@ -54,6 +54,14 @@ install(FILES "${qtmesh_openriglogic_src_SOURCE_DIR}/LICENSE"
         DESTINATION ${CMAKE_INSTALL_PREFIX}
         RENAME OpenRigLogic.LICENSE)
 
+# JSON DNA (the library's text format; JSONStreamReader/Writer) is compiled only under this define,
+# which must reach the library's own sources AND every includer of its headers (the classes are
+# declared inside the same #ifdef), hence PUBLIC. It is self-contained (terse's JSON archive, no
+# external dependency).
+if(TARGET riglogic4)
+    target_compile_definitions(riglogic4 PUBLIC DNA_BUILD_WITH_JSON_SUPPORT)
+endif()
+
 # Upstream forces C++11 only when CMAKE_CXX_STANDARD is unset, so it follows ours.
 add_library(qtmesh_openriglogic INTERFACE)
 target_link_libraries(qtmesh_openriglogic INTERFACE RigLogic::riglogic4)

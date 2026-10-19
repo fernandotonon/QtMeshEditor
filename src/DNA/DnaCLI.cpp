@@ -9,6 +9,7 @@
 #include "DnaArkitMap.h"
 #include "DnaFaceBake.h"
 #include "DnaFit.h"
+#include "DnaRegister.h"
 #include "DnaRigLogic.h"
 #include "DnaScene.h"
 #include "../ModelTurntableRenderer.h"
@@ -45,10 +46,11 @@ void usage()
     CLIPipeline::writeOutput(QStringLiteral(
         "Usage: qtmesh dna info <file.dna> [--lod N] [--json] [--keep-units]\n"
         "       qtmesh dna pose <body.dna> --set <joint>=<axis>:<deg>|<rx,ry,rz> [--set ...]\n"
-        "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
+        "                       [--compare [--vs-rig]] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
         "       qtmesh dna fit <body.dna> --target <edited mesh | other body.dna> [--poses] [--lods]\n"
-        "                      [--uniform-scale S] [--write-dna fitted.dna] [-o fitted.glb] [--json]\n"
+        "                      [--register-joints [--no-align-limbs] | --register] [--uniform-scale S] [--write-dna fitted.dna]\n"
+        "                      [-o fitted.glb] [--json]\n"
         "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
         "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
         "\n"
@@ -218,7 +220,7 @@ static int runPose(int argc, char* argv[])
 {
     QString path, out;
     QList<QPair<QString, QString>> sets;
-    bool json = false, compare = false, noCorrectives = false;
+    bool json = false, compare = false, noCorrectives = false, vsRig = false;
     bool sawDna = false, sawPose = false;
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -228,6 +230,7 @@ static int runPose(int argc, char* argv[])
         if (a == "--json") json = true;
         else if (a == "--compare") compare = true;
         else if (a == "--no-correctives") noCorrectives = true;
+        else if (a == "--vs-rig") vsRig = true;
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--set" && i + 1 < argc) {
             const QString kv = QString::fromLocal8Bit(argv[++i]);
@@ -240,6 +243,10 @@ static int runPose(int argc, char* argv[])
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
     }
     if (path.isEmpty() || sets.isEmpty()) { usage(); return 2; }
+    if (vsRig && !compare) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --vs-rig is a part of --compare (it adds the full-rig ground truth to that report); pass both\n"));
+        return 2;
+    }
     if (!available()) {
         CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
@@ -320,6 +327,57 @@ static int runPose(int argc, char* argv[])
         report.insert("p99DisplacementMm", d.empty() ? 0.0 : d[size_t(double(d.size() - 1) * 0.99)]);
         report.insert("verticesMovedOver1mm", over1);
         report.insert("verticesMovedOver5mm", over5);
+        if (vsRig) {
+            // Ground truth: the FULL skeleton (every joint, every influence, all correctives) evaluated
+            // by RigLogic and skinned on the CPU — what the import trades away to fit Ogre's 256 bones
+            // and 4 influences per vertex.
+            ReadOptions gro;
+            gro.loadBehavior = true;
+            const ReadResult full = read(QFileInfo(path).absoluteFilePath(), gro);
+            QString gerr;
+            auto gev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), gro, &gerr);
+            if (!full.ok || !gev) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --vs-rig could not read the full rig: %1\n").arg(full.ok ? gerr : full.error));
+                return 1;
+            }
+            QList<QPair<QString, std::array<double, 4>>> rots;
+            for (const auto& kv : sets) {
+                std::array<double, 4> q;
+                parseRotation(kv.second, &q);
+                rots << qMakePair(kv.first, q);
+            }
+            const auto truth = FaceBake::evaluatePositionsPosed(full.rig, *gev, rots);
+            const std::vector<size_t> imported = Fit::importedMeshIndices(full.rig, full.rig.flipV);
+            { double tm = 0; for (size_t mi : imported) for (size_t i = 0; i < truth[mi].size(); ++i) tm = std::max(tm, double(std::abs(truth[mi][i] - full.rig.meshes[mi].positions[i])) * 1000.0); report.insert("vsRigTruthMovedMm", tm); }
+            std::vector<double> err;
+            size_t ev0 = 0;
+            double worst = 0; size_t worstMesh = 0, worstPos = 0;
+            for (size_t mi : imported) {
+                const ExpandedMesh ex = expand(full.rig.meshes[mi], full.rig.flipV);
+                for (size_t v = 0; v < ex.positionOf.size(); ++v, ++ev0) {
+                    if (ev0 * 3 + 2 >= corrected.size()) break;
+                    const size_t p = ex.positionOf[v];
+                    const double dx = corrected[ev0 * 3] - truth[mi][p * 3], dy = corrected[ev0 * 3 + 1] - truth[mi][p * 3 + 1], dz = corrected[ev0 * 3 + 2] - truth[mi][p * 3 + 2];
+                    const double e = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                    err.push_back(e);
+                    if (e > worst) { worst = e; worstMesh = mi; worstPos = p; }
+                }
+            }
+            std::sort(err.begin(), err.end());
+            double esum = 0; int e1 = 0, e5 = 0;
+            for (double v : err) { esum += v; e1 += v > 1.0; e5 += v > 5.0; }
+            report.insert("vsRigMaxMm", err.empty() ? 0.0 : err.back());
+            report.insert("vsRigMeanMm", err.empty() ? 0.0 : esum / double(err.size()));
+            report.insert("vsRigP99Mm", err.empty() ? 0.0 : err[size_t(double(err.size() - 1) * 0.99)]);
+            report.insert("vsRigOver1mm", e1);
+            report.insert("vsRigOver5mm", e5);
+            if (!err.empty() && worstMesh < full.rig.meshes.size() && worstPos < full.rig.meshes[worstMesh].skin.size()) {
+                float bw = 0; QString bn;
+                for (const auto& inf : full.rig.meshes[worstMesh].skin[worstPos])
+                    if (inf.weight > bw && inf.joint < full.rig.joints.size()) { bw = inf.weight; bn = full.rig.joints[inf.joint].name; }
+                report.insert("vsRigWorstVertexDominantJoint", bn);
+            }
+        }
     } else {
         mgr->setEnabled(!noCorrectives);
         mgr->evaluateNow();
@@ -364,6 +422,11 @@ static int runPose(int argc, char* argv[])
         if (compare)
             t += QStringLiteral("Pose moved vertices by up to %1 mm (plain skinning vs neutral)\n")
                      .arg(report["poseMaxAxisDisplacementMm"].toDouble(), 0, 'f', 1);
+        if (compare && vsRig)
+            t += QStringLiteral("Imported (<=256 bones, 4 influences) vs the FULL DNA rig: max %1 mm, mean %2 mm, p99 %3 mm; %4 vertices >1 mm, %5 >5 mm (worst vertex: %6)\n")
+                     .arg(report["vsRigMaxMm"].toDouble(), 0, 'f', 2).arg(report["vsRigMeanMm"].toDouble(), 0, 'f', 3)
+                     .arg(report["vsRigP99Mm"].toDouble(), 0, 'f', 2).arg(report["vsRigOver1mm"].toInt()).arg(report["vsRigOver5mm"].toInt())
+                     .arg(report["vsRigWorstVertexDominantJoint"].toString());
         if (compare)
             t += QStringLiteral("Corrected vs plain skinning: max %1 mm, mean %2 mm, p99 %3 mm; %4 of %5 vertices move >1 mm, %6 >5 mm\n")
                      .arg(report["maxDisplacementMm"].toDouble(), 0, 'f', 2).arg(report["meanDisplacementMm"].toDouble(), 0, 'f', 3)
@@ -556,6 +619,39 @@ static int runFace(int argc, char* argv[])
 namespace {
 
 // Bind-pose (undeformed) vertex positions of every submesh, in submesh order.
+
+// Merge every submesh of an entity into one surface (positions + triangle indices).
+bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
+{
+    const Ogre::MeshPtr mesh = e->getMesh();
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
+        if (!vd || !sm->indexData || sm->operationType != Ogre::RenderOperation::OT_TRIANGLE_LIST) continue;
+        const Ogre::VertexElement* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        if (!pe) continue;
+        const int base = int(pos.size() / 3);
+        Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
+        auto* vbase = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        // A VertexData / IndexData may select a window inside a shared buffer.
+        for (size_t v = 0; v < vd->vertexCount; ++v) {
+            float* p = nullptr;
+            pe->baseVertexPointerToElement(vbase + (vd->vertexStart + v) * vb->getVertexSize(), &p);
+            pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
+        }
+        vb->unlock();
+        Ogre::HardwareIndexBufferSharedPtr ib = sm->indexData->indexBuffer;
+        const size_t n = sm->indexData->indexCount, i0 = sm->indexData->indexStart;
+        void* ip = ib->lock(Ogre::HardwareBuffer::HBL_READ_ONLY);
+        const bool wide = ib->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+        for (size_t k = 0; k + 2 < n; k += 3)
+            for (int c = 0; c < 3; ++c)
+                tris.push_back(base + int(wide ? static_cast<uint32_t*>(ip)[i0 + k + size_t(c)] : static_cast<uint16_t*>(ip)[i0 + k + size_t(c)]));
+        ib->unlock();
+    }
+    return !tris.empty();
+}
+
 std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
 {
     std::vector<Fit::ImportedSubmesh> out;
@@ -572,7 +668,7 @@ std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
                 auto* ubase = static_cast<unsigned char*>(ub->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
                 for (size_t v = 0; v < vd->vertexCount; ++v) {
                     float* p = nullptr;
-                    ue->baseVertexPointerToElement(ubase + v * ustride, &p);
+                    ue->baseVertexPointerToElement(ubase + (vd->vertexStart + v) * ustride, &p);
                     uvs.push_back(p[0]); uvs.push_back(p[1]);
                 }
                 ub->unlock();
@@ -584,7 +680,7 @@ std::vector<Fit::ImportedSubmesh> bindPositionsOf(Ogre::Entity* e)
                 auto* base = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
                 for (size_t v = 0; v < vd->vertexCount; ++v) {
                     float* p = nullptr;
-                    pe->baseVertexPointerToElement(base + v * stride, &p);
+                    pe->baseVertexPointerToElement(base + (vd->vertexStart + v) * stride, &p);
                     pos.push_back(p[0]); pos.push_back(p[1]); pos.push_back(p[2]);
                 }
                 vb->unlock();
@@ -615,7 +711,7 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 static int runFit(int argc, char* argv[])
 {
     QString path, targetPath, writeDna, out;
-    bool json = false, poses = false, lods = false;
+    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     double uniformScale = 0.0;
     bool sawDna = false, sawFit = false;
     for (int i = 1; i < argc; ++i) {
@@ -626,6 +722,9 @@ static int runFit(int argc, char* argv[])
         if (a == "--json") json = true;
         else if (a == "--poses") poses = true;
         else if (a == "--lods") lods = true;
+        else if (a == "--register") doRegister = true;
+        else if (a == "--register-joints") registerJoints = true;
+        else if (a == "--no-align-limbs") noAlignLimbs = true;
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
@@ -642,6 +741,12 @@ static int runFit(int argc, char* argv[])
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
     }
     if (path.isEmpty() || targetPath.isEmpty()) { usage(); return 2; }
+    if (doRegister && registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --register and --register-joints are alternatives; pass one\n")); return 2; }
+    if ((doRegister || registerJoints || noAlignLimbs) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
+        return 2;
+    }
+    if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
     if (!available()) {
         CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
@@ -655,10 +760,13 @@ static int runFit(int argc, char* argv[])
     if (!src.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
 
     // ---- the target, as one position array per rig mesh ----
+    bool rigChanged = false;
+    Rig baseRig = src.rig;   // replaced by the limb-aligned rig when --register-joints re-poses it
     std::vector<std::vector<float>> target;
     double seamMm = 0, matchedFraction = 1.0;
     bool matchedByUv = false, flippedV = false;
     int ambiguous = 0;
+    QVariantMap registration;
     if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
         if (!tr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
@@ -680,6 +788,50 @@ static int runFit(int argc, char* argv[])
                                            .arg(targetPath, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
             return 1;
         }
+        if (registerJoints) {
+            // pair the target's skeleton with the MetaHuman joints and warp the body onto its proportions
+            std::vector<std::pair<QString, std::array<double, 3>>> bones;
+            if (te->hasSkeleton()) {
+                Ogre::SkeletonInstance* sk = te->getSkeleton();
+                sk->setBindingPose();
+                for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
+                    Ogre::Bone* bone = sk->getBone(b);
+                    bone->_update(true, false);
+                    const Ogre::Vector3 p = bone->_getDerivedPosition();
+                    bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
+                }
+            }
+            if (bones.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
+            QStringList unmatched;
+            const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
+            const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
+            if (!jr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
+            target = jr.positions;
+            baseRig = jr.alignedRig;
+            rigChanged = jr.limbChainsAligned > 0 || jr.yawDegrees != 0.0;
+            registration.insert("yawDegrees", jr.yawDegrees);
+            registration.insert("limbChainsAligned", jr.limbChainsAligned);
+            registration.insert("limbAngles", jr.limbAngles);
+            registration.insert("mode", "joints");
+            registration.insert("anchorsUsed", jr.anchorsUsed);
+            registration.insert("anchorResidualMm", jr.anchorResidualMm);
+            registration.insert("unmatchedJoints", unmatched);
+            registration.insert("warnings", jr.warnings);
+        } else if (doRegister) {
+            std::vector<float> tpos;
+            std::vector<int> ttri;
+            if (!surfaceOf(te, tpos, ttri)) { CLIPipeline::writeCliError(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
+            const Fit::RegisterResult rr = Fit::registerToSurface(src.rig, tpos, ttri);
+            if (!rr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: registration: %1\n").arg(rr.error)); return 1; }
+            target = rr.positions;
+            registration.insert("alignScale", rr.alignScale);
+            registration.insert("templateVertices", rr.templateVertices);
+            registration.insert("meanResidualPct", rr.meanResidualPct);
+            registration.insert("p95ResidualPct", rr.p95ResidualPct);
+            registration.insert("maxResidualPct", rr.maxResidualPct);
+            registration.insert("warnings", rr.warnings);
+            matchedFraction = 1.0;
+        } else {
         const Fit::Correspondence c = Fit::matchImported(src.rig, bindPositionsOf(te));
         if (!c.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
         target = c.positions;
@@ -688,9 +840,15 @@ static int runFit(int argc, char* argv[])
         matchedFraction = c.matchedFraction;
         ambiguous = c.ambiguousVertices;
         flippedV = c.flippedV;
+        }
     }
 
-    const Fit::Result fr = Fit::fit(src.rig, target);
+    if (rigChanged && (lods || !writeDna.isEmpty())) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --lods and --write-dna are not supported together with limb pose alignment "
+                                                  "(the DNA keeps the original neutral orientations and facing); add --no-align-limbs and use a target that already faces the same way\n"));
+        return 2;
+    }
+    const Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
 
     QVariantMap report;
@@ -706,12 +864,13 @@ static int runFit(int argc, char* argv[])
     report.insert("matchedFraction", matchedFraction);
     report.insert("ambiguousVertices", ambiguous);
     report.insert("targetVFlipped", flippedV);
+    if (doRegister || registerJoints) report.insert("registration", registration);
     report.insert("joints", int(fr.fitted.joints.size()));
     report.insert("warnings", fr.warnings);
 
     if (poses) {
         QVariantList rows;
-        for (const Fit::PoseReport& p : Fit::evaluatePoses(src.rig, fr.fitted, Fit::referencePoses(), uniformScale))
+        for (const Fit::PoseReport& p : Fit::evaluatePoses(baseRig, fr.fitted, Fit::referencePoses(), uniformScale))
             rows << poseRows(p);
         report.insert("poses", rows);
     }

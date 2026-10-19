@@ -244,6 +244,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaArkitMap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFaceBake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFit.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRegister.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFitWrite.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCorrectiveManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ComputeSkinWeightsCommand.cpp

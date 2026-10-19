@@ -6,6 +6,7 @@
 #include <QFileInfo>
 
 #include <cmath>
+#include <set>
 
 using namespace Dna;
 
@@ -218,6 +219,38 @@ TEST(DnaRigEvaluator, UnknownDriverIsRejectedAndSignIsNormalised)
     const auto b = ev->jointDeltas();
     ASSERT_EQ(a.size(), b.size());
     for (size_t i = 0; i < a.size(); ++i) EXPECT_NEAR(a[i], b[i], 1e-5f);
+}
+
+
+TEST(DnaRigEvaluator, EveryJointRigLogicMovesIsInTheDrivenSet)
+{
+    // Joint groups are not the only thing that writes joint outputs: twist and swing setups drive the
+    // twist joints too. A driven set built from joint groups alone silently left those at rest under a
+    // bent limb (measured: a 60 degree hip flexion was 88 mm off the full rig at the thigh).
+    const QString path = bodyDna();
+    if (path.isEmpty()) { SUCCEED() << "no MetaHuman body DNA available" << " — Epic's asset is not redistributable; set QTMESH_TEST_DNA_BODY / QTMESH_TEST_DNA_FACE to run"; return; }
+    auto ev = RigEvaluator::create(path);
+    ASSERT_NE(ev, nullptr);
+    std::set<int> driven(ev->drivenJoints().begin(), ev->drivenJoints().end());
+    const double h = kPi / 6.0;   // 60 degrees about each axis
+    int checked = 0;
+    for (const char* joint : {"thigh_l", "upperarm_r", "calf_l", "lowerarm_l"})
+        for (int axis = 0; axis < 3; ++axis) {
+            std::array<double, 4> q{std::cos(h), 0, 0, 0};
+            q[size_t(1 + axis)] = std::sin(h);
+            ev->resetControls();
+            ASSERT_TRUE(ev->setDriverRotation(joint, q)) << joint;
+            ev->calculate();
+            const auto deltas = ev->jointDeltas();
+            for (size_t j = 0; j * 9 + 8 < deltas.size(); ++j) {
+                double m = 0;
+                for (int a = 0; a < 9; ++a) m = std::max(m, double(std::abs(deltas[j * 9 + size_t(a)])));
+                if (m < 1e-5) continue;
+                ++checked;
+                EXPECT_TRUE(driven.count(int(j))) << ev->jointName(int(j)).toStdString() << " moves but is not in the driven set";
+            }
+        }
+    EXPECT_GT(checked, 30);   // the bends must actually move joints, or the invariant above says nothing
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

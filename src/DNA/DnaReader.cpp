@@ -87,6 +87,32 @@ std::array<double, 4> eulerToQuaternion(const std::array<double, 3>& angles,
     return normalised(q);
 }
 
+void yawRig(Rig& rig, double radians)
+{
+    const double c = std::cos(radians), sn = std::sin(radians);
+    auto rot = [&](float* p) {
+        const double x = p[0], z = p[2];
+        p[0] = float(x * c + z * sn);
+        p[2] = float(-x * sn + z * c);
+    };
+    const std::array<double, 4> qy{std::cos(radians / 2), 0, std::sin(radians / 2), 0};
+    for (Joint& j : rig.joints) {
+        if (j.parent >= 0) continue;
+        const double x = j.translation[0], z = j.translation[2];
+        j.translation[0] = x * c + z * sn;
+        j.translation[2] = -x * sn + z * c;
+        const auto& q = j.orientation;
+        j.orientation = {qy[0] * q[0] - qy[1] * q[1] - qy[2] * q[2] - qy[3] * q[3], qy[0] * q[1] + qy[1] * q[0] + qy[2] * q[3] - qy[3] * q[2],
+                         qy[0] * q[2] - qy[1] * q[3] + qy[2] * q[0] + qy[3] * q[1], qy[0] * q[3] + qy[1] * q[2] - qy[2] * q[1] + qy[3] * q[0]};
+    }
+    for (Mesh& m : rig.meshes) {
+        for (size_t i = 0; i + 2 < m.positions.size(); i += 3) rot(&m.positions[i]);
+        for (size_t i = 0; i + 2 < m.normals.size(); i += 3) rot(&m.normals[i]);
+        for (auto& bs : m.blendShapeTargets)
+            for (size_t i = 0; i + 2 < bs.deltas.size(); i += 3) rot(&bs.deltas[i]);
+    }
+}
+
 bool worldToLocal(std::vector<Joint>& joints)
 {
     const size_t n = joints.size();
@@ -488,6 +514,11 @@ ReadResult build(dna::BinaryStreamReader* reader, const ReadOptions& opt, const 
                                 .arg(opt.lod).arg(d.lodCount);
     }
 
+    // Default facing: -Z (see DnaReaderInternal.h). The file itself faces +Z.
+    if (opt.convertCoordinateSystem && !opt.facePlusZ) {
+        yawRig(rig, 3.14159265358979323846);
+        rig.facingTurned = true;
+    }
     res.ok = true;
     return res;
 }
@@ -501,6 +532,15 @@ ReadResult read(const QString& path, const ReadOptions& options)
         return failure(ErrorCode::FileNotFound,
             QStringLiteral("DNA file not found: %1").arg(path));
 
+    if (detail::isJsonDnaFile(fi.absoluteFilePath())) {
+        auto mem = pma::makeScoped<dna::MemoryStream>();
+        if (!mem) return failure(ErrorCode::Other, QStringLiteral("Could not allocate a memory stream."));
+        const QString jerr = detail::jsonToBinaryStream(fi.absoluteFilePath(), *mem);
+        if (!jerr.isEmpty()) return failure(ErrorCode::NotDna, jerr);
+        auto jreader = pma::makeScoped<dna::BinaryStreamReader>(mem.get(), detail::makeConfig(options));
+        if (!jreader) return failure(ErrorCode::Other, QStringLiteral("Could not create a DNA reader."));
+        return build(jreader.get(), options, fi.fileName());
+    }
     const QByteArray p = QFile::encodeName(fi.absoluteFilePath());
     auto stream = pma::makeScoped<dna::FileStream>(p.constData(), dna::FileStream::AccessMode::Read,
                                                    dna::FileStream::OpenMode::Binary);

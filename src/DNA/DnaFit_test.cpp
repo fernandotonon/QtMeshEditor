@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include "DnaFit.h"
+#include "DnaRegister.h"
 #include "DnaReader.h"
 #include "DnaRigLogic.h"
 
@@ -547,6 +548,186 @@ TEST(DnaFitWrite, RefusesToOverwriteTheSourceThroughASymlink)
     EXPECT_TRUE(wr.error.contains("overwrite")) << wr.error.toStdString();
     EXPECT_EQ(QFileInfo(srcPath).size(), before);   // the source is untouched
 #endif
+}
+
+
+// ---- registration onto another character --------------------------------------------
+
+namespace {
+// A stick rig with MetaHuman body-joint names, all children of the pelvis, plus the tube mesh.
+Rig stickRig(std::vector<std::array<double, 3>>& world)
+{
+    Rig rig = tubeRig();
+    const std::vector<std::pair<const char*, std::array<double, 3>>> j = {
+        {"pelvis", {0, 1.0, 0}}, {"spine_03", {0, 1.4, 0.05}}, {"spine_05", {0, 1.6, 0.05}}, {"neck_01", {0, 1.75, 0.04}},
+        {"head", {0, 1.85, 0.06}}, {"upperarm_l", {0.2, 1.6, 0}}, {"upperarm_r", {-0.2, 1.6, 0}},
+        {"hand_l", {0.7, 1.5, 0.1}}, {"hand_r", {-0.7, 1.5, 0.1}}, {"thigh_l", {0.1, 0.95, 0}}, {"thigh_r", {-0.1, 0.95, 0}},
+        {"foot_l", {0.1, 0.05, 0.05}}, {"foot_r", {-0.1, 0.05, 0.05}}};
+    rig.joints.clear();
+    world.clear();
+    for (size_t i = 0; i < j.size(); ++i) {
+        Joint jt;
+        jt.name = j[i].first;
+        jt.parent = i == 0 ? -1 : 0;
+        jt.translation = i == 0 ? j[i].second : std::array<double, 3>{j[i].second[0] - j[0].second[0], j[i].second[1] - j[0].second[1], j[i].second[2] - j[0].second[2]};
+        rig.joints.push_back(jt);
+        world.push_back(j[i].second);
+    }
+    for (auto& v : rig.meshes[0].skin) v = {{0, 1.f}};   // everything on the pelvis; skinning is not under test
+    return rig;
+}
+}  // namespace
+
+TEST(DnaRegister, JointNamesAreMatchedAcrossConventionsAndTheRestReported)
+{
+    std::vector<std::pair<QString, std::array<double, 3>>> bones = {
+        {"Hips", {0, 1, 0}}, {"mixamorig:LeftArm", {1, 2, 0}}, {"RIGHTHAND", {-2, 2, 0}}, {"Head", {0, 3, 0}}, {"prop_sword", {9, 9, 9}}};
+    QStringList unmatched;
+    const auto a = matchJointAnchors(bones, &unmatched);
+    ASSERT_EQ(a.size(), 4u);
+    EXPECT_TRUE(unmatched.contains("foot_l"));
+    EXPECT_FALSE(unmatched.contains("pelvis"));
+    bool sawHand = false;
+    for (const auto& x : a) if (x.bodyJoint == "hand_r") { sawHand = true; EXPECT_EQ(x.target[0], -2.0); }   // case-insensitive
+    EXPECT_TRUE(sawHand);
+}
+
+TEST(DnaRegister, TooFewAnchorsIsRefusedWithAnActionableMessage)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    const JointRegisterResult r = registerByJoints(rig, {{"pelvis", {0, 1, 0}}, {"head", {0, 2, 0}}});
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains("at least 6")) << r.error.toStdString();
+}
+
+TEST(DnaRegister, AUniformlyScaledCoplanarTargetKeepsItsDepth)
+{
+    // The target skeleton is flat (T-pose, every joint at z = 0): without depth anchors the
+    // warp has no depth information and squashes the body to a sheet.
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {1.5 * w[i][0], 1.5 * w[i][1], 0.0}});
+    const JointRegisterResult r = registerByJoints(rig, anchors);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.positions[0].empty());
+    double zmin = 1e9, zmax = -1e9, ymax = -1e9;
+    const auto& P = r.positions[0];
+    for (size_t i = 0; i + 2 < P.size(); i += 3) { zmin = std::min(zmin, double(P[i + 2])); zmax = std::max(zmax, double(P[i + 2])); ymax = std::max(ymax, double(P[i + 1])); }
+    const double depth = zmax - zmin;          // source tube is 0.6 deep -> ~0.9 after a 1.5x scale
+    EXPECT_GT(depth, 0.6) << "depth collapsed: " << depth;
+    EXPECT_NEAR(ymax, 1.5 * 2.5, 0.35);        // height followed the scale (tube top at y = 2.5)
+}
+
+TEST(DnaRegister, SurfaceRegistrationLandsOnTheTargetSurface)
+{
+    // Register the tube onto a copy of itself scaled 1.3x taller/wider: the fit should land on
+    // the surface (residual tiny) and report the pre-align scale it used.
+    const Rig rig = tubeRig();
+    const Mesh& m = rig.meshes[0];
+    std::vector<float> tv;
+    for (float v : m.positions) tv.push_back(v * 1.3f);
+    std::vector<int> tf;
+    for (const auto& f : m.faces)
+        for (size_t k = 1; k + 1 < f.size(); ++k) { tf.push_back(int(m.layouts[f[0]].position)); tf.push_back(int(m.layouts[f[k]].position)); tf.push_back(int(m.layouts[f[k + 1]].position)); }
+    const RegisterResult r = registerToSurface(rig, tv, tf);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_NEAR(r.alignScale, 1.3, 1e-6);
+    EXPECT_LT(r.meanResidualPct, 0.5);
+}
+
+TEST(DnaRegister, AnEmptyOrBrokenTargetSurfaceIsRefused)
+{
+    const Rig rig = tubeRig();
+    EXPECT_FALSE(registerToSurface(rig, {}, {}).ok);
+    EXPECT_FALSE(registerToSurface(rig, {0, 0, 0, 1, 0, 0, 0, 1, 0}, {0, 1, 7}).ok);   // index out of range
+}
+
+TEST(DnaAlignLimbs, ArmChainRotatesOntoTheTargetDirectionsThroughAParentWithAnOrientation)
+{
+    Rig rig = tubeRig();
+    auto J = [&](const char* n, int parent, std::array<double, 3> t, std::array<double, 4> q = {1, 0, 0, 0}) {
+        Joint j; j.name = n; j.parent = parent; j.translation = t; j.orientation = q; rig.joints.push_back(j); return int(rig.joints.size() - 1);
+    };
+    rig.joints.clear();
+    const double h = std::sqrt(0.5);
+    const int pel = J("pelvis", -1, {0, 1, 0}, {h, 0, h, 0});            // rooted frame turned 90 deg about Y
+    const int ua = J("upperarm_l", pel, {0.0, 0.6, 0.2}, {h, h, 0, 0});  // with its own orientation too
+    const int la = J("lowerarm_l", ua, {0.0, 0.3, 0.0});
+    J("hand_l", la, {0.0, 0.3, 0.0});
+    for (auto& v : rig.meshes[0].skin) v = {{uint16_t(ua), 1.f}};
+    const auto before = jointWorldPositions(rig);
+    // target: a straight arm along +X from the upper-arm position
+    const std::vector<std::pair<QString, std::array<double, 3>>> tj = {
+        {"upperarm_l", {before[size_t(ua)][0], before[size_t(ua)][1], before[size_t(ua)][2]}},
+        {"lowerarm_l", {before[size_t(ua)][0] + 0.3, before[size_t(ua)][1], before[size_t(ua)][2]}},
+        {"hand_l", {before[size_t(ua)][0] + 0.6, before[size_t(ua)][1], before[size_t(ua)][2]}}};
+    const LimbAlignment la2 = alignLimbs(rig, tj);
+    EXPECT_EQ(la2.chainsAligned, 2);
+    const auto after = jointWorldPositions(la2.rig);
+    auto dir = [&](int a, int b) { std::array<double, 3> d{after[size_t(b)][0] - after[size_t(a)][0], after[size_t(b)][1] - after[size_t(a)][1], after[size_t(b)][2] - after[size_t(a)][2]}; double l = std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]); for (double& x : d) x /= l; return d; };
+    const auto d1 = dir(ua, la), d2 = dir(la, la + 1);
+    EXPECT_NEAR(d1[0], 1.0, 1e-6) << d1[0] << "," << d1[1] << "," << d1[2];
+    EXPECT_NEAR(d2[0], 1.0, 1e-6) << d2[0] << "," << d2[1] << "," << d2[2];
+    // bone lengths and the upper-arm joint position are untouched; the pelvis does not move
+    EXPECT_NEAR(std::abs(after[size_t(la)][0] - after[size_t(ua)][0]), 0.3, 1e-6);
+    EXPECT_NEAR(after[size_t(ua)][1], before[size_t(ua)][1], 1e-9);
+    // skin follows: a vertex weighted 100 % to the upper arm moved rigidly with that bone
+    const auto& P0 = rig.meshes[0].positions; const auto& P1 = la2.rig.meshes[0].positions;
+    ASSERT_EQ(P0.size(), P1.size());
+    auto dist = [&](const std::vector<float>& P, size_t a, size_t b) { return std::sqrt(std::pow(P[a*3]-P[b*3],2)+std::pow(P[a*3+1]-P[b*3+1],2)+std::pow(P[a*3+2]-P[b*3+2],2)); };
+    EXPECT_NEAR(dist(P0, 0, 7), dist(P1, 0, 7), 1e-5);   // rigid: pairwise distances preserved
+}
+
+TEST(DnaRegister, ATargetFacingTheOtherWayTurnsTheBodyInsteadOfCrossingSides)
+{
+    // The target is the rig turned 180 degrees about Y (it faces the other way, so its LEFT
+    // bones sit at -X): pairing by name stays right, but the body must be turned first.
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {-w[i][0], w[i][1], -w[i][2]}});
+    const JointRegisterResult r = registerByJoints(rig, anchors, /*alignLimbPose=*/false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_NEAR(std::abs(r.yawDegrees), 180.0, 1.0);
+    bool warned = false;
+    for (const QString& m : r.warnings) if (m.contains("turned about Y")) warned = true;
+    EXPECT_TRUE(warned);
+    // the registered body is the source turned 180 degrees: (x, y, z) -> (-x, y, -z)
+    double maxErr = 0;
+    const auto& P0 = rig.meshes[0].positions; const auto& P1 = r.positions[0];
+    for (size_t i = 0; i + 2 < P0.size(); i += 3)
+        maxErr = std::max({maxErr, double(std::abs(P1[i] + P0[i])), double(std::abs(P1[i + 2] + P0[i + 2]))});
+    EXPECT_LT(maxErr, 0.05);
+    // and the aligned rig faces the same way: its left upper arm is now on -X
+    const auto jp = jointWorldPositions(r.alignedRig);
+    size_t ul = 0; for (size_t j = 0; j < rig.joints.size(); ++j) if (rig.joints[j].name == "upperarm_l") ul = j;
+    EXPECT_LT(jp[ul][0], 0.0);
+}
+
+TEST(DnaRegister, AlreadyFacingTheSameWayLeavesTheBodyAlone)
+{
+    std::vector<std::array<double, 3>> w;
+    const Rig rig = stickRig(w);
+    std::vector<JointAnchor> anchors;
+    for (size_t i = 0; i < w.size(); ++i) anchors.push_back({rig.joints[i].name, {w[i][0] * 1.2, w[i][1] * 1.2, w[i][2] * 1.2}});
+    const JointRegisterResult r = registerByJoints(rig, anchors, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.yawDegrees, 0.0);
+}
+
+TEST(DnaFitYaw, TurnsRootsMeshesAndNormalsAndIsInvertible)
+{
+    Rig rig = tubeRig();
+    const Rig before = rig;
+    yawRig(rig, 3.14159265358979);
+    EXPECT_NEAR(rig.meshes[0].positions[0], -before.meshes[0].positions[0], 1e-5f);
+    EXPECT_NEAR(rig.meshes[0].positions[1], before.meshes[0].positions[1], 1e-6f);   // height untouched
+    EXPECT_NEAR(rig.meshes[0].positions[2], -before.meshes[0].positions[2], 1e-5f);
+    yawRig(rig, -3.14159265358979);
+    for (size_t i = 0; i < before.meshes[0].positions.size(); ++i)
+        EXPECT_NEAR(rig.meshes[0].positions[i], before.meshes[0].positions[i], 1e-5f);
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

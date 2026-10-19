@@ -252,14 +252,23 @@ TEST(DnaReader, BehaviourInventoryOnlyWhenRequested)
 
 TEST(DnaReader, CoordinateConversionKeepsYUpCharacterUpright)
 {
-    // Source is x=right y=up z=back (a MetaHuman faces -Z); the target faces +Z,
-    // a 180-degree turn about Y: X flips, height is untouched.
+    // Source is x=right y=up z=back (a MetaHuman faces -Z). The default keeps that orientation
+    // (what the editor's viewport expects); only the units change.
     const ReadResult r = readFromBuffer(makeSyntheticDna());
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     EXPECT_TRUE(r.rig.coordinateSystemConverted);
     EXPECT_NEAR(r.rig.meshes[0].positions[7], 1.5f, 1e-5f);
-    EXPECT_NEAR(r.rig.meshes[0].positions[0], 0.1f, 1e-5f);  // was -10 cm
-    EXPECT_NEAR(r.rig.meshes[0].positions[1 * 3], -0.1f, 1e-5f);
+    EXPECT_NEAR(r.rig.meshes[0].positions[0], -0.1f, 1e-5f);  // -10 cm, unflipped
+    EXPECT_NEAR(r.rig.meshes[0].positions[1 * 3], 0.1f, 1e-5f);
+
+    // facePlusZ asks for the glTF/Mixamo convention: a 180-degree turn about Y (X and Z flip).
+    ReadOptions plus;
+    plus.facePlusZ = true;
+    const ReadResult p = readFromBuffer(makeSyntheticDna(), plus);
+    ASSERT_TRUE(p.ok) << p.error.toStdString();
+    EXPECT_NEAR(p.rig.meshes[0].positions[7], 1.5f, 1e-5f);                       // height untouched
+    EXPECT_NEAR(p.rig.meshes[0].positions[0], 0.1f, 1e-5f);                        // X flipped
+    EXPECT_NEAR(p.rig.meshes[0].positions[2], -r.rig.meshes[0].positions[2], 1e-5f);  // Z flipped
 }
 
 TEST(DnaReader, InvalidLodIsRejectedWithRange)
@@ -306,6 +315,48 @@ TEST(DnaReader, ReadsFromDisk)
     const ReadResult r = read(path);
     ASSERT_TRUE(r.ok) << r.error.toStdString();
     EXPECT_EQ(r.rig.joints.size(), 3u);
+}
+
+
+TEST(DnaReader, ReadsAJsonDnaWithTheSameConventionsAsBinary)
+{
+    // JSON DNA is the library's text format. It is re-serialised through a binary stream so that the
+    // unit / coordinate / rotation conversions apply exactly as they do for binary files.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const std::string json = DnaTest::makeSyntheticDnaJson();
+    ASSERT_FALSE(json.empty());
+    ASSERT_EQ(json.front(), '{');
+    for (const char* name : {"c.json", "c_noext_hint.dna"}) {   // by extension, and by content
+        const QString path = dir.filePath(name);
+        QFile f(path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(json.data(), qint64(json.size()));
+        f.close();
+        const ReadResult j = read(path);
+        ASSERT_TRUE(j.ok) << name << ": " << j.error.toStdString();
+        const ReadResult b = readFromBuffer(DnaTest::makeSyntheticDna());
+        ASSERT_TRUE(b.ok);
+        ASSERT_EQ(j.rig.joints.size(), b.rig.joints.size());
+        ASSERT_EQ(j.rig.meshes.size(), b.rig.meshes.size());
+        for (size_t i = 0; i < b.rig.meshes[0].positions.size(); ++i)
+            EXPECT_NEAR(j.rig.meshes[0].positions[i], b.rig.meshes[0].positions[i], 1e-6f) << name << " " << i;
+        EXPECT_EQ(j.rig.joints[1].name, b.rig.joints[1].name);
+        EXPECT_NEAR(j.rig.joints[1].translation[1], b.rig.joints[1].translation[1], 1e-9);
+    }
+}
+
+TEST(DnaReader, BrokenJsonIsReportedNotCrashed)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QFile f(dir.filePath("broken.json"));
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("{ \"this\": is not valid json");
+    f.close();
+    const ReadResult r = read(dir.filePath("broken.json"));
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(r.error.isEmpty());
 }
 
 #endif  // ENABLE_OPENRIGLOGIC

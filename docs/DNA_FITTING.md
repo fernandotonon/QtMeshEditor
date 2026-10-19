@@ -139,7 +139,51 @@ budget issue), and an in-editor RBF without DNA (our own pose-space solver drivi
 existing morph targets) may be the better product for game assets. Recommendation:
 prototype the DNA-free pose-space version first.
 
-## 9. Known limits / follow-ups
+## 9. Fitting to a character with its own topology (`--register-joints`, `--register`)
+
+`dna fit` needs one target position per source vertex, which only a same-topology target
+provides. Two ways to build that for an arbitrary character were prototyped and measured on
+`officer_rigged.glb` (a stylised, T-posed chibi: big head, short limbs, 53-bone Mixamo-style rig):
+
+| Route | Flag | Result |
+|---|---|---|
+| Surface registration: pre-align by height, then the face rig's Amberg optimal-step NRICP drapes the body on the target | `--register` | **Rejected.** Residual looks excellent (mean 0.12 %, p95 0.34 % of the target size) but the render shows the bare body collapsed into the silhouette of the clothes (a thin vase torso, spindly arms). A low surface residual says nothing about whether the result is a plausible body. |
+| Skeleton-anchored warp: pair the target's bones with the MetaHuman joints by name (Mixamo / generic biped tables), build a smooth affine + RBF warp from those correspondences, carry the body and skeleton through it | `--register-joints` | **Works as a prototype.** The body takes the officer's proportions (wide stance, short legs, arms out); reference-pose stretch p99 <= 0.38, worst edge <= 1.9x. |
+
+Two traps the joint route hit, both pinned by tests: a T-posed target's joints are
+(nearly) **coplanar**, so a warp fitted to them has no depth information and squashes the body
+to a sheet (first render: a zero-thickness sliver) — fixed with helper points offset along depth
+and scaled by the similarity factor; and name pairing must be case-insensitive and tolerate the
+`mixamorig:` prefix, with unmatched joints reported rather than silently dropped (at least 6 pairs
+are required).
+
+**Limb pose alignment (default on; `--no-align-limbs` to skip).** Before the warp, each limb chain
+(upper arm -> forearm -> hand, thigh -> calf -> foot, both sides) is rotated by the shortest arc
+onto the target's bone direction, root to leaf, and the body is linear-blend-skinned into that new
+bind pose (`alignLimbs`; correctives are not applied). On the officer: arms rotated 29 deg / 35-38 deg,
+legs 8 deg / 1-2 deg; the render shows a clean T-pose (no drooping arms) and reference-pose stretch p99
+drops to <= 0.07 (from <= 0.38 without it). `--lods` and `--write-dna` are refused with it because the
+written DNA keeps the original neutral orientations — use `--no-align-limbs` for those.
+
+**Facing (found by this alignment).** A first attempt showed the officer's "Left" bones on the rig's
+right and was mis-diagnosed as mirrored naming. It was a 180 deg difference in FACING: the importer
+turned MetaHumans to face +Z, while the editor's default viewport and the officer (a pipeline asset)
+face -Z. Two fixes came out of it: (1) the DNA importer now faces **-Z by default** — the file itself
+is `x=left y=up z=front`, i.e. faces +Z with left on +X, so the library is asked for an identity
+transform and `yawRig` turns the roots/meshes 180 deg afterwards (`ReadOptions::facePlusZ` or
+`QTMESH_DNA_FACE_PLUS_Z=1` keeps the glTF/Mixamo +Z convention). RigLogic's outputs are joint-LOCAL
+deltas in the file's frame, so a library-side axis change would have left them inconsistent with the
+converted skeleton; a root yaw does not touch any non-root local transform, and `RigEvaluator` applies
+the same yaw to root poses. (2) `registerByJoints` derives each skeleton's facing from its
+left-minus-right vector and turns the body about Y when they differ by more than 30 deg (reported in
+the warnings), instead of the earlier side swap, which was a reflection and not a rotation.
+
+What it still is **not**: the result is the *MetaHuman body with the officer's skeleton
+proportions*, not a body shaped like the officer's clothes or head (the body DNA has no head, and
+the warp is smooth, so hands/feet detail does not follow). The surface route would
+need the same pre-pose plus landmarks before it could be trusted.
+
+## 10. Known limits / follow-ups
 
 1. Corrective data is not recalibrated (section 6).
 2. No in-editor preview/undo (section 7).

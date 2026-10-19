@@ -46,7 +46,7 @@ A build without the flag compiles; every entry point reports
 | Topic | Choice |
 |---|---|
 | Units | cm → metres by default (`--keep-units` / `Units::Preserve`); glTF is metre-based and the viewport grid expects ~1-unit characters |
-| Coordinates | converted by the library to right-handed, Y up, character facing +Z (`x=left y=up z=front` in DNA naming — a 180° turn about Y from MetaHuman's authored `x=right y=up z=back`, which faces −Z) |
+| Coordinates | converted by the library to right-handed, Y up, character facing **−Z** by default (the editor's viewport convention). The file itself is `x=left y=up z=front` (faces +Z, left on +X); the library is asked for that identity transform and `yawRig` turns the root joints + meshes 180° about Y afterwards, so RigLogic's joint-local outputs stay valid. `ReadOptions::facePlusZ` / `QTMESH_DNA_FACE_PLUS_Z=1` keep +Z (glTF/Mixamo) |
 | Euler → quaternion | Maya rotate order: first letter applied first (`xyz` ⇒ X, then Y, then Z; column-vector product Rz·Ry·Rx) — equal to OpenRigLogic's row-vector `Rx*Ry*Rz`. The first cut multiplied the other way round and produced a scrambled skeleton |
 | Neutral joint space | **PARENT-RELATIVE** (verified on Epic's real DNA; `NeutralSpace::World` is only for producers that write world transforms). The root joint carries a −90° X orientation that turns the data's Z-up joint axes into Y-up |
 | UVs | V flipped (DNA bottom-left → Ogre/glTF top-left) |
@@ -57,7 +57,7 @@ A build without the flag compiles; every entry point reports
 ## Verified on Epic's own archetype DNA (UE 5.7 `SKM_Body.dna` / `SKM_Face.dna`)
 
 Not redistributed — read from a local Unreal install. Both import; the head sits directly
-above the body in the shared space, the character faces +Z after the coordinate conversion,
+above the body in the shared space, the character faces −Z after the import turn (+Z with `facePlusZ`),
 and the skeleton agrees with the skin: the median vertex lies 3.9 cm (body) / 1.0 cm (face)
 from its dominant joint in world space. Findings:
 
@@ -84,7 +84,7 @@ from its dominant joint in world space. Findings:
 5. **Groom and clothing** are not in the DNA/DCC package. They are separate
    pipeline inputs (import as ordinary meshes and bind to the DNA skeleton);
    not handled automatically.
-6. **JSON DNA** is not read (binary only).
+6. **JSON DNA** is read (`.json` extension or a `{` first byte; `read()`, `RigEvaluator::create`, every `qtmesh dna` command) by re-serialising it as a binary DNA in memory, so the library's unit / coordinate / rotation conversions apply exactly as for binary. Needs `DNA_BUILD_WITH_JSON_SUPPORT` on the library (set in `cmake/OpenRigLogic.cmake`). `dna fit --write-dna` still needs a binary SOURCE. The editor's file dialog / MCP `load_mesh` import only `.dna` (a JSON DNA saved with that extension is detected by content).
 7. **Export:** the only DNA writer is `qtmesh dna fit --write-dna` (Phase 4):
    it rewrites joint neutral translations and mesh positions of a *fitted* rig
    and must read back and load in RigLogic, else the file is removed. DNA
@@ -92,6 +92,33 @@ from its dominant joint in world space. Findings:
    (see `DNA_FITTING.md` section 6). There is no general DNA export.
 8. **LOD propagation / lower-LOD skeleton pruning:** the full skeleton is
    imported at every LOD; `Rig::lodJointIndices` records the per-LOD subset.
+
+## Validation against the full rig (`qtmesh dna pose --compare --vs-rig`)
+
+The imported character is a compromise: Ogre allows 256 bones (the body has 342 joints, 333 of
+them skinned) and 4 influences per vertex. `--vs-rig` measures what that costs — the imported,
+corrected character against the FULL skeleton (every joint, every influence, all correctives)
+evaluated by RigLogic and skinned on the CPU (`FaceBake::evaluatePositionsPosed`):
+
+| Pose | Before (max / mean / p99, mm) | After |
+|---|---|---|
+| calf_l z -90 | 54.6 / 0.50 / 18.8 | 11.9 / 0.13 / 5.8 |
+| thigh_l x 60 | 88.0 / 2.79 / 67.2 | 7.4 / 0.024 / 0.83 |
+| upperarm_l z 70 | 30.5 / 0.39 / 14.8 | 10.8 / 0.053 / 1.64 |
+| lowerarm_l y 90 | 17.1 / 0.18 / 7.3 | 2.5 / 0.010 / 0.27 |
+| clavicle_l z 20 | — | 14.2 / 0.076 / 2.43 |
+| spine_03 x 30, finger/hand/foot bends | — | max <= 3.7 mm |
+
+The whole improvement came from one bug, not from the bone budget: **twist and swing setups drive
+joints too** (`thigh_twist_*`, `upperarm_twist_*` …). The evaluator's driven set was built from
+joint groups only, so those joints stayed at rest under a bent limb. `RigEvaluator` now also takes
+`getTwistOutputJointIndices` / `getSwingOutputJointIndices`; the invariant "every joint RigLogic moves
+is in the driven set" is pinned by a real-asset test. Still 61 of the ~258 driven joints do not fit
+in Ogre's 256 bones (folded into their parents); what remains of the error is mostly those, plus the
+4-influence clip. An experiment replaced the rest-weight fold criterion with a MEASURED cost (how far
+a joint's vertices move if they follow the parent, over every driver bent about each axis): the folded
+set differs (mostly finger helpers) but the errors were equal within noise (limbs identical, finger
+poses within 1 mm either way), so it was dropped as complexity without a benefit.
 
 ## Phases still open
 

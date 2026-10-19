@@ -73,6 +73,11 @@ struct NricpOptions {
     // should not exist, and that warp detunes the deformation transfer's
     // target rest frames (every blendshape came out 4-9x too weak).
     // Leave empty to pre-align on the fitted geometry itself.
+    // Start from the template exactly as given (no centroid/diagonal pre-align). For a caller that has
+    // already aligned it by other means (DNA body registration matches feet and height) — the
+    // centroid/diagonal pre-align would undo that and, on a character with different proportions,
+    // start the anneal from a worse place.
+    bool skipPrealign = false;
     std::vector<float> prealignTmplV;
     std::vector<float> prealignUserV;
 };
