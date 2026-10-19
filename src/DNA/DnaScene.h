@@ -5,11 +5,13 @@
 // the pure-data reader is DnaReader.h.
 
 #include "DnaReader.h"
+#include "../PoseSpaceRbf.h"
 
 #include <QString>
 #include <QStringList>
 
 #include <memory>
+#include <vector>
 
 namespace Ogre { class SceneNode; }
 
@@ -29,6 +31,7 @@ struct ImportReport {
     int correctiveJoints = 0;       ///< rig-driven joints present in the imported skeleton
     int correctiveJointsFolded = 0; ///< rig-driven joints lost to the 256-bone limit
     bool correctivesAttached = false;
+    int poseSpaceSets = 0;          ///< pose-space correctives driving the character (0 = RigLogic bone correctives)
     int faceShapes = 0;             ///< morph targets baked from the face rig
     int faceShapesApproximate = 0;  ///< of those, ARKit channels that are close composites
     double faceBakeMs = 0.0;
@@ -43,13 +46,18 @@ struct ImportReport {
 /// to the new entity (DnaCorrectiveManager).
 Ogre::SceneNode* importRigToScene(const Rig& rig, const QString& baseName,
                                   ImportReport* report = nullptr, QString* error = nullptr,
-                                  std::shared_ptr<RigEvaluator> evaluator = nullptr);
+                                  std::shared_ptr<RigEvaluator> evaluator = nullptr,
+                                  std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace = nullptr);
 
 /// UserObjectBindings key (a std::string absolute path) set on every entity the DNA importer creates.
 static const char* const kSourcePathKey = "qtmesh.dna.source";
 
 /// What the importer builds on top of the neutral character.
 struct ImportOptions {
+    /// Replace the RigLogic bone correctives by generic pose-space sets baked from the rig (see DnaPsdBake.h): the
+    /// sets are cached in <AppData>/dna_psd/ so only the first import pays the bake (~6 s for the body). Also
+    /// switched on by QTMESH_DNA_PSD=1.
+    bool poseSpaceCorrectives = false;
     /// A face DNA (it exposes expression controls) gets its rig baked into morph
     /// targets: the 51 ARKit channels by default. See DnaFaceBake.h for why a
     /// bake rather than live joints.

@@ -130,12 +130,14 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     o.mode = mode;
     o.alignLimbs = alignLimbs;
     o.poses = true;
+    o.poseSpace = true;   // the fitted body gets correctives for ITS proportions (cached bake + warp transfer)
+    std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace;
     auto rig = std::make_shared<Dna::Rig>();
     QVariantMap report;
     QString err;
     bool ok = false;
     try {
-        ok = Dna::DnaCLI::fitEntityReport(src, p.target, o, rig.get(), &report, &err);
+        ok = Dna::DnaCLI::fitEntityReport(src, p.target, o, rig.get(), &report, &err, &poseSpace);
     } catch (const std::exception& e) {
         err = QString::fromUtf8(e.what());
     }
@@ -144,7 +146,7 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
         emit changed();
         return false;
     }
-    auto* cmd = new AddFittedDnaCharacterCommand(rig, src, QFileInfo(src).completeBaseName() + QStringLiteral("_fitted"));
+    auto* cmd = new AddFittedDnaCharacterCommand(rig, src, QFileInfo(src).completeBaseName() + QStringLiteral("_fitted"), poseSpace);
     // push() runs redo() and deletes a command that marked itself obsolete (a failed build): read the shared
     // outcome, never the command, afterwards.
     const auto outcome = cmd->outcome();
@@ -158,7 +160,7 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     double worstStretchP99 = 0;
     for (const QVariant& v : report.value("poses").toList()) worstStretchP99 = std::max(worstStretchP99, v.toMap().value("stretchDeltaP99").toDouble());
     m_status = QStringLiteral("Fitted (%1): body moved by mean %2 mm, joints by mean %3 mm; reference-pose stretch p99 <= %4. "
-                              "Added as '%5' — Ctrl+Z removes it. Corrective data is not recalibrated.")
+                              "Added as '%5' — Ctrl+Z removes it.")
                    .arg(mode).arg(report.value("meanVertexShiftMm").toDouble(), 0, 'f', 0).arg(report.value("meanJointShiftMm").toDouble(), 0, 'f', 0)
                    .arg(worstStretchP99, 0, 'f', 2).arg(outcome->nodeName);
     {

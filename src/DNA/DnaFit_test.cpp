@@ -681,6 +681,41 @@ TEST(DnaAlignLimbs, ArmChainRotatesOntoTheTargetDirectionsThroughAParentWithAnOr
     EXPECT_NEAR(dist(P0, 0, 7), dist(P1, 0, 7), 1e-5);   // rigid: pairwise distances preserved
 }
 
+TEST(DnaAlignLimbs, BlendedLinearCarriesAVertexExactlyAsItsPositionMoved)
+{
+    // For a vertex skinned 100 % to one bone, the blended linear map must equal that bone's rotation: pairwise vertex
+    // differences of the aligned mesh are the rest-space vectors carried through it (what a corrective offset needs).
+    Rig rig = tubeRig();
+    auto J = [&](const char* n, int parent, std::array<double, 3> t) {
+        Joint j; j.name = n; j.parent = parent; j.translation = t; rig.joints.push_back(j); return int(rig.joints.size() - 1);
+    };
+    rig.joints.clear();
+    const int pel = J("pelvis", -1, {0, 1, 0});
+    const int ua = J("upperarm_l", pel, {0.0, 0.6, 0.2});
+    const int la = J("lowerarm_l", ua, {0.0, 0.3, 0.0});
+    J("hand_l", la, {0.0, 0.3, 0.0});
+    for (auto& v : rig.meshes[0].skin) v = {{uint16_t(ua), 1.f}};
+    const auto before = jointWorldPositions(rig);
+    const std::vector<std::pair<QString, std::array<double, 3>>> tj = {
+        {"upperarm_l", before[size_t(ua)]},
+        {"lowerarm_l", {before[size_t(ua)][0] + 0.3, before[size_t(ua)][1], before[size_t(ua)][2]}},
+        {"hand_l", {before[size_t(ua)][0] + 0.6, before[size_t(ua)][1], before[size_t(ua)][2]}}};
+    const LimbAlignment al = alignLimbs(rig, tj);
+    ASSERT_GT(al.chainsAligned, 0);
+    const auto lin = blendedAlignmentLinear(rig, al.rig);
+    ASSERT_EQ(lin.size(), rig.meshes.size());
+    const auto& P0 = rig.meshes[0].positions;
+    const auto& P1 = al.rig.meshes[0].positions;
+    const auto& A = lin[0][0];
+    // vector between vertex 0 and vertex 7 before, carried by A, equals the vector after
+    for (int c = 0; c < 3; ++c) {
+        const double d0x = P0[7 * 3] - P0[0], d0y = P0[7 * 3 + 1] - P0[1], d0z = P0[7 * 3 + 2] - P0[2];
+        const double want = P1[7 * 3 + size_t(c)] - P1[size_t(c)];
+        const double got = A[size_t(c * 3)] * d0x + A[size_t(c * 3 + 1)] * d0y + A[size_t(c * 3 + 2)] * d0z;
+        EXPECT_NEAR(got, want, 1e-5) << c;
+    }
+}
+
 TEST(DnaRegister, ATargetFacingTheOtherWayTurnsTheBodyInsteadOfCrossingSides)
 {
     // The target is the rig turned 180 degrees about Y (it faces the other way, so its LEFT

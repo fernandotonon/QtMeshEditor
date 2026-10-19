@@ -6,9 +6,12 @@
 // meshes, blend-shape channels, rig-logic inventory) without touching Ogre.
 // Importing/converting goes through the normal `qtmesh convert head.dna -o x.glb`.
 
+#include "../PoseSpaceRbf.h"
 #include "DnaReader.h"
 
 #include <QString>
+#include <memory>
+#include <vector>
 #include <QVariantMap>
 
 namespace Ogre { class Entity; }
@@ -26,7 +29,9 @@ int run(int argc, char* argv[]);
 struct FitOptions {
     QString mode;
     bool poses = true, lods = false, alignLimbs = true;
+    bool poseSpace = false;   ///< (live-entity fit) also bake + transfer generic pose-space correctives for the fitted body
     QString outputDna, outputMesh;
+    QString outputCorrectives;   ///< write the fitted body's pose-space correctives (.qpsd binary, otherwise JSON)
 };
 bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptions& options,
                QVariantMap* report, QString* error);
@@ -34,7 +39,7 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
 /// The same fit against a LIVE entity (the editor's "Fit DNA body" action). `fittedRig` receives the
 /// fitted rig (when the fit re-posed the limbs it is the re-posed one). Nothing is added to the scene.
 bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
-                     QVariantMap* report, QString* error);
+                     QVariantMap* report, QString* error, std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpace = nullptr);
 }
 }
 

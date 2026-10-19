@@ -1,4 +1,5 @@
 #include "AnimationControlController.h"
+#include "PoseSpaceRbf.h"
 #include "GamificationManager.h"
 #include "PropertiesPanelController.h"
 #include "MorphAnimationManager.h"
@@ -195,7 +196,7 @@ void AnimationControlController::updateAnimationTree()
         if (Ogre::AnimationStateSet* set = entity->getAllAnimationStates()) {
             for (const auto& pair : set->getAnimationStates()) {
                 const QString name = QString::fromStdString(pair.first);
-                if (morphNames.contains(name)) continue;  // blend shape, not a clip
+                if (morphNames.contains(name) || PoseSpace::isChannelName(name)) continue;  // blend shape / pose-space channel, not a clip
                 animNames << name;
             }
         }

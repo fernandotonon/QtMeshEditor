@@ -10743,6 +10743,7 @@ QJsonObject MCPServer::toolFitDnaBody(const QJsonObject& args)
     if (args.contains("lods")) o.lods = args.value("lods").toBool(false);
     if (args.contains("align_limbs")) o.alignLimbs = args.value("align_limbs").toBool(true);
     o.outputDna = args.value("output_dna").toString();
+    o.outputCorrectives = args.value("output_correctives").toString();
     o.outputMesh = args.value("output_mesh").toString();
     QVariantMap report;
     QString err;
@@ -14723,6 +14724,7 @@ QJsonArray MCPServer::buildToolsList()
         props["lods"] = QJsonObject{{"type", "boolean"}, {"description", "Report propagation to the lower LODs (default false; not with limb alignment)."}};
         props["align_limbs"] = QJsonObject{{"type", "boolean"}, {"description", "mode=joints: rotate the limbs onto the target's bone directions first (default true)."}};
         props["output_dna"] = QJsonObject{{"type", "string"}, {"description", "Write the fitted rig as a new .dna (never the source; read back and RigLogic-checked)."}};
+        props["output_correctives"] = QJsonObject{{"type", "string"}, {"description", "Write generic pose-space correctives for the FITTED body (per-vertex offsets carried through the limb alignment and the fit warp). .qpsd = compact binary, anything else = JSON."}};
         props["output_mesh"] = QJsonObject{{"type", "string"}, {"description", "Export the fitted character (glb/fbx/...)."}};
         appendTool("fit_dna_body",
                    "Fit a MetaHuman body rig to an edited mesh or to another character: moves the skeleton and mesh onto the "

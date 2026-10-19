@@ -7,6 +7,7 @@
 
 #include "DnaCorrectiveManager.h"
 #include "DnaRigLogic.h"
+#include "../PoseSpaceRbf.h"
 
 #include "../Manager.h"
 #include "../TestHelpers.h"
@@ -333,4 +334,40 @@ TEST_F(DnaCorrectiveSceneTest, SkinnedPositionsFollowTheBentDriver)
     double moved = 0;
     for (size_t i = 0; i < 9; ++i) moved += std::abs(bent[i] - rest[i]);
     EXPECT_GT(moved, 0.1);
+}
+
+// ---- pose-space correctives ----------------------------------------------------
+
+TEST(DnaCorrectiveManagerBasics, PoseSpaceNeedsAtLeastOneSet)
+{
+    auto* m = DnaCorrectiveManager::instance();
+    EXPECT_FALSE(m->attachPoseSpace("x", nullptr));
+    EXPECT_FALSE(m->attachPoseSpace("x", std::make_shared<std::vector<PoseSpace::Set>>()));
+    EXPECT_EQ(m->characterCount(), 0);
+}
+
+TEST_F(DnaCorrectiveSceneTest, PoseSpaceModeDoesNotWriteTheBoneCorrectivesAlso)
+{
+    // The sets already contain the corrective behaviour; writing the RigLogic bone correctives as well would apply
+    // every corrective twice. The fixture entity has no pose channels, so this exercises only the bookkeeping.
+    auto sets = std::make_shared<std::vector<PoseSpace::Set>>();
+    PoseSpace::Set s;
+    s.name = QStringLiteral("Child");
+    s.drivers = {QStringLiteral("Child")};
+    PoseSpace::Sample sm;
+    sm.rotations = {PoseSpace::Quat{std::cos(kPi / 4), 0, 0, std::sin(kPi / 4)}};
+    sm.vertices = {0};
+    sm.deltas = {0.f, 1.f, 0.f};
+    s.samples.push_back(sm);
+    ASSERT_TRUE(s.solve());
+    sets->push_back(s);
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attachPoseSpace(entityName, sets, std::make_shared<FakeRig>()));
+    ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
+    ASSERT_TRUE(m->evaluateNow());
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5f, 1e-5f);   // untouched: still its bind
+    const QVariantMap st = m->statsMap(entityName);
+    EXPECT_EQ(st.value("poseSpaceSets").toInt(), 1);
+    // the driver itself is still posed from the preview override
+    EXPECT_LT(std::abs(bone("Child")->getOrientation().Dot(Ogre::Quaternion::IDENTITY)), 0.99f);
 }

@@ -2,7 +2,9 @@
 
 #include "PoseSpaceRbf.h"
 
+#include <QBuffer>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <cmath>
 
 using namespace PoseSpace;
@@ -135,4 +137,72 @@ TEST(PoseSpaceRbf, JsonRejectsFractionalOrOutOfRangeVertexIndices)
         EXPECT_FALSE(Set::fromJson(o, &back, &err)) << bad;
         EXPECT_FALSE(err.isEmpty());
     }
+}
+
+namespace {
+Set sampleSet()
+{
+    Set s;
+    s.name = QStringLiteral("elbow_l");
+    s.drivers = {QStringLiteral("lowerarm_l")};
+    for (double deg : {40.0, 80.0}) {
+        Sample sm;
+        sm.rotations = {aboutZ(deg)};
+        sm.vertices = {2, 7};
+        sm.deltas = {0.1f, 0.2f, 0.3f, float(deg) * 0.01f, 0.f, -0.5f};
+        s.samples.push_back(sm);
+    }
+    s.solve();
+    return s;
+}
+}  // namespace
+
+TEST(PoseSpaceRbf, BinaryRoundTripIsExactAndSmallerThanJson)
+{
+    const Set s = sampleSet();
+    QByteArray bytes;
+    QBuffer w(&bytes);
+    ASSERT_TRUE(w.open(QIODevice::WriteOnly));
+    QString err;
+    ASSERT_TRUE(writeBinary(&w, {s}, &err)) << err.toStdString();
+    w.close();
+    QBuffer r(&bytes);
+    ASSERT_TRUE(r.open(QIODevice::ReadOnly));
+    std::vector<Set> back;
+    ASSERT_TRUE(readBinary(&r, &back, &err)) << err.toStdString();
+    ASSERT_EQ(back.size(), 1u);
+    EXPECT_EQ(back[0].name, s.name);
+    EXPECT_EQ(back[0].samples.size(), s.samples.size());
+    const std::vector<Quat> q{aboutZ(60)};
+    for (size_t i = 0; i < 24; ++i) EXPECT_FLOAT_EQ(back[0].evaluate(q, 8)[i], s.evaluate(q, 8)[i]);
+    EXPECT_LT(bytes.size(), QJsonDocument(s.toJson()).toJson(QJsonDocument::Compact).size());
+}
+
+TEST(PoseSpaceRbf, BinaryRejectsTruncatedAndForeignStreams)
+{
+    const Set s = sampleSet();
+    QByteArray bytes;
+    QBuffer w(&bytes);
+    w.open(QIODevice::WriteOnly);
+    ASSERT_TRUE(writeBinary(&w, {s}));
+    w.close();
+    std::vector<Set> back;
+    QString err;
+    for (int cut : {0, 3, 9, int(bytes.size()) / 2, int(bytes.size()) - 1}) {
+        QByteArray part = bytes.left(cut);
+        QBuffer r(&part);
+        r.open(QIODevice::ReadOnly);
+        EXPECT_FALSE(readBinary(&r, &back, &err)) << cut;
+        EXPECT_FALSE(err.isEmpty());
+    }
+    QByteArray junk("NOTPSD-and-more-bytes");
+    QBuffer rj(&junk);
+    rj.open(QIODevice::ReadOnly);
+    EXPECT_FALSE(readBinary(&rj, &back, &err));
+}
+
+TEST(PoseSpaceRbf, ChannelNamesRoundTripTheirPrefix)
+{
+    EXPECT_TRUE(isChannelName(channelName(QStringLiteral("calf_l"), 3)));
+    EXPECT_FALSE(isChannelName(QStringLiteral("jawOpen")));
 }

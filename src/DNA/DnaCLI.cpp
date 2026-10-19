@@ -759,6 +759,8 @@ struct FitArgs {
     bool refineSurface = false;      ///< with registerJoints: refine the shape onto the target surface afterwards
     bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     Ogre::Entity* targetEntity = nullptr;   ///< fit to this live entity instead of importing targetPath
+    std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpaceOut = nullptr;   ///< in-editor fits: receives the transferred pose-space sets (fittedRigOut's rig carries their channels)
+    QString checkPose;              ///< "joint=axis:deg[,...]": import the fitted body WITH its pose-space correctives, bend it, report what they move
     Rig* fittedRigOut = nullptr;            ///< receives the fitted rig (the limb-aligned base when the fit re-posed it)
     bool headless = true;     ///< CLI process (may init Ogre, nothing to clean up) vs inside the editor (MCP)
     double uniformScale = 0.0;
@@ -779,7 +781,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
         return 1;
     }
-    const bool needScene = !targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty();
+    const bool needScene = !targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty() || !a.checkPose.isEmpty();
     if (needScene && a.headless && !CLIPipeline::initOgreHeadless()) return 1;
     // Nodes the fit creates (the imported target, the exported fitted character) are removed again when
     // running inside the editor (MCP): the CLI process exits, the editor must not keep them.
@@ -994,8 +996,105 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         stats(target, "errorVsReference");
         stats(unfitted, "unfittedErrorVsReference");
     }
-    const Fit::Result fr = Fit::fit(baseRig, target);
+    Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { err(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
+    QVariantMap psdReport;
+    if (!a.bakeCorrectives.isEmpty() || a.poseSpaceOut || !a.checkPose.isEmpty()) {
+        // Generic pose-space correctives for the FITTED body: bake the original rig's corrective behaviour as
+        // per-vertex offsets (cached per DNA), carry them through the limb alignment / facing yaw (per-vertex
+        // linear part) and the fit warp (its local linear part), see Psd::transferThroughWarp.
+        // an in-editor fit keeps going without correctives when they cannot be built (the fit itself is fine);
+        // an explicit --bake-correctives request fails instead
+        const bool soft = a.bakeCorrectives.isEmpty();
+        auto problem = [&](const QString& m) {
+            if (!soft) { err(QStringLiteral("Error: pose-space correctives: %1\n").arg(m)); return 1; }
+            fr.warnings << QStringLiteral("Pose-space correctives were not built (%1); the body keeps plain skinning.").arg(m);
+            return 0;
+        };
+        QString evErr;
+        auto bev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &evErr);
+        std::vector<PoseSpace::Set> sets;
+        QStringList psdNotes;
+        if (!bev) { if (problem(evErr)) return 1; }
+        else {
+            sets = Psd::cachedBake(QFileInfo(path).absoluteFilePath(), src.rig, *bev, &psdNotes);
+            if (sets.empty() && problem(QStringLiteral("this DNA has no correctives to bake"))) return 1;
+        }
+        if (!sets.empty()) {
+        if (rigChanged) Psd::applyVertexLinear(sets, Fit::blendedAlignmentLinear(src.rig, baseRig));
+        Psd::transferThroughWarp(sets, baseRig, fr.warp);
+        for (auto& st : sets) { QString serr; if (!st.solve(&serr)) { err(QStringLiteral("Error: transferred correctives are degenerate: %1\n").arg(serr)); return 1; } }
+        QVariantMap cv;
+        cv.insert("sets", int(sets.size()));
+        cv.insert("notes", psdNotes);
+        if (!a.bakeCorrectives.isEmpty()) {
+            QSaveFile f(a.bakeCorrectives);
+            bool wrote = false;
+            if (f.open(QIODevice::WriteOnly)) {
+                if (a.bakeCorrectives.endsWith(QLatin1String(".qpsd"), Qt::CaseInsensitive)) {
+                    wrote = PoseSpace::writeBinary(&f, sets);
+                } else {
+                    QJsonArray arr;
+                    for (const auto& st : sets) arr.append(st.toJson());
+                    QJsonObject doc;
+                    doc.insert(QStringLiteral("schema"), QStringLiteral("qtmesh-pose-correctives-collection-v1"));
+                    doc.insert(QStringLiteral("sets"), arr);
+                    wrote = f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact)) >= 0;
+                }
+                wrote = wrote && f.commit();
+            }
+            if (!wrote) { err(QStringLiteral("Error: cannot write %1\n").arg(a.bakeCorrectives)); return 1; }
+            cv.insert("file", QFileInfo(a.bakeCorrectives).absoluteFilePath());
+        }
+        if (!a.checkPose.isEmpty()) {
+            // The editor's commit path, headless: import the fitted body with the transferred sets (poses attached to
+            // the mesh, weights driven by DnaCorrectiveManager), bend it, and measure what the correctives move.
+            Rig withChannels = fr.fitted;
+            Psd::appendAsBlendShapes(withChannels, sets);
+            QString ierr;
+            auto shared = std::make_shared<std::vector<PoseSpace::Set>>(sets);
+            Ogre::SceneNode* node = importRigToScene(withChannels, QStringLiteral("psdcheck"), nullptr, &ierr, nullptr, shared);
+            DnaCorrectiveManager* mgr = DnaCorrectiveManager::peek();
+            Ogre::Entity* ent = nullptr;
+            if (node && mgr)
+                for (auto* obj : Manager::getSingleton()->getEntities())
+                    if (obj && obj->getMovableType() == "Entity" && obj->getName() == node->getName()) ent = static_cast<Ogre::Entity*>(obj);
+            if (!ent || !mgr->isAttached(QString::fromStdString(node->getName()))) {
+                err(QStringLiteral("Error: --check-pose: could not build the fitted body with its correctives%1\n").arg(ierr.isEmpty() ? QString() : QStringLiteral(": ") + ierr));
+                return 1;
+            }
+            const QString en = QString::fromStdString(node->getName());
+            for (const QString& kv : a.checkPose.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                const int eq = kv.indexOf(QLatin1Char('='));
+                std::array<double, 4> q;
+                if (eq <= 0 || !parseRotation(kv.mid(eq + 1), &q) || !mgr->setPoseOverride(en, kv.left(eq), q)) {
+                    err(QStringLiteral("Error: --check-pose: bad entry '%1' (joint=axis:deg)\n").arg(kv));
+                    return 1;
+                }
+            }
+            mgr->setEnabled(false);
+            mgr->evaluateNow();
+            const std::vector<float> plain = DnaCorrectiveManager::skinnedPositions(ent);
+            mgr->setEnabled(true);
+            mgr->evaluateNow();
+            const std::vector<float> corrected = DnaCorrectiveManager::skinnedPositions(ent);
+            double mx = 0, sum = 0; size_t n = 0;
+            for (size_t i = 0; i + 2 < plain.size() && i + 2 < corrected.size(); i += 3, ++n) {
+                const double d = std::sqrt(std::pow(double(corrected[i]) - plain[i], 2) + std::pow(double(corrected[i + 1]) - plain[i + 1], 2) + std::pow(double(corrected[i + 2]) - plain[i + 2], 2)) * 1000.0;
+                mx = std::max(mx, d); sum += d;
+            }
+            cv.insert("checkPoseMaxDisplacementMm", mx);
+            cv.insert("checkPoseMeanDisplacementMm", n ? sum / double(n) : 0.0);
+            cv.insert("checkPoseActiveSamples", mgr->statsMap(en).value("poseSpaceActiveSamples"));
+        }
+        psdReport = cv;
+        if (a.poseSpaceOut) {
+            // the fitted rig carries the samples as blend-shape channels (the importer turns them into poses on the mesh)
+            Psd::appendAsBlendShapes(fr.fitted, sets);
+            *a.poseSpaceOut = std::make_shared<std::vector<PoseSpace::Set>>(std::move(sets));
+        }
+        }
+    }
     if (a.fittedRigOut) *a.fittedRigOut = fr.fitted;
     if (!anchorTargets.empty()) {
         // After the whole pipeline, where do the fitted joints sit relative to the target's own bones?
@@ -1070,6 +1169,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     }
 
     report.clear();
+    if (!psdReport.isEmpty()) report.insert("bakedCorrectives", psdReport);
     report.insert("verticesMatched", fr.verticesMatched);
     report.insert("controlPoints", fr.controlPoints);
     report.insert("meanVertexShiftMm", fr.meanVertexShiftMm);
@@ -1109,35 +1209,6 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             rows << row;
         }
         report.insert("lodPropagation", rows);
-    }
-
-    if (!a.bakeCorrectives.isEmpty()) {
-        // Generic pose-space correctives for the FITTED body: bake the original rig's corrective behaviour as
-        // per-vertex offsets and carry them through the fit warp (see Psd::transferThroughWarp).
-        if (rigChanged) {
-            err(QStringLiteral("Error: --bake-correctives needs the fit to keep the rig's pose (add --no-align-limbs): "
-                               "the offsets are expressed along the original joint axes\n"));
-            return 1;
-        }
-        QString evErr;
-        auto bev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &evErr);
-        if (!bev) { err(QStringLiteral("Error: --bake-correctives: %1\n").arg(evErr)); return 1; }
-        Psd::BakeResult pb = Psd::bake(src.rig, *bev);
-        Psd::transferThroughWarp(pb.sets, src.rig, fr.warp);
-        QJsonArray arr;
-        for (auto& s : pb.sets) { QString serr; if (!s.solve(&serr)) continue; arr.append(s.toJson()); }
-        QJsonObject doc;
-        doc.insert(QStringLiteral("schema"), QStringLiteral("qtmesh-pose-correctives-collection-v1"));
-        doc.insert(QStringLiteral("sets"), arr);
-        QSaveFile f(a.bakeCorrectives);
-        if (!f.open(QIODevice::WriteOnly) || f.write(QJsonDocument(doc).toJson(QJsonDocument::Compact)) < 0 || !f.commit()) {
-            err(QStringLiteral("Error: cannot write %1\n").arg(a.bakeCorrectives));
-            return 1;
-        }
-        QVariantMap cv;
-        cv.insert("file", QFileInfo(a.bakeCorrectives).absoluteFilePath());
-        cv.insert("sets", int(arr.size()));
-        report.insert("bakedCorrectives", cv);
     }
 
     if (!writeDna.isEmpty()) {
@@ -1274,7 +1345,7 @@ static int runPsd(int argc, char* argv[])
 
 static int runFit(int argc, char* argv[])
 {
-    QString path, targetPath, writeDna, out, referencePath, bakeCorrectives;
+    QString path, targetPath, writeDna, out, referencePath, bakeCorrectives, checkPose;
     std::vector<double> stiffness;
     QString registerMethod;   // "" / smooth (default) | nricp
     bool refineSurface = false;
@@ -1315,6 +1386,7 @@ static int runFit(int argc, char* argv[])
         else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--bake-correctives" && i + 1 < argc) bakeCorrectives = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--check-pose" && i + 1 < argc) checkPose = QString::fromLocal8Bit(argv[++i]);
         else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
         else if (a == "--uniform-scale" && i + 1 < argc) {
             bool ok = false;
@@ -1348,6 +1420,7 @@ static int runFit(int argc, char* argv[])
     fa.path = path; fa.targetPath = targetPath; fa.writeDna = writeDna; fa.out = out;
     fa.poses = poses; fa.lods = lods; fa.doRegister = doRegister; fa.registerJoints = registerJoints;
     fa.bakeCorrectives = bakeCorrectives;
+    fa.checkPose = checkPose;
     fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true; fa.referencePath = referencePath; fa.stiffness = stiffness; fa.registerMethod = registerMethod; fa.refineSurface = refineSurface;
     QVariantMap report;
     const int rc = fitCore(fa, report, [](const QString& m) { CLIPipeline::writeCliError(m); });
@@ -1393,13 +1466,14 @@ static int runFit(int argc, char* argv[])
 }
 
 bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
-                     QVariantMap* report, QString* error)
+                     QVariantMap* report, QString* error, std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpace)
 {
     if (!target) { if (error) *error = QStringLiteral("no target entity"); return false; }
     FitArgs a;
     a.path = dnaPath;
     a.targetEntity = target;
     a.fittedRigOut = fittedRig;
+    a.poseSpaceOut = options.poseSpace ? poseSpace : nullptr;
     a.poses = options.poses;
     a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
     a.refineSurface = options.mode == QLatin1String("joints+surface");
@@ -1422,6 +1496,7 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
     a.targetPath = targetPath;
     a.writeDna = options.outputDna;
     a.out = options.outputMesh;
+    a.bakeCorrectives = options.outputCorrectives;
     a.poses = options.poses;
     a.lods = options.lods;
     a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");

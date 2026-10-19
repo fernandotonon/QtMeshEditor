@@ -6,8 +6,10 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace Dna { struct Rig; }
+namespace PoseSpace { class Set; }
 
 /**
  * Undoable commit of a MetaHuman fit (epic #1095, Phase 4): adds the FITTED character to the scene as a
@@ -21,7 +23,10 @@ public:
     /** @param rig         the fitted rig (editor frame, metres).
      *  @param sourcePath  the DNA file the rig came from (the corrective evaluator is created from it).
      *  @param baseName    base for the node/entity name; a counter keeps it unique. */
-    AddFittedDnaCharacterCommand(std::shared_ptr<Dna::Rig> rig, QString sourcePath, QString baseName);
+    /** @param poseSpace  optional generic pose-space correctives for the fitted body; when given they drive the
+     *                    character (the rig must carry their channels) instead of the RigLogic bone correctives. */
+    AddFittedDnaCharacterCommand(std::shared_ptr<Dna::Rig> rig, QString sourcePath, QString baseName,
+                                 std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace = nullptr);
 
     void redo() override;
     void undo() override;
@@ -41,6 +46,7 @@ public:
 
 private:
     std::shared_ptr<Dna::Rig> m_rig;
+    std::shared_ptr<std::vector<PoseSpace::Set>> m_poseSpace;
     QString m_sourcePath, m_baseName, m_nodeName, m_error;
     bool m_created = false;
     int m_revision = 0;

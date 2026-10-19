@@ -8,9 +8,14 @@
 #include "DnaRigLogic.h"
 #include "DnaFaceBake.h"
 #include "DnaArkitMap.h"
+#include "DnaPsdBake.h"
 #include "../commands/MorphCommands.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QStandardPaths>
 
 #include <OgreException.h>
 #include <OgreHardwareBufferManager.h>
@@ -206,7 +211,8 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
 
 Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
                                   ImportReport* report, QString* error,
-                                  std::shared_ptr<RigEvaluator> evaluator)
+                                  std::shared_ptr<RigEvaluator> evaluator,
+                                  std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace)
 {
     ImportReport local;
     ImportReport& rep = report ? *report : local;
@@ -223,7 +229,16 @@ Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
     try {
         Ogre::SceneNode* n = importRigImpl(rig, baseName, &rep, error);
         rep.warnings = pruneNotes + rep.warnings;
-        if (n && evaluator && qEnvironmentVariable("QTMESH_DNA_CORRECTIVES") != QLatin1String("0")) {
+        if (n && poseSpace && !poseSpace->empty() && qEnvironmentVariable("QTMESH_DNA_CORRECTIVES") != QLatin1String("0")) {
+            // generic pose-space correctives replace the RigLogic bone correctives (they are baked from them)
+            DnaCorrectiveManager* mgr = DnaCorrectiveManager::instance();
+            const QString entityName = QString::fromStdString(n->getName());
+            if (mgr->attachPoseSpace(entityName, poseSpace, evaluator)) {
+                mgr->evaluateNow();
+                rep.correctivesAttached = true;
+                rep.poseSpaceSets = int(poseSpace->size());
+            }
+        } else if (n && evaluator && qEnvironmentVariable("QTMESH_DNA_CORRECTIVES") != QLatin1String("0")) {
             DnaCorrectiveManager* mgr = DnaCorrectiveManager::instance();
             const QString entityName = QString::fromStdString(n->getName());
             if (mgr->attach(entityName, evaluator)) {
@@ -436,6 +451,8 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
     ImportOptions io;
     if (qEnvironmentVariable("QTMESH_DNA_FACE_MORPHS") == QLatin1String("0"))
         io.faceMorphs = false;
+    if (qEnvironmentVariable("QTMESH_DNA_PSD") == QLatin1String("1"))
+        io.poseSpaceCorrectives = true;
     return importToScene(path, options, io, report, error);
 }
 
@@ -495,7 +512,19 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options, 
             evaluator.reset();
         }
     }
-    Ogre::SceneNode* node = importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator);
+    // Generic pose-space correctives (opt-in): baked from the rig, attached to the mesh as pose channels BEFORE the
+    // entity exists, driven by DnaCorrectiveManager::attachPoseSpace.
+    std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace;
+    if (import.poseSpaceCorrectives && evaluator && !rr.rig.meshes.empty()) {
+        QStringList psdNotes;
+        std::vector<PoseSpace::Set> baked = Psd::cachedBake(path, rr.rig, *evaluator, &psdNotes);
+        if (!baked.empty()) {
+            poseSpace = std::make_shared<std::vector<PoseSpace::Set>>(std::move(baked));
+            Psd::appendAsBlendShapes(rr.rig, *poseSpace);
+        }
+        bakeNotes << psdNotes;
+    }
+    Ogre::SceneNode* node = importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator, poseSpace);
     if (node) {
         // Remember the file so "fit this character to another" (DnaFitController) can reopen the DNA.
         const std::string abs = QFileInfo(path).absoluteFilePath().toStdString();

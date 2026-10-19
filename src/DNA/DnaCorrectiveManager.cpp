@@ -1,6 +1,7 @@
 #include "DnaCorrectiveManager.h"
 
 #include "DnaRigLogic.h"
+#include "../PoseSpaceRbf.h"
 
 #include "../Manager.h"
 #include "../SentryReporter.h"
@@ -32,6 +33,9 @@ struct DnaCorrectiveManager::Character {
     /// the original absolute pose snapped every corrective joint back to the old skeleton — broken
     /// forearms and ankles.
     QHash<int, Dna::JointPose> neutral;
+    /// Generic pose-space correctives (null = RigLogic bone correctives).
+    std::shared_ptr<std::vector<PoseSpace::Set>> psd;
+    std::vector<std::vector<QString>> psdChannels;   ///< per set, per sample: the pose animation's name
 };
 
 namespace {
@@ -126,6 +130,27 @@ bool DnaCorrectiveManager::attach(const QString& entityName, std::shared_ptr<Dna
     return true;
 }
 
+bool DnaCorrectiveManager::attachPoseSpace(const QString& entityName, std::shared_ptr<std::vector<PoseSpace::Set>> sets,
+                                           std::shared_ptr<Dna::RigEvaluator> evaluator)
+{
+    if (!sets || sets->empty()) return false;
+    auto c = std::make_shared<Character>();
+    c->evaluator = std::move(evaluator);
+    c->psd = std::move(sets);
+    for (const PoseSpace::Set& s : *c->psd) {
+        std::vector<QString> names;
+        for (size_t i = 0; i < s.samples.size(); ++i) names.push_back(PoseSpace::channelName(s.name, i));
+        c->psdChannels.push_back(std::move(names));
+    }
+    c->stats.poseSpaceSets = int(c->psd->size());
+    m_chars.insert(entityName, c);
+    ensureListener();
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.dna_correctives"),
+                                  QStringLiteral("attach pose-space: %1 sets").arg(c->psd->size()));
+    emit changed();
+    return true;
+}
+
 void DnaCorrectiveManager::detach(const QString& entityName)
 {
     if (m_chars.contains(entityName)) {
@@ -171,6 +196,16 @@ void DnaCorrectiveManager::restorePlain(const QString& name)
 {
     Ogre::Entity* e = entityByName(name);
     auto it = m_chars.constFind(name);
+    if (e && it != m_chars.constEnd() && it.value()->psd) {
+        // pose-space correctives: switch every channel off (plain skinning)
+        if (Ogre::AnimationStateSet* states = e->getAllAnimationStates())
+            for (const auto& names : it.value()->psdChannels)
+                for (const QString& n : names) {
+                    const std::string cn = n.toStdString();
+                    if (states->hasAnimationState(cn) && states->getAnimationState(cn)->getEnabled())
+                        states->getAnimationState(cn)->setEnabled(false);
+                }
+    }
     // Only undo what we actually did: a character that was attached but never
     // evaluated never took the skip flag, so another subsystem's hold (PoseLibrary,
     // mocap) must be left exactly as it is.
@@ -196,7 +231,6 @@ bool DnaCorrectiveManager::applyTo(const QString& name, Character& c, bool corre
     Ogre::Entity* e = entityByName(name);
     if (!e || !e->hasSkeleton()) return false;
     Ogre::SkeletonInstance* skel = e->getSkeleton();
-    Dna::RigEvaluator& ev = *c.evaluator;
 
     // Pose from the clips here (resetting every bone, corrective joints
     // included, to its neutral), then stop Ogre re-sampling over our writes.
@@ -214,6 +248,51 @@ bool DnaCorrectiveManager::applyTo(const QString& name, Character& c, bool corre
         const auto& q = o.value();
         b->setOrientation(b->getInitialOrientation() * Ogre::Quaternion(float(q[0]), float(q[1]), float(q[2]), float(q[3])));
     }
+
+    if (c.psd) {
+        // Pose-space correctives: blend weights from the drivers' rotations, written to the pose animation
+        // states. Skinning stays plain (the bone correctives are baked into the sets).
+        const auto tp = std::chrono::steady_clock::now();
+        int active = 0;
+        Ogre::AnimationStateSet* states = e->getAllAnimationStates();
+        for (size_t si = 0; si < c.psd->size() && states; ++si) {
+            const PoseSpace::Set& set = (*c.psd)[si];
+            std::vector<double> w(set.samples.size(), 0.0);
+            if (correctives) {
+                std::vector<PoseSpace::Quat> q;
+                for (const QString& d : set.drivers) {
+                    PoseSpace::Quat id{1, 0, 0, 0};
+                    const std::string bn = d.toStdString();
+                    if (skel->hasBone(bn)) {
+                        Ogre::Bone* b = skel->getBone(bn);
+                        id = localDelta(toArray(b->getInitialOrientation()), toArray(b->getOrientation()));
+                    }
+                    q.push_back(id);
+                }
+                w = set.weights(q);
+            }
+            for (size_t i = 0; i < w.size() && i < c.psdChannels[si].size(); ++i) {
+                const std::string cn = c.psdChannels[si][i].toStdString();
+                if (!states->hasAnimationState(cn)) continue;
+                Ogre::AnimationState* st = states->getAnimationState(cn);
+                if (std::abs(w[i]) < 1e-3) { if (st->getEnabled()) st->setEnabled(false); continue; }
+                st->setTimePosition(0.0f);
+                st->setWeight(float(w[i]));
+                if (!st->getEnabled()) st->setEnabled(true);
+                ++active;
+            }
+        }
+        for (Ogre::Bone* b : skel->getBones())
+            if (b && !b->getParent()) b->_update(true, false);
+        if (states) states->_notifyDirty();
+        c.stats.poseSpaceSets = int(c.psd->size());
+        c.stats.poseSpaceActive = active;
+        c.stats.calcMs = 0.0;
+        c.stats.applyMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tp).count();
+        return true;
+    }
+    if (!c.evaluator) return false;
+    Dna::RigEvaluator& ev = *c.evaluator;
 
     if (!correctives) {
         // Plain skinning with the preview pose only: corrective bones stay at
@@ -403,8 +482,12 @@ QVariantMap DnaCorrectiveManager::statsMap(const QString& entityName) const
         out.insert(QStringLiteral("correctiveJointsMissing"), s.missingDriven);
         out.insert(QStringLiteral("rigLogicMs"), s.calcMs);
         out.insert(QStringLiteral("applyMs"), s.applyMs);
-        out.insert(QStringLiteral("rbfSolvers"), it.value()->evaluator->rbfSolverCount());
-        out.insert(QStringLiteral("rbfPoses"), it.value()->evaluator->rbfPoseCount());
+        if (it.value()->evaluator) {
+            out.insert(QStringLiteral("rbfSolvers"), it.value()->evaluator->rbfSolverCount());
+            out.insert(QStringLiteral("rbfPoses"), it.value()->evaluator->rbfPoseCount());
+        }
+        out.insert(QStringLiteral("poseSpaceSets"), s.poseSpaceSets);
+        out.insert(QStringLiteral("poseSpaceActiveSamples"), s.poseSpaceActive);
     }
     return out;
 }

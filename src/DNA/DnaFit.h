@@ -99,6 +99,11 @@ struct LimbAlignment {
 };
 LimbAlignment alignLimbs(const Rig& rig, const std::vector<std::pair<QString, std::array<double, 3>>>& targetJoints);
 
+/// The blended 3x3 linear part (row-major) that carries every vertex of `original` into `aligned` — the same rig
+/// with new neutral joint orientations (limb alignment, a facing yaw): sum_j w_j * (W'_j * W_j^-1).linear over the
+/// vertex's skin influences. A rest-space vector at that vertex (a corrective offset) is carried through it.
+std::vector<std::vector<std::array<float, 9>>> blendedAlignmentLinear(const Rig& original, const Rig& aligned);
+
 /// World position of every joint at the neutral pose (rig units).
 std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig);
 
