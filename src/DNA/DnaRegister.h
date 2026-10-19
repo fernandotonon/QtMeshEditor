@@ -37,6 +37,9 @@ struct RegisterOptions {
     /// Smooth method: ICP rounds per resolution level (7 levels, 24 -> 1500 control points). Measured on a
     /// re-meshed, edited MetaHuman body: 1 round = 8.7 mm mean joint error, 3 = 7.5, 6 = 6.1, 10 = 5.2.
     int rounds = 8;
+    /// Per-vertex detail rounds after the smooth levels (0 = off): lets the body take on shape finer than the
+    /// warp's control spacing (flatten a bust, grow a belly).
+    int detailRounds = 6;
     bool alignHeight = true;          ///< uniform scale by Y extent + match feet / centre before the fit
     std::vector<double> stiffness;    ///< NRICP schedule (empty = the library default)
     /// Optional anchors: body joint name -> position in the TARGET's frame. The vertex
@@ -85,6 +88,7 @@ struct JointRegisterResult {
     QString error;
     QStringList warnings;
     std::vector<std::vector<float>> positions;   ///< per rig mesh, per POSITION, warped onto the target proportions
+    std::vector<std::array<double, 3>> warpedJointPositions;   ///< every rig joint's neutral world position carried through the joint warp
     Rig alignedRig;                              ///< the rig after limb pose alignment (== input when none ran) — pass THIS to Fit::fit
     double yawDegrees = 0;                       ///< turn applied so the body faces the target's way (0 = none)
     bool surfaceRefined = false;                 ///< the surface wrap ran after the joint warp (registerJointsThenSurface)
@@ -105,7 +109,7 @@ JointRegisterResult registerByJoints(const Rig& rig, const std::vector<JointAnch
 /// TARGET frame and `alignedRig` is the rig Fit::fit must start from, exactly as for registerByJoints.
 JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
                                               const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                              bool alignLimbPose = true, int rounds = 8);
+                                              bool alignLimbPose = true, int rounds = 8, int detailRounds = 6);
 
 /// `targetV` / `targetF`: the target surface in the rig's axis convention (+Y up),
 /// x,y,z per vertex and triangle indices.

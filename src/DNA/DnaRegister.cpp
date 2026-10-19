@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <set>
 
 namespace Dna {
 namespace Fit {
@@ -25,8 +27,15 @@ namespace {
 
 // Smooth coarse-to-fine ICP (see RegisterOptions::Method::Smooth). `X` holds the template positions
 // (x,y,z per vertex) and is deformed in place. Returns false with `err` set on failure.
+// Strongly weighted correspondences kept through the iterations (the skeleton's matched joints): `pos` is carried
+// through every warp so it always names where the joint currently is.
+struct IcpAnchor {
+    std::array<double, 3> pos;
+    std::array<double, 3> target;
+};
+
 bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vector<float>& targetV,
-               const std::vector<int>& targetF, int roundsPerLevel, QString* err)
+               const std::vector<int>& targetF, int roundsPerLevel, int detailRounds, QString* err, std::vector<IcpAnchor>* anchors = nullptr)
 {
     std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
     QuadRemesh::SurfaceLocator loc;
@@ -59,6 +68,33 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
         return n;
     };
 
+    // Vertices on an OPEN boundary (neckline, wrists, ankles of a body that has no head or hands attached) have
+    // no surface of their own to match: their closest target point is whatever geometry happens to be nearby
+    // (the head and hat above a neckline, a boot below an ankle) and they drag the whole body toward it.
+    // Exclude them, and the two rings around them, from the correspondences; the smooth warp carries them.
+    std::vector<char> skipVertex(nv, 0);
+    {
+        std::map<std::pair<int, int>, int> edgeUse;
+        for (size_t t = 0; t + 2 < tf.size(); t += 3)
+            for (int k = 0; k < 3; ++k) {
+                int a = tf[t + size_t(k)], b = tf[t + size_t((k + 1) % 3)];
+                if (a > b) std::swap(a, b);
+                ++edgeUse[{a, b}];
+            }
+        std::vector<std::vector<int>> adj(nv);
+        for (const auto& e : edgeUse) {
+            adj[size_t(e.first.first)].push_back(e.first.second);
+            adj[size_t(e.first.second)].push_back(e.first.first);
+            if (e.second == 1) { skipVertex[size_t(e.first.first)] = 1; skipVertex[size_t(e.first.second)] = 1; }
+        }
+        for (int ring = 0; ring < 2; ++ring) {
+            std::vector<char> next = skipVertex;
+            for (size_t v = 0; v < nv; ++v)
+                if (skipVertex[v]) for (int n : adj[v]) next[size_t(n)] = 1;
+            skipVertex = std::move(next);
+        }
+    }
+
     // Windings may disagree between the two meshes (different importers/tools): decide by the initial
     // correspondences which sign makes the normals agree, instead of assuming outward-facing for both.
     double normalSign = 1.0;
@@ -90,6 +126,7 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
             std::vector<Pair> pairs;
             pairs.reserve(nv);
             for (size_t v = 0; v < nv; ++v) {
+                if (skipVertex[v]) continue;
                 int tri; float bary[3], q[3];
                 if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
                 const auto& n = tn[size_t(tri)];
@@ -108,6 +145,14 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
                 src.push_back({X[p.v * 3], X[p.v * 3 + 1], X[p.v * 3 + 2]});
                 dst.push_back({p.q[0], p.q[1], p.q[2]});
             }
+            // The joint constraints: each anchor stands for `kAnchorWeight` coincident pairs, which the voxel
+            // averaging in buildWarp turns into a weight (a lone pair would be averaged away by the hundreds of
+            // surface pairs sharing its cell).
+            if (anchors) {
+                constexpr int kAnchorWeight = 150;
+                for (const IcpAnchor& an : *anchors)
+                    for (int m = 0; m < kAnchorWeight; ++m) { src.push_back(an.pos); dst.push_back(an.target); }
+            }
             Options wo;
             wo.maxControlPoints = levels[L];
             wo.regularisation = ridge[L];
@@ -118,6 +163,69 @@ bool smoothIcp(std::vector<float>& X, const std::vector<int>& tf, const std::vec
                 const auto d = w.displacement({double(X[v * 3]), double(X[v * 3 + 1]), double(X[v * 3 + 2])});
                 X[v * 3] += float(d[0]); X[v * 3 + 1] += float(d[1]); X[v * 3 + 2] += float(d[2]);
             }
+            if (anchors)
+                for (IcpAnchor& an : *anchors) {
+                    const auto d = w.displacement(an.pos);
+                    for (int k = 0; k < 3; ++k) an.pos[size_t(k)] += d[size_t(k)];
+                }
+        }
+    }
+    // Detail stage: the smooth warp cannot express anything finer than its control spacing (~7 cm at 1500
+    // points over a body), which is what keeps a bust or a belly when the target has none. Move the VERTICES
+    // toward their (normal-gated) closest target points, with the displacement field smoothed over the mesh
+    // so neighbours move together (correspondences must not slide), and the anchors (the skeleton's joints)
+    // pinned where they are.
+    if (detailRounds > 0) {
+        std::vector<std::vector<int>> adj(nv);
+        {
+            std::set<std::pair<int, int>> seen;
+            for (size_t t = 0; t + 2 < tf.size(); t += 3)
+                for (int k = 0; k < 3; ++k) {
+                    int a = tf[t + size_t(k)], b = tf[t + size_t((k + 1) % 3)];
+                    if (a > b) std::swap(a, b);
+                    if (seen.insert({a, b}).second) { adj[size_t(a)].push_back(b); adj[size_t(b)].push_back(a); }
+                }
+        }
+        for (int round = 0; round < detailRounds; ++round) {
+            const std::vector<std::array<double, 3>> vn = vertexNormals(X);
+            std::vector<std::array<double, 3>> D(nv, {0, 0, 0});
+            std::vector<char> known(nv, 0);
+            std::vector<double> dists;
+            std::vector<size_t> ids;
+            for (size_t v = 0; v < nv; ++v) {
+                if (skipVertex[v]) continue;
+                int tri; float bary[3], q[3];
+                if (!loc.closest(&X[v * 3], tri, bary, q)) continue;
+                const auto& n = tn[size_t(tri)];
+                if (normalSign * (vn[v][0] * n[0] + vn[v][1] * n[1] + vn[v][2] * n[2]) < 0.5) continue;
+                D[v] = {double(q[0]) - X[v * 3], double(q[1]) - X[v * 3 + 1], double(q[2]) - X[v * 3 + 2]};
+                known[v] = 1;
+                dists.push_back(std::sqrt(D[v][0] * D[v][0] + D[v][1] * D[v][1] + D[v][2] * D[v][2]));
+                ids.push_back(v);
+            }
+            if (dists.empty()) break;
+            std::vector<double> sorted = dists;
+            std::sort(sorted.begin(), sorted.end());
+            const double gate = std::max(3.0 * sorted[sorted.size() / 2], 0.002 * diag);
+            for (size_t k = 0; k < ids.size(); ++k)
+                if (dists[k] > gate) { known[ids[k]] = 0; D[ids[k]] = {0, 0, 0}; }
+            // smooth the displacement field over the mesh: unknown vertices take their neighbours' mean,
+            // known ones blend halfway toward it
+            for (int it = 0; it < 12; ++it) {
+                std::vector<std::array<double, 3>> N = D;
+                for (size_t v = 0; v < nv; ++v) {
+                    if (adj[v].empty()) continue;
+                    std::array<double, 3> m{0, 0, 0};
+                    for (int nb : adj[v]) for (int k = 0; k < 3; ++k) m[size_t(k)] += D[size_t(nb)][size_t(k)];
+                    for (int k = 0; k < 3; ++k) m[size_t(k)] /= double(adj[v].size());
+                    const double s = known[v] ? 0.5 : 1.0;
+                    for (int k = 0; k < 3; ++k) N[v][size_t(k)] = (1 - s) * D[v][size_t(k)] + s * m[size_t(k)];
+                }
+                D = std::move(N);
+            }
+            const double step = 0.6;
+            for (size_t v = 0; v < nv; ++v)
+                for (int k = 0; k < 3; ++k) X[v * 3 + size_t(k)] += float(step * D[v][size_t(k)]);
         }
     }
     return true;
@@ -214,7 +322,7 @@ RegisterResult registerToSurface(const Rig& rig, const std::vector<float>& targe
     if (options.method == RegisterOptions::Method::Smooth) {
         std::vector<float> X = aligned;
         QString serr;
-        if (!smoothIcp(X, tf, targetV, targetF, std::max(1, options.rounds), &serr)) { r.error = serr; return r; }
+        if (!smoothIcp(X, tf, targetV, targetF, std::max(1, options.rounds), options.detailRounds, &serr)) { r.error = serr; return r; }
         // residual to the target surface, for the report
         std::vector<uint32_t> tidx(targetF.begin(), targetF.end());
         QuadRemesh::SurfaceLocator loc;
@@ -392,6 +500,11 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
         worst = std::max(worst, std::sqrt(e));
     }
     r.anchorResidualMm = worst * 1000.0;
+    r.warpedJointPositions = jp;
+    for (auto& p : r.warpedJointPositions) {
+        const auto d = w.displacement(p);
+        for (int k = 0; k < 3; ++k) p[size_t(k)] += d[size_t(k)];
+    }
     r.positions.assign(rig.meshes.size(), {});
     for (size_t mi : importedMeshIndices(rig)) {
         const auto& P = rig.meshes[mi].positions;
@@ -409,7 +522,7 @@ JointRegisterResult registerByJoints(const Rig& rigIn, const std::vector<JointAn
 
 JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<JointAnchor>& anchors,
                                               const std::vector<float>& targetV, const std::vector<int>& targetF,
-                                              bool alignLimbPose, int rounds)
+                                              bool alignLimbPose, int rounds, int detailRounds)
 {
     // 1. skeleton: facing, limb pose and proportions (a smooth warp from matched joints)
     JointRegisterResult r = registerByJoints(rig, anchors, alignLimbPose);
@@ -430,8 +543,15 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
         if (P.size() != r.alignedRig.meshes[mi].positions.size()) { r.ok = false; r.error = QStringLiteral("internal: joint warp / mesh size mismatch"); return r; }
         std::copy(P.begin(), P.end(), X.begin() + std::ptrdiff_t(offset[mi] * 3));
     }
+    // The matched joints stay pinned to the target's bones through the refinement, so the surface can reshape
+    // the body but not lift/shift it away from its skeleton (measured without this: the upper body ended
+    // ~45 mm above the officer's bones, mean 40 mm joint drift).
+    std::vector<IcpAnchor> icpAnchors;
+    for (const JointAnchor& an : anchors)
+        for (size_t j = 0; j < r.alignedRig.joints.size() && j < r.warpedJointPositions.size(); ++j)
+            if (r.alignedRig.joints[j].name == an.bodyJoint) { icpAnchors.push_back({r.warpedJointPositions[j], an.target}); break; }
     QString err;
-    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), &err)) {
+    if (!smoothIcp(X, tf, targetV, targetF, std::max(1, rounds), detailRounds, &err, &icpAnchors)) {
         r.ok = false;
         r.error = QStringLiteral("surface refinement failed: %1").arg(err);
         return r;

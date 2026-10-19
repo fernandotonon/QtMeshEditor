@@ -785,6 +785,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     bool matchedByUv = false, flippedV = false;
     int ambiguous = 0;
     QVariantMap registration;
+    std::vector<Fit::JointAnchor> anchorTargets;
     if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
         if (!tr.ok) { err(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
@@ -857,6 +858,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             registration.insert("limbChainsAligned", jr.limbChainsAligned);
             registration.insert("limbAngles", jr.limbAngles);
             registration.insert("mode", jr.surfaceRefined ? "joints+surface" : "joints");
+            anchorTargets = anchors;
             registration.insert("anchorsUsed", jr.anchorsUsed);
             registration.insert("anchorResidualMm", jr.anchorResidualMm);
             registration.insert("unmatchedJoints", unmatched);
@@ -960,6 +962,23 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
     const Fit::Result fr = Fit::fit(baseRig, target);
     if (!fr.ok) { err(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
     if (a.fittedRigOut) *a.fittedRigOut = fr.fitted;
+    if (!anchorTargets.empty()) {
+        // After the whole pipeline, where do the fitted joints sit relative to the target's own bones?
+        const auto jp = Fit::jointWorldPositions(fr.fitted);
+        QVariantList rows;
+        double sum = 0, worst = 0;
+        for (const Fit::JointAnchor& an : anchorTargets)
+            for (size_t j = 0; j < fr.fitted.joints.size(); ++j)
+                if (fr.fitted.joints[j].name == an.bodyJoint) {
+                    const double dx = jp[j][0] - an.target[0], dy = jp[j][1] - an.target[1], dz = jp[j][2] - an.target[2];
+                    const double d = std::sqrt(dx * dx + dy * dy + dz * dz) * 1000.0;
+                    sum += d; worst = std::max(worst, d);
+                    rows << QVariantMap{{"joint", an.bodyJoint}, {"errMm", d}, {"dxMm", dx * 1000.0}, {"dyMm", dy * 1000.0}, {"dzMm", dz * 1000.0}};
+                }
+        registration.insert("finalJointVsTargetBones", rows);
+        registration.insert("finalJointVsTargetBonesMeanMm", rows.isEmpty() ? 0.0 : sum / double(rows.size()));
+        registration.insert("finalJointVsTargetBonesMaxMm", worst);
+    }
     if (!referencePositions.empty() && !rigChanged) {
         // The fit the reference itself would give (same-topology, exact) vs the fit from the registered wrap:
         // how far each JOINT lands from where the true edit puts it.
