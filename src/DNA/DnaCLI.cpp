@@ -630,9 +630,23 @@ namespace {
 // Bind-pose (undeformed) vertex positions of every submesh, in submesh order.
 
 // Merge every submesh of an entity into one surface (positions + triangle indices).
-bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
+bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris, std::vector<int>* vertexGroup = nullptr)
 {
     const Ogre::MeshPtr mesh = e->getMesh();
+    // body part of each bone of the target skeleton, for the part-restricted surface matching
+    std::vector<int> boneGroup;
+    if (vertexGroup && e->hasSkeleton()) {
+        Ogre::SkeletonInstance* sk = e->getSkeleton();
+        std::vector<QString> names(sk->getNumBones());
+        std::vector<int> parent(sk->getNumBones(), -1);
+        for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
+            Ogre::Bone* bone = sk->getBone(b);
+            names[bone->getHandle() < names.size() ? bone->getHandle() : b] = QString::fromStdString(bone->getName());
+            if (auto* par = dynamic_cast<Ogre::Bone*>(bone->getParent()))
+                if (bone->getHandle() < parent.size()) parent[bone->getHandle()] = int(par->getHandle());
+        }
+        boneGroup = Fit::targetBoneGroups(names, parent);
+    }
     for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
         Ogre::SubMesh* sm = mesh->getSubMesh(i);
         Ogre::VertexData* vd = sm->useSharedVertices ? mesh->sharedVertexData : sm->vertexData;
@@ -640,6 +654,17 @@ bool surfaceOf(Ogre::Entity* e, std::vector<float>& pos, std::vector<int>& tris)
         const Ogre::VertexElement* pe = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
         if (!pe) continue;
         const int base = int(pos.size() / 3);
+        const size_t groupBase = vertexGroup ? vertexGroup->size() : 0;
+        if (vertexGroup) vertexGroup->resize(groupBase + vd->vertexCount, -1);
+        if (vertexGroup && !boneGroup.empty()) {
+            const auto& assignments = sm->useSharedVertices ? mesh->getBoneAssignments() : sm->getBoneAssignments();
+            std::vector<float> bestW(vd->vertexCount, -1.f);
+            for (const auto& kv : assignments)
+                if (kv.first < vd->vertexCount && kv.second.weight > bestW[kv.first] && kv.second.boneIndex < boneGroup.size()) {
+                    bestW[kv.first] = kv.second.weight;
+                    (*vertexGroup)[groupBase + kv.first] = boneGroup[kv.second.boneIndex];
+                }
+        }
         Ogre::HardwareVertexBufferSharedPtr vb = vd->vertexBufferBinding->getBuffer(pe->getSource());
         auto* vbase = static_cast<unsigned char*>(vb->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         // A VertexData / IndexData may select a window inside a shared buffer.
@@ -844,9 +869,9 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             Fit::JointRegisterResult jr;
             if (a.refineSurface) {
                 std::vector<float> tpos;
-                std::vector<int> ttri;
-                if (!surfaceOf(te, tpos, ttri)) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
-                jr = Fit::registerJointsThenSurface(src.rig, anchors, tpos, ttri, !noAlignLimbs);
+                std::vector<int> ttri, tgroup;
+                if (!surfaceOf(te, tpos, ttri, &tgroup)) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
+                jr = Fit::registerJointsThenSurface(src.rig, anchors, tpos, ttri, !noAlignLimbs, 8, 6, &tgroup);
             } else {
                 jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
             }

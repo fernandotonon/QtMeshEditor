@@ -220,6 +220,24 @@ layout (`DnaRegister.SmoothWrapRecoversAKnownEditOnAReMeshedTarget`).
 surface mesh it used 74 of 900 allowed centres (the original Phase 4 fit!). It now steers toward the budget
 (~85 %); the same-topology body fit uses 657 centres and the warp residual drops from the old 3.5 mm.
 
+**Body-part restriction (found on Mixamo's Rumba model).** With a plain closest-point ICP the legs came out
+CROSSED: where the target's legs are close, each body leg grabbed the other's surface. A skeleton-aware fix:
+every body vertex gets the limb of its dominant skin joint (`bodyGroupOfJoint`: torso / left-right arm /
+left-right leg, found through names and ancestry, so twist and finger joints follow their limb) and every
+target vertex the limb of its dominant bone (`targetBoneGroups`: bones named like the joint table, everything
+else inherits from its parent). A vertex then only matches target triangles of its own limb. The same run
+also shows the answer to "can it become a male or an ape?": on Rumba the torso takes the stout male body (belly,
+wide chest) — the shape comes from the target's surface, the female DNA mesh only supplies topology and
+weights — and the arm/leg lengths come from the skeleton route, so long-armed (ape-like) proportions are
+a matter of the target skeleton. Two honest limits: the target must be body-shaped (a CLOTHED character gives
+body-inside-clothes, not a bare male body), and the corrective data stays the female MetaHuman's.
+
+**Skeleton stays in charge.** Surface refinement alone pulled the fitted joints away from the target's bones
+(mean 40 mm, max 84 mm on the officer: the body looked shifted and stretched). The matched joints are now carried
+through every ICP round as strongly weighted correspondences (mean 17 mm, max 36 mm), open-boundary vertices
+(neckline, wrists, ankles of a headless body) are excluded from the correspondences, and a final per-vertex detail
+stage lets the body take shape finer than the warp's control spacing (ground truth: vertices 2.1 -> 1.9 mm).
+
 **On the stylised officer** the surface wrap alone no longer collapses (it follows the trousers/shirt volume
 into a wide-hipped body) but it does not match the T-pose. The two routes are complementary, so they are now
 combined: `--register-joints --refine-surface` (MCP mode `joints+surface`, `registerJointsThenSurface`) runs the

@@ -882,4 +882,35 @@ TEST(DnaRegister, JointsThenSurfaceRefusesAnEmptyTarget)
     EXPECT_TRUE(r.error.contains("empty")) << r.error.toStdString();
 }
 
+TEST(DnaRegister, BodyPartsComeFromJointNamesAndAncestry)
+{
+    Rig rig;
+    auto J = [&](const char* n, int parent) { Joint j; j.name = n; j.parent = parent; rig.joints.push_back(j); return int(rig.joints.size() - 1); };
+    const int pel = J("pelvis", -1), th = J("thigh_l", pel), twist = J("thigh_twist_01_l", th), calf = J("calf_r", pel);
+    const int ua = J("upperarm_l", pel), hand = J("hand_r", pel), finger = J("index_01_r", hand), spine = J("spine_03", pel);
+    EXPECT_EQ(bodyGroupOfJoint(rig, pel), int(GroupTorso));
+    EXPECT_EQ(bodyGroupOfJoint(rig, th), int(GroupLeftLeg));
+    EXPECT_EQ(bodyGroupOfJoint(rig, twist), int(GroupLeftLeg));        // a twist joint belongs to its limb
+    EXPECT_EQ(bodyGroupOfJoint(rig, calf), int(GroupRightLeg));
+    EXPECT_EQ(bodyGroupOfJoint(rig, ua), int(GroupLeftArm));
+    EXPECT_EQ(bodyGroupOfJoint(rig, finger), int(GroupRightArm));      // a finger follows its hand, found through the parent
+    EXPECT_EQ(bodyGroupOfJoint(rig, spine), int(GroupTorso));
+}
+
+TEST(DnaRegister, TargetBonesGetTheirLimbAndUnnamedBonesInheritIt)
+{
+    // Mixamo-style target: only the table names are recognised, a toe/finger/prop bone follows its parent.
+    const std::vector<QString> names = {"Hips", "LeftUpLeg", "LeftLeg", "LeftFoot", "LeftToeBase", "RightUpLeg", "LeftArm", "LeftHand", "LeftHandIndex1", "Spine", "weird_prop"};
+    const std::vector<int> parent = {-1, 0, 1, 2, 3, 0, 9, 6, 7, 0, 9};
+    const std::vector<int> g = targetBoneGroups(names, parent);
+    ASSERT_EQ(g.size(), names.size());
+    EXPECT_EQ(g[0], int(GroupTorso));
+    EXPECT_EQ(g[1], int(GroupLeftLeg));
+    EXPECT_EQ(g[4], int(GroupLeftLeg));        // toe: inherits from the foot
+    EXPECT_EQ(g[5], int(GroupRightLeg));
+    EXPECT_EQ(g[7], int(GroupLeftArm));
+    EXPECT_EQ(g[8], int(GroupLeftArm));        // finger: inherits from the hand
+    EXPECT_EQ(g[10], int(GroupTorso));         // unknown bone under the spine: the torso
+}
+
 #endif  // ENABLE_OPENRIGLOGIC
