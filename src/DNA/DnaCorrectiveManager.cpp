@@ -26,6 +26,12 @@ struct DnaCorrectiveManager::Character {
     QHash<QString, std::array<double, 4>> overrides;   // joint -> delta wxyz
     bool skipping = false;   ///< we set setSkipAnimationStateUpdate on the entity
     bool priorSkip = false;  ///< the flag's value when we took it over (PoseLibrary / mocap may own it)
+    /// RigLogic's own NEUTRAL pose of every driven joint (controls at rest). The corrective is applied as a
+    /// DELTA from it onto each bone's bind transform, not as an absolute pose: on a FITTED character the
+    /// bones' bind transforms differ from the DNA's neutral (new proportions, re-posed limbs), and writing
+    /// the original absolute pose snapped every corrective joint back to the old skeleton — broken
+    /// forearms and ankles.
+    QHash<int, Dna::JointPose> neutral;
 };
 
 namespace {
@@ -105,6 +111,10 @@ bool DnaCorrectiveManager::attach(const QString& entityName, std::shared_ptr<Dna
         return false;
     auto c = std::make_shared<Character>();
     c->evaluator = std::move(evaluator);
+    c->evaluator->resetControls();
+    c->evaluator->calculate();
+    for (const Dna::JointPose& p : c->evaluator->drivenPoses()) c->neutral.insert(p.joint, p);
+    c->evaluator->resetControls();
     m_chars.insert(entityName, c);
     ensureListener();
     SentryReporter::addBreadcrumb(
@@ -232,10 +242,24 @@ bool DnaCorrectiveManager::applyTo(const QString& name, Character& c, bool corre
         const std::string bn = ev.jointName(p.joint).toStdString();
         if (!skel->hasBone(bn)) { ++missing; continue; }
         Ogre::Bone* b = skel->getBone(bn);
-        b->setPosition(Ogre::Vector3(float(p.translation[0]), float(p.translation[1]), float(p.translation[2])));
-        b->setOrientation(Ogre::Quaternion(float(p.orientation[0]), float(p.orientation[1]),
-                                           float(p.orientation[2]), float(p.orientation[3])));
-        b->setScale(Ogre::Vector3(float(p.scale[0]), float(p.scale[1]), float(p.scale[2])));
+        const auto nit = c.neutral.constFind(p.joint);
+        if (nit == c.neutral.constEnd()) {   // no neutral recorded: fall back to the absolute pose
+            b->setPosition(Ogre::Vector3(float(p.translation[0]), float(p.translation[1]), float(p.translation[2])));
+            b->setOrientation(Ogre::Quaternion(float(p.orientation[0]), float(p.orientation[1]),
+                                               float(p.orientation[2]), float(p.orientation[3])));
+            b->setScale(Ogre::Vector3(float(p.scale[0]), float(p.scale[1]), float(p.scale[2])));
+        } else {
+            const Dna::JointPose& n = nit.value();
+            // bind + (pose - neutral), in the bone's own parent frame
+            b->setPosition(b->getInitialPosition() + Ogre::Vector3(float(p.translation[0] - n.translation[0]),
+                                                                  float(p.translation[1] - n.translation[1]),
+                                                                  float(p.translation[2] - n.translation[2])));
+            const Ogre::Quaternion qn(float(n.orientation[0]), float(n.orientation[1]), float(n.orientation[2]), float(n.orientation[3]));
+            const Ogre::Quaternion qp(float(p.orientation[0]), float(p.orientation[1]), float(p.orientation[2]), float(p.orientation[3]));
+            b->setOrientation(b->getInitialOrientation() * (qn.Inverse() * qp));
+            auto ratio = [](double a, double b2) { return std::abs(b2) > 1e-9 ? float(a / b2) : 1.0f; };
+            b->setScale(b->getInitialScale() * Ogre::Vector3(ratio(p.scale[0], n.scale[0]), ratio(p.scale[1], n.scale[1]), ratio(p.scale[2], n.scale[2])));
+        }
         ++driven;
     }
     // Ogre flags only the changed node: descendants keep stale derived
