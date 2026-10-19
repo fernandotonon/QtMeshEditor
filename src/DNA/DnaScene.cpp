@@ -6,11 +6,15 @@
 #include "../SentryReporter.h"
 #include "DnaCorrectiveManager.h"
 #include "DnaRigLogic.h"
+#include "DnaFaceBake.h"
+#include "DnaArkitMap.h"
 #include "../commands/MorphCommands.h"
 
 #include <QFileInfo>
 
 #include <OgreException.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreVertexIndexData.h>
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreMesh.h>
@@ -20,6 +24,7 @@
 #include <OgreResourceGroupManager.h>
 
 #include <algorithm>
+#include <chrono>
 #include <map>
 #include <vector>
 
@@ -28,6 +33,35 @@ namespace Dna {
 namespace {
 
 constexpr size_t kMaxInfluences = 4;  // Ogre hardware skinning limit
+
+// Ogre's software pose animation addresses positions as a tightly packed float3
+// array (base + vertex * 3), so a mesh that carries morph targets needs POSITION
+// in a buffer of its own. EditableMesh interleaves position/normal/uv in one
+// buffer, which turns every pose offset into garbage (the mesh "explodes" as soon
+// as a morph state is enabled). The glTF importer builds separate buffers for the
+// same reason. Must run BEFORE _compileBoneAssignments, which appends the blend
+// elements in a buffer of their own.
+void separatePositionBuffer(Ogre::VertexData* vd)
+{
+    if (!vd || !vd->vertexDeclaration) return;
+    Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
+    const Ogre::VertexElement* pos = decl->findElementBySemantic(Ogre::VES_POSITION);
+    if (!pos) return;
+    bool alone = pos->getOffset() == 0;
+    for (const Ogre::VertexElement& e : decl->getElements())
+        if (e.getSource() == pos->getSource() && e.getSemantic() != Ogre::VES_POSITION) alone = false;
+    if (alone) return;
+
+    Ogre::VertexDeclaration* nd = Ogre::HardwareBufferManager::getSingleton().createVertexDeclaration();
+    nd->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    size_t offset = 0;
+    for (const Ogre::VertexElement& e : decl->getElements()) {
+        if (e.getSemantic() == Ogre::VES_POSITION) continue;
+        nd->addElement(1, offset, e.getType(), e.getSemantic(), e.getIndex());
+        offset += Ogre::VertexElement::getTypeSize(e.getType());
+    }
+    vd->reorganiseBuffers(nd);   // takes ownership of `nd`
+}
 
 Ogre::SceneNode* fail(QString* error, const QString& msg)
 {
@@ -175,7 +209,7 @@ Ogre::SceneNode* importRigToScene(const Rig& input, const QString& baseName,
     try {
         Ogre::SceneNode* n = importRigImpl(rig, baseName, &rep, error);
         rep.warnings = pruneNotes + rep.warnings;
-        if (n && evaluator) {
+        if (n && evaluator && qEnvironmentVariable("QTMESH_DNA_CORRECTIVES") != QLatin1String("0")) {
             DnaCorrectiveManager* mgr = DnaCorrectiveManager::instance();
             const QString entityName = QString::fromStdString(n->getName());
             if (mgr->attach(entityName, evaluator)) {
@@ -308,6 +342,10 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
     if (!mesh)
         return fail(error, QStringLiteral("Failed to build the Ogre mesh from the DNA geometry."));
 
+    if (!rig.blendShapeChannels.isEmpty())
+        for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i)
+            separatePositionBuffer(mesh->getSubMesh(i)->vertexData);
+
     mesh->_notifySkeleton(skel);
     mesh->clearBoneAssignments();
     for (unsigned short i = 0; i < mesh->getNumSubMeshes() && i < subs.size(); ++i) {
@@ -326,13 +364,11 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
     mesh->_compileBoneAssignments();
     rep.meshes = static_cast<int>(subs.size());
 
-    Ogre::SceneNode* node = mgr->addSceneNode(baseName + QStringLiteral("_dna_node"));
-    if (!node)
-        return fail(error, QStringLiteral("Failed to create the scene node."));
-    Ogre::Entity* entity = mgr->createEntity(node, mesh);
-
     // ---- morph targets: DNA channel -> one named pose per mesh slice ---------
-    if (entity && !rig.blendShapeChannels.isEmpty()) {
+    // Built on the MESH, before any entity exists (the way the glTF importer does
+    // it): adding poses to a live entity of a skinned mesh needs a re-initialise
+    // that this many submeshes / poses do not survive.
+    if (!rig.blendShapeChannels.isEmpty()) {
         std::map<int, std::vector<MorphPoseSlice>> byChannel;
         for (size_t sub = 0; sub < builtMeshIndex.size(); ++sub) {
             const Mesh& m = rig.meshes[builtMeshIndex[sub]];
@@ -359,16 +395,15 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
             }
         }
         for (auto& [channel, slices] : byChannel) {
-            AddMorphTargetCommand cmd(entity, rig.blendShapeChannels[channel], slices);
-            cmd.setDeferInit(true);
-            cmd.redo();
+            attachMorphPosesToMesh(mesh.get(), rig.blendShapeChannels[channel], slices);
             ++rep.morphTargets;
         }
-        if (rep.morphTargets > 0) {
-            entity->_initialise(true);
-            entity->refreshAvailableAnimationState();
-        }
     }
+
+    Ogre::SceneNode* node = mgr->addSceneNode(baseName + QStringLiteral("_dna_node"));
+    if (!node)
+        return fail(error, QStringLiteral("Failed to create the scene node."));
+    mgr->createEntity(node, mesh);
 
     SentryReporter::addBreadcrumb(
         QStringLiteral("file.import"),
@@ -382,9 +417,23 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
 Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
                                ImportReport* report, QString* error)
 {
+    // The GUI / convert / MCP importers cannot pass options, so a user can opt out
+    // of the face bake from the environment.
+    ImportOptions io;
+    if (qEnvironmentVariable("QTMESH_DNA_FACE_MORPHS") == QLatin1String("0"))
+        io.faceMorphs = false;
+    return importToScene(path, options, io, report, error);
+}
+
+Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options, const ImportOptions& import,
+                               ImportReport* report, QString* error)
+{
     ReadResult rr = read(path, options);
     if (!rr.ok)
         return fail(error, rr.error);
+    QStringList bakeNotes;
+    int faceShapes = 0, faceApprox = 0;
+    double faceMs = 0.0, faceMax = 0.0;
 
     // A DNA with rig-logic behaviour (a MetaHuman body) gets live correctives.
     // The evaluator also tells the importer which joints the rig reads or moves,
@@ -394,6 +443,32 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
     if (available()) {
         QString evErr;
         evaluator = std::shared_ptr<RigEvaluator>(RigEvaluator::create(path, options, &evErr).release());
+
+        // A face rig: bake it into morph targets BEFORE the skeleton is cut down
+        // to Ogre's bone limit — the bake runs on the complete joint set.
+        if (evaluator && import.faceMorphs
+            && evaluator->rawControlIndex(ArkitMap::controlPrefix() + QStringLiteral("jawOpen")) >= 0
+            && !rr.rig.meshes.empty()) {
+            QList<ArkitMap::Entry> map = ArkitMap::defaultMap();
+            if (!import.arkitMapPath.isEmpty()) {
+                const ArkitMap::LoadResult lr = ArkitMap::loadOverride(import.arkitMapPath);
+                if (!lr.ok) return fail(error, QStringLiteral("ARKit map: %1").arg(lr.error));
+                map = lr.entries;
+            }
+            const QList<FaceBake::ShapeSpec> specs = import.allFaceControls
+                ? FaceBake::allExpressionSpecs(*evaluator) : FaceBake::arkitSpecs(map);
+            const auto t0 = std::chrono::steady_clock::now();
+            const FaceBake::Result baked = FaceBake::bake(rr.rig, *evaluator, specs);
+            faceMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            faceShapes = FaceBake::appendAsBlendShapes(rr.rig, baked);
+            for (const FaceBake::BakedShape& s : baked.shapes) faceMax = std::max(faceMax, s.maxDeltaMm);
+            if (!import.allFaceControls)
+                faceApprox = int(ArkitMap::approximateChannels(map).size());
+            bakeNotes << baked.warnings;
+            bakeNotes << QStringLiteral("Face rig baked into %1 morph targets (%2) in %3 ms; ARKit channels flagged approximate: %4")
+                             .arg(faceShapes).arg(import.allFaceControls ? "all expression controls" : "ARKit set")
+                             .arg(faceMs, 0, 'f', 0).arg(faceApprox);
+        }
         if (evaluator && !evaluator->driverJoints().isEmpty() && !evaluator->drivenJoints().empty()) {
             rr.rig.protectedJoint.assign(rr.rig.joints.size(), 0);
             for (const QString& d : evaluator->driverJoints()) {
@@ -406,7 +481,15 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options,
             evaluator.reset();
         }
     }
-    return importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator);
+    Ogre::SceneNode* node = importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator);
+    if (node && report) {
+        report->faceShapes = faceShapes;
+        report->faceShapesApproximate = faceApprox;
+        report->faceBakeMs = faceMs;
+        report->faceMaxDeltaMm = faceMax;
+        report->warnings = bakeNotes + report->warnings;
+    }
+    return node;
 }
 
 }  // namespace Dna

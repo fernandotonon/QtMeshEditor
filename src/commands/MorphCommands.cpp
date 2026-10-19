@@ -247,6 +247,11 @@ void rebuildWeightClips(Ogre::Mesh* mesh, const std::vector<WeightClipSnapshot>&
 
 // ──────────────── AddMorphTargetCommand ─────────────────────────────
 
+void attachMorphPosesToMesh(Ogre::Mesh* mesh, const QString& name, const std::vector<MorphPoseSlice>& slices)
+{
+    buildPosesFromSlices(mesh, name, slices, nullptr);
+}
+
 AddMorphTargetCommand::AddMorphTargetCommand(Ogre::Entity* entity,
                                              const QString& name,
                                              const std::vector<MorphPoseSlice>& slices,

@@ -1,7 +1,7 @@
 # MetaHuman DNA / OpenRigLogic (epic #1095) — import + body correctives
 
-Status: **Phase 1 (DNA import) and Phase 2 (body correctives) implemented.**
-Phases 3–4 are tracked as child issues; this document records what was verified
+Status: **Phase 1 (DNA import), Phase 2 (body correctives) and Phase 3 (face → ARKit morph targets) implemented.**
+Phase 4 is tracked as a child issue; this document records what was verified
 and the gaps that shape them.
 
 ## What shipped
@@ -94,7 +94,6 @@ from its dominant joint in world space. Findings:
 
 ## Phases still open
 
-3. Facial controls, ARKit/Audio2Face mapping, baking.
 4. Body mesh fitting and generic RBF correctives.
 Follow-up (separate issue): image-based body prediction.
 
@@ -190,3 +189,98 @@ corrective bones — negligible next to rendering. Software-skinned reads for th
    facial controls are Phase 3.
 5. Corrective *blend shapes* and animated maps are not driven yet (the body has
    none; the face does).
+
+
+---
+
+# Phase 3 — facial controls: a MetaHuman head → ARKit morph targets (#1097)
+
+A MetaHuman face DNA is a JOINT rig: 870 joints (732 skinned), 263 expression raw
+controls (`CTRL_expressions.browDownL`, `eyeBlinkL`, `jawOpen`, `mouthCornerPullL`,
+`mouthFunnelUL` …), 545 PSD rows, 38 RBF poses, plus `neck_01/neck_02/head`
+quaternion drivers. Ogre cannot hold that skeleton (256 bones) and the editor's
+face capture, lipsync and every exporter speak morph targets, so the rig is
+**baked**, not played:
+
+```
+delta(shape) = skin(rig evaluated with the shape's controls) − skin(neutral)
+```
+
+`skin()` is full linear-blend skinning over the COMPLETE skeleton with every
+influence (up to 10 per vertex; Ogre would clip to 4), so a single baked shape is
+exact for its control set. Result: the head imports with the 50 ARKit-named
+targets, which the existing face capture (`qtmesh mocap --face`), Audio2Face
+lipsync (`qtmesh lipsync`) and any glTF/FBX export drive directly — no mapping
+layer in between (the names are the canonical ARKit names).
+
+| Piece | Where |
+|---|---|
+| ARKit-52 → MetaHuman control table (data, overridable) | `src/DNA/DnaArkitMap.{h,cpp}` |
+| Bake + linearity measurement (pure data) | `src/DNA/DnaFaceBake.{h,cpp}` |
+| Import integration | `DnaScene` — automatic for any DNA that exposes expression controls |
+| CLI | `qtmesh dna face head.dna [-o head.glb \| sheet.png] [--all-controls] [--map arkit.json] [--preview label:shape=w,… ] [--validate] [--json]` |
+| Opt-out | `QTMESH_DNA_FACE_MORPHS=0` (face bake), `QTMESH_DNA_CORRECTIVES=0` (live neck correctives) |
+
+## The mapping (documented supported subset)
+
+All **51** ARKit channels (every canonical name except `_neutral`) have a table
+entry; **11 are flagged approximate** because MetaHuman has no single equivalent:
+`cheekSquint{Left,Right}`, `eyeSquint{Left,Right}`, `mouthClose`, `mouthFunnel`,
+`mouthPucker`, `mouthRollLower/Upper`, `mouthShrugLower/Upper` (the table records
+why for each). L/R are the character's left/right on both sides; ARKit "In"/"Out"
+are nose-relative, so `eyeLookInLeft` drives MetaHuman's `eyeLookRightL`. A project
+can replace or drop entries with a `qtmesh-dna-arkit-map-v1` JSON (`--map`); an
+unknown ARKit name is an error, never a silent no-op.
+
+## Validation (Epic SKM_Face.dna, LOD 0)
+
+* **50 of 51 shapes bake in 22 ms**; `mouthClose` (all four lips-together controls)
+  drives no vertices at LOD 0 and is reported, not faked.
+* **Direction/side:** `jawOpen` moves the lower face DOWN (largest displacement
+  31.6 mm), left shapes peak at +X and right shapes at −X, and left/right magnitudes
+  agree within 30 % (unit-tested on the real file).
+* **Visual:** a contact sheet (`--preview`) shows neutral, jaw open (mouth, teeth
+  and tongue visible), smile (cheeks and corners lift), blink (lids close) and a
+  pucker rendering correctly on the live entity.
+* **Nonlinearity, measured** (`--validate`: rig evaluated with several controls at
+  once vs the sum of the baked shapes):
+
+| Expression | Max error | Mean error | Expression size |
+|---|---|---|---|
+| jawOpen + smileL + smileR | 4.2 mm | 0.36 mm | 31.6 mm |
+| eyeBlinkL + browDownL | 0.07 mm | 0.000 mm | 15.1 mm |
+| mouthFunnel + jawOpen + browInnerUp | 3.3 mm | 0.28 mm | 38.8 mm |
+| mouthPucker + jawOpen | **16.6 mm** | 1.1 mm | 31.6 mm |
+
+Typical expressions are within a few millimetres; **pucker + open jaw is the worst
+case and is clearly nonlinear** — a morph target cannot keep it, and that is the
+price of not shipping 870 joints.
+
+## What was found along the way
+
+* **Ogre software pose animation needs POSITION in its own tightly packed buffer.**
+  It addresses positions as `base + vertex * 3` floats. `EditableMesh` interleaves
+  position/normal/uv, so as soon as any pose state was enabled the whole head
+  exploded into spikes (even at weight 0, even for a 4-vertex quad). The glTF
+  importer avoids it by building separate buffers. The DNA importer now splits
+  POSITION into its own buffer for meshes that carry morph targets; a scene test
+  pins it. This also affects any other `EditableMesh`-built mesh that later
+  receives poses (retopo/split outputs) — worth a follow-up.
+* Poses are now attached to the mesh BEFORE the entity exists (as the glTF
+  importer does), not to a live entity.
+
+## Gaps (decisions for later)
+
+1. **Joint animation baking is not offered** — the face skeleton does not fit
+   Ogre. The deliverable is shape-space (morph) baking; evaluated joint curves are
+   not exported.
+2. **Animated maps (82, e.g. wrinkle masks) are not baked or applied.**
+3. **Corrective joints on the head** (neck) still run live through the Phase 2
+   manager; on the face 591 of 840 rig-driven joints are not in the Ogre skeleton
+   (the same 256-bone limit), which is harmless for the baked morphs but is
+   reported.
+4. Only LOD 0 meshes are baked; teeth/tongue/eyes/lashes are included as slices.
+5. `--all-controls` bakes every `CTRL_expressions.*` control as its own target
+   (~260): useful for authoring, heavy for the Inspector list.
+6. No GUI surface beyond the import itself; the targets appear in the normal
+   Vertex Morph Animation list.

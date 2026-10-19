@@ -5,6 +5,11 @@
 #include "../Manager.h"
 #include "../MeshImporterExporter.h"
 #include "DnaCorrectiveManager.h"
+#include "../MorphAnimationManager.h"
+#include "DnaArkitMap.h"
+#include "DnaFaceBake.h"
+#include "DnaRigLogic.h"
+#include "DnaScene.h"
 #include "../ModelTurntableRenderer.h"
 
 #include <QImage>
@@ -35,6 +40,10 @@ void usage()
         "       qtmesh dna pose <body.dna> --set <joint>=<axis>:<deg>|<rx,ry,rz> [--set ...]\n"
         "                       [--compare] [--no-correctives] [-o posed.stl|.obj|.glb] [--json]\n"
         "\n"
+        "       qtmesh dna face <head.dna> [-o head.glb|sheet.png] [--all-controls] [--map arkit.json]\n"
+        "                       [--preview label:shape=w,shape=w ...] [--validate] [--json]\n"
+        "\n"
+        "face bakes the face rig into ARKit-named morph targets (see below).\n"
         "pose bends driver joints (rotation relative to neutral, degrees, local axes) and\n"
         "evaluates the body correctives. --compare reports how far the corrected\n"
         "deformation moves the skinned vertices versus plain skinning (millimetres).\n"
@@ -48,12 +57,16 @@ void usage()
 }
 
 static int runPose(int argc, char* argv[]);
+static int runFace(int argc, char* argv[]);
 
 int run(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i)
         if (QString::fromLocal8Bit(argv[i]) == QLatin1String("pose"))
             return runPose(argc, argv);
+    for (int i = 1; i < argc; ++i)
+        if (QString::fromLocal8Bit(argv[i]) == QLatin1String("face"))
+            return runFace(argc, argv);
     QString path;
     bool json = false;
     ReadOptions opt;
@@ -342,6 +355,181 @@ static int runPose(int argc, char* argv[])
         t += QStringLiteral("%1 driver bones, %2 corrective bones evaluated (%3 not in skeleton), RigLogic %4 ms\n")
                  .arg(report["driverBones"].toInt()).arg(report["correctiveBones"].toInt())
                  .arg(report["correctiveJointsMissing"].toInt()).arg(report["rigLogicMs"].toDouble(), 0, 'f', 2);
+        if (!out.isEmpty()) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
+        CLIPipeline::writeOutput(t);
+    }
+    return 0;
+}
+
+static int runFace(int argc, char* argv[])
+{
+    QString path, out, mapPath;
+    QStringList previews;
+    bool json = false, all = false, validate = false;
+    bool sawDna = false, sawFace = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (!sawFace && a == "face") { sawFace = true; continue; }
+        if (a == "--json") json = true;
+        else if (a == "--all-controls") all = true;
+        else if (a == "--validate") validate = true;
+        else if (a == "--map" && i + 1 < argc) mapPath = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--preview" && i + 1 < argc) previews << QString::fromLocal8Bit(argv[++i]);
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (!a.startsWith('-') && path.isEmpty()) path = a;
+        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
+    }
+    if (path.isEmpty()) { usage(); return 2; }
+    if (!available()) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
+                                                  "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
+        return 1;
+    }
+    if (!CLIPipeline::initOgreHeadless()) return 1;
+
+    ImportOptions io;
+    io.allFaceControls = all;
+    io.arkitMapPath = mapPath;
+    ImportReport rep;
+    QString err;
+    Ogre::SceneNode* node = importToScene(QFileInfo(path).absoluteFilePath(), ReadOptions(), io, &rep, &err);
+    if (!node) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err));
+        return 1;
+    }
+    if (rep.faceShapes == 0) {
+        CLIPipeline::writeCliError(QStringLiteral(
+            "Error: %1 has no face expression controls to bake (a body DNA? use `qtmesh dna pose`).\n")
+                                       .arg(QFileInfo(path).fileName()));
+        return 1;
+    }
+
+    QVariantMap report;
+    report.insert("morphTargets", rep.morphTargets);
+    report.insert("faceShapes", rep.faceShapes);
+    report.insert("approximateArkitChannels", rep.faceShapesApproximate);
+    report.insert("bakeMs", rep.faceBakeMs);
+    report.insert("maxVertexDisplacementMm", rep.faceMaxDeltaMm);
+    report.insert("jointsInOgreSkeleton", rep.joints);
+    report.insert("warnings", rep.warnings);
+
+    if (validate) {
+        // The nonlinearity a morph target cannot keep: the rig evaluated with
+        // several controls at once vs the sum of their baked shapes.
+        ReadOptions ro;
+        const ReadResult rr = read(QFileInfo(path).absoluteFilePath(), ro);
+        QString e2;
+        auto ev = RigEvaluator::create(QFileInfo(path).absoluteFilePath(), ro, &e2);
+        QVariantList rows;
+        if (!rr.ok || !ev) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: --validate could not run: %1\n")
+                                           .arg(!rr.ok ? rr.error : e2));
+            return 1;
+        }
+        {
+            QList<ArkitMap::Entry> map = ArkitMap::defaultMap();
+            if (!mapPath.isEmpty()) {
+                const ArkitMap::LoadResult lr = ArkitMap::loadOverride(mapPath);
+                if (!lr.ok) {
+                    CLIPipeline::writeCliError(QStringLiteral("Error: ARKit map: %1\n").arg(lr.error));
+                    return 1;
+                }
+                map = lr.entries;
+            }
+            const QList<FaceBake::ShapeSpec> all52 = FaceBake::arkitSpecs(map);
+            auto pick = [&](const QStringList& names) {
+                QList<FaceBake::ShapeSpec> v;
+                for (const QString& n : names)
+                    for (const auto& s : all52) if (s.name == n) v << s;
+                return v;
+            };
+            const QList<QStringList> combos = {
+                {"jawOpen", "mouthSmileLeft", "mouthSmileRight"},
+                {"eyeBlinkLeft", "browDownLeft"},
+                {"mouthPucker", "jawOpen"},
+                {"mouthFunnel", "jawOpen", "browInnerUp"},
+            };
+            for (const QStringList& c : combos) {
+                const auto lr = FaceBake::linearityError(rr.rig, *ev, pick(c));
+                QVariantMap row;
+                row.insert("shapes", c.join(QStringLiteral(" + ")));
+                row.insert("maxErrorMm", lr.maxMm);
+                row.insert("meanErrorMm", lr.meanMm);
+                row.insert("expressionMaxMm", lr.combinedMaxMm);
+                rows << row;
+            }
+        }
+        report.insert("linearity", rows);
+    }
+
+    if (!out.isEmpty() && out.endsWith(QStringLiteral(".png"), Qt::CaseInsensitive)) {
+        // Contact sheet: one front view per --preview (a neutral frame first).
+        Ogre::Entity* face = nullptr;
+        for (auto* o : node->getAttachedObjects())
+            if (o && o->getMovableType() == "Entity") { face = static_cast<Ogre::Entity*>(o); break; }
+        if (!face) { CLIPipeline::writeCliError(QStringLiteral("Error: no entity to render\n")); return 1; }
+        QStringList sheets = previews;
+        sheets.prepend(QStringLiteral("neutral:"));
+        auto* morphs = MorphAnimationManager::instance();
+        QList<QImage> images;
+        for (const QString& p : sheets) {
+            for (const QString& t : morphs->morphTargetsFor(face)) morphs->setWeight(face, t, 0.0f);
+            const int colon = p.indexOf(QLatin1Char(':'));
+            const QString spec = colon >= 0 ? p.mid(colon + 1) : p;
+            for (const QString& kv : spec.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+                const QStringList nv = kv.split(QLatin1Char('='));
+                bool ok = false;
+                const double w = nv.value(1, QStringLiteral("1")).toDouble(&ok);
+                if (!ok || !std::isfinite(w) || !morphs->setWeight(face, nv[0], float(w))) {
+                    CLIPipeline::writeCliError(QStringLiteral("Error: cannot set '%1' (unknown target or bad weight)\n").arg(kv));
+                    return 1;
+                }
+            }
+            TurntableOptions to;
+            to.width = 480; to.height = 540; to.frameCount = 1; to.elevationDegrees = 0.0f; to.studio = true;
+            QList<QImage> frames;
+            QString rerr;
+            if (!ModelTurntableRenderer::renderToImages({face}, to, &frames, &rerr) || frames.isEmpty()) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: render failed: %1\n").arg(rerr));
+                return 1;
+            }
+            images << frames.first();
+        }
+        QImage strip(480 * images.size(), 540, QImage::Format_ARGB32);
+        strip.fill(Qt::black);
+        QPainter pt(&strip);
+        for (int i = 0; i < images.size(); ++i) pt.drawImage(i * 480, 0, images[i]);
+        pt.end();
+        if (!strip.save(QFileInfo(out).absoluteFilePath())) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: could not write %1\n").arg(out));
+            return 1;
+        }
+        report.insert("output", QFileInfo(out).absoluteFilePath());
+    } else if (!out.isEmpty()) {
+        if (MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(),
+                                           CLIPipeline::formatForExtension(out)) != 0) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: export failed: %1\n").arg(out));
+            return 1;
+        }
+        report.insert("output", QFileInfo(out).absoluteFilePath());
+    }
+
+    if (json) {
+        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
+    } else {
+        QString t = QStringLiteral("Baked %1 face morph targets in %2 ms (largest vertex displacement %3 mm; %4 ARKit channels are close composites, not exact).\n")
+                        .arg(rep.faceShapes).arg(rep.faceBakeMs, 0, 'f', 0).arg(rep.faceMaxDeltaMm, 0, 'f', 1)
+                        .arg(rep.faceShapesApproximate);
+        for (const QVariant& v : report.value("linearity").toList()) {
+            const QVariantMap m = v.toMap();
+            t += QStringLiteral("  %1: summed shapes differ from the joint rig by max %2 mm / mean %3 mm (expression moves up to %4 mm)\n")
+                     .arg(m["shapes"].toString()).arg(m["maxErrorMm"].toDouble(), 0, 'f', 2)
+                     .arg(m["meanErrorMm"].toDouble(), 0, 'f', 3).arg(m["expressionMaxMm"].toDouble(), 0, 'f', 1);
+        }
+        for (const QString& w : rep.warnings) t += QStringLiteral("  note: %1\n").arg(w);
         if (!out.isEmpty()) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
         CLIPipeline::writeOutput(t);
     }

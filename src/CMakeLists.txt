@@ -232,6 +232,8 @@ DNA/DnaReader.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
 DNA/DnaRigLogic.cpp
+DNA/DnaArkitMap.cpp
+DNA/DnaFaceBake.cpp
 DNA/DnaCorrectiveManager.cpp
 Mocap/VideoFrameSource.cpp
 Mocap/OneEuroFilter.cpp

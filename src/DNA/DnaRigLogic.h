@@ -54,13 +54,13 @@ public:
                                                 const ReadOptions& options = ReadOptions(),
                                                 QString* error = nullptr);
 
-    int jointCount() const;
+    virtual int jointCount() const;
     virtual QString jointName(int joint) const;
     int jointIndex(const QString& name) const;          ///< -1 if absent
 
-    int rawControlCount() const;
-    QString rawControlName(int index) const;
-    int rawControlIndex(const QString& name) const;     ///< -1 if absent
+    virtual int rawControlCount() const;
+    virtual QString rawControlName(int index) const;
+    virtual int rawControlIndex(const QString& name) const;     ///< -1 if absent
 
     /// Joints that feed rotation quaternions into the rig (raw controls named
     /// "<joint>.qx"). For a body: the ~44 driver joints.
@@ -72,7 +72,7 @@ public:
     virtual int rbfPoseCount() const;
 
     virtual void resetControls();
-    void setRawControl(int index, float value);
+    virtual void setRawControl(int index, float value);
     /// Feed a driver joint's rotation relative to neutral, quaternion (w,x,y,z).
     /// Returns false when `joint` is not a driver. The sign is normalised to
     /// w >= 0 (the RBF targets are authored in that hemisphere).
@@ -84,7 +84,7 @@ public:
     /// Absolute local transform of every driven joint for the current controls.
     virtual std::vector<JointPose> drivenPoses() const;
     /// Absolute local transform of one joint (neutral + delta).
-    JointPose jointPose(int joint) const;
+    virtual JointPose jointPose(int joint) const;
 
     /// Raw joint output delta (9 floats per joint), as RigLogic produced them.
     std::vector<float> jointDeltas() const;

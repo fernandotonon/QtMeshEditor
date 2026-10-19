@@ -20,6 +20,8 @@
 
 #include <cmath>
 
+namespace { constexpr double kPi = 3.14159265358979323846; }  // M_PI is not portable (MSVC/MinGW)
+
 using namespace Dna;
 
 namespace {
@@ -73,7 +75,7 @@ private:
 
 std::array<double, 4> aboutZ(double degrees)
 {
-    const double h = degrees * M_PI / 360.0;
+    const double h = degrees * kPi / 360.0;
     return {std::cos(h), 0.0, 0.0, std::sin(h)};
 }
 
@@ -151,8 +153,8 @@ TEST_F(DnaCorrectiveSceneTest, DriverRotationIsReadRelativeToNeutral)
     ASSERT_TRUE(m->attach(entityName, rig));
     ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(rig->lastDriver[0], std::cos(M_PI / 4), 1e-4);
-    EXPECT_NEAR(rig->lastDriver[3], std::sin(M_PI / 4), 1e-4);
+    EXPECT_NEAR(rig->lastDriver[0], std::cos(kPi / 4), 1e-4);
+    EXPECT_NEAR(rig->lastDriver[3], std::sin(kPi / 4), 1e-4);
     EXPECT_GE(rig->calcs, 1);
 }
 
@@ -165,13 +167,13 @@ TEST_F(DnaCorrectiveSceneTest, CorrectiveBoneIsWrittenAsAnAbsoluteLocalTransform
     EXPECT_NEAR(bone("Corr")->getPosition().y, 0.0f, 1e-5f);
     ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (M_PI / 2), 1e-3);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
     // Evaluating again must not accumulate (the skeleton is re-posed first).
     ASSERT_TRUE(m->evaluateNow());
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (M_PI / 2), 1e-3);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
     // The driver itself carries neutral * delta.
     EXPECT_NEAR(std::abs(bone("Child")->getOrientation().Dot(
-                    bone("Child")->getInitialOrientation() * Ogre::Quaternion(Ogre::Radian(M_PI / 2), Ogre::Vector3::UNIT_Z))),
+                    bone("Child")->getInitialOrientation() * Ogre::Quaternion(Ogre::Radian(kPi / 2), Ogre::Vector3::UNIT_Z))),
                 1.0f, 1e-4f);
 }
 
@@ -191,7 +193,7 @@ TEST_F(DnaCorrectiveSceneTest, DisablingRestoresPlainSkinningButKeepsThePreviewP
 
     m->setEnabled(true);
     EXPECT_GT(bone("Corr")->getPosition().y, 0.1f);
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (M_PI / 2), 1e-3);
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
 }
 
 TEST_F(DnaCorrectiveSceneTest, ClearingOverridesReturnsTheCharacterToRest)
@@ -245,6 +247,57 @@ TEST_F(DnaCorrectiveSceneTest, ADestroyedEntityIsDroppedEvenWhileCorrectivesAreO
     entity = nullptr;
     m->evaluateNow();
     EXPECT_EQ(m->characterCount(), 0);
+}
+
+TEST_F(DnaCorrectiveSceneTest, DisablingKeepsAnAnimationSkipSomeoneElseHeld)
+{
+    // PoseLibrary / mocap may already own setSkipAnimationStateUpdate(true).
+    entity->setSkipAnimationStateUpdate(true);
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    ASSERT_TRUE(m->evaluateNow());
+    m->setEnabled(false);
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());   // given back as found, not forced to false
+    m->detach(entityName);
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+}
+
+TEST_F(DnaCorrectiveSceneTest, DetachingANeverEvaluatedCharacterLeavesAnExternalHoldAlone)
+{
+    entity->setSkipAnimationStateUpdate(true);   // owned by someone else
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    // No evaluateNow(): the manager never took the flag, so it must not release it.
+    m->detach(entityName);
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+    m->attach(entityName, std::make_shared<FakeRig>());
+    m->clear();
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+}
+
+TEST_F(DnaCorrectiveSceneTest, ADetachedCharacterIsHandedBackToOgre)
+{
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
+    ASSERT_TRUE(m->evaluateNow());
+    EXPECT_TRUE(entity->getSkipAnimationStateUpdate());
+    m->detach(entityName);
+    EXPECT_FALSE(entity->getSkipAnimationStateUpdate());
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5f, 1e-5f);   // corrective bone back at neutral
+}
+
+TEST_F(DnaCorrectiveSceneTest, ClearRestoresLiveEntitiesBeforeForgettingThem)
+{
+    auto* m = DnaCorrectiveManager::instance();
+    ASSERT_TRUE(m->attach(entityName, std::make_shared<FakeRig>()));
+    ASSERT_TRUE(m->evaluateNow());
+    ASSERT_TRUE(entity->getSkipAnimationStateUpdate());
+    m->clear();
+    EXPECT_EQ(m->characterCount(), 0);
+    // Without the restore the entity would stay frozen on its last corrected pose.
+    EXPECT_FALSE(entity->getSkipAnimationStateUpdate());
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5f, 1e-5f);
 }
 
 TEST_F(DnaCorrectiveSceneTest, SkinnedPositionsFollowTheBentDriver)

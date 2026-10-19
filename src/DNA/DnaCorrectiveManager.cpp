@@ -25,6 +25,7 @@ struct DnaCorrectiveManager::Character {
     Stats stats;
     QHash<QString, std::array<double, 4>> overrides;   // joint -> delta wxyz
     bool skipping = false;   ///< we set setSkipAnimationStateUpdate on the entity
+    bool priorSkip = false;  ///< the flag's value when we took it over (PoseLibrary / mocap may own it)
 };
 
 namespace {
@@ -117,8 +118,9 @@ bool DnaCorrectiveManager::attach(const QString& entityName, std::shared_ptr<Dna
 
 void DnaCorrectiveManager::detach(const QString& entityName)
 {
-    if (m_chars.remove(entityName)) {
-        restorePlain(entityName);
+    if (m_chars.contains(entityName)) {
+        restorePlain(entityName);   // before the record (and its prior-skip state) is dropped
+        m_chars.remove(entityName);
         emit changed();
     }
 }
@@ -126,6 +128,10 @@ void DnaCorrectiveManager::detach(const QString& entityName)
 void DnaCorrectiveManager::clear()
 {
     if (m_chars.isEmpty()) return;
+    // A live entity must get plain skinning and its skip flag back: once the
+    // records are gone nothing would ever restore it.
+    for (auto it = m_chars.cbegin(); it != m_chars.cend(); ++it)
+        restorePlain(it.key());
     m_chars.clear();
     emit changed();
 }
@@ -155,11 +161,18 @@ void DnaCorrectiveManager::restorePlain(const QString& name)
 {
     Ogre::Entity* e = entityByName(name);
     auto it = m_chars.constFind(name);
-    if (it != m_chars.constEnd()) it.value()->skipping = false;
+    // Only undo what we actually did: a character that was attached but never
+    // evaluated never took the skip flag, so another subsystem's hold (PoseLibrary,
+    // mocap) must be left exactly as it is.
+    const bool tookControl = it != m_chars.constEnd() && it.value()->skipping;
+    if (!tookControl) return;
+    it.value()->skipping = false;
     if (!e || !e->hasSkeleton()) return;
     // Hand sampling back to Ogre and re-pose from the clips: with nothing
     // playing, no later frame would overwrite the last corrected pose.
-    e->setSkipAnimationStateUpdate(false);
+    // Give the flag back as we found it: another subsystem may have been holding a pose.
+    const bool prior = it != m_chars.constEnd() ? it.value()->priorSkip : false;
+    e->setSkipAnimationStateUpdate(prior);
     if (Ogre::AnimationStateSet* states = e->getAllAnimationStates()) {
         e->getSkeleton()->setAnimationState(*states);
         states->_notifyDirty();
@@ -179,6 +192,7 @@ bool DnaCorrectiveManager::applyTo(const QString& name, Character& c, bool corre
     // included, to its neutral), then stop Ogre re-sampling over our writes.
     if (Ogre::AnimationStateSet* states = e->getAllAnimationStates()) skel->setAnimationState(*states);
     else skel->reset(false);
+    if (!c.skipping) c.priorSkip = e->getSkipAnimationStateUpdate();   // remember it once, on first takeover
     e->setSkipAnimationStateUpdate(true);
     c.skipping = true;
 
