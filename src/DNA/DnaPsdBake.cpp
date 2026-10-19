@@ -100,6 +100,12 @@ std::vector<PoseSpace::Set> cachedBake(const QString& path, const Rig& rig, RigE
     h.addData(QByteArray::number(fi.size()));
     h.addData(QByteArray::number(fi.lastModified().toMSecsSinceEpoch()));
     h.addData("qpsd1-sampling-6x3");
+    // the rig the sets were baked from depends on how it was READ: LOD, unit scale, facing turn, vertex count
+    h.addData(QByteArray::number(rig.lod));
+    h.addData(QByteArray::number(rig.unitScale[0], 'g', 12));
+    h.addData(rig.facingTurned ? "turned" : "file-facing");
+    h.addData(QByteArray::number(qulonglong(rig.meshes.size())));
+    for (const Mesh& m : rig.meshes) h.addData(QByteArray::number(qulonglong(m.positions.size())));
     const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/dna_psd");
     const QString cache = dir + QLatin1Char('/') + QString::fromLatin1(h.result().toHex()) + QStringLiteral(".qpsd");
     std::vector<PoseSpace::Set> sets;

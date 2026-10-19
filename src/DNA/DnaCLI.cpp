@@ -1005,10 +1005,10 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         // linear part) and the fit warp (its local linear part), see Psd::transferThroughWarp.
         // an in-editor fit keeps going without correctives when they cannot be built (the fit itself is fine);
         // an explicit --bake-correctives request fails instead
-        const bool soft = a.bakeCorrectives.isEmpty();
+        const bool soft = a.bakeCorrectives.isEmpty() && a.checkPose.isEmpty();
         auto problem = [&](const QString& m) {
             if (!soft) { err(QStringLiteral("Error: pose-space correctives: %1\n").arg(m)); return 1; }
-            fr.warnings << QStringLiteral("Pose-space correctives were not built (%1); the body keeps plain skinning.").arg(m);
+            fr.warnings << QStringLiteral("Pose-space correctives were not built (%1); the body keeps the RigLogic bone correctives of the original proportions.").arg(m);
             return 0;
         };
         QString evErr;
