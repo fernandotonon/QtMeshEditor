@@ -12,6 +12,10 @@
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QQmlEngine>
+#include <QThread>
+
+#include <memory>
+#include <vector>
 
 #include <OgreAny.h>
 #include <OgreEntity.h>
@@ -74,6 +78,12 @@ DnaFitController::DnaFitController(QObject* parent) : QObject(parent)
     refresh();
 }
 
+DnaFitController::~DnaFitController()
+{
+    // never leave the worker running against a destroyed controller
+    if (m_thread) { m_thread->wait(); delete m_thread; m_thread = nullptr; }
+}
+
 DnaFitController* DnaFitController::instance()
 {
     if (!m_pSingleton) m_pSingleton = new DnaFitController();
@@ -111,6 +121,7 @@ void DnaFitController::refresh()
 
 bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
 {
+    if (m_busy) return false;
     const Pair p = selectedPair();
     if (!p.dna || !p.target || p.entities != 2) {
         m_status = QStringLiteral("Select the MetaHuman body and the character to fit it to.");
@@ -122,29 +133,52 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     const QString src = sourcePathOf(p.dna);
     SentryReporter::addBreadcrumb("ui.action", QStringLiteral("dna fit mode=%1").arg(mode));
 
-    m_status = QStringLiteral("Fitting (%1)… the editor is busy for a few seconds.").arg(mode);
-    emit changed();
-    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);   // let the status paint before the solver blocks
-
+    // Everything the solver reads from the live target is copied here, on the main thread (it locks GPU buffers and
+    // walks the live skeleton); the solve itself touches no Ogre object and runs on a worker.
+    const std::shared_ptr<Dna::DnaCLI::TargetSnapshot> snapshot = Dna::DnaCLI::snapshotTarget(p.target);
     Dna::DnaCLI::FitOptions o;
     o.mode = mode;
     o.alignLimbs = alignLimbs;
     o.poses = true;
-    o.poseSpace = true;   // the fitted body gets correctives for ITS proportions (cached bake + warp transfer)
-    std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace;
-    auto rig = std::make_shared<Dna::Rig>();
-    QVariantMap report;
-    QString err;
-    bool ok = false;
-    try {
-        ok = Dna::DnaCLI::fitEntityReport(src, p.target, o, rig.get(), &report, &err, &poseSpace);
-    } catch (const std::exception& e) {
-        err = QString::fromUtf8(e.what());
-    }
+    o.poseSpace = true;   // the fitted body gets correctives for ITS proportions (cached bake + transfer)
+
+    struct Job {
+        std::shared_ptr<Dna::Rig> rig = std::make_shared<Dna::Rig>();
+        std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace;
+        QVariantMap report;
+        QString err;
+        bool ok = false;
+    };
+    auto job = std::make_shared<Job>();
+    m_busy = true;
+    m_status = QStringLiteral("Fitting (%1)… running in the background; the editor stays usable.").arg(mode);
+    emit changed();
+
+    if (m_thread) { m_thread->wait(); delete m_thread; m_thread = nullptr; }
+    m_thread = QThread::create([job, snapshot, src, o]() {
+        try {
+            job->ok = Dna::DnaCLI::fitSnapshotReport(src, snapshot, o, job->rig.get(), &job->report, &job->err, &job->poseSpace);
+        } catch (const std::exception& e) {
+            job->err = QString::fromUtf8(e.what());
+        } catch (...) {
+            job->err = QStringLiteral("unknown error");
+        }
+    });
+    connect(m_thread, &QThread::finished, this, [this, job, mode, src]() { finishFit(job->ok, job->rig, job->poseSpace, job->report, job->err, mode, src); },
+            Qt::QueuedConnection);
+    m_thread->start();
+    return true;
+}
+
+void DnaFitController::finishFit(bool ok, const std::shared_ptr<Dna::Rig>& rig,
+                                 const std::shared_ptr<std::vector<PoseSpace::Set>>& poseSpace,
+                                 const QVariantMap& report, const QString& err, const QString& mode, const QString& src)
+{
+    m_busy = false;
     if (!ok) {
         m_status = QStringLiteral("Fit failed: %1").arg(err);
         emit changed();
-        return false;
+        return;
     }
     auto* cmd = new AddFittedDnaCharacterCommand(rig, src, QFileInfo(src).completeBaseName() + QStringLiteral("_fitted"), poseSpace);
     // push() runs redo() and deletes a command that marked itself obsolete (a failed build): read the shared
@@ -155,7 +189,7 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     if (!outcome->created) {
         m_status = QStringLiteral("The fit worked but the fitted character could not be built: %1").arg(outcome->error);
         emit changed();
-        return false;
+        return;
     }
     double worstStretchP99 = 0;
     for (const QVariant& v : report.value("poses").toList()) worstStretchP99 = std::max(worstStretchP99, v.toMap().value("stretchDeltaP99").toDouble());
@@ -174,5 +208,4 @@ bool DnaFitController::fitSelected(const QString& modeIn, bool alignLimbs)
     }
     for (const QString& w : report.value("warnings").toStringList()) m_status += QStringLiteral("\n• ") + w;
     emit changed();
-    return true;
 }

@@ -71,9 +71,9 @@ Column {
     }
 
     ToolBtn {
-        label: "Fit body to selected character"
+        label: DnaFitController.busy ? "Fitting…" : "Fit body to selected character"
         accent: true
-        enabled: DnaFitController.canFit
+        enabled: DnaFitController.canFit && !DnaFitController.busy
         tip: "Fits the MetaHuman body to the selected character and adds the result as a new node (Ctrl+Z removes it)."
         onClicked: DnaFitController.fitSelected(modeBox.ids[modeBox.currentIndex], true)
     }

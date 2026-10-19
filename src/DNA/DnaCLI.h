@@ -8,6 +8,7 @@
 
 #include "../PoseSpaceRbf.h"
 #include "DnaReader.h"
+#include "DnaFit.h"
 
 #include <QString>
 #include <memory>
@@ -38,6 +39,23 @@ bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptio
 
 /// The same fit against a LIVE entity (the editor's "Fit DNA body" action). `fittedRig` receives the
 /// fitted rig (when the fit re-posed the limbs it is the re-posed one). Nothing is added to the scene.
+/// Everything the fit reads from the target entity, copied out on the MAIN thread (it locks GPU buffers and walks the
+/// live skeleton) so the solver itself can run on a worker thread without touching Ogre.
+struct TargetSnapshot {
+    std::vector<std::pair<QString, std::array<double, 3>>> bones;   ///< bind-pose world position of every bone
+    std::vector<float> surfacePos;                                  ///< all submeshes merged: x,y,z per vertex
+    std::vector<int> surfaceTris;
+    std::vector<int> surfaceGroup;                                  ///< body part of each surface vertex (-1 = none)
+    std::vector<Fit::ImportedSubmesh> bindSubmeshes;                ///< per submesh positions + UVs (same-topology matching)
+    bool hasSkeleton = false;
+};
+std::shared_ptr<TargetSnapshot> snapshotTarget(Ogre::Entity* target);
+
+/// fitEntityReport on a snapshot: thread-safe (no Ogre, no scene), what the editor's background fit runs.
+bool fitSnapshotReport(const QString& dnaPath, std::shared_ptr<TargetSnapshot> snapshot, const FitOptions& options,
+                       Rig* fittedRig, QVariantMap* report, QString* error,
+                       std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpace = nullptr);
+
 bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOptions& options, Rig* fittedRig,
                      QVariantMap* report, QString* error, std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpace = nullptr);
 }

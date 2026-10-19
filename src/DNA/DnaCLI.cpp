@@ -750,7 +750,45 @@ QVariantMap poseRows(const Fit::PoseReport& p)
     return m;
 }
 
+// The BIND pose of a skeleton, read without touching the entity: setBindingPose() would record whatever the character
+// is doing right now (an animation, an edited bone) as its new rest pose — fine for a throw-away imported copy,
+// destructive for a live one. Compose each bone's initial transform down the hierarchy instead.
+std::vector<std::pair<QString, std::array<double, 3>>> bindBonesOf(Ogre::Entity* te)
+{
+    std::vector<std::pair<QString, std::array<double, 3>>> bones;
+    if (!te || !te->hasSkeleton()) return bones;
+    Ogre::SkeletonInstance* sk = te->getSkeleton();
+    std::map<unsigned short, Ogre::Matrix4> world;
+    std::function<const Ogre::Matrix4&(Ogre::Bone*)> bindWorld = [&](Ogre::Bone* bone) -> const Ogre::Matrix4& {
+        auto it = world.find(bone->getHandle());
+        if (it != world.end()) return it->second;
+        Ogre::Matrix4 local;
+        local.makeTransform(bone->getInitialPosition(), bone->getInitialScale(), bone->getInitialOrientation());
+        auto* parent = dynamic_cast<Ogre::Bone*>(bone->getParent());
+        return world[bone->getHandle()] = parent ? Ogre::Matrix4(bindWorld(parent) * local) : local;
+    };
+    for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
+        Ogre::Bone* bone = sk->getBone(b);
+        const Ogre::Vector3 p = bindWorld(bone).getTrans();
+        bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
+    }
+    return bones;
+}
+
 }  // namespace
+
+std::shared_ptr<TargetSnapshot> snapshotTarget(Ogre::Entity* target)
+{
+    auto s = std::make_shared<TargetSnapshot>();
+    if (!target) return s;
+    s->hasSkeleton = target->hasSkeleton();
+    s->bones = bindBonesOf(target);
+    if (!surfaceOf(target, s->surfacePos, s->surfaceTris, &s->surfaceGroup)) {
+        s->surfacePos.clear(); s->surfaceTris.clear(); s->surfaceGroup.clear();
+    }
+    s->bindSubmeshes = bindPositionsOf(target);
+    return s;
+}
 
 struct FitArgs {
     QString path, targetPath, writeDna, out, referencePath, bakeCorrectives;
@@ -759,6 +797,7 @@ struct FitArgs {
     bool refineSurface = false;      ///< with registerJoints: refine the shape onto the target surface afterwards
     bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
     Ogre::Entity* targetEntity = nullptr;   ///< fit to this live entity instead of importing targetPath
+    std::shared_ptr<TargetSnapshot> snapshot;   ///< or to this copy of it: no Ogre access (background thread)
     std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpaceOut = nullptr;   ///< in-editor fits: receives the transferred pose-space sets (fittedRigOut's rig carries their channels)
     QString checkPose;              ///< "joint=axis:deg[,...]": import the fitted body WITH its pose-space correctives, bend it, report what they move
     Rig* fittedRigOut = nullptr;            ///< receives the fitted rig (the limb-aligned base when the fit re-posed it)
@@ -781,7 +820,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
         return 1;
     }
-    const bool needScene = !targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty() || !a.checkPose.isEmpty();
+    const bool needScene = !a.snapshot && (!targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty() || !a.checkPose.isEmpty());
     if (needScene && a.headless && !CLIPipeline::initOgreHeadless()) return 1;
     // Nodes the fit creates (the imported target, the exported fitted character) are removed again when
     // running inside the editor (MCP): the CLI process exits, the editor must not keep them.
@@ -834,7 +873,8 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         for (const Mesh& m : tr.rig.meshes) target.push_back(m.positions);
     } else {
         Ogre::Entity* te = a.targetEntity;
-        if (!te) {
+        const TargetSnapshot* snap = a.snapshot.get();
+        if (!te && !snap) {
             MeshImporterExporter::clearLastImportError();
             // The target is the entity this import ADDS: inside the editor the scene already holds the
             // user's meshes, and the traversal order is not the import order.
@@ -845,7 +885,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
                 for (auto* o : Manager::getSingleton()->getEntities())
                 if (o && o->getMovableType() == "Entity" && !entitiesBefore.count(static_cast<Ogre::Entity*>(o))) te = static_cast<Ogre::Entity*>(o);
         }
-        if (!te) {
+        if (!te && !snap) {
             const QString why = MeshImporterExporter::lastImportError();
             err(QStringLiteral("Error: could not import the target %1%2\n")
                                            .arg(targetPath, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
@@ -853,28 +893,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         }
         if (registerJoints) {
             // pair the target's skeleton with the MetaHuman joints and warp the body onto its proportions
-            std::vector<std::pair<QString, std::array<double, 3>>> bones;
-            if (te->hasSkeleton()) {
-                // The BIND pose, read without touching the entity: setBindingPose() would record whatever the
-                // character is doing right now (an animation, an edited bone) as its new rest pose — fine for a
-                // throw-away imported copy, destructive for a live one. Compose each bone's initial transform
-                // down the hierarchy instead.
-                Ogre::SkeletonInstance* sk = te->getSkeleton();
-                std::map<unsigned short, Ogre::Matrix4> world;
-                std::function<const Ogre::Matrix4&(Ogre::Bone*)> bindWorld = [&](Ogre::Bone* bone) -> const Ogre::Matrix4& {
-                    auto it = world.find(bone->getHandle());
-                    if (it != world.end()) return it->second;
-                    Ogre::Matrix4 local;
-                    local.makeTransform(bone->getInitialPosition(), bone->getInitialScale(), bone->getInitialOrientation());
-                    auto* parent = dynamic_cast<Ogre::Bone*>(bone->getParent());
-                    return world[bone->getHandle()] = parent ? Ogre::Matrix4(bindWorld(parent) * local) : local;
-                };
-                for (unsigned short b = 0; b < sk->getNumBones(); ++b) {
-                    Ogre::Bone* bone = sk->getBone(b);
-                    const Ogre::Vector3 p = bindWorld(bone).getTrans();
-                    bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
-                }
-            }
+            const std::vector<std::pair<QString, std::array<double, 3>>> bones = snap ? snap->bones : bindBonesOf(te);
             if (bones.empty()) { err(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
             QStringList unmatched;
             const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
@@ -882,7 +901,9 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             if (a.refineSurface) {
                 std::vector<float> tpos;
                 std::vector<int> ttri, tgroup;
-                if (!surfaceOf(te, tpos, ttri, &tgroup)) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
+                const bool haveSurface = snap ? !snap->surfaceTris.empty() : surfaceOf(te, tpos, ttri, &tgroup);
+                if (snap && haveSurface) { tpos = snap->surfacePos; ttri = snap->surfaceTris; tgroup = snap->surfaceGroup; }
+                if (!haveSurface) { err(QStringLiteral("Error: the target has no triangle surface to refine onto\n")); return 1; }
                 jr = Fit::registerJointsThenSurface(src.rig, anchors, tpos, ttri, !noAlignLimbs, 8, 6, &tgroup);
             } else {
                 jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
@@ -903,7 +924,9 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
         } else if (doRegister) {
             std::vector<float> tpos;
             std::vector<int> ttri;
-            if (!surfaceOf(te, tpos, ttri)) { err(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
+            const bool haveSurface = snap ? !snap->surfaceTris.empty() : surfaceOf(te, tpos, ttri);
+            if (snap && haveSurface) { tpos = snap->surfacePos; ttri = snap->surfaceTris; }
+            if (!haveSurface) { err(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
             Fit::RegisterOptions ropt;
             ropt.stiffness = a.stiffness;
             if (a.registerMethod == QLatin1String("nricp")) ropt.method = Fit::RegisterOptions::Method::Nricp;
@@ -918,7 +941,7 @@ static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<vo
             registration.insert("warnings", rr.warnings);
             matchedFraction = 1.0;
         } else {
-        const Fit::Correspondence c = Fit::matchImported(src.rig, bindPositionsOf(te));
+        const Fit::Correspondence c = Fit::matchImported(src.rig, snap ? snap->bindSubmeshes : bindPositionsOf(te));
         if (!c.ok) { err(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
         target = c.positions;
         seamMm = c.maxSeamSplitMm;
@@ -1472,6 +1495,30 @@ bool fitEntityReport(const QString& dnaPath, Ogre::Entity* target, const FitOpti
     FitArgs a;
     a.path = dnaPath;
     a.targetEntity = target;
+    a.fittedRigOut = fittedRig;
+    a.poseSpaceOut = options.poseSpace ? poseSpace : nullptr;
+    a.poses = options.poses;
+    a.registerJoints = options.mode == QLatin1String("joints") || options.mode == QLatin1String("joints+surface");
+    a.refineSurface = options.mode == QLatin1String("joints+surface");
+    a.doRegister = options.mode == QLatin1String("surface");
+    a.noAlignLimbs = !options.alignLimbs;
+    if (!options.alignLimbs && !a.registerJoints) { if (error) *error = QStringLiteral("align_limbs=false only applies with the skeleton modes"); return false; }
+    a.headless = false;
+    QString msg;
+    QVariantMap local;
+    const int rc = fitCore(a, local, [&](const QString& m) { msg += m; });
+    if (rc != 0) { if (error) *error = msg.trimmed().isEmpty() ? QStringLiteral("the fit failed") : msg.trimmed(); return false; }
+    if (report) *report = local;
+    return true;
+}
+
+bool fitSnapshotReport(const QString& dnaPath, std::shared_ptr<TargetSnapshot> snapshot, const FitOptions& options, Rig* fittedRig,
+                       QVariantMap* report, QString* error, std::shared_ptr<std::vector<PoseSpace::Set>>* poseSpace)
+{
+    if (!snapshot) { if (error) *error = QStringLiteral("no target"); return false; }
+    FitArgs a;
+    a.path = dnaPath;
+    a.snapshot = std::move(snapshot);
     a.fittedRigOut = fittedRig;
     a.poseSpaceOut = options.poseSpace ? poseSpace : nullptr;
     a.poses = options.poses;

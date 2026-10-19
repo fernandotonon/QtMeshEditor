@@ -9,9 +9,16 @@
 // touched, so Ctrl+Z (AddFittedDnaCharacterCommand) fully reverts it.
 
 #include <QObject>
+#include <QVariantMap>
+#include <memory>
+#include <vector>
+
+#include "../PoseSpaceRbf.h"
 #include <QString>
 #include <QtQml/qqmlregistration.h>
 
+namespace Dna { struct Rig; }
+class QThread;
 class QQmlEngine;
 class QJSEngine;
 
@@ -25,6 +32,7 @@ class DnaFitController : public QObject
     Q_PROPERTY(QString hint READ hint NOTIFY changed)
     Q_PROPERTY(QString status READ status NOTIFY changed)
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY changed)
+    Q_PROPERTY(bool busy READ busy NOTIFY changed)
 
 public:
     static DnaFitController* instance();
@@ -38,7 +46,11 @@ public:
     QString status() const { return m_status; }
     /// A DNA character is in the scene at all (the section is shown only then).
     bool hasSelection() const { return m_hasDna; }
+    /// A fit is running on its worker thread (the editor stays responsive; the button is disabled meanwhile).
+    bool busy() const { return m_busy; }
 
+    /// Starts the fit and returns at once (true = started). The solver runs on a worker thread on a COPY of the
+    /// target's data taken here; the result is committed on the main thread when it finishes.
     /// mode: "auto" (joints when the target has a skeleton, else topology), "topology", "joints", "surface".
     Q_INVOKABLE bool fitSelected(const QString& mode = QStringLiteral("auto"), bool alignLimbs = true);
     Q_INVOKABLE void refresh();
@@ -48,8 +60,12 @@ signals:
 
 private:
     explicit DnaFitController(QObject* parent = nullptr);
+    ~DnaFitController() override;
+    void finishFit(bool ok, const std::shared_ptr<Dna::Rig>& rig, const std::shared_ptr<std::vector<PoseSpace::Set>>& poseSpace,
+                   const QVariantMap& report, const QString& err, const QString& mode, const QString& src);
     static DnaFitController* m_pSingleton;
-    bool m_canFit = false, m_hasDna = false;
+    bool m_canFit = false, m_hasDna = false, m_busy = false;
+    QThread* m_thread = nullptr;
     QString m_hint, m_status;
 };
 
