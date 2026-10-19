@@ -616,6 +616,7 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
     // 1. skeleton: facing, limb pose and proportions (a smooth warp from matched joints)
     JointRegisterResult r = registerByJoints(rig, anchors, alignLimbPose);
     if (!r.ok) return r;
+    const bool symmetrize = qgetenv("QTMESH_WRAP_SYMMETRIZE") != "0";
     // 2. surface: refine the shape from that start. The template is the ALIGNED rig's meshes carried through
     //    the joint warp; the ICP then pulls it onto the surface.
     std::vector<float> X;
@@ -669,6 +670,120 @@ JointRegisterResult registerJointsThenSurface(const Rig& rig, const std::vector<
         r.ok = false;
         r.error = QStringLiteral("surface refinement failed: %1").arg(err);
         return r;
+    }
+    // A body is left/right symmetric but a target's clothing is not (one trouser leg folds, one sleeve hangs
+    // differently). Average each vertex's displacement with its mirror partner's (the template is symmetric, so the
+    // partner is the vertex nearest to the mirrored start position), which keeps the target's overall shape and drops
+    // the one-sided cloth wrinkles.
+    if (symmetrize) {
+        const size_t N = X.size() / 3;
+        std::vector<std::array<float, 3>> st(N);
+        for (size_t mi : imported) {
+            const auto& P = r.positions[mi];
+            for (size_t v = 0; v < P.size() / 3; ++v) st[offset[mi] + v] = {P[v * 3], P[v * 3 + 1], P[v * 3 + 2]};
+        }
+        float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+        for (const auto& q : st) for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], q[size_t(a)]); hi[a] = std::max(hi[a], q[size_t(a)]); }
+        const float diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) + (hi[2] - lo[2]) * (hi[2] - lo[2]));
+        // the side axis is the one the left/right limbs differ along: the widest horizontal extent
+        int side = (hi[0] - lo[0] >= hi[2] - lo[2]) ? 0 : 2;
+        const float cx = 0.5f * (lo[size_t(side)] + hi[size_t(side)]);
+        const float cell = std::max(1e-4f, diag * 0.01f);
+        auto cellOf = [&](float v) { return (long long)std::floor(v / cell); };
+        auto key = [](long long a, long long b, long long c) { return (a * 73856093LL) ^ (b * 19349663LL) ^ (c * 83492791LL); };
+        std::unordered_map<long long, std::vector<size_t>> grid;
+        for (size_t i = 0; i < N; ++i) grid[key(cellOf(st[i][0]), cellOf(st[i][1]), cellOf(st[i][2]))].push_back(i);
+        std::vector<std::array<float, 3>> d(N);
+        for (size_t i = 0; i < N; ++i) for (int a = 0; a < 3; ++a) d[i][size_t(a)] = X[i * 3 + size_t(a)] - st[i][size_t(a)];
+        std::vector<float> maxDist(1, diag * 0.02f);
+        // a whole-body shift is not asymmetry: symmetrise the deviation from the mean displacement only
+        double md[3] = {0, 0, 0};
+        for (size_t i = 0; i < N; ++i) for (int a = 0; a < 3; ++a) md[a] += d[i][size_t(a)];
+        for (int a = 0; a < 3; ++a) md[a] /= double(std::max<size_t>(1, N));
+        for (size_t i = 0; i < N; ++i) for (int a = 0; a < 3; ++a) d[i][size_t(a)] -= float(md[a]);
+        for (size_t i = 0; i < N; ++i) {
+            if (extremity[i]) continue;
+            std::array<float, 3> m = st[i];
+            m[size_t(side)] = 2 * cx - m[size_t(side)];
+            const long long ca = cellOf(m[0]), cb = cellOf(m[1]), cc = cellOf(m[2]);
+            double best = 1e30; size_t bj = i;
+            for (long long da = -1; da <= 1; ++da) for (long long db = -1; db <= 1; ++db) for (long long dc = -1; dc <= 1; ++dc) {
+                auto g = grid.find(key(ca + da, cb + db, cc + dc));
+                if (g == grid.end()) continue;
+                for (size_t j : g->second) {
+                    const double dx = st[j][0] - m[0], dy = st[j][1] - m[1], dz = st[j][2] - m[2];
+                    const double dd = dx * dx + dy * dy + dz * dz;
+                    if (dd < best) { best = dd; bj = j; }
+                }
+            }
+            if (bj == i || best > double(maxDist[0]) * double(maxDist[0])) continue;
+            std::array<float, 3> dm = d[bj];
+            dm[size_t(side)] = -dm[size_t(side)];
+            for (int a = 0; a < 3; ++a) X[i * 3 + size_t(a)] = st[i][size_t(a)] + float(md[a]) + 0.5f * (d[i][size_t(a)] + dm[size_t(a)]);
+        }
+    }
+    // The surface warp is global and smooth, so it also scaled the (unmatched) hands and feet along with the baggy
+    // trousers/sleeves above them. Put each extremity back to its skeleton-aligned shape and carry it RIGIDLY by
+    // the mean displacement of the 40 nearest matched vertices of the same limb, so it follows without growing.
+    {
+        std::vector<std::array<float, 3>> start(X.size() / 3);
+        for (size_t mi : imported) {
+            const auto& P = r.positions[mi];
+            for (size_t v = 0; v < P.size() / 3; ++v) start[offset[mi] + v] = {P[v * 3], P[v * 3 + 1], P[v * 3 + 2]};
+        }
+        for (int g = 0; g < 5; ++g) {
+            std::vector<size_t> ext, body;
+            for (size_t i = 0; i < extremity.size(); ++i) {
+                if (tmplGroup[i] != g) continue;
+                (extremity[i] ? ext : body).push_back(i);
+            }
+            if (ext.empty() || body.empty()) continue;
+            double c[3] = {0, 0, 0};
+            for (size_t i : ext) for (int a = 0; a < 3; ++a) c[a] += start[i][size_t(a)];
+            for (int a = 0; a < 3; ++a) c[a] /= double(ext.size());
+            std::vector<std::pair<double, size_t>> d;
+            d.reserve(body.size());
+            for (size_t b : body) {
+                const double dx = start[b][0] - c[0], dy = start[b][1] - c[1], dz = start[b][2] - c[2];
+                d.push_back({dx * dx + dy * dy + dz * dz, b});
+            }
+            const size_t k = std::min<size_t>(40, d.size());
+            std::partial_sort(d.begin(), d.begin() + std::ptrdiff_t(k), d.end());
+            double t[3] = {0, 0, 0};
+            for (size_t q = 0; q < k; ++q) for (int a = 0; a < 3; ++a) t[a] += X[d[q].second * 3 + size_t(a)] - start[d[q].second][size_t(a)];
+            for (int a = 0; a < 3; ++a) t[a] /= double(k);
+            // blend: at the joint with the matched limb the surface result is kept (no step where the calf grew), and
+            // it fades to the rigid carry over the next few centimetres, so the foot keeps its own proportions
+            float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f};
+            for (size_t b : body) for (int a = 0; a < 3; ++a) { lo[a] = std::min(lo[a], start[b][size_t(a)]); hi[a] = std::max(hi[a], start[b][size_t(a)]); }
+            const double diag = std::sqrt(double((hi[0] - lo[0]) * (hi[0] - lo[0]) + (hi[1] - lo[1]) * (hi[1] - lo[1]) + (hi[2] - lo[2]) * (hi[2] - lo[2])));
+            const double d0 = 0.004 * diag, d1 = 0.045 * diag;
+            std::vector<size_t> sub;   // body vertices nearest the extremity, to keep the distance search cheap
+            {
+                std::vector<std::pair<double, size_t>> bd;
+                for (size_t b : body) {
+                    const double dx = start[b][0] - c[0], dy = start[b][1] - c[1], dz = start[b][2] - c[2];
+                    bd.push_back({dx * dx + dy * dy + dz * dz, b});
+                }
+                const size_t m = std::min<size_t>(1500, bd.size());
+                std::partial_sort(bd.begin(), bd.begin() + std::ptrdiff_t(m), bd.end());
+                for (size_t q = 0; q < m; ++q) sub.push_back(bd[q].second);
+            }
+            for (size_t i : ext) {
+                double nd = 1e30;
+                for (size_t b : sub) {
+                    const double dx = start[b][0] - start[i][0], dy = start[b][1] - start[i][1], dz = start[b][2] - start[i][2];
+                    nd = std::min(nd, dx * dx + dy * dy + dz * dz);
+                }
+                nd = std::sqrt(nd);
+                double w = 1.0 - std::min(1.0, std::max(0.0, (nd - d0) / (d1 - d0)));
+                w = w * w * (3 - 2 * w);
+                for (int a = 0; a < 3; ++a) {
+                    const float rigid = start[i][size_t(a)] + float(t[a]);
+                    X[i * 3 + size_t(a)] = rigid + float(w) * (X[i * 3 + size_t(a)] - rigid);
+                }
+            }
+        }
     }
     for (size_t mi : imported) {
         const size_t np = r.alignedRig.meshes[mi].positions.size() / 3;
