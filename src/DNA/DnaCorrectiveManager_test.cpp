@@ -211,7 +211,8 @@ TEST_F(DnaCorrectiveSceneTest, DisablingRestoresPlainSkinningButKeepsThePreviewP
 
     m->setEnabled(true);
     EXPECT_GT(bone("Corr")->getPosition().y, 0.1f);
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.1 * (kPi / 2), 1e-3);
+    // correctives apply as a DELTA on the bone's own bind (initial 0.5): bind + (rig output - rig neutral)
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5 + 0.1 * (kPi / 2), 1e-3);
 }
 
 TEST_F(DnaCorrectiveSceneTest, ClearingOverridesReturnsTheCharacterToRest)
@@ -221,7 +222,7 @@ TEST_F(DnaCorrectiveSceneTest, ClearingOverridesReturnsTheCharacterToRest)
     ASSERT_TRUE(m->setPoseOverride(entityName, "Child", aboutZ(90)));
     ASSERT_TRUE(m->evaluateNow());
     m->clearPoseOverrides(entityName);
-    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.0f, 1e-5f);   // rig output at rest
+    EXPECT_NEAR(bone("Corr")->getPosition().y, 0.5f, 1e-5f);   // rig output at rest = the bone's own bind
     EXPECT_NEAR(std::abs(bone("Child")->getOrientation().Dot(Ogre::Quaternion::IDENTITY)), 1.0f, 1e-5f);
 }
 
