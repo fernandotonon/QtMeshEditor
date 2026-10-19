@@ -1,4 +1,6 @@
 #include "DnaCLI.h"
+#include <functional>
+#include <set>
 #include "DnaReader.h"
 
 #include "../CLIPipeline.h"
@@ -708,56 +710,41 @@ QVariantMap poseRows(const Fit::PoseReport& p)
 
 }  // namespace
 
-static int runFit(int argc, char* argv[])
-{
+struct FitArgs {
     QString path, targetPath, writeDna, out;
-    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
+    bool poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
+    bool headless = true;     ///< CLI process (may init Ogre, nothing to clean up) vs inside the editor (MCP)
     double uniformScale = 0.0;
-    bool sawDna = false, sawFit = false;
-    for (int i = 1; i < argc; ++i) {
-        const QString a = QString::fromLocal8Bit(argv[i]);
-        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
-        if (!sawDna && a == "dna") { sawDna = true; continue; }
-        if (!sawFit && a == "fit") { sawFit = true; continue; }
-        if (a == "--json") json = true;
-        else if (a == "--poses") poses = true;
-        else if (a == "--lods") lods = true;
-        else if (a == "--register") doRegister = true;
-        else if (a == "--register-joints") registerJoints = true;
-        else if (a == "--no-align-limbs") noAlignLimbs = true;
-        else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
-        else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
-        else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
-        else if (a == "--uniform-scale" && i + 1 < argc) {
-            bool ok = false;
-            uniformScale = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
-            if (!ok || !std::isfinite(uniformScale) || uniformScale <= 0) {
-                CLIPipeline::writeCliError(QStringLiteral("Error: --uniform-scale expects a positive number\n"));
-                return 2;
-            }
-        }
-        else if (a == "-h" || a == "--help") { usage(); return 0; }
-        else if (!a.startsWith('-') && path.isEmpty()) path = a;
-        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
-    }
-    if (path.isEmpty() || targetPath.isEmpty()) { usage(); return 2; }
-    if (doRegister && registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --register and --register-joints are alternatives; pass one\n")); return 2; }
-    if ((doRegister || registerJoints || noAlignLimbs) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
-        return 2;
-    }
-    if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
+};
+
+// The fit itself, shared by `qtmesh dna fit` and MCP `fit_dna_body`. Returns 0 on success (report filled);
+// otherwise an exit code with the message already passed to `err`.
+static int fitCore(const FitArgs& a, QVariantMap& report, const std::function<void(const QString&)>& err)
+{
+    const QString& path = a.path;
+    const QString& targetPath = a.targetPath;
+    const QString& writeDna = a.writeDna;
+    const QString& out = a.out;
+    const bool poses = a.poses, lods = a.lods, doRegister = a.doRegister, registerJoints = a.registerJoints, noAlignLimbs = a.noAlignLimbs;
+    const double uniformScale = a.uniformScale;
     if (!available()) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
+        err(QStringLiteral("Error: MetaHuman DNA support is not compiled into this build. "
                                                   "Rebuild QtMeshEditor with -DENABLE_OPENRIGLOGIC=ON.\n"));
         return 1;
     }
     const bool needScene = !targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive) || !out.isEmpty();
-    if (needScene && !CLIPipeline::initOgreHeadless()) return 1;
+    if (needScene && a.headless && !CLIPipeline::initOgreHeadless()) return 1;
+    // Nodes the fit creates (the imported target, the exported fitted character) are removed again when
+    // running inside the editor (MCP): the CLI process exits, the editor must not keep them.
+    struct NodeCleanup {
+        bool active; std::set<QString> before;
+        explicit NodeCleanup(bool on) : active(on) { if (on) for (auto* n : Manager::getSingleton()->getSceneNodes()) before.insert(QString::fromStdString(n->getName())); }
+        ~NodeCleanup() { if (!active) return; QList<Ogre::SceneNode*> add; for (auto* n : Manager::getSingleton()->getSceneNodes()) if (!before.count(QString::fromStdString(n->getName()))) add << n; for (auto* n : add) Manager::getSingleton()->destroySceneNode(n); }
+    } cleanup(!a.headless && needScene);
 
     ReadOptions ro;
     const ReadResult src = read(QFileInfo(path).absoluteFilePath(), ro);
-    if (!src.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
+    if (!src.ok) { err(QStringLiteral("Error: %1\n").arg(src.error)); return 1; }
 
     // ---- the target, as one position array per rig mesh ----
     bool rigChanged = false;
@@ -769,9 +756,9 @@ static int runFit(int argc, char* argv[])
     QVariantMap registration;
     if (targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
         const ReadResult tr = read(QFileInfo(targetPath).absoluteFilePath(), ro);
-        if (!tr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
+        if (!tr.ok) { err(QStringLiteral("Error: target: %1\n").arg(tr.error)); return 1; }
         if (tr.rig.meshes.size() != src.rig.meshes.size()) {
-            CLIPipeline::writeCliError(QStringLiteral("Error: the target DNA has %1 meshes, the source %2 (a different "
+            err(QStringLiteral("Error: the target DNA has %1 meshes, the source %2 (a different "
                                                       "topology is not supported)\n").arg(tr.rig.meshes.size()).arg(src.rig.meshes.size()));
             return 1;
         }
@@ -784,7 +771,7 @@ static int runFit(int argc, char* argv[])
             if (o && o->getMovableType() == "Entity") te = static_cast<Ogre::Entity*>(o);
         if (!te) {
             const QString why = MeshImporterExporter::lastImportError();
-            CLIPipeline::writeCliError(QStringLiteral("Error: could not import the target %1%2\n")
+            err(QStringLiteral("Error: could not import the target %1%2\n")
                                            .arg(targetPath, why.isEmpty() ? QString() : QStringLiteral(": ") + why));
             return 1;
         }
@@ -801,11 +788,11 @@ static int runFit(int argc, char* argv[])
                     bones.push_back({QString::fromStdString(bone->getName()), {double(p.x), double(p.y), double(p.z)}});
                 }
             }
-            if (bones.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
+            if (bones.empty()) { err(QStringLiteral("Error: --register-joints needs a target with a skeleton\n")); return 1; }
             QStringList unmatched;
             const auto anchors = Fit::matchJointAnchors(bones, &unmatched);
             const Fit::JointRegisterResult jr = Fit::registerByJoints(src.rig, anchors, !noAlignLimbs);
-            if (!jr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
+            if (!jr.ok) { err(QStringLiteral("Error: joint registration: %1\n").arg(jr.error)); return 1; }
             target = jr.positions;
             baseRig = jr.alignedRig;
             rigChanged = jr.limbChainsAligned > 0 || jr.yawDegrees != 0.0;
@@ -820,9 +807,9 @@ static int runFit(int argc, char* argv[])
         } else if (doRegister) {
             std::vector<float> tpos;
             std::vector<int> ttri;
-            if (!surfaceOf(te, tpos, ttri)) { CLIPipeline::writeCliError(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
+            if (!surfaceOf(te, tpos, ttri)) { err(QStringLiteral("Error: the target has no triangle surface\n")); return 1; }
             const Fit::RegisterResult rr = Fit::registerToSurface(src.rig, tpos, ttri);
-            if (!rr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: registration: %1\n").arg(rr.error)); return 1; }
+            if (!rr.ok) { err(QStringLiteral("Error: registration: %1\n").arg(rr.error)); return 1; }
             target = rr.positions;
             registration.insert("alignScale", rr.alignScale);
             registration.insert("templateVertices", rr.templateVertices);
@@ -833,7 +820,7 @@ static int runFit(int argc, char* argv[])
             matchedFraction = 1.0;
         } else {
         const Fit::Correspondence c = Fit::matchImported(src.rig, bindPositionsOf(te));
-        if (!c.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
+        if (!c.ok) { err(QStringLiteral("Error: %1\n").arg(c.error)); return 1; }
         target = c.positions;
         seamMm = c.maxSeamSplitMm;
         matchedByUv = c.matchedByUv;
@@ -844,14 +831,14 @@ static int runFit(int argc, char* argv[])
     }
 
     if (rigChanged && (lods || !writeDna.isEmpty())) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: --lods and --write-dna are not supported together with limb pose alignment "
+        err(QStringLiteral("Error: --lods and --write-dna are not supported together with limb pose alignment "
                                                   "(the DNA keeps the original neutral orientations and facing); add --no-align-limbs and use a target that already faces the same way\n"));
         return 2;
     }
     const Fit::Result fr = Fit::fit(baseRig, target);
-    if (!fr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
+    if (!fr.ok) { err(QStringLiteral("Error: %1\n").arg(fr.error)); return 1; }
 
-    QVariantMap report;
+    report.clear();
     report.insert("verticesMatched", fr.verticesMatched);
     report.insert("controlPoints", fr.controlPoints);
     report.insert("meanVertexShiftMm", fr.meanVertexShiftMm);
@@ -896,7 +883,7 @@ static int runFit(int argc, char* argv[])
     if (!writeDna.isEmpty()) {
         const Fit::WriteResult wr = Fit::writeFittedDna(QFileInfo(path).absoluteFilePath(), src.rig, fr.fitted, fr.warp,
                                                         QFileInfo(writeDna).absoluteFilePath());
-        if (!wr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(wr.error)); return 1; }
+        if (!wr.ok) { err(QStringLiteral("Error: %1\n").arg(wr.error)); return 1; }
         // Read it back: serialisation is only trustworthy if it round-trips.
         const ReadResult rb = read(QFileInfo(writeDna).absoluteFilePath(), ro);
         QVariantMap v;
@@ -924,7 +911,7 @@ static int runFit(int argc, char* argv[])
         if (!rb.ok || !ev) {
             // an output that cannot be read back / evaluated is not a result: do not leave it behind
             QFile::remove(QFileInfo(writeDna).absoluteFilePath());
-            CLIPipeline::writeCliError(QStringLiteral("Error: the written DNA failed validation (%1) and was removed\n")
+            err(QStringLiteral("Error: the written DNA failed validation (%1) and was removed\n")
                                            .arg(!rb.ok ? QStringLiteral("it does not read back") : QStringLiteral("RigLogic cannot load it: %1").arg(evErr)));
             return 1;
         }
@@ -934,22 +921,70 @@ static int runFit(int argc, char* argv[])
         QString ierr;
         Ogre::SceneNode* node = importRigToScene(fr.fitted, QFileInfo(out).completeBaseName() + QStringLiteral("_fitted"), nullptr, &ierr);
         if (!node || MeshImporterExporter::exporter(node, QFileInfo(out).absoluteFilePath(), CLIPipeline::formatForExtension(out)) != 0) {
-            CLIPipeline::writeCliError(QStringLiteral("Error: could not export the fitted character%1\n")
+            err(QStringLiteral("Error: could not export the fitted character%1\n")
                                            .arg(ierr.isEmpty() ? QString() : QStringLiteral(": ") + ierr));
             return 1;
         }
         report.insert("output", QFileInfo(out).absoluteFilePath());
     }
+    return 0;
+}
 
+static int runFit(int argc, char* argv[])
+{
+    QString path, targetPath, writeDna, out;
+    bool json = false, poses = false, lods = false, doRegister = false, registerJoints = false, noAlignLimbs = false;
+    double uniformScale = 0.0;
+    bool sawDna = false, sawFit = false;
+    for (int i = 1; i < argc; ++i) {
+        const QString a = QString::fromLocal8Bit(argv[i]);
+        if (a == "--cli" || a == "--verbose" || a == "--no-telemetry") continue;
+        if (!sawDna && a == "dna") { sawDna = true; continue; }
+        if (!sawFit && a == "fit") { sawFit = true; continue; }
+        if (a == "--json") json = true;
+        else if (a == "--poses") poses = true;
+        else if (a == "--lods") lods = true;
+        else if (a == "--register") doRegister = true;
+        else if (a == "--register-joints") registerJoints = true;
+        else if (a == "--no-align-limbs") noAlignLimbs = true;
+        else if (a == "--target" && i + 1 < argc) targetPath = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--write-dna" && i + 1 < argc) writeDna = QString::fromLocal8Bit(argv[++i]);
+        else if ((a == "-o" || a == "--output") && i + 1 < argc) out = QString::fromLocal8Bit(argv[++i]);
+        else if (a == "--uniform-scale" && i + 1 < argc) {
+            bool ok = false;
+            uniformScale = QString::fromLocal8Bit(argv[++i]).toDouble(&ok);
+            if (!ok || !std::isfinite(uniformScale) || uniformScale <= 0) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --uniform-scale expects a positive number\n"));
+                return 2;
+            }
+        }
+        else if (a == "-h" || a == "--help") { usage(); return 0; }
+        else if (!a.startsWith('-') && path.isEmpty()) path = a;
+        else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown argument %1\n").arg(a)); return 2; }
+    }
+    if (path.isEmpty() || targetPath.isEmpty()) { usage(); return 2; }
+    if (doRegister && registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --register and --register-joints are alternatives; pass one\n")); return 2; }
+    if ((doRegister || registerJoints || noAlignLimbs) && targetPath.endsWith(QStringLiteral(".dna"), Qt::CaseInsensitive)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: --register / --register-joints / --no-align-limbs apply to a mesh target with its own skeleton; a .dna target has the same topology and needs none\n"));
+        return 2;
+    }
+    if (noAlignLimbs && !registerJoints) { CLIPipeline::writeCliError(QStringLiteral("Error: --no-align-limbs only applies with --register-joints\n")); return 2; }
+    FitArgs fa;
+    fa.path = path; fa.targetPath = targetPath; fa.writeDna = writeDna; fa.out = out;
+    fa.poses = poses; fa.lods = lods; fa.doRegister = doRegister; fa.registerJoints = registerJoints;
+    fa.noAlignLimbs = noAlignLimbs; fa.uniformScale = uniformScale; fa.headless = true;
+    QVariantMap report;
+    const int rc = fitCore(fa, report, [](const QString& m) { CLIPipeline::writeCliError(m); });
+    if (rc != 0) return rc;
     if (json) {
         CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
     } else {
         QString t = QStringLiteral("Fitted %1 joints to %2 matched vertices (%3 RBF control points).\n"
                                    "  mesh moved by mean %4 mm / max %5 mm; joints moved by mean %6 mm / max %7 mm; "
                                    "warp misses a vertex by at most %8 mm\n")
-                        .arg(report["joints"].toInt()).arg(fr.verticesMatched).arg(fr.controlPoints)
-                        .arg(fr.meanVertexShiftMm, 0, 'f', 1).arg(fr.maxVertexShiftMm, 0, 'f', 1)
-                        .arg(fr.meanJointShiftMm, 0, 'f', 1).arg(fr.maxJointShiftMm, 0, 'f', 1).arg(fr.warpResidualMm, 0, 'f', 2);
+                        .arg(report["joints"].toInt()).arg(report["verticesMatched"].toInt()).arg(report["controlPoints"].toInt())
+                        .arg(report["meanVertexShiftMm"].toDouble(), 0, 'f', 1).arg(report["maxVertexShiftMm"].toDouble(), 0, 'f', 1)
+                        .arg(report["meanJointShiftMm"].toDouble(), 0, 'f', 1).arg(report["maxJointShiftMm"].toDouble(), 0, 'f', 1).arg(report["warpResidualMm"].toDouble(), 0, 'f', 2);
         for (const QVariant& v : report.value("poses").toList()) {
             const QVariantMap m = v.toMap();
             t += QStringLiteral("  pose %1: stretch delta max %2 (p99 %3)").arg(m["pose"].toString(), -24)
@@ -974,11 +1009,35 @@ static int runFit(int argc, char* argv[])
                      .arg(w["roundTripMaxJointMm"].toDouble(), 0, 'f', 4).arg(w["rigLogicLoads"].toBool() ? "yes" : "NO");
             for (const QString& n : w["notes"].toStringList()) t += QStringLiteral("  note: %1\n").arg(n);
         }
-        for (const QString& w : fr.warnings) t += QStringLiteral("  warning: %1\n").arg(w);
+        for (const QString& w : report.value("warnings").toStringList()) t += QStringLiteral("  warning: %1\n").arg(w);
         if (report.contains("output")) t += QStringLiteral("Wrote %1\n").arg(report["output"].toString());
         CLIPipeline::writeOutput(t);
     }
     return 0;
+}
+
+bool fitReport(const QString& dnaPath, const QString& targetPath, const FitOptions& options, QVariantMap* report, QString* error)
+{
+    FitArgs a;
+    a.path = dnaPath;
+    a.targetPath = targetPath;
+    a.writeDna = options.outputDna;
+    a.out = options.outputMesh;
+    a.poses = options.poses;
+    a.lods = options.lods;
+    a.registerJoints = options.mode == QLatin1String("joints");
+    a.doRegister = options.mode == QLatin1String("surface");
+    a.noAlignLimbs = !options.alignLimbs;
+    a.headless = false;   // inside the editor: Ogre is up, and created nodes are cleaned afterwards
+    QString msg;
+    QVariantMap local;
+    const int rc = fitCore(a, local, [&](const QString& m) { msg += m; });
+    if (rc != 0) {
+        if (error) *error = msg.trimmed().isEmpty() ? QStringLiteral("the fit failed") : msg.trimmed();
+        return false;
+    }
+    if (report) *report = local;
+    return true;
 }
 
 }  // namespace DnaCLI
