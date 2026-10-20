@@ -9856,6 +9856,10 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
             "Error: the entity is not skinned — body capture retargets onto a "
             "humanoid skeleton (auto_rig with skin:true first).");
 
+    // By NAME (and mesh identity): the model download and the event pumping below can remove or replace the entity.
+    const std::string samEntityName = entity->getName();
+    const Ogre::Mesh* samSourceMesh = entity->getMesh().get();
+
     // SAM 3D Body backend (#1100): decode the file, solve every kept frame, write ONE undoable clip through the retargeter.
     // `algo` defaults to sam3dbody; it falls back to pose-ik (with the reason) when SAM is unavailable.
     QString samFallback;
@@ -9880,7 +9884,6 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                 bool samFinished = false;
                 QString samStreamError;
                 bool samTruncated = false;
-                const std::string samEntityName = entity->getName();   // by NAME: the entity may be gone after the event pumping below
                 QObject::connect(&samSource, &VideoFrameSource::frameReady, [&](const MocapFrame& f) {
                     if (frames.size() >= 1200) { samTruncated = true; samFinished = true; samLoop.quit(); return; }   // stop decoding, report it
                     frames.push_back(SamBody::downscaledForCapture(f.image));
@@ -9915,6 +9918,8 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                         target = m2->getSceneMgr()->getEntity(samEntityName);
                     if (!target)
                         return makeErrorResult("Error: the target entity was removed while the capture ran");
+                    if (target->getMesh().get() != samSourceMesh)
+                        return makeErrorResult("Error: the target entity changed while the capture ran");
                     auto* cmd = new RecordBodyClipCommand(samEntityName, seq, 0, samOptions);   // the decoded timestamps
                     UndoManager::getSingleton()->push(cmd);
                     MocapRecorder::BodyRecordReport report = cmd->report();

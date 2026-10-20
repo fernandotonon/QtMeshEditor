@@ -2032,12 +2032,8 @@ void MocapController::stopPreview()
         d->cameraStartupTimer->deleteLater();
         d->cameraStartupTimer = nullptr;
     }
-    if (d->busy) {
-        // a SAM solve is pumping events inside stopRecording(); tearing the session down under it would free what it uses
-        d->cancelCapture = true;
-        setStatusMessage(tr("A SAM 3D Body solve is running: cancelling it first — click Stop again afterwards."));
-        return;
-    }
+    // (A SAM solve may be running: it owns its frames/times on its own thread and finishes into the undo stack, so the live
+    // preview can be torn down underneath it.)
     if (d->state == Recording)
         stopRecording();  // commit the take rather than dropping it (samSession stays set until it has been solved)
 
@@ -2252,6 +2248,8 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
     };
     if (d->state != Idle)
         return fail(tr("Stop the live preview first."));
+    if (d->busy)
+        return fail(tr("A capture is already running."));
     if (imagePaths.size() < 2)
         return fail(tr("Pick at least 2 pose images."));
 
