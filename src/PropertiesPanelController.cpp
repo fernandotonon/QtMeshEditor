@@ -1,5 +1,6 @@
 #include <QWidget>
 #include "PropertiesPanelController.h"
+#include "PoseSpaceRbf.h"
 #include "SceneTreeModel.h"
 #include "LightsController.h"
 #include "LightManager.h"
@@ -1090,7 +1091,7 @@ QVariantList PropertiesPanelController::animationData() const
             for (const auto& [key, state] : states->getAnimationStates())
             {
                 const QString name = QString::fromStdString(key);
-                if (morphNames.contains(name)) continue;   // blend shape, not a clip
+                if (morphNames.contains(name) || PoseSpace::isChannelName(name)) continue;   // blend shape / pose-space channel, not a clip
                 QVariantMap anim;
                 anim["name"] = name;
                 anim["enabled"] = state->getEnabled();

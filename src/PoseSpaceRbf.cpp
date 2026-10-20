@@ -1,9 +1,11 @@
 #include "PoseSpaceRbf.h"
 
+#include <QDataStream>
 #include <QJsonArray>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace PoseSpace {
 
@@ -199,6 +201,98 @@ bool Set::fromJson(const QJsonObject& o, Set* out, QString* error)
     }
     if (!s.solve(error)) return false;
     *out = std::move(s);
+    return true;
+}
+
+QString channelName(const QString& setName, size_t index)
+{
+    return QStringLiteral("PSD|%1|%2").arg(setName).arg(index);
+}
+
+bool isChannelName(const QString& name)
+{
+    return name.startsWith(QLatin1String("PSD|"));
+}
+
+namespace {
+constexpr char kMagic[] = "QPSD1";
+constexpr quint32 kMaxSets = 4096, kMaxSamples = 1u << 20, kMaxDrivers = 64, kMaxVertices = 1u << 26;
+}  // namespace
+
+bool writeBinary(QIODevice* out, const std::vector<Set>& sets, QString* error)
+{
+    auto fail = [&](const QString& m) { if (error) *error = m; return false; };
+    if (!out || !out->isWritable()) return fail(QStringLiteral("the output is not writable"));
+    QDataStream ds(out);
+    ds.setVersion(QDataStream::Qt_6_0);
+    ds.writeRawData(kMagic, 5);
+    ds << quint32(sets.size());
+    for (const Set& s : sets) {
+        ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+        ds << s.name << s.drivers << double(s.sigma) << double(s.ridge) << quint32(s.samples.size());
+        for (const Sample& sm : s.samples) {
+            for (const Quat& q : sm.rotations) for (double c : q) ds << c;
+            ds << quint32(sm.vertices.size());
+            for (uint32_t v : sm.vertices) ds << quint32(v);
+            ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            for (float d : sm.deltas) ds << d;
+            ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+        }
+    }
+    return ds.status() == QDataStream::Ok ? true : fail(QStringLiteral("writing failed"));
+}
+
+bool readBinary(QIODevice* in, std::vector<Set>* sets, QString* error)
+{
+    auto fail = [&](const QString& m) { if (error) *error = m; return false; };
+    if (!in || !in->isReadable()) return fail(QStringLiteral("the input is not readable"));
+    QDataStream ds(in);
+    ds.setVersion(QDataStream::Qt_6_0);
+    char magic[5] = {0};
+    if (ds.readRawData(magic, 5) != 5 || std::memcmp(magic, kMagic, 5) != 0)
+        return fail(QStringLiteral("not a QPSD1 corrective file"));
+    quint32 nsets = 0;
+    ds >> nsets;
+    if (ds.status() != QDataStream::Ok || nsets > kMaxSets) return fail(QStringLiteral("corrupt corrective file (set count)"));
+    std::vector<Set> out;
+    for (quint32 si = 0; si < nsets; ++si) {
+        Set s;
+        double sigma = 0, ridge = 0;
+        quint32 nsamples = 0;
+        ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+        ds >> s.name >> s.drivers >> sigma >> ridge >> nsamples;
+        if (ds.status() != QDataStream::Ok || s.drivers.isEmpty() || quint32(s.drivers.size()) > kMaxDrivers || nsamples > kMaxSamples
+            || !std::isfinite(sigma) || !std::isfinite(ridge))
+            return fail(QStringLiteral("corrupt corrective file (set header)"));
+        s.sigma = sigma;
+        s.ridge = ridge;
+        for (quint32 k = 0; k < nsamples; ++k) {
+            Sample sm;
+            for (int d = 0; d < s.drivers.size(); ++d) {
+                Quat q;
+                for (double& c : q) { ds >> c; if (!std::isfinite(c)) return fail(QStringLiteral("corrupt corrective file (rotation)")); }
+                const double len = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+                if (len < 1e-9) return fail(QStringLiteral("corrupt corrective file (zero rotation)"));
+                for (double& c : q) c /= len;
+                sm.rotations.push_back(q);
+            }
+            quint32 nv = 0;
+            ds >> nv;
+            if (ds.status() != QDataStream::Ok || nv > kMaxVertices) return fail(QStringLiteral("corrupt corrective file (vertex count)"));
+            sm.vertices.resize(nv);
+            for (quint32 v = 0; v < nv; ++v) { quint32 x; ds >> x; sm.vertices[v] = x; }
+            ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+            sm.deltas.resize(size_t(nv) * 3);
+            for (float& d : sm.deltas) { ds >> d; if (!std::isfinite(d)) return fail(QStringLiteral("corrupt corrective file (delta)")); }
+            ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+            if (ds.status() != QDataStream::Ok) return fail(QStringLiteral("truncated corrective file"));
+            s.samples.push_back(std::move(sm));
+        }
+        QString serr;
+        if (!s.solve(&serr)) return fail(QStringLiteral("corrupt corrective file (%1)").arg(serr));
+        out.push_back(std::move(s));
+    }
+    *sets = std::move(out);
     return true;
 }
 

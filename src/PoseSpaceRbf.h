@@ -17,6 +17,7 @@
 // implicit sample with zero offsets (so the correction fades out toward the bind pose), and between
 // samples the correction blends smoothly. Pure data, Ogre-free: unit-tested without a scene.
 
+#include <QIODevice>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -73,6 +74,18 @@ private:
     double m_sigma = 0;
     bool m_solved = false;
 };
+
+/// Compact binary container for a collection of sets (the JSON of a MetaHuman body is ~32 MB, this is ~8 MB and
+/// reads in milliseconds): "QPSD1", then per set its name, drivers, sigma, ridge and samples. Little-endian via
+/// QDataStream; vertex deltas are stored as 32-bit floats. readBinary solves every set and rejects a truncated or
+/// malformed stream with a reason (the vertex indices, counts and rotations are all range-checked).
+bool writeBinary(QIODevice* out, const std::vector<Set>& sets, QString* error = nullptr);
+bool readBinary(QIODevice* in, std::vector<Set>* sets, QString* error = nullptr);
+
+/// The name of the Ogre/blend-shape channel that carries sample `index` of `set`: the runtime looks the poses up by it.
+QString channelName(const QString& setName, size_t index);
+/// True for names produced by channelName() (UI lists use it to hide these from the morph-target panel).
+bool isChannelName(const QString& name);
 
 /// Solve A x = b (dense, partial-pivot LU). Exposed for tests. Returns false when singular.
 bool solveLinear(std::vector<double> A, std::vector<double>& B, size_t n, size_t rhs);

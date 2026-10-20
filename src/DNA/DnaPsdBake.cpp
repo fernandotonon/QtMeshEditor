@@ -1,6 +1,13 @@
 #include "DnaPsdBake.h"
 
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QStandardPaths>
+
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 
@@ -31,7 +38,136 @@ bool invert3(const std::array<float, 9>& m, double out[9])
     return true;
 }
 
+
+// A fit warp can stretch a body part two- to fourfold along one axis where the target's clothing is baggy (measured
+// on Rumba Dancing: 22 % of the offsets would have grown past 2x, up to 4x, and a corrected knee moved 270 mm). A
+// corrective should follow the part's ROTATION and its overall SIZE, not that shear: replace J by (volume scale,
+// clamped to [0.5, 2.5]) x (its closest rotation, by Newton polar iteration).
+void orthogonalWithSize(double J[3][3])
+{
+    auto det3 = [](const double m[3][3]) {
+        return m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+               m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    };
+    const double det = det3(J);
+    double s = std::cbrt(std::max(det, 1e-9));
+    s = std::min(2.5, std::max(0.5, s));
+    double R[3][3];
+    for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) R[r][c] = J[r][c];
+    for (int it = 0; it < 12; ++it) {
+        const double d = det3(R);
+        if (std::abs(d) < 1e-12) break;
+        // inverse transpose via cofactors: (R^-T)[r][c] = cofactor(r,c) / det
+        double T[3][3];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 3; ++c) {
+                const int r1 = (r + 1) % 3, r2 = (r + 2) % 3, c1 = (c + 1) % 3, c2 = (c + 2) % 3;
+                T[r][c] = (R[r1][c1] * R[r2][c2] - R[r1][c2] * R[r2][c1]) / d;
+            }
+        for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) R[r][c] = 0.5 * (R[r][c] + T[r][c]);
+    }
+    for (int r = 0; r < 3; ++r) for (int c = 0; c < 3; ++c) J[r][c] = s * R[r][c];
+}
+
 }  // namespace
+
+void applyVertexLinear(std::vector<PoseSpace::Set>& sets, const std::vector<std::vector<std::array<float, 9>>>& lin)
+{
+    std::vector<size_t> start;
+    size_t total = 0;
+    for (const auto& m : lin) { start.push_back(total); total += m.size(); }
+    for (PoseSpace::Set& set : sets)
+        for (PoseSpace::Sample& sm : set.samples)
+            for (size_t k = 0; k < sm.vertices.size(); ++k) {
+                const uint32_t g = sm.vertices[k];
+                size_t mi = start.size();
+                while (mi-- > 0) if (g >= start[mi]) break;
+                if (mi >= lin.size() || g - start[mi] >= lin[mi].size()) continue;
+                const auto& A = lin[mi][g - start[mi]];
+                float* d = &sm.deltas[k * 3];
+                const double x = d[0], y = d[1], z = d[2];
+                d[0] = float(A[0] * x + A[1] * y + A[2] * z);
+                d[1] = float(A[3] * x + A[4] * y + A[5] * z);
+                d[2] = float(A[6] * x + A[7] * y + A[8] * z);
+            }
+}
+
+std::vector<PoseSpace::Set> cachedBake(const QString& path, const Rig& rig, RigEvaluator& ev, QStringList* notes)
+{
+    const QFileInfo fi(path);
+    QCryptographicHash h(QCryptographicHash::Sha1);
+    h.addData(fi.absoluteFilePath().toUtf8());
+    h.addData(QByteArray::number(fi.size()));
+    h.addData(QByteArray::number(fi.lastModified().toMSecsSinceEpoch()));
+    h.addData("qpsd1-sampling-6x3");
+    // the rig the sets were baked from depends on how it was READ: LOD, unit scale, facing turn, vertex count
+    h.addData(QByteArray::number(rig.lod));
+    h.addData(QByteArray::number(rig.unitScale[0], 'g', 12));
+    h.addData(rig.facingTurned ? "turned" : "file-facing");
+    h.addData(QByteArray::number(qulonglong(rig.meshes.size())));
+    for (const Mesh& m : rig.meshes) h.addData(QByteArray::number(qulonglong(m.positions.size())));
+    const QString dir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/dna_psd");
+    const QString cache = dir + QLatin1Char('/') + QString::fromLatin1(h.result().toHex()) + QStringLiteral(".qpsd");
+    std::vector<PoseSpace::Set> sets;
+    {
+        QFile f(cache);
+        QString err;
+        if (f.exists() && f.open(QIODevice::ReadOnly) && PoseSpace::readBinary(&f, &sets, &err) && !sets.empty()) {
+            if (notes) *notes << QStringLiteral("Pose-space correctives loaded from the cache (%1 sets).").arg(sets.size());
+            return sets;
+        }
+        sets.clear();
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    BakeResult b = bake(rig, ev);
+    if (b.sets.empty()) return {};
+    sets = std::move(b.sets);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    QDir().mkpath(dir);
+    QFile out(cache + QStringLiteral(".tmp"));
+    if (out.open(QIODevice::WriteOnly)) {
+        QString err;
+        const bool ok = PoseSpace::writeBinary(&out, sets, &err);
+        out.close();
+        if (ok) { QFile::remove(cache); out.rename(cache); } else out.remove();
+    }
+    if (notes) *notes << QStringLiteral("Pose-space correctives baked in %1 ms (%2 sets) and cached.").arg(ms, 0, 'f', 0).arg(sets.size());
+    return sets;
+}
+
+int appendAsBlendShapes(Rig& rig, const std::vector<PoseSpace::Set>& sets)
+{
+    std::vector<uint32_t> start;
+    uint32_t total = 0;
+    for (const Mesh& m : rig.meshes) { start.push_back(total); total += uint32_t(m.positions.size() / 3); }
+    int added = 0;
+    for (const PoseSpace::Set& set : sets)
+        for (size_t i = 0; i < set.samples.size(); ++i) {
+            const PoseSpace::Sample& sm = set.samples[i];
+            const QString name = PoseSpace::channelName(set.name, i);
+            if (rig.blendShapeChannels.contains(name)) continue;
+            const int channel = rig.blendShapeChannels.size();
+            std::vector<BlendShapeTarget> per(rig.meshes.size());
+            for (BlendShapeTarget& t : per) t.channel = channel;
+            for (size_t k = 0; k < sm.vertices.size(); ++k) {
+                const uint32_t g = sm.vertices[k];
+                size_t mi = start.size();
+                while (mi-- > 0) if (g >= start[mi]) break;
+                if (mi >= rig.meshes.size()) continue;
+                const uint32_t v = g - start[mi];
+                if (size_t(v) * 3 + 2 >= rig.meshes[mi].positions.size()) continue;
+                per[mi].vertexIndices.push_back(v);
+                per[mi].deltas.insert(per[mi].deltas.end(), {sm.deltas[k * 3], sm.deltas[k * 3 + 1], sm.deltas[k * 3 + 2]});
+            }
+            bool any = false;
+            for (size_t mi = 0; mi < per.size(); ++mi)
+                if (!per[mi].vertexIndices.empty()) { rig.meshes[mi].blendShapeTargets.push_back(std::move(per[mi])); any = true; }
+            if (!any) continue;
+            rig.blendShapeChannels << name;
+            ++added;
+        }
+    return added;
+}
 
 void transferThroughWarp(std::vector<PoseSpace::Set>& sets, const Rig& original, const Fit::Warp& warp)
 {
@@ -49,7 +185,7 @@ void transferThroughWarp(std::vector<PoseSpace::Set>& sets, const Rig& original,
         p = {double(meshOf[mi]->positions[v * 3]), double(meshOf[mi]->positions[v * 3 + 1]), double(meshOf[mi]->positions[v * 3 + 2])};
         return true;
     };
-    const double h = 1e-3;   // metres; the field is smooth at this scale
+    const double h = 1e-3;   // metres
     for (PoseSpace::Set& set : sets)
         for (PoseSpace::Sample& sm : set.samples)
             for (size_t k = 0; k < sm.vertices.size(); ++k) {
@@ -63,6 +199,7 @@ void transferThroughWarp(std::vector<PoseSpace::Set>& sets, const Rig& original,
                     const auto da = warp.displacement(a), db = warp.displacement(b);
                     for (int r = 0; r < 3; ++r) J[r][c] = (r == c ? 1.0 : 0.0) + (da[size_t(r)] - db[size_t(r)]) / (2 * h);
                 }
+                orthogonalWithSize(J);
                 float* d = &sm.deltas[k * 3];
                 const double x = d[0], y = d[1], z = d[2];
                 for (int r = 0; r < 3; ++r) d[r] = float(J[r][0] * x + J[r][1] * y + J[r][2] * z);

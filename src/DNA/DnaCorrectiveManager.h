@@ -33,6 +33,7 @@
 #include <vector>
 
 namespace Dna { class RigEvaluator; }
+namespace PoseSpace { class Set; }
 namespace Ogre { class Entity; class Bone; }
 class QQmlEngine;
 class QJSEngine;
@@ -57,6 +58,14 @@ public:
     /// Returns false (and attaches nothing) when the rig has no quaternion
     /// driver joints (e.g. a head DNA — facial controls are Phase 3).
     bool attach(const QString& entityName, std::shared_ptr<Dna::RigEvaluator> evaluator);
+    /// Register a character whose correctives are generic pose-space RBF sets (PoseSpace::Set) instead of — or in
+    /// addition to — RigLogic: each frame the sets' blend weights are computed from the driver bones' rotations and
+    /// written to the entity's pose animation states (the channels PoseSpace::channelName names, attached to the
+    /// mesh at import). `evaluator` may be null (a fitted or hand-authored character has no usable RigLogic); when
+    /// given it is used only for its statistics — the sets already contain the corrective behaviour, so the bone
+    /// correctives are NOT written (that would apply every corrective twice).
+    bool attachPoseSpace(const QString& entityName, std::shared_ptr<std::vector<PoseSpace::Set>> sets,
+                         std::shared_ptr<Dna::RigEvaluator> evaluator = nullptr);
     void detach(const QString& entityName);
     void clear();
     bool isAttached(const QString& entityName) const;
@@ -78,6 +87,8 @@ public:
         int missingDriven = 0;    ///< corrective joints the skeleton does not have (folded by the 256-bone limit)
         double calcMs = 0.0;      ///< RigLogic time of the last frame
         double applyMs = 0.0;     ///< bone-write time of the last frame
+        int poseSpaceSets = 0;    ///< pose-space sets driving this character (0 = RigLogic bone correctives)
+        int poseSpaceActive = 0;  ///< samples with a non-zero weight on the last frame
     };
     Stats statsFor(const QString& entityName) const;
     /// JSON-friendly stats for MCP / CLI.

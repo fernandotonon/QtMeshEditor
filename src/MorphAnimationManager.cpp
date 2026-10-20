@@ -9,6 +9,7 @@ The MIT License
 */
 
 #include "MorphAnimationManager.h"
+#include "PoseSpaceRbf.h"
 
 #include "AnimationControlController.h"
 #include "PropertiesPanelController.h"
@@ -115,6 +116,7 @@ QStringList MorphAnimationManager::morphTargetsFor(Ogre::Entity* entity) const
         const Ogre::String n = p->getName();
         if (n.empty()) continue;
         const QString qn = QString::fromStdString(n);
+        if (PoseSpace::isChannelName(qn)) continue;   // pose-space corrective channels are driven by the rig, not user morph targets
         if (seen.contains(qn)) continue;   // coalesce same-named poses
         seen.insert(qn);
         out << qn;

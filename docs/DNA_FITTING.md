@@ -295,6 +295,33 @@ Measured on SKM_Body.dna, 12 seeded-random held-out poses (seed 1) with ~25 % of
 offset through the fit warp's local linear part J = I + ∇displacement (`Psd::transferThroughWarp`): a uniform ×1.25 warp
 scales every offset by exactly 1.25 (unit test), and a limb that grew thicker gets a proportionally bigger bulge.
 
-Not done yet: evaluating the sets in the viewport (they need Ogre poses attached to the mesh before the entity exists, the
-same constraint as the face morph targets), a binary format (the JSON of the body is ~32 MB), a GUI, and fits that re-pose
-the rig (limb alignment rotates the driver axes, so the offsets would have to be rotated with it).
+### Running them in the viewport
+
+`ImportOptions::poseSpaceCorrectives` (or `QTMESH_DNA_PSD=1`) replaces the RigLogic bone correctives of an imported
+body by the baked sets: each sample becomes a blend-shape channel named `PSD|<driver>|<i>` (`PoseSpace::channelName`),
+which the importer turns into an Ogre pose on the MESH before the entity exists (the only way a skinned mesh can carry
+poses), and `DnaCorrectiveManager::attachPoseSpace` drives the pose weights every frame from the driver bones'
+rotations. The bone correctives are NOT written in that mode — the sets already contain them, and applying both would
+double every corrective. The channels are hidden from the Morph and Animation lists. The bake is cached per DNA
+(path, size, mtime) in `<AppData>/dna_psd/*.qpsd` — the compact binary container (`PoseSpace::writeBinary`, ~7 MB for the
+body vs ~32 MB of JSON), so only the first import pays the ~6 s.
+
+Measured through that path (`qtmesh dna pose body.dna --set calf_l=z:-90 --set thigh_l=x:60 --set upperarm_r=y:50
+--compare --vs-rig`), against the full rig: bone correctives mean 0.22 mm / max 12.2 mm, pose-space sets mean 0.31 mm /
+max 14.7 mm — comparable, and independent of RigLogic.
+
+### Fitted bodies
+
+The editor's Fit action now bakes the original rig's sets (cached), carries them through the fit and commits them with
+the new character, so a fitted body has correctives for ITS proportions (the status line no longer says "not
+recalibrated"). Two transfers compose: **the alignment** (limb alignment / facing yaw re-orients the joints, so each
+offset is carried through the vertex's blended alignment matrix, `Fit::blendedAlignmentLinear`) and **the warp** (its
+local linear part). A raw Jacobian stretches an offset two- to fourfold where the target is baggy (a corrected knee
+moved 270 mm on Rumba), so only its rotation and overall size are kept (`orthogonalWithSize`: volume scale clamped to
+[0.5, 2.5] times the closest rotation). Failure to build the sets never fails the fit; it adds a warning and the body
+keeps plain skinning. CLI: `qtmesh dna fit … --bake-correctives sets.qpsd` (`.qpsd` = binary, otherwise JSON) and
+`--check-pose "calf_l=z:-90,…"`, which imports the fitted body WITH its sets (the editor's commit path, headless), bends
+it and reports how far the correctives move the skin; MCP `fit_dna_body {output_correctives}`.
+
+Not done yet: a GUI to author sets for stylised characters, and the offsets are baked per driver (a pose of many
+joints at once relies on the sum of the per-driver sets: see the validation table above).

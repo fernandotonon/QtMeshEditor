@@ -3,14 +3,16 @@
 #include "DNA/DnaReader.h"
 #include "DNA/DnaRigLogic.h"
 #include "DNA/DnaScene.h"
+#include "PoseSpaceRbf.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 
 #include <OgreSceneNode.h>
 
-AddFittedDnaCharacterCommand::AddFittedDnaCharacterCommand(std::shared_ptr<Dna::Rig> rig, QString sourcePath, QString baseName)
-    : m_rig(std::move(rig)), m_sourcePath(std::move(sourcePath)), m_baseName(std::move(baseName))
+AddFittedDnaCharacterCommand::AddFittedDnaCharacterCommand(std::shared_ptr<Dna::Rig> rig, QString sourcePath, QString baseName,
+                                                           std::shared_ptr<std::vector<PoseSpace::Set>> poseSpace)
+    : m_rig(std::move(rig)), m_poseSpace(std::move(poseSpace)), m_sourcePath(std::move(sourcePath)), m_baseName(std::move(baseName))
 {
     setText(QObject::tr("Fit MetaHuman body"));
 }
@@ -37,7 +39,7 @@ void AddFittedDnaCharacterCommand::redo()
     Dna::ImportReport report;
     QString err;
     const QString name = QStringLiteral("%1_%2").arg(m_baseName).arg(++m_revision);
-    Ogre::SceneNode* node = Dna::importRigToScene(*m_rig, name, &report, &err, ev);
+    Ogre::SceneNode* node = Dna::importRigToScene(*m_rig, name, &report, &err, ev, m_poseSpace);
     if (!node) {
         m_error = err;
         m_outcome->error = err;

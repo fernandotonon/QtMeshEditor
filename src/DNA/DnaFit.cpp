@@ -316,6 +316,32 @@ LimbAlignment alignLimbs(const Rig& rig, const std::vector<std::pair<QString, st
     return out;
 }
 
+std::vector<std::vector<std::array<float, 9>>> blendedAlignmentLinear(const Rig& original, const Rig& aligned)
+{
+    std::vector<std::vector<std::array<float, 9>>> out;
+    const std::vector<Aff> w0 = worldMatrices(original), w1 = worldMatrices(aligned);
+    const size_t nj = std::min(w0.size(), w1.size());
+    std::vector<Aff> M(nj);
+    for (size_t j = 0; j < nj; ++j) M[j] = mul(w1[j], inverse(w0[j]));
+    for (const Mesh& m : original.meshes) {
+        std::vector<std::array<float, 9>> lin(m.positions.size() / 3, std::array<float, 9>{1, 0, 0, 0, 1, 0, 0, 0, 1});
+        for (size_t v = 0; v < lin.size() && v < m.skin.size(); ++v) {
+            double sum = 0;
+            for (const SkinInfluence& i : m.skin[v]) if (i.joint < nj) sum += i.weight;
+            if (sum <= 1e-12) continue;
+            double acc[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+            for (const SkinInfluence& i : m.skin[v]) {
+                if (i.joint >= nj) continue;
+                const double wgt = i.weight / sum;
+                for (int k = 0; k < 9; ++k) acc[k] += wgt * M[i.joint].a[k];
+            }
+            for (int k = 0; k < 9; ++k) lin[v][size_t(k)] = float(acc[k]);
+        }
+        out.push_back(std::move(lin));
+    }
+    return out;
+}
+
 std::vector<std::array<double, 3>> jointWorldPositions(const Rig& rig)
 {
     const std::vector<Aff> w = worldMatrices(rig);
