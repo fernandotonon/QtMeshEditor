@@ -45,3 +45,34 @@ repos with your account (`huggingface-cli login` is already set up here), then: 
 → the MHR mesh/parameters → export a mesh through the MHR TorchScript model → `qtmesh dna fit … --target <that mesh>`.
 Open questions for that step: whether inference runs on Apple MPS/CPU in usable time (not stated upstream), and a
 Python 3.11 arm64 environment (the default `python3` here is an x86_64 build whose torch cannot load).
+
+
+## Result with the original weights (access granted 2026-10-19)
+
+Run on CPU (Apple Silicon, no GPU) with `scripts/sam3dbody_photo_to_body.py` on a public-domain NASA photo (Schirra, Mercury
+suit, hands on hips; hard: the suit hides the body):
+
+* load 9.5 s, **inference 64 s on CPU** for one person (the model runs fine without CUDA once Meta's hard-coded `.cuda()`
+  calls are changed to CPU in a local clone). Output: 18,439-vertex MHR mesh (LOD 1), 70 keypoints, 45 shape + 28 scale +
+  72 expression parameters, camera translation.
+* The posed mesh reproduces the photo's pose (hands on hips, wide stance); the identity-only neutral body (shape + scale, zero
+  pose) is a plausible stocky adult man in an A-pose, 1.68 m.
+* Through our existing Fit (`qtmesh dna fit … --target <neutral body, rotated to face -Z> --register`, surface wrap, no
+  skeleton): mean surface residual 0.38 %, p95 1.8 %. The MetaHuman body takes the heavier build; the neck/shoulder seam
+  shows spikes because the body DNA has no head and the surface-only wrap has no skeleton to constrain it (joints + surface
+  needs the MHR joints as the target's skeleton: the model returns 127 joint coordinates, not yet exported with names).
+* Facing matters for the surface-only mode: the MHR neutral faces +Z and the MetaHuman import −Z; turning the target 180°
+  halved the shift (237 mm vs 301 mm mean).
+
+### Things found on the way
+* The checkpoint loads with 113 "missing" keys, all of them the MHR asset's own tensors (`head_pose.mhr.*`,
+  `hand_pose_comps_ori`, `backbone.encoder.mask_token`), which `mhr_model.pt` supplies; 0 unexpected keys.
+* The DINOv3 backbone **code** is fetched at run time with `torch.hub` from `facebookresearch/dinov3` (cached in
+  `~/.cache/torch/hub`); the weights are inside Meta's SAM checkpoint. That repository has its own licence (the DINOv3
+  License), which has to be read before an editor feature depends on it — a port would reimplement the architecture
+  from the ONNX export instead.
+* The community ONNX export's CPU backbone is fp32 (3.4 GB); the original checkpoint is 2.1 GB (bf16).
+
+### Next
+Export the backbone and decoder to ONNX ourselves (script run by the user, never shipped), verify against these PyTorch
+outputs, and add the MHR joint output so the skeleton fit (`--register-joints --refine-surface`) can be used.
