@@ -32,6 +32,7 @@ This repository is the standalone model card + mirror. The application downloads
 | `sam3d_decoder.onnx` | camera-ray conditioning + promptable decoder (6 layers, intermediate pose feedback) + pose/camera heads | SAM License |
 | `mhr_body.onnx` | MHR body forward (shape `[1,45]` + model params `[1,204]` → vertices in cm, joint translations/rotations), no pose correctives, no face model | Apache-2.0 (MHR data) |
 | `mhr_faces.i32` | MHR body topology, 36,874 triangles, int32 little-endian | Apache-2.0 (MHR data) |
+| `mhr_uv.bin` | MHR UV layout (int32 nt, nf; float32 texcoords[nt,2]; int32 texcoord_faces[nf,3]) for texturing | Apache-2.0 (MHR data) |
 | `LICENSE-SAM.txt`, `LICENSE-MHR.txt` | the licence texts — **the SAM License requires a copy to travel with the SAM materials** | |
 
 ## Provenance and fidelity
@@ -51,7 +52,7 @@ Pre-processing (person crop, affine warp, CLIFF condition, camera rays) lives in
   distributed under the **SAM License** (`LICENSE-SAM.txt`; Meta Platforms, Last Updated November 19, 2025).
   It is not an OSI open-source licence: it carries an indemnity clause, a litigation-termination clause, trade-control
   restrictions and Meta's right to update the terms. By using these files you accept it.
-* `mhr_body.onnx` and `mhr_faces.i32` derive from Meta's **MHR** release data, which is **Apache-2.0**
+* `mhr_body.onnx`, `mhr_faces.i32` and `mhr_uv.bin` derive from Meta's **MHR** release data, which is **Apache-2.0**
   (`LICENSE-MHR.txt`).
 * Hosting here follows the maintainer's own reading of the SAM License and is not legal advice.
 

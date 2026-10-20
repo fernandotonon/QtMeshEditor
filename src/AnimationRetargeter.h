@@ -160,6 +160,11 @@ bool sourceRestFromId(const QString& id, SourceRest* out);
 struct Options {
     TranslationMode translation = TranslationMode::Root;
     bool alignDirections = true;
+    /// Target bones that keep the plain rest-orientation transport even when `alignDirections` is on (no rest-direction
+    /// alignment, nothing inherited from them). For the spine/neck/head: their rest curvature is a rig convention, not a pose, and
+    /// aligning it to another rig's curvature bends the torso by the difference (measured 25-38 degrees on a Mixamo target), while
+    /// the limbs genuinely need the A-pose vs T-pose alignment.
+    std::vector<std::string> noAlignTargets;
     SourceRest sourceRest = SourceRest::Bind;
 };
 
@@ -225,6 +230,16 @@ struct Result {
 Result retarget(Ogre::Skeleton* sourceSkel, const std::string& sourceAnim,
                 Ogre::Skeleton* targetSkel, const std::string& newAnim,
                 const BoneMap& map, const Options& options, int fps = 30);
+
+/// Write retargeted LOCAL frames (`retargetFrames` output, one pose per time) as a NEW skeletal animation `newAnim` on
+/// `targetSkel`: keyframes relative to the target bind pose, tracks only for bones where `animated[i]` is set. `handles` is
+/// `describeSkeleton`'s handle list. Refuses (false + `error`) when the animation exists. The caller refreshes the entity's
+/// animation states. Shared by `retarget` and callers that produce their source frames from something other than a skeleton
+/// (SAM 3D Body's MHR joint rotations).
+bool writeRetargetedClip(Ogre::Skeleton* targetSkel, const std::string& newAnim, const std::vector<float>& times,
+                         const std::vector<LocalPose>& frames, const RigDesc& target,
+                         const std::vector<unsigned short>& handles, const std::vector<char>& animated,
+                         QString* error = nullptr);
 
 /// `base` when free on `skel`, else `base_2`, `base_3`, …
 std::string uniqueAnimationName(Ogre::Skeleton* skel, const std::string& base);

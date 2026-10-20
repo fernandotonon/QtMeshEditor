@@ -6,6 +6,7 @@
 #include <QStringList>
 
 #include <array>
+#include <memory>
 #include <vector>
 
 /// #1100: photo -> human body mesh, via Meta's **SAM 3D Body** (body branch) exported to
@@ -32,6 +33,7 @@ inline constexpr int kShapeComps = 45;
 inline constexpr int kModelParams = 204;    ///< 136 pose (trans*10, rot, 130 body) + 68 scale
 inline constexpr int kPoseParams = 136;
 inline constexpr int kVertexCount = 18439;
+inline constexpr int kJointCount = 127;     ///< MHR skeleton (see SamBodyMotion.h for the names)
 
 /// Everything the decoder needs to know about where the person is in the photo.
 struct CropGeometry {
@@ -67,6 +69,8 @@ struct Body {
     std::vector<float> posedVertices;    ///< 18439*3, metres, MHR frame (Y up, +Z front)
     std::vector<float> neutralVertices;  ///< same layout, pose zeroed, shape+scale kept
     std::vector<int> triangles;          ///< 36874*3
+    std::vector<float> jointPos;         ///< 127*3, metres, MHR frame (posed)
+    std::vector<float> jointQuat;        ///< 127*4 (x,y,z,w) GLOBAL joint rotations, MHR frame (posed)
     std::array<float, 3> camT{};         ///< decoder camera translation (m, camera frame)
     float focalPx = 0.0f;
 };
@@ -79,12 +83,17 @@ struct Result {
     CropGeometry geometry;
     QRectF bboxUsed;
     bool usedMatte = false;              ///< the person box came from background removal
+    /// false when no box was given and none could be found (the whole photo was used): a motion sequence treats that
+    /// frame as a dropout instead of regressing a pose from arbitrary background
+    bool personFound = true;
 };
 
 struct Options {
     /// Person box in photo px. Empty = find it (background removal) or fall back to the whole photo.
     QRectF bbox;
     bool autoDetect = true;
+    /// false = skip the neutral mesh and topology (a motion sequence only needs the joints)
+    bool wantMesh = true;
 };
 
 QString modelDir();
@@ -97,7 +106,22 @@ bool isAvailable();                       ///< built with ENABLE_ONNX
 /// Fetch whatever is missing (blocks on the shared downloader). Empty `error` on success.
 bool ensureModelsBlocking(QString* error = nullptr);
 
-/// Full pipeline. Never returns a partially-valid body.
+/// Holds the ONNX sessions between calls: a sequence loads the 3.4 GB backbone once instead of per frame.
+class Runner {
+public:
+    Runner();
+    ~Runner();
+    Runner(const Runner&) = delete;
+    Runner& operator=(const Runner&) = delete;
+    Result predict(const QImage& photo, const Options& opts = {});
+    /// MHR joint positions (metres) and global rotations (x,y,z,w) at the all-zero pose, the rest pose of the skeleton.
+    bool restPose(std::vector<float>& jointPos, std::vector<float>& jointQuat, QString* error = nullptr);
+private:
+    struct Impl;
+    std::unique_ptr<Impl> d;
+};
+
+/// One-shot pipeline (a temporary Runner). Never returns a partially-valid body.
 Result predict(const QImage& photo, const Options& opts = {});
 
 /// Neutral = pose zeroed, shape+scale kept (what `qtmesh dna fit` wants as a target).

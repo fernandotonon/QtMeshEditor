@@ -92,7 +92,7 @@ declare -A FILES=(
   [depthanything]="depth/da2_small.onnx"
   [birefnet]="rembg/birefnet.onnx"
   [lama]="pbr/lama.onnx"
-  [sam3dbody]="sam3dbody/sam3d_backbone.onnx sam3dbody/sam3d_backbone.onnx.data sam3dbody/sam3d_decoder.onnx sam3dbody/mhr_body.onnx sam3dbody/mhr_faces.i32 sam3dbody/LICENSE-SAM.txt sam3dbody/LICENSE-MHR.txt"
+  [sam3dbody]="sam3dbody/sam3d_backbone.onnx sam3dbody/sam3d_backbone.onnx.data sam3dbody/sam3d_decoder.onnx sam3dbody/mhr_body.onnx sam3dbody/mhr_faces.i32 sam3dbody/mhr_uv.bin sam3dbody/LICENSE-SAM.txt sam3dbody/LICENSE-MHR.txt"
 )
 
 sync_one() {
