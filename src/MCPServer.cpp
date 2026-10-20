@@ -37,6 +37,7 @@
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "BodyFromPhoto/SamBodyPredictor.h"
 #include "DNA/DnaCLI.h"
 #include "DNA/DnaCorrectiveManager.h"
 #include "DNA/DnaReader.h"
@@ -741,6 +742,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("explode_mesh_parts"), &MCPServer::toolExplodeMeshParts},
         {QStringLiteral("join_mesh_parts"), &MCPServer::toolJoinMeshParts},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
+        {QStringLiteral("generate_body_from_photo"), &MCPServer::toolGenerateBodyFromPhoto},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -899,6 +901,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("generate_lipsync"),
         QStringLiteral("fit_dna_body"),
         QStringLiteral("generate_mesh_from_image"),
+        QStringLiteral("generate_body_from_photo"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene"),
         QStringLiteral("bake_vat"),
@@ -987,6 +990,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("capture_face_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("generate_body_from_photo"), QStringLiteral("image_to_3d")},
             {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
             {QStringLiteral("photo_depth"), QStringLiteral("pbr_synth")},
@@ -3717,6 +3721,79 @@ QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
     // the model found no structure, which a caller may want to act on.
     result["rawMin"] = r.rawMin;
     result["rawMax"] = r.rawMax;
+    return result;
+#endif
+}
+
+QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(args);
+    return makeErrorResult(
+        "This build was compiled without photo-to-body (rebuild with -DENABLE_ONNX=ON).");
+#else
+    const QString srcPath = args.value("image_path").toString();
+    if (srcPath.trimmed().isEmpty())
+        return makeErrorResult("'image_path' is required (a 2D photo of ONE person).");
+    if (!QFileInfo::exists(srcPath))
+        return makeErrorResult(QStringLiteral("image not found: %1").arg(srcPath));
+    const QString outPath = args.value("output_path").toString();
+    if (outPath.trimmed().isEmpty())
+        return makeErrorResult("'output_path' is required (the .obj to write).");
+    const QString pose = args.value("pose").toString(QStringLiteral("neutral")).toLower();
+    if (pose != QLatin1String("neutral") && pose != QLatin1String("posed"))
+        return makeErrorResult("'pose' must be neutral or posed.");
+
+    QRectF bbox;
+    if (args.contains("bbox")) {
+        const QJsonArray a = args.value("bbox").toArray();
+        if (a.size() != 4)
+            return makeErrorResult("'bbox' must be [x1, y1, x2, y2] in photo pixels.");
+        const double x1 = a[0].toDouble(), y1 = a[1].toDouble(), x2 = a[2].toDouble(), y2 = a[3].toDouble();
+        if (!(x2 > x1) || !(y2 > y1))
+            return makeErrorResult("'bbox' needs x2 > x1 and y2 > y1.");
+        bbox = QRectF(x1, y1, x2 - x1, y2 - y1);
+    }
+
+    // EXIF orientation: QImage(path) reads the unrotated pixels (a portrait phone JPEG would be sideways).
+    QImageReader reader(srcPath);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
+    if (photo.isNull())
+        return makeErrorResult(QStringLiteral("could not read %1 as an image (%2).")
+                                   .arg(srcPath, reader.errorString()));
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("generate_body_from_photo"));
+    QString why;
+    if (!SamBody::ensureModelsBlocking(&why))
+        return makeErrorResult(QStringLiteral("SAM 3D Body models unavailable: %1").arg(why));
+
+    SamBody::Options opts;
+    opts.bbox = bbox;
+    opts.autoDetect = args.value("detect").toBool(true);
+    const SamBody::Result r = SamBody::predict(photo, opts);
+    if (!r.ok)
+        return makeErrorResult(QStringLiteral("photo to body failed: %1").arg(r.error));
+
+    const auto& verts = pose == QLatin1String("posed") ? r.body.posedVertices : r.body.neutralVertices;
+    const QByteArray obj = SamBody::toObj(verts, r.body.triangles, !args.value("facing_z").toBool(false));
+    QSaveFile f(outPath);
+    if (!f.open(QIODevice::WriteOnly) || f.write(obj) != obj.size() || !f.commit())
+        return makeErrorResult(QStringLiteral("could not write %1").arg(outPath));
+
+    float ymin = 1e30f, ymax = -1e30f;
+    for (size_t i = 1; i < verts.size(); i += 3) { ymin = std::min(ymin, verts[i]); ymax = std::max(ymax, verts[i]); }
+    QJsonObject result = makeSuccessResult(
+        QStringLiteral("Wrote a %1 MHR body (%2 vertices, %3 m tall) from '%4'.")
+            .arg(pose).arg(verts.size() / 3).arg(ymax - ymin, 0, 'f', 2).arg(QFileInfo(srcPath).fileName()));
+    result["outputPath"] = outPath;
+    result["pose"] = pose;
+    result["vertexCount"] = static_cast<int>(verts.size() / 3);
+    result["triangleCount"] = static_cast<int>(r.body.triangles.size() / 3);
+    result["heightMeters"] = ymax - ymin;
+    result["bbox"] = QJsonArray{r.bboxUsed.left(), r.bboxUsed.top(), r.bboxUsed.right(), r.bboxUsed.bottom()};
+    result["personFoundByMatte"] = r.usedMatte;
+    if (!r.warning.isEmpty()) result["warning"] = r.warning;
     return result;
 #endif
 }
@@ -13350,6 +13427,33 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
+    // generate_body_from_photo (#1100)
+    {
+        QJsonObject props;
+        props["image_path"] = QJsonObject{{"type", "string"},
+            {"description", "Path to a PHOTOGRAPH of ONE person (full body is best). EXIF orientation is honoured."}};
+        props["output_path"] = QJsonObject{{"type", "string"},
+            {"description", "Where to write the body mesh (.obj, metres, Y up, facing -Z unless facing_z)."}};
+        props["pose"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"neutral", "posed"}},
+            {"description", "neutral (default) = predicted shape and proportions with the pose zeroed (the input qtmesh dna fit wants); posed = the photo's pose."}};
+        props["bbox"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
+            {"description", "Optional person box [x1, y1, x2, y2] in photo pixels. Omit to find the person automatically."}};
+        props["detect"] = QJsonObject{{"type", "boolean"},
+            {"description", "Find the person by background removal when no bbox is given (default true; false uses the whole photo)."}};
+        props["facing_z"] = QJsonObject{{"type", "boolean"},
+            {"description", "Keep the MHR model's own +Z facing instead of the editor's -Z (default false)."}};
+        appendTool(
+            "generate_body_from_photo",
+            "Predict a HUMAN BODY mesh from ONE photo (issue #1100) with Meta's SAM 3D Body (body branch, ONNX) and the "
+            "MHR (Momentum Human Rig) body model: 18,439 vertices, real shape and proportions. Writes an .obj. "
+            "Feed it to `fit_dna_body` (mode surface/joints+surface) to fit a MetaHuman body rig to the person. "
+            "Models (~3.6 GB, SAM License + Apache-2.0 MHR data) download on first use. Pose correctives are not "
+            "reproduced (posed vertices within ~2 mm mean of the full model). Not for creatures or objects: use "
+            "generate_mesh_from_image.",
+            props,
+            QJsonArray{"image_path", "output_path"}
+        );
+    }
     // photo_depth (#1018)
     {
         QJsonObject props;

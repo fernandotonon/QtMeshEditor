@@ -45,3 +45,32 @@ repos with your account (`huggingface-cli login` is already set up here), then: 
 → the MHR mesh/parameters → export a mesh through the MHR TorchScript model → `qtmesh dna fit … --target <that mesh>`.
 Open questions for that step: whether inference runs on Apple MPS/CPU in usable time (not stated upstream), and a
 Python 3.11 arm64 environment (the default `python3` here is an x86_64 build whose torch cannot load).
+
+## Shipped: the ONNX port (2026-10-20)
+
+`qtmesh body <photo> -o body.obj [--pose neutral|posed] [--bbox x1,y1,x2,y2] [--facing-z] [--json]` and MCP
+`generate_body_from_photo`. Code: `src/BodyFromPhoto/SamBodyPredictor.{h,cpp}` (+ `BodyFromPhotoCLI`); export:
+`scripts/export-sam3dbody-onnx.py`; hosting: `scripts/upload-sam3dbody-models.sh` (card: `scripts/sam3dbody_model_card.md`);
+licences/decision record: `THIRD_PARTY_AI_MODELS.md`.
+
+Pipeline: person box (explicit, or the alpha matte of the existing U²-Net background remover) → padded 1.25, fixed to aspect 0.75 then
+1:1 → 512² affine warp (bilinear, zero border like `cv2.warpAffine`) → backbone → decoder (CLIFF condition + camera rays,
+the reference's own formulas, pinned by a unit test against values captured from Meta's pipeline) → MHR forward twice (posed;
+neutral = pose params zeroed, shape + scale kept). A real photo takes ~32 s end to end on an Apple-silicon CPU (backbone
+~2 s of that is the graph itself; the rest is loading 3.4 GB of weights).
+
+Facts learned getting it through the exporter (each is also in the export script's docstring):
+* the anti-aliased ray downsample must become two matmuls, and the weights must be extracted with a spatial dim of 8 (a dim of 1
+  takes a different PyTorch resample path and produced weights that looked right and were off by 0.9);
+* `roma`'s euler conversion and several `x[idx] = y` / `x[..., [1, 2]] *= -1` lines in Meta's heads export as `Add` nodes with
+  EMPTY inputs: the export succeeds and only onnxruntime's loader rejects the file, so verify by loading, not by exporting;
+* the dinov3 backbone type skips the `x * 16/12` keypoint-grid scaling the ViT variants apply (leaving it in broke parity by 0.3).
+
+Measured against Meta's PyTorch on identical inputs: decoder ~1e-6, backbone ~2e-5, MHR ~1e-4 cm; the full C++ run's shape
+parameters are within 0.015 of Meta's body-only reference (the remainder is bf16 vs fp32 and resampling).
+
+### Next
+* Use the MHR joints (the `mhr_body.onnx` graph already returns 127 joint translations/rotations) as the target skeleton for
+  `--register-joints --refine-surface`; the neutral OBJ alone is the surface-only route.
+* GUI action (Object mode) and an undoable "fit to this photo" that chains `generate_body_from_photo` → `fit_dna_body`.
+* Pose correctives for the posed output (664 MB; not needed for the neutral body the fit uses).

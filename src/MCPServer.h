@@ -287,6 +287,7 @@ private:
     QJsonObject toolExplodeMeshParts(const QJsonObject &args);   // #862/#864
     QJsonObject toolJoinMeshParts(const QJsonObject &args);      // #862/#864
     QJsonObject toolGenerateMeshFromImage(const QJsonObject &args);   // #764 image-to-3D
+    QJsonObject toolGenerateBodyFromPhoto(const QJsonObject &args);   // #1100 photo -> MHR body
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);
