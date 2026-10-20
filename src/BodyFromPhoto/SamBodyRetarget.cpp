@@ -153,6 +153,13 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
     for (const std::string& name : target.names)
         if (const int role = MotionInbetween::canonicalIndexForBone(QString::fromStdString(name)); role >= 0 && role <= 5)
             options.noAlignTargets.push_back(name);
+    // Feet and toes too: their rest "direction" is ankle -> toe, which depends on the ankle HEIGHT of each rig (Mixamo 35 degrees
+    // down, MHR 16), not on how the foot is posed. Aligning those directions pitched a flat foot's toes up by the difference.
+    for (const std::string& name : target.names) {
+        QString lower = QString::fromStdString(name).toLower();
+        if (lower.contains(QLatin1String("foot")) || lower.contains(QLatin1String("toe")))
+            options.noAlignTargets.push_back(name);
+    }
     options.sourceRest = Retarget::SourceRest::Bind;
     const std::vector<Retarget::LocalPose> posed =
         Retarget::retargetFrames(aliased, frames, target, mapped.map, options, &out.report);
