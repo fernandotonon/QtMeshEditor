@@ -17,6 +17,7 @@
 #include "BodyPoseStream.h"
 #include "../BodyFromPhoto/SamBodyPredictor.h"
 #include "../BodyFromPhoto/SamBodySequence.h"
+#include "../ImageTo3D/BackgroundRemover.h"
 #include <atomic>
 #include "FaceCapGeom.h"
 #include "../AnimationMerger.h"
@@ -41,6 +42,7 @@
 #include <algorithm>
 
 #include <QHash>
+#include <QPointer>
 #include <QSettings>
 #include <QBuffer>
 #include <QCollator>
@@ -132,6 +134,8 @@ void MocapController::setBodyBackend(int) {}
 bool MocapController::samAvailable() const { return false; }
 QString MocapController::samHint() const { return {}; }
 bool MocapController::busy() const { return false; }
+double MocapController::progress() const { return -1.0; }
+QString MocapController::progressLabel() const { return {}; }
 QString MocapController::captureVideoBody(const QString&) { return unavailableReason(); }
 void MocapController::cancelBodyCapture() {}
 bool MocapController::showPoseDebug() const { return false; }
@@ -542,6 +546,19 @@ struct MocapController::Impl {
     int bodyBackend = 0;      // 0 landmarks, 1 SAM 3D Body (#1100)
     bool busy = false;        // a blocking SAM capture is running
     std::atomic<bool> cancelCapture{false};
+    double progress = -1.0;
+    QString progressLabel;
+    QPointer<QThread> samThread;                                        // the SAM worker (deleted when it finishes)
+    std::function<void(const SamBody::MhrSequence&)> samDone;          // runs on the main thread
+    // offline video read for SamBody (decode first, solve after: a slow model must not stall the player)
+    std::unique_ptr<VideoFrameSource> videoSource;
+    std::vector<QImage> videoFrames;
+    std::vector<double> videoTimes;
+    bool videoTruncated = false;
+    bool videoReadDone = false;
+    QString videoError;
+    std::string videoTarget;
+    QString videoClip;
     // SAM recording: full frames (downscaled) + their times while Recording, solved on stop
     std::vector<QImage> samFrames;
     std::vector<double> samTimes;
@@ -674,6 +691,10 @@ MocapController::MocapController(QObject* parent)
 
 MocapController::~MocapController()
 {
+    // the SAM worker holds `this` for its queued callbacks: cancel it and wait before anything is torn down
+    d->cancelCapture = true;
+    if (d->samThread)
+        d->samThread->wait();
     // stopPreview() touches Ogre (snapshot/restore of bone + morph state) and
     // could throw; an exception escaping a destructor calls std::terminate.
     // Swallow it — we're tearing down anyway.
@@ -791,7 +812,60 @@ QString MocapController::samHint() const
              "More accurate and includes fingers, but slow: the camera and video are solved after recording.");
 }
 bool MocapController::busy() const { return d->busy; }
+double MocapController::progress() const { return d->progress; }
+QString MocapController::progressLabel() const { return d->progressLabel; }
 void MocapController::cancelBodyCapture() { d->cancelCapture = true; }
+
+void MocapController::setProgress(double fraction, const QString& label)
+{
+    d->progress = fraction;
+    d->progressLabel = label;
+    emit progressChanged();
+    setStatusMessage(label);
+}
+
+void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double> times,
+                                  std::function<void(const SamBody::MhrSequence&)> onDone)
+{
+    d->busy = true;
+    emit busyChanged();
+    d->cancelCapture = false;
+    setProgress(0.0, tr("Preparing SAM 3D Body…"));
+    // resolving the matting model may download it, which needs the main thread: do it here, hand the path to the worker
+    const QString matte = BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast);
+    auto fr = std::make_shared<std::vector<QImage>>(std::move(frames));
+    auto tm = std::make_shared<std::vector<double>>(std::move(times));
+    d->samDone = std::move(onDone);
+    d->samThread = QThread::create([this, fr, tm, matte]() {
+        SamBody::Runner runner;
+        auto seq = std::make_shared<SamBody::MhrSequence>(SamBody::solveSequence(
+            runner, *fr, *tm,
+            [this](int done, int total, const QString&) {
+                QMetaObject::invokeMethod(this, [this, done, total]() {
+                    setProgress(total > 0 ? static_cast<double>(done) / total : -1.0,
+                                tr("Solving the body with SAM 3D Body… %1 / %2").arg(std::min(done + 1, total)).arg(total));
+                }, Qt::QueuedConnection);
+                return !d->cancelCapture.load();
+            },
+            QRectF(), matte));
+        QMetaObject::invokeMethod(this, [this, seq]() { finishSamSolve(seq); }, Qt::QueuedConnection);
+    });
+    connect(d->samThread.data(), &QThread::finished, d->samThread.data(), &QObject::deleteLater);
+    d->samThread->start();
+}
+
+void MocapController::finishSamSolve(const std::shared_ptr<SamBody::MhrSequence>& seq)
+{
+    d->busy = false;
+    d->progress = -1.0;
+    d->progressLabel.clear();
+    emit busyChanged();
+    emit progressChanged();
+    auto done = std::move(d->samDone);
+    d->samDone = nullptr;
+    if (done)
+        done(*seq);
+}
 
 bool MocapController::showPoseDebug() const
 {
@@ -1834,45 +1908,48 @@ void MocapController::stopRecording()
     }
 
     if (samWanted) {
-        d->busy = true;
-        emit busyChanged();
-        d->cancelCapture = false;
-        SamBody::Runner runner;
+        // The solve takes seconds per frame: run it on a worker thread and finish the take (clip + status) when it is done. The face /
+        // head clip above is already written; the status message below is composed from it plus the body result.
         std::vector<QImage> frames = std::move(d->samFrames);
         std::vector<double> times = std::move(d->samTimes);
         d->samFrames.clear();
         d->samTimes.clear();
-        const SamBody::MhrSequence seq = SamBody::solveSequence(runner, frames, times,
-            [this](int done, int total, const QString&) {
-                setStatusMessage(tr("Solving the body with SAM 3D Body… %1 / %2 (Cancel to stop)").arg(done).arg(total));
-                QCoreApplication::processEvents();
-                return !d->cancelCapture.load();
+        const std::string entityName = d->entityName;
+        const QString bodyClip = d->clipName + QStringLiteral("_Body");
+        runSamSolve(std::move(frames), std::move(times),
+            [this, summary, bodyFailure, clipLen, entityName, bodyClip](const SamBody::MhrSequence& seq) mutable {
+                QStringList sum = summary;
+                QString failure = bodyFailure;
+                double len = clipLen;
+                if (!seq.ok()) {
+                    failure = seq.error == QLatin1String("cancelled") ? tr("body solve cancelled") : seq.error;
+                } else {
+                    MocapRecorder::BodyRecordOptions bopts;
+                    bopts.clipName = bodyClip;
+                    bopts.algorithmUsed = QStringLiteral("sam3dbody");
+                    auto* bcmd = new RecordBodyClipCommand(entityName, seq, 0, bopts);
+                    UndoManager::getSingleton()->push(bcmd);
+                    const auto& br = bcmd->report();
+                    if (br.ok()) {
+                        d->savedBoundsFromSkeleton = true;
+                        len = std::max(len, br.clipLength);
+                        sum << tr("'%1' (%2 bones, SAM 3D Body)").arg(br.clipName).arg(br.tracksWritten);
+                    } else {
+                        failure = br.error;
+                    }
+                    GamificationManager::noteOperation(
+                        QStringLiteral("mocap_body"),
+                        {{QStringLiteral("frames"), static_cast<qint64>(seq.jointQuat.size())},
+                         {QStringLiteral("tracks"), static_cast<qint64>(br.tracksWritten)}},
+                        GamificationManager::Surface::Gui);
+                }
+                if (!failure.isEmpty())
+                    setStatusMessage(sum.isEmpty() ? failure
+                                                   : tr("Recorded %1; body recording failed: %2").arg(sum.join(QStringLiteral(" + ")), failure));
+                else
+                    setStatusMessage(tr("Recorded %1s → %2 — Ctrl+Z to discard.").arg(len, 0, 'f', 1).arg(sum.join(QStringLiteral(" + "))));
             });
-        d->busy = false;
-        emit busyChanged();
-        if (!seq.ok()) {
-            bodyFailure = seq.error;
-        } else {
-            MocapRecorder::BodyRecordOptions bopts;
-            bopts.clipName = d->clipName + QStringLiteral("_Body");
-            bopts.algorithmUsed = QStringLiteral("sam3dbody");
-            auto* bcmd = new RecordBodyClipCommand(d->entityName, seq, 0, bopts);
-            UndoManager::getSingleton()->push(bcmd);
-            const auto& br = bcmd->report();
-            if (br.ok()) {
-                d->savedBoundsFromSkeleton = true;
-                clipLen = std::max(clipLen, br.clipLength);
-                bodyTracks = br.tracksWritten;
-                summary << tr("'%1' (%2 bones, SAM 3D Body)").arg(br.clipName).arg(bodyTracks);
-            } else {
-                bodyFailure = br.error;
-            }
-            GamificationManager::noteOperation(
-                QStringLiteral("mocap_body"),
-                {{QStringLiteral("frames"), static_cast<qint64>(seq.jointQuat.size())},
-                 {QStringLiteral("tracks"), static_cast<qint64>(bodyTracks)}},
-                GamificationManager::Surface::Gui);
-        }
+        return;   // the status message arrives with the result
     }
 
     if (!summary.isEmpty() && bodyFailure.isEmpty())
@@ -2037,77 +2114,107 @@ QString MocapController::captureVideoBody(const QString& filePath)
         if (!SamBody::ensureModelsBlocking(&why))
             return fail(tr("SAM 3D Body models unavailable: %1").arg(why));
     }
-    const std::string target = entity->getName();
 
-    d->busy = true;
-    emit busyChanged();
-    d->cancelCapture = false;
+    // Phase 1 — read the file at playback speed (a slow model inside the frame handler would stall the real-time player).
+    // Phase 2 — solve on a worker thread (runSamSolve). Neither blocks the UI.
     constexpr double kFps = 10.0;
-    auto source = std::make_unique<FileFrameSource>(filePath, kFps);
+    d->videoTarget = entity->getName();
+    d->videoClip = d->clipName == QLatin1String("FaceCap") ? QStringLiteral("BodyCap") : d->clipName + QStringLiteral("_Body");
+    d->videoFrames.clear();
+    d->videoTimes.clear();
+    d->videoTruncated = false;
+    d->videoReadDone = false;
+    d->videoError.clear();
+    d->cancelCapture = false;
+    d->videoSource = std::make_unique<FileFrameSource>(filePath, kFps);
     QString openError;
-    if (!source->open(&openError)) {
-        d->busy = false;
-        emit busyChanged();
+    if (!d->videoSource->open(&openError)) {
+        d->videoSource.reset();
         return fail(openError);
     }
-    std::vector<QImage> frames;
-    std::vector<double> times;
-    QEventLoop loop;
-    bool finished = false;
-    bool truncated = false;
-    QString streamError;
-    QObject::connect(source.get(), &VideoFrameSource::frameReady, this, [&](const MocapFrame& f) {
-        if (frames.size() >= kMaxSamVideoFrames) { truncated = true; finished = true; loop.quit(); return; }
-        frames.push_back(SamBody::downscaledForCapture(f.image));
-        times.push_back(f.timeSec);
-        setStatusMessage(tr("Reading the video… %1 frames (Cancel to stop)").arg(frames.size()));
-        if (d->cancelCapture.load()) { finished = true; loop.quit(); }
-    });
-    QObject::connect(source.get(), &VideoFrameSource::finished, this, [&] { finished = true; loop.quit(); });
-    QObject::connect(source.get(), &VideoFrameSource::errorOccurred, this, [&](const QString& m) { streamError = m; finished = true; loop.quit(); });
-    source->start();
-    if (!finished)
-        loop.exec();
-    source->stop();
-    if (d->cancelCapture.load() || !streamError.isEmpty() || frames.size() < 2) {
-        d->busy = false;
-        emit busyChanged();
-        if (d->cancelCapture.load())
-            return fail(tr("Cancelled."));
-        return fail(streamError.isEmpty() ? tr("The video produced fewer than 2 frames.") : streamError);
-    }
-
-    SamBody::Runner runner;
-    const SamBody::MhrSequence seq = SamBody::solveSequence(runner, frames, times,
-        [this, &frames](int done, int total, const QString&) {
-            Q_UNUSED(frames);
-            setStatusMessage(tr("Solving the body with SAM 3D Body… %1 / %2 (Cancel to stop)").arg(done).arg(total));
-            QCoreApplication::processEvents();
-            return !d->cancelCapture.load();
-        });
-    d->busy = false;
+    d->busy = true;
     emit busyChanged();
-    if (!seq.ok())
-        return fail(seq.error);
-
-    MocapRecorder::BodyRecordOptions opts;
-    opts.clipName = d->clipName == QLatin1String("FaceCap") ? QStringLiteral("BodyCap") : d->clipName + QStringLiteral("_Body");
-    opts.algorithmUsed = QStringLiteral("sam3dbody");
-    auto* cmd = new RecordBodyClipCommand(target, seq, 0, opts);   // the decoded timestamps, not an assumed rate
-    UndoManager::getSingleton()->push(cmd);
-    const auto& rep = cmd->report();
-    if (!rep.ok())
-        return fail(rep.error);
-    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_body"),
-        QStringLiteral("gui video (sam3dbody): %1 frames -> %2 bones").arg(seq.jointQuat.size()).arg(rep.tracksWritten));
-    GamificationManager::noteOperation(QStringLiteral("mocap_body"),
-        {{QStringLiteral("frames"), static_cast<qint64>(seq.jointQuat.size())}, {QStringLiteral("tracks"), static_cast<qint64>(rep.tracksWritten)}},
-        GamificationManager::Surface::Gui);
-    setStatusMessage(tr("Created '%1': %2 frames, %3 bones, %4 s (SAM 3D Body)%5 — Ctrl+Z to discard.")
-                         .arg(rep.clipName).arg(seq.jointQuat.size()).arg(rep.tracksWritten).arg(rep.clipLength, 0, 'f', 1)
-                         .arg((seq.dropouts > 0 ? tr(", %1 frame(s) without a person held").arg(seq.dropouts) : QString())
-                              + (truncated ? tr(", video cut at %1 frames").arg(kMaxSamVideoFrames) : QString())));
+    setProgress(-1.0, tr("Reading the video…"));
+    VideoFrameSource* src = d->videoSource.get();
+    connect(src, &VideoFrameSource::frameReady, this, [this](const MocapFrame& f) {
+        if (d->videoReadDone)
+            return;
+        if (d->videoFrames.size() >= kMaxSamVideoFrames) {
+            d->videoTruncated = true;
+            finishVideoRead();
+            return;
+        }
+        d->videoFrames.push_back(SamBody::downscaledForCapture(f.image));
+        d->videoTimes.push_back(f.timeSec);
+        setProgress(-1.0, tr("Reading the video… %1 frames").arg(d->videoFrames.size()));
+        if (d->cancelCapture.load())
+            finishVideoRead();
+    });
+    connect(src, &VideoFrameSource::finished, this, [this]() { finishVideoRead(); });
+    connect(src, &VideoFrameSource::errorOccurred, this, [this](const QString& m) { d->videoError = m; finishVideoRead(); });
+    src->start();
     return {};
+}
+
+void MocapController::finishVideoRead()
+{
+    if (d->videoReadDone)
+        return;
+    d->videoReadDone = true;
+    // the source is deleted AFTER this signal handler returns (it is the sender)
+    VideoFrameSource* src = d->videoSource.release();
+    if (src) {
+        src->stop();
+        src->deleteLater();
+    }
+    auto abort = [this](const QString& msg) {
+        d->busy = false;
+        d->progress = -1.0;
+        d->progressLabel.clear();
+        emit busyChanged();
+        emit progressChanged();
+        setStatusMessage(msg);
+        emit errorOccurred(msg);
+    };
+    if (d->cancelCapture.load()) { abort(tr("Cancelled.")); return; }
+    if (!d->videoError.isEmpty()) { abort(d->videoError); return; }
+    if (d->videoFrames.size() < 2) { abort(tr("The video produced fewer than 2 frames.")); return; }
+    const bool truncated = d->videoTruncated;
+    const std::string target = d->videoTarget;
+    const QString clip = d->videoClip;
+    std::vector<QImage> frames = std::move(d->videoFrames);
+    std::vector<double> times = std::move(d->videoTimes);
+    d->videoFrames.clear();
+    d->videoTimes.clear();
+    d->busy = false;       // runSamSolve sets it again; keep the flag consistent in between
+    runSamSolve(std::move(frames), std::move(times), [this, target, clip, truncated](const SamBody::MhrSequence& seq) {
+        if (!seq.ok()) {
+            const QString msg = seq.error == QLatin1String("cancelled") ? tr("Cancelled.") : seq.error;
+            setStatusMessage(msg);
+            emit errorOccurred(msg);
+            return;
+        }
+        MocapRecorder::BodyRecordOptions opts;
+        opts.clipName = clip;
+        opts.algorithmUsed = QStringLiteral("sam3dbody");
+        auto* cmd = new RecordBodyClipCommand(target, seq, 0, opts);   // the decoded timestamps, not an assumed rate
+        UndoManager::getSingleton()->push(cmd);
+        const auto& rep = cmd->report();
+        if (!rep.ok()) {
+            setStatusMessage(rep.error);
+            emit errorOccurred(rep.error);
+            return;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_body"),
+            QStringLiteral("gui video (sam3dbody): %1 frames -> %2 bones").arg(seq.jointQuat.size()).arg(rep.tracksWritten));
+        GamificationManager::noteOperation(QStringLiteral("mocap_body"),
+            {{QStringLiteral("frames"), static_cast<qint64>(seq.jointQuat.size())}, {QStringLiteral("tracks"), static_cast<qint64>(rep.tracksWritten)}},
+            GamificationManager::Surface::Gui);
+        setStatusMessage(tr("Created '%1': %2 frames, %3 bones, %4 s (SAM 3D Body)%5 — Ctrl+Z to discard.")
+                             .arg(rep.clipName).arg(seq.jointQuat.size()).arg(rep.tracksWritten).arg(rep.clipLength, 0, 'f', 1)
+                             .arg((seq.dropouts > 0 ? tr(", %1 frame(s) without a person held").arg(seq.dropouts) : QString())
+                                  + (truncated ? tr(", video cut at %1 frames").arg(kMaxSamVideoFrames) : QString())));
+    });
 }
 
 QStringList MocapController::pickPoseImages()
@@ -2216,32 +2323,32 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
             images.push_back(SamBody::downscaledForCapture(img));
             imageTimes.push_back(times[size_t(i)]);
         }
-        d->busy = true;
-        emit busyChanged();
-        d->cancelCapture = false;
-        SamBody::Runner runner;
-        const SamBody::MhrSequence seq = SamBody::solveSequence(runner, images, imageTimes,
-            [this, &imagePaths](int done, int total, const QString&) {
-                setStatusMessage(tr("Analysing pose %1 / %2 with SAM 3D Body… (Cancel to stop)").arg(std::min(done + 1, total)).arg(imagePaths.size()));
-                QCoreApplication::processEvents();
-                return !d->cancelCapture.load();
+        const QString poseClip = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
+        const int photoCount = imagePaths.size();
+        runSamSolve(std::move(images), std::move(imageTimes),
+            [this, targetEntity, poseClip, photoCount](const SamBody::MhrSequence& seq) {
+                if (!seq.ok()) {
+                    const QString msg = seq.error == QLatin1String("cancelled") ? tr("Cancelled.") : seq.error;
+                    setStatusMessage(msg);
+                    emit errorOccurred(msg);
+                    return;
+                }
+                MocapRecorder::BodyRecordOptions sopts;
+                sopts.clipName = poseClip;
+                sopts.algorithmUsed = QStringLiteral("sam3dbody-keyframes");
+                auto* scmd = new RecordBodyClipCommand(targetEntity, seq, 0, sopts);
+                UndoManager::getSingleton()->push(scmd);
+                const auto& srep = scmd->report();
+                if (!srep.ok()) {
+                    setStatusMessage(srep.error);
+                    emit errorOccurred(srep.error);
+                    return;
+                }
+                SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_body"),
+                    QStringLiteral("gui pose keyframes (sam3dbody): %1 images -> %2 tracks").arg(photoCount).arg(srep.tracksWritten));
+                setStatusMessage(tr("Created '%1': %2 keys, %3 bones, %4s (SAM 3D Body) — Ctrl+Z to discard.")
+                                     .arg(srep.clipName).arg(srep.framesProcessed).arg(srep.tracksWritten).arg(srep.clipLength, 0, 'f', 2));
             });
-        d->busy = false;
-        emit busyChanged();
-        if (!seq.ok())
-            return fail(seq.error);
-        MocapRecorder::BodyRecordOptions sopts;
-        sopts.clipName = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
-        sopts.algorithmUsed = QStringLiteral("sam3dbody-keyframes");
-        auto* scmd = new RecordBodyClipCommand(targetEntity, seq, 0, sopts);
-        UndoManager::getSingleton()->push(scmd);
-        const auto& srep = scmd->report();
-        if (!srep.ok())
-            return fail(srep.error);
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_body"),
-            QStringLiteral("gui pose keyframes (sam3dbody): %1 images -> %2 tracks").arg(imagePaths.size()).arg(srep.tracksWritten));
-        setStatusMessage(tr("Created '%1': %2 keys, %3 bones, %4s (SAM 3D Body).")
-                             .arg(srep.clipName).arg(srep.framesProcessed).arg(srep.tracksWritten).arg(srep.clipLength, 0, 'f', 2));
         return {};
     }
 

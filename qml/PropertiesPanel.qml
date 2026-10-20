@@ -3236,11 +3236,52 @@ Rectangle {
                     font.pixelSize: 9
                     text: MocapController.samHint
                 }
-                // a blocking SAM run (video / pose photos / the solve after a camera take) can be stopped from here
-                InspectorButton {
+                // SAM work (reading a video, solving it, the solve after a camera take, pose photos) runs on a worker thread:
+                // label + bar + Cancel, the same shape as the other AI processes. progress < 0 = indeterminate (length unknown).
+                Column {
+                    width: parent.width
+                    spacing: 4
                     visible: MocapController.busy
-                    text: "Cancel SAM capture"
-                    onClicked: MocapController.cancelBodyCapture()
+
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        text: MocapController.progressLabel !== "" ? MocapController.progressLabel : "Working…"
+                    }
+                    Rectangle {
+                        width: parent.width
+                        height: 6
+                        radius: 3
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        clip: true
+                        Rectangle {
+                            id: samFill
+                            readonly property bool indeterminate: MocapController.progress < 0
+                            height: parent.height - 2
+                            y: 1
+                            x: indeterminate ? 1 + (parent.width - width - 2) * parent.samSweep : 1
+                            radius: 2
+                            color: PropertiesPanelController.highlightColor
+                            width: indeterminate ? (parent.width - 2) * 0.3
+                                                 : Math.max(3, (parent.width - 2) * Math.min(1, MocapController.progress))
+                            Behavior on width { enabled: !samFill.indeterminate; NumberAnimation { duration: 150 } }
+                        }
+                        property real samSweep: 0
+                        SequentialAnimation on samSweep {
+                            running: MocapController.busy && MocapController.progress < 0
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad }
+                            NumberAnimation { from: 1; to: 0; duration: 900; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                    InspectorButton {
+                        text: "Cancel"
+                        onClicked: MocapController.cancelBodyCapture()
+                    }
                 }
             }
 

@@ -94,6 +94,9 @@ struct Options {
     bool autoDetect = true;
     /// false = skip the neutral mesh and topology (a motion sequence only needs the joints)
     bool wantMesh = true;
+    /// Resolved background-removal model. A caller on a WORKER thread must pass it (resolving may download, which needs the main
+    /// thread); empty = resolve here (main-thread callers).
+    QString matteModel;
 };
 
 QString modelDir();

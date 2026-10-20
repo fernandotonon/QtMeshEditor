@@ -31,7 +31,7 @@ using SequenceProgress = std::function<bool(int done, int total, const QString& 
 /// frame; empty = find the person per frame. Never throws; `error` explains an unusable result (cancelled, no ONNX build, too few
 /// people found).
 MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, const std::vector<double>& times,
-                          const SequenceProgress& progress = {}, const QRectF& box = {});
+                          const SequenceProgress& progress = {}, const QRectF& box = {}, const QString& matteModel = {});
 
 /// Frames are kept at a capture-friendly size: the model crops to 512 px anyway, and a minute of 1080p frames would not fit in memory.
 /// The camera intrinsics are derived from the image size, so a proportional downscale keeps them consistent.

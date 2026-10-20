@@ -9730,6 +9730,20 @@ QJsonObject MCPServer::toolStartLiveCapture(const QJsonObject &args)
     // video_path drives from a file (the macOS-camera-blocked path); else the
     // webcam device_id (empty = default camera).
     const QString videoPath = args.value("video_path").toString();
+    if (!videoPath.isEmpty() && c->bodyBackend() == 1 && c->bodyEnabled() && c->samAvailable()) {
+        // SAM 3D Body + a video file = the GUI's "Capture from Video…": read the file, then solve on a worker thread and write one
+        // undoable clip. Returns at once; the GUI shows progress, `busy` is true until it finishes.
+        const QString err = c->captureVideoBody(videoPath);
+        if (!err.isEmpty())
+            return makeErrorResult(QString("Error: %1").arg(err));
+        QJsonObject started;
+        started["ok"] = true;
+        started["state"] = "capturing";
+        started["source"] = "video";
+        started["backend"] = "sam3dbody";
+        started["note"] = "reading the video, then solving it on a worker thread; the clip is written when it finishes (undoable)";
+        return makeSuccessResult(QString::fromUtf8(QJsonDocument(started).toJson(QJsonDocument::Indented)));
+    }
     const bool started = videoPath.isEmpty()
         ? c->startPreview(args.value("device_id").toString())
         : c->startPreviewFromVideo(videoPath);

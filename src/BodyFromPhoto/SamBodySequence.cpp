@@ -11,7 +11,7 @@ QImage downscaledForCapture(const QImage& image, int maxEdge)
 }
 
 MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, const std::vector<double>& times,
-                          const SequenceProgress& progress, const QRectF& box)
+                          const SequenceProgress& progress, const QRectF& box, const QString& matteModel)
 {
     MhrSequence seq;
     if (images.size() != times.size() || images.size() < 2) {
@@ -38,6 +38,7 @@ MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, con
         Options o;
         o.wantMesh = false;
         o.bbox = box;
+        o.matteModel = matteModel;
         const Result r = runner.predict(images[size_t(i)], o);
         if (r.ok && r.personFound) {
             seq.jointQuat.push_back(r.body.jointQuat);

@@ -30,9 +30,12 @@
 #ifdef ENABLE_MOCAP
 #include "FaceCapMapper.h"
 #include "FaceCapPredictor.h"
+#include "../BodyFromPhoto/SamBodySequence.h"
+#include <QImage>
 #include <vector>
 #endif
 
+#include <functional>
 #include <memory>
 
 class QJSEngine;
@@ -81,6 +84,9 @@ class MocapController : public QObject
     Q_PROPERTY(bool samAvailable READ samAvailable CONSTANT)
     Q_PROPERTY(QString samHint READ samHint NOTIFY bodyBackendChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // progress of the background SAM work: 0..1, or -1 when it cannot say (reading a video of unknown length)
+    Q_PROPERTY(double progress READ progress NOTIFY progressChanged)
+    Q_PROPERTY(QString progressLabel READ progressLabel NOTIFY progressChanged)
     Q_PROPERTY(bool showPoseDebug READ showPoseDebug WRITE setShowPoseDebug
                NOTIFY previewSettingsChanged)
 
@@ -123,6 +129,8 @@ public:
     bool samAvailable() const;
     QString samHint() const;
     bool busy() const;
+    double progress() const;
+    QString progressLabel() const;
     bool showPoseDebug() const;
     void setShowPoseDebug(bool on);
 
@@ -152,8 +160,9 @@ public:
     // between keys. `timesCsv` (optional, one ascending second value per
     // image) overrides `intervalSec` spacing. Synchronous, one undo step.
     // Returns "" on success or an error message.
-    // SAM 3D Body backend, VIDEO FILE: decode the file (playback speed), solve every kept frame with SAM and write ONE undoable body
-    // clip on the SELECTED humanoid. Synchronous (pumps events; cancel with cancelBodyCapture()). Returns "" on success or an error.
+    // SAM 3D Body backend, VIDEO FILE: decode the file (playback speed), then solve every kept frame with SAM on a WORKER THREAD and
+    // write ONE undoable body clip on the SELECTED humanoid when it finishes. Returns "" once started (progress / busy / statusMessage
+    // report the rest; cancel with cancelBodyCapture()) or an error message.
     Q_INVOKABLE QString captureVideoBody(const QString& filePath);
     Q_INVOKABLE void cancelBodyCapture();
     Q_INVOKABLE QStringList pickPoseImages();
@@ -187,6 +196,7 @@ signals:
     void previewSettingsChanged();
     void bodyBackendChanged();
     void busyChanged();
+    void progressChanged();
     void errorOccurred(const QString& message);
 
 private:
@@ -213,6 +223,13 @@ private:
     void refreshMappingForSelection();
     void restoreEntityState();
     void setStatusMessage(const QString& message);
+    // Solve `frames` with SAM 3D Body on a worker thread (progress + cancel), then call `onDone` on the MAIN thread (Ogre and the
+    // undo stack are main-thread only). Sets busy/progress for the duration. The caller has already validated everything.
+    void runSamSolve(std::vector<QImage> frames, std::vector<double> times,
+                     std::function<void(const SamBody::MhrSequence&)> onDone);
+    void finishSamSolve(const std::shared_ptr<SamBody::MhrSequence>& seq);
+    void setProgress(double fraction, const QString& label);
+    void finishVideoRead();
 #endif
 
     struct Impl;
