@@ -240,14 +240,16 @@ bool ensureModelsBlocking(QString* error)
     QDir().mkpath(modelDir());
     for (const FileSpec& f : kFiles) {
         const QString dest = QDir(modelDir()).filePath(QString::fromLatin1(f.name));
-        if (QFileInfo::exists(dest) && (!defaultHosting || noDownload)) continue;
-        if (noDownload) {
+        if (QFileInfo::exists(dest) && !defaultHosting) continue;   // a mirror may serve a different export
+        if (noDownload && !QFileInfo::exists(dest)) {
             if (error) *error = QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SAM3DBODY_NO_DOWNLOAD")
                                     .arg(QString::fromLatin1(f.name));
             return false;
         }
         ModelFetch::Request req;
-        req.url = base + QString::fromLatin1(f.name);
+        // An empty URL = verify only: with downloads disabled an existing file is still checked against its digest
+        // (a truncated or tampered file must not reach ONNX Runtime); a mismatch deletes it and reports why.
+        req.url = noDownload ? QString() : base + QString::fromLatin1(f.name);
         req.destination = dest;
         req.label = QString::fromLatin1(f.label);
         req.timeoutMs = 3600000;                       // the backbone weights are ~3.4 GB
@@ -334,12 +336,12 @@ Result predict(const QImage& photo, const Options& opts)
         QString rembg = BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast);
         if (!rembg.isEmpty()) {
             BackgroundRemover::Options ro;
-            ro.keepAlpha = true;
-            ro.foregroundRatio = 0.0f;
             const auto cut = BackgroundRemover::removeBackground(photo, rembg, ro);
-            if (cut.ok) {
-                box = alphaBounds(cut.image);
-                r.usedMatte = box.width() > 0;
+            // The remover returns a cropped, re-padded square: its own coordinates are not the photo's.
+            // foregroundBox is the subject's box in the SOURCE image.
+            if (cut.ok && !cut.foregroundBox.isEmpty()) {
+                box = QRectF(cut.foregroundBox);
+                r.usedMatte = true;
             }
         }
         if (!(box.width() > 0))

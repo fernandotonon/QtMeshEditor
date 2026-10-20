@@ -493,6 +493,9 @@ def main():
                                   opset_version=17, dynamo=False, do_constant_folding=True)
                 ref = bb(img)
             m = onnx.load(os.path.join(tmp, "b.onnx"))
+            # save_model APPENDS to an existing external-data file: a second export into the same dir would double it
+            for stale in (out("sam3d_backbone.onnx"), out("sam3d_backbone.onnx.data")):
+                if os.path.exists(stale): os.remove(stale)
             onnx.save_model(m, out("sam3d_backbone.onnx"), save_as_external_data=True, all_tensors_to_one_file=True,
                             location="sam3d_backbone.onnx.data", size_threshold=1024)
         got = sess(out("sam3d_backbone.onnx")).run(None, {"image": img.numpy()})

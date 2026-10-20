@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -90,7 +91,10 @@ int run(int argc, char* argv[])
     }
     if (photoPath.isEmpty() || outPath.isEmpty()) { usage(); return 2; }
 
-    QImage photo(photoPath);
+    // Honour EXIF orientation (a portrait phone JPEG would otherwise arrive sideways, and --bbox is in displayed pixels).
+    QImageReader reader(photoPath);
+    reader.setAutoTransform(true);
+    QImage photo = reader.read();
     if (photo.isNull()) {
         CLIPipeline::writeCliError(QStringLiteral("Error: cannot read the image %1\n").arg(photoPath));
         return 1;
