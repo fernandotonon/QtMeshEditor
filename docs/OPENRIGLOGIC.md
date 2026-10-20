@@ -30,7 +30,10 @@ A build without the flag compiles; every entry point reports
   no source-tree writes with `READ_ONLY_SOURCE_TREE=ON`. Upstream targets
   Windows/Linux too and has no third-party runtime deps, but **Windows (MinGW)
   and Linux were not built in the spike** — they are covered by CI once the flag
-  is enabled there. Action item before enabling by default.
+  is enabled there. **Status (October 2026):** `-DENABLE_OPENRIGLOGIC=ON` is built and tested in CI on every
+  platform — Linux unit tests (amd64), Linux release `.deb` (amd64 + arm64, so the Docker image carries `qtmesh dna`),
+  macOS arm64 and Windows (MinGW, static). The CMake default stays OFF (it FetchContents a pinned OpenRigLogic commit
+  and a local configure without network access would otherwise fail); every shipped build enables it explicitly.
 * **API:** `dna::BinaryStreamReader` with layer selection (`Definition`,
   `Geometry`, `RBFBehavior`, `MachineLearnedBehavior`, `TwistSwingBehavior`,
   …), LOD selection, and a library-side coordinate-system transform.
