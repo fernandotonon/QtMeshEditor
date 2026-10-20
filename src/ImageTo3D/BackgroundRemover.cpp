@@ -340,6 +340,7 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 
         r.ok = true;
         r.usedModel = true;
+        r.foregroundBox = QRect(bx0, by0, fgW, fgH);
         r.image = composed;
         return r;
     } catch (const Ort::Exception& e) {

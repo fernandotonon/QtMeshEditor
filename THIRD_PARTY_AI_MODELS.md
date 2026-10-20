@@ -578,6 +578,36 @@ models are deliberately excluded (e.g. RigNet was rejected for #408 — GPL code
 unlicensed weights — in favour of UniRig; ShapeNet-Part/PartNet were rejected
 for #410 — non-commercial — in favour of synthetic bone-weight-derived labels).
 
+## SAM 3D Body + MHR — photo to body (issue #1100, epic #1095)
+
+`qtmesh body photo.jpg -o body.obj`, MCP `generate_body_from_photo`: one photo → a human body mesh (MHR, 18,439
+vertices) whose shape/proportions come from the person.
+
+- **What is hosted** (`fernandotonon/QtMeshEditor-models` under `sam3dbody/`, mirrored at
+  `fernandotonon/QtMeshEditor-sam3dbody-onnx`): `sam3d_backbone.onnx` (+ `.data`, fp32, DINOv3-ViT-H+/16),
+  `sam3d_decoder.onnx` (ray conditioning + promptable decoder + pose/camera heads), `mhr_body.onnx` (MHR forward, no
+  correctives, no face model), `mhr_faces.i32`, and **both licence texts**. Produced by
+  `scripts/export-sam3dbody-onnx.py` from the user's own copy of Meta's checkpoint (access to the gated HF repo
+  `facebook/sam-3d-body-dinov3` is required to re-export); uploaded with `scripts/upload-sam3dbody-models.sh`. No Meta
+  source file is redistributed — the script imports Meta's package from a local clone.
+- **Licences, per file.** The backbone and decoder graphs are derivative works of the SAM Materials and are under the
+  **SAM License** (2025-11-19). §1.b.i permits redistributing derivatives under that licence with a copy attached
+  (`LICENSE-SAM.txt` is downloaded next to the graphs and sits in both repos). The MHR body graph and topology derive from the
+  **Apache-2.0** MHR release (`LICENSE-MHR.txt`). Accepted, recorded risks (same list as the #870 decision record above):
+  indemnity (§5.b), litigation-termination, trade-controls pass-through, Meta's right to amend the terms (§8). The feature
+  is optional and downloaded on first use, never bundled; the maintainer accepted the hosting risk knowingly (2026-10-20).
+- **DINOv3 backbone code** is NOT used at runtime: the ONNX graph contains only operators and weights, so the application
+  has no dependency on `facebookresearch/dinov3`. (The export script's torch.hub fetch of that code is a developer-machine
+  step; its licence should be read by whoever re-exports.)
+- **Fidelity** (vs Meta's PyTorch on the same inputs): decoder ~1e-6, backbone ~2e-5 (fp32 here vs bf16 there), MHR ~1e-4 cm;
+  the full C++ pipeline reproduces Meta's body-only shape parameters to 0.015. **Not reproduced:** MHR pose correctives (664 MB;
+  mean 2 mm / max 25 mm on a posed body) and the face-expression model.
+- **Integrity:** every hosted file's SHA-256 is pinned in `SamBodyPredictor.cpp` and verified on download AND on an existing
+  file (default hosting only; a mirror override may serve a different export). Overrides: `QTMESH_SAM3DBODY_MODEL_BASE_URL` /
+  QSettings `ai/sam3dbodyModelBaseUrl`; `QTMESH_SAM3DBODY_NO_DOWNLOAD`.
+- **Not used:** the community C++ port `AmmarkoV/SAM3DBody-cpp` and its ONNX files were studied for the export recipe only
+  (its detector is YOLO11 = AGPL, and it vendors GPL sources — nothing from it is bundled).
+
 ## Prompt-to-3D image generation (FLUX.2-klein-4B)
 
 - **FLUX.2-klein-4B** (Black Forest Labs) — text-to-image model used to

@@ -18,6 +18,7 @@
 #include "Mocap/MocapCLI.h"
 #include "AudioToFace/LipsyncCLI.h"
 #include "DNA/DnaCLI.h"
+#include "BodyFromPhoto/BodyFromPhotoCLI.h"
 #ifdef ENABLE_MOCAP
 #include "Mocap/MocapCameraHints.h"
 #endif
@@ -971,6 +972,11 @@ void CLIPipeline::printUsage()
         "                                    mesh's ARKit-style morph targets (+ head rotation); --body\n"
         "                                    retargets the tracked full-body pose onto the humanoid rig.\n"
         "\n"
+        "  body <photo> -o <body.obj> [--pose neutral|posed] [--bbox x1,y1,x2,y2] [--no-detect]\n"
+        "       [--facing-z] [--json] | body --download\n"
+        "                                    Photo -> human body mesh (SAM 3D Body + MHR, ONNX): the\n"
+        "                                    person's real shape and proportions. Models download on first use.\n"
+        "\n"
         "  ps1 capture <iso> --bios <bios> [--frames N | --scene Ns] [--script in.json]\n"
         "              [--auto-input] [--tracked-only] [--smooth] [--drop-slivers]\n"
         "              [--dedupe-strict] [-o out.gltf] [--json]\n"
@@ -1728,6 +1734,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "mocap") rc = MocapCLI::run(argc, argv);
     else if (cmd == "lipsync") rc = AudioToFace::LipsyncCLI::run(argc, argv);
     else if (cmd == "dna") rc = Dna::DnaCLI::run(argc, argv);
+    else if (cmd == "body") rc = SamBody::BodyCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);

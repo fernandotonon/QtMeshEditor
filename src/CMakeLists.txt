@@ -232,6 +232,8 @@ PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
+BodyFromPhoto/SamBodyPredictor.cpp
+BodyFromPhoto/BodyFromPhotoCLI.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp

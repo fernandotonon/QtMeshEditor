@@ -78,6 +78,9 @@ public:
         /// model is missing, and a caller that asked for Best should be able to
         /// tell rather than silently believing it got the better matte.
         Quality qualityUsed = Quality::Fast;
+        /// Subject bounding box (alpha > 0.5) in the SOURCE image's pixel coordinates; empty when no matte ran.
+        /// The returned `image` is cropped and re-padded, so its own coordinates are NOT the source's.
+        QRect foregroundBox;
     };
 
     // True only when built with ENABLE_ONNX.

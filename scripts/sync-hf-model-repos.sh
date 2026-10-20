@@ -31,6 +31,8 @@
 #   segveh     → QtMeshEditor-mesh-segmentation-vehicle    (CC-BY-4.0, in-house #818 B2)
 #   segbld     → QtMeshEditor-mesh-segmentation-building   (CC-BY-4.0, in-house #818 B2)
 #   segcls     → QtMeshEditor-mesh-segmentation-category   (CC-BY-4.0, in-house #818 B2 Auto dispatcher)
+#   sam3dbody  → QtMeshEditor-sam3dbody-onnx   (SAM License + Apache-2.0 MHR data; #1100 — upload with
+#                                               upload-sam3dbody-models.sh, which also writes the card)
 #   mocap-* (5, #869; Apache, converted Google MediaPipe graphs):
 #     blazeface       → QtMeshEditor-blazeface-onnx       (face detector)
 #     facemesh        → QtMeshEditor-facemesh-onnx        (478 face landmarks)
@@ -66,6 +68,7 @@ declare -A REPOS=(
   [depthanything]=QtMeshEditor-depthanything-onnx
   [birefnet]=QtMeshEditor-birefnet-onnx
   [lama]=QtMeshEditor-lama-onnx
+  [sam3dbody]=QtMeshEditor-sam3dbody-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -89,6 +92,7 @@ declare -A FILES=(
   [depthanything]="depth/da2_small.onnx"
   [birefnet]="rembg/birefnet.onnx"
   [lama]="pbr/lama.onnx"
+  [sam3dbody]="sam3dbody/sam3d_backbone.onnx sam3dbody/sam3d_backbone.onnx.data sam3dbody/sam3d_decoder.onnx sam3dbody/mhr_body.onnx sam3dbody/mhr_faces.i32 sam3dbody/LICENSE-SAM.txt sam3dbody/LICENSE-MHR.txt"
 )
 
 sync_one() {
