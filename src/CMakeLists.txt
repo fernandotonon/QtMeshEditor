@@ -236,6 +236,7 @@ DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
 DNA/DnaPsdBake.cpp
+DNA/DnaTextures.cpp
 DNA/DnaFit.cpp
 DNA/DnaRegister.cpp
 DNA/DnaFitWrite.cpp
