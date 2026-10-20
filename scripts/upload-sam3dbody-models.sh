@@ -17,7 +17,7 @@ AGG="${AGG:-fernandotonon/QtMeshEditor-models}"
 DED="${DED:-fernandotonon/QtMeshEditor-sam3dbody-onnx}"
 OUT_DIR="${OUT_DIR:?set OUT_DIR to the export output dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data)
+FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_uv.bin mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data)
 
 retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 8 ] && return 1; echo "retry $n..."; sleep 10; done; }
 

@@ -92,6 +92,7 @@ QString backbonePath();
 QString decoderPath();
 QString mhrPath();
 QString facesPath();
+QString uvPath();                          ///< mhr_uv.bin (see BodyTexture.h)
 bool modelsPresent();
 bool isAvailable();                       ///< built with ENABLE_ONNX
 /// Fetch whatever is missing (blocks on the shared downloader). Empty `error` on success.

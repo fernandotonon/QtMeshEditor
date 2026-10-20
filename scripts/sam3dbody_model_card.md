@@ -32,6 +32,7 @@ This repository is the standalone model card + mirror. The application downloads
 | `sam3d_decoder.onnx` | camera-ray conditioning + promptable decoder (6 layers, intermediate pose feedback) + pose/camera heads | SAM License |
 | `mhr_body.onnx` | MHR body forward (shape `[1,45]` + model params `[1,204]` → vertices in cm, joint translations/rotations), no pose correctives, no face model | Apache-2.0 (MHR data) |
 | `mhr_faces.i32` | MHR body topology, 36,874 triangles, int32 little-endian | Apache-2.0 (MHR data) |
+| `mhr_uv.bin` | MHR UV layout (int32 nt, nf; float32 texcoords[nt,2]; int32 texcoord_faces[nf,3]) for texturing | Apache-2.0 (MHR data) |
 | `LICENSE-SAM.txt`, `LICENSE-MHR.txt` | the licence texts — **the SAM License requires a copy to travel with the SAM materials** | |
 
 ## Provenance and fidelity

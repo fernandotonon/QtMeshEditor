@@ -243,6 +243,9 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/BodyFromPhotoCLI.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/BodyTexture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/BodyTextureTrellis.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/BodyTexture_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRigLogic.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaArkitMap.cpp

@@ -37,6 +37,7 @@
 #include "PoseLibrary.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
+#include "BodyFromPhoto/BodyTextureTrellis.h"
 #include "BodyFromPhoto/SamBodyPredictor.h"
 #include "DNA/DnaCLI.h"
 #include "DNA/DnaCorrectiveManager.h"
@@ -3776,10 +3777,33 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
         return makeErrorResult(QStringLiteral("photo to body failed: %1").arg(r.error));
 
     const auto& verts = pose == QLatin1String("posed") ? r.body.posedVertices : r.body.neutralVertices;
-    const QByteArray obj = SamBody::toObj(verts, r.body.triangles, !args.value("facing_z").toBool(false));
-    QSaveFile f(outPath);
-    if (!f.open(QIODevice::WriteOnly) || f.write(obj) != obj.size() || !f.commit())
-        return makeErrorResult(QStringLiteral("could not write %1").arg(outPath));
+    const bool facingMinusZ = !args.value("facing_z").toBool(false);
+    const QString textureMode = args.value("texture").toString().toLower();
+    if (!textureMode.isEmpty() && textureMode != QLatin1String("trellis2"))
+        return makeErrorResult("'texture' must be trellis2 (or omitted).");
+    QString textureNote;
+    if (textureMode == QLatin1String("trellis2")) {
+        const SamBody::UvLayout uv = SamBody::loadUvLayout(SamBody::uvPath());
+        if (!uv.valid())
+            return makeErrorResult(QStringLiteral("the MHR UV layout (%1) is missing or damaged; re-download the SAM 3D Body models.").arg(SamBody::uvPath()));
+        SamBody::TexturedBodyOptions to;
+        to.textureSize = qBound(256, args.value("texture_size").toInt(2048), 4096);
+        const QString preset = args.value("trellis_preset").toString(QStringLiteral("balanced")).toLower();
+        if (preset != QLatin1String("fast") && preset != QLatin1String("balanced") && preset != QLatin1String("high"))
+            return makeErrorResult("'trellis_preset' must be fast, balanced or high.");
+        to.trellisPreset = preset;
+        const SamBody::TexturedBodyResult tr = SamBody::textureBodyFromTrellis(photo, verts, r.body.triangles, uv, to);
+        if (!tr.ok) return makeErrorResult(QStringLiteral("texturing from TRELLIS.2 failed: %1").arg(tr.error));
+        const QString we = SamBody::writeTexturedBody(outPath, verts, r.body.triangles, uv, tr.transfer, facingMinusZ);
+        if (!we.isEmpty()) return makeErrorResult(we);
+        textureNote = QStringLiteral("texture coverage %1%, wrap residual %2% of height")
+                          .arg(tr.transfer.coverage * 100.0f, 0, 'f', 1).arg(tr.transfer.meanDistanceFraction * 100.0f, 0, 'f', 2);
+    } else {
+        const QByteArray obj = SamBody::toObj(verts, r.body.triangles, facingMinusZ);
+        QSaveFile f(outPath);
+        if (!f.open(QIODevice::WriteOnly) || f.write(obj) != obj.size() || !f.commit())
+            return makeErrorResult(QStringLiteral("could not write %1").arg(outPath));
+    }
 
     float ymin = 1e30f, ymax = -1e30f;
     for (size_t i = 1; i < verts.size(); i += 3) { ymin = std::min(ymin, verts[i]); ymax = std::max(ymax, verts[i]); }
@@ -3793,6 +3817,8 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
     result["heightMeters"] = ymax - ymin;
     result["bbox"] = QJsonArray{r.bboxUsed.left(), r.bboxUsed.top(), r.bboxUsed.right(), r.bboxUsed.bottom()};
     result["personFoundByMatte"] = r.usedMatte;
+    result["textured"] = !textureNote.isEmpty();
+    if (!textureNote.isEmpty()) result["textureNote"] = textureNote;
     if (!r.warning.isEmpty()) result["warning"] = r.warning;
     return result;
 #endif
@@ -13442,6 +13468,11 @@ QJsonArray MCPServer::buildToolsList()
             {"description", "Find the person by background removal when no bbox is given (default true; false uses the whole photo)."}};
         props["facing_z"] = QJsonObject{{"type", "boolean"},
             {"description", "Keep the MHR model's own +Z facing instead of the editor's -Z (default false)."}};
+        props["texture"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2"}},
+            {"description", "Also texture the body: runs TRELLIS.2 on the photo and bakes its appearance (including the unseen back) onto the MHR UV atlas; writes <stem>.obj + .mtl + _diffuse.png (+ _roughness/_metallic). Needs the TRELLIS.2 runtime; takes minutes."}};
+        props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Atlas edge in pixels, 256..4096 (default 2048)."}};
+        props["trellis_preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}},
+            {"description", "TRELLIS.2 quality preset when texture is trellis2 (default balanced)."}};
         appendTool(
             "generate_body_from_photo",
             "Predict a HUMAN BODY mesh from ONE photo (issue #1100) with Meta's SAM 3D Body (body branch, ONNX) and the "

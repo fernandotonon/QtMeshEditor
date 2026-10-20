@@ -234,6 +234,8 @@ DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
 BodyFromPhoto/SamBodyPredictor.cpp
 BodyFromPhoto/BodyFromPhotoCLI.cpp
+BodyFromPhoto/BodyTexture.cpp
+BodyFromPhoto/BodyTextureTrellis.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp

@@ -1,5 +1,7 @@
 #include "BodyFromPhotoCLI.h"
 
+#include "BodyTexture.h"
+#include "BodyTextureTrellis.h"
 #include "SamBodyPredictor.h"
 #include "../CLIPipeline.h"
 #include "../SentryReporter.h"
@@ -23,6 +25,7 @@ void usage()
 {
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh body <photo> -o <body.obj> [--pose neutral|posed] [--bbox x1,y1,x2,y2] [--no-detect]\n"
+        "                  [--texture trellis2 [--texture-size N] [--trellis-preset fast|balanced|high]]\n"
         "                  [--facing-z] [--json]\n"
         "       qtmesh body --download\n"
         "\n"
@@ -32,6 +35,10 @@ void usage()
         "(pose correctives are not reproduced: posed vertices are within ~2 mm mean / 25 mm max of the\n"
         "full model). The person is found by background removal unless --bbox is given (pixels).\n"
         "The OBJ is in metres, Y up, facing -Z (the editor's convention); --facing-z keeps the model's own +Z.\n"
+        "--texture trellis2 also runs TRELLIS.2 on the photo and bakes its appearance (including the back) onto the\n"
+        "body's UV atlas: a .glb output is one self-contained file (open it in the editor); .obj writes\n"
+        "<stem>.obj + .mtl + _diffuse.png (+ _roughness/_metallic when TRELLIS baked them; the editor does not bind an OBJ's MTL).\n"
+        "Needs the TRELLIS.2 runtime (trellis.cpp or the Python sidecar).\n"
         "Models (~3.6 GB) download on first use; see THIRD_PARTY_AI_MODELS.md for the SAM License.\n"
         "Needs a build with -DENABLE_ONNX=ON.\n"));
 }
@@ -44,6 +51,9 @@ int run(int argc, char* argv[])
     QString pose = QStringLiteral("neutral");
     QRectF bbox;
     bool autoDetect = true, facingZ = false, json = false, download = false;
+    QString textureMode;
+    int textureSize = 2048;
+    QString trellisPreset = QStringLiteral("balanced");
 
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -67,6 +77,19 @@ int run(int argc, char* argv[])
                 CLIPipeline::writeCliError(QStringLiteral("Error: --bbox must be x1,y1,x2,y2 with x2>x1, y2>y1\n")); return 2;
             }
             bbox = QRectF(v[0], v[1], v[2] - v[0], v[3] - v[1]);
+        } else if (a == "--texture") {
+            if (i + 1 >= argc) { CLIPipeline::writeCliError(QStringLiteral("Error: --texture requires trellis2\n")); return 2; }
+            textureMode = QString::fromLocal8Bit(argv[++i]).toLower();
+            if (textureMode != "trellis2") { CLIPipeline::writeCliError(QStringLiteral("Error: --texture must be trellis2\n")); return 2; }
+        } else if (a == "--texture-size") {
+            bool ok = false;
+            textureSize = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]).toInt(&ok) : 0;
+            if (!ok || textureSize < 256 || textureSize > 4096) { CLIPipeline::writeCliError(QStringLiteral("Error: --texture-size must be 256..4096\n")); return 2; }
+        } else if (a == "--trellis-preset") {
+            trellisPreset = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]).toLower() : QString();
+            if (trellisPreset != "fast" && trellisPreset != "balanced" && trellisPreset != "high") {
+                CLIPipeline::writeCliError(QStringLiteral("Error: --trellis-preset must be fast, balanced or high\n")); return 2;
+            }
         } else if (a == "--no-detect") autoDetect = false;
         else if (a == "--facing-z") facingZ = true;
         else if (a == "--json") json = true;
@@ -118,11 +141,35 @@ int run(int argc, char* argv[])
     if (!r.warning.isEmpty()) CLIPipeline::writeCliError(QStringLiteral("Warning: %1\n").arg(r.warning));
 
     const auto& verts = pose == "posed" ? r.body.posedVertices : r.body.neutralVertices;
-    const QByteArray obj = toObj(verts, r.body.triangles, !facingZ);
-    QSaveFile f(outPath);
-    if (!f.open(QIODevice::WriteOnly) || f.write(obj) != obj.size() || !f.commit()) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: cannot write %1\n").arg(outPath));
-        return 1;
+    bool textured = false;
+    QString textureNote;
+    if (textureMode == "trellis2") {
+        const UvLayout uv = loadUvLayout(uvPath());
+        if (!uv.valid()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: the MHR UV layout (%1) is missing or damaged; run qtmesh body --download\n").arg(uvPath()));
+            return 1;
+        }
+        TexturedBodyOptions to;
+        to.textureSize = textureSize;
+        to.trellisPreset = trellisPreset;
+        const TexturedBodyResult tr = textureBodyFromTrellis(photo, verts, r.body.triangles, uv, to);
+        if (!tr.ok) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(tr.error));
+            return 1;
+        }
+        for (const QString& n : tr.notes) CLIPipeline::writeCliError(QStringLiteral("Note: %1\n").arg(n));
+        const QString we = writeTexturedBody(outPath, verts, r.body.triangles, uv, tr.transfer, !facingZ);
+        if (!we.isEmpty()) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(we)); return 1; }
+        textured = true;
+        textureNote = QStringLiteral("texture coverage %1%, wrap residual %2% of height")
+                          .arg(tr.transfer.coverage * 100.0f, 0, 'f', 1).arg(tr.transfer.meanDistanceFraction * 100.0f, 0, 'f', 2);
+    } else {
+        const QByteArray obj = toObj(verts, r.body.triangles, !facingZ);
+        QSaveFile f(outPath);
+        if (!f.open(QIODevice::WriteOnly) || f.write(obj) != obj.size() || !f.commit()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: cannot write %1\n").arg(outPath));
+            return 1;
+        }
     }
 
     float ymin = 1e30f, ymax = -1e30f;
@@ -136,13 +183,16 @@ int run(int argc, char* argv[])
         o["heightMeters"] = ymax - ymin;
         o["bbox"] = QJsonArray{r.bboxUsed.left(), r.bboxUsed.top(), r.bboxUsed.right(), r.bboxUsed.bottom()};
         o["personFoundByMatte"] = r.usedMatte;
+        o["textured"] = textured;
+        if (textured) o["textureNote"] = textureNote;
         QJsonArray shape; for (float s : r.body.shape) shape.append(s);
         o["shape"] = shape;
         if (!r.warning.isEmpty()) o["warning"] = r.warning;
         CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } else {
-        CLIPipeline::writeOutput(QStringLiteral("Wrote %1 (%2 body, %3 vertices, %4 m tall)\n")
-                                     .arg(outPath, pose).arg(verts.size() / 3).arg(ymax - ymin, 0, 'f', 2));
+        CLIPipeline::writeOutput(QStringLiteral("Wrote %1 (%2 body, %3 vertices, %4 m tall%5)\n")
+                                     .arg(outPath, pose).arg(verts.size() / 3).arg(ymax - ymin, 0, 'f', 2)
+                                     .arg(textured ? QStringLiteral(", textured: ") + textureNote : QString()));
     }
     return 0;
 }

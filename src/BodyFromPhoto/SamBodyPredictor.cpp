@@ -31,6 +31,7 @@ constexpr FileSpec kFiles[] = {
     {"sam3d_decoder.onnx",       "SAM 3D Body decoder",            "b47971ea3f1cd7533f4a0d6ef7113db8bfb1e0a4726019d2fe3ebd9801440c47"},
     {"mhr_body.onnx",            "MHR body model",                 "1b5eea8284226dbee296968d89605cceb463f278f5ecdb73f59cba26fed71359"},
     {"mhr_faces.i32",            "MHR body topology",              "f6748e290ef37fbb6877c4cc5bd7287105db9e98252b0ba170ae9ac3c45eacd6"},
+    {"mhr_uv.bin",               "MHR UV layout",                  "87dd98b37aa3c54147c6fb84a1bd774261d21b0c25677e4d994dc9e6eed20caf"},
     // The SAM License requires a copy of itself to accompany the SAM materials wherever they are distributed.
     {"LICENSE-SAM.txt",          "SAM License",                    "b3a5a0e2d973ab80e6610ccf1cffc40756050d0ace3cd4fec879b3ec290b2e9b"},
     {"LICENSE-MHR.txt",          "MHR (Apache-2.0) licence",       "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
@@ -177,6 +178,7 @@ QString backbonePath() { return QDir(modelDir()).filePath(QStringLiteral("sam3d_
 QString decoderPath()  { return QDir(modelDir()).filePath(QStringLiteral("sam3d_decoder.onnx")); }
 QString mhrPath()      { return QDir(modelDir()).filePath(QStringLiteral("mhr_body.onnx")); }
 QString facesPath()    { return QDir(modelDir()).filePath(QStringLiteral("mhr_faces.i32")); }
+QString uvPath()       { return QDir(modelDir()).filePath(QStringLiteral("mhr_uv.bin")); }
 
 bool modelsPresent()
 {
