@@ -425,6 +425,7 @@ int run(int argc, char* argv[])
     // sam3dbody (#1100): the MHR pose regressor, per frame, no landmark detour. Joint rotations feed recordBody directly.
     std::unique_ptr<SamBody::Runner> samRunner;
     std::vector<QImage> samFrames;                      // frames kept (downscaled) and solved AFTER the source finishes: a slow
+    bool samTruncated = false;
     std::vector<double> samTimes;                       // model must not stall a real-time video player
     if (body && algo == QLatin1String("sam3dbody") && !noModel && !poseKeyMode) {
         QString why;
@@ -566,6 +567,17 @@ int run(int argc, char* argv[])
                              samples.push_back(s);
                          }
                          if (body && samRunner) {
+                             constexpr size_t kMaxSamFrames = 1200;   // the frames live in memory until the solve
+                             if (samFrames.size() >= kMaxSamFrames) {
+                                 if (!samTruncated)
+                                     CLIPipeline::writeCliError(QStringLiteral(
+                                         "Warning: SAM 3D Body keeps at most %1 frames; the rest of the source is ignored "
+                                         "(use a lower --fps or a shorter clip).\n").arg(kMaxSamFrames));
+                                 samTruncated = true;
+                                 finished = true;
+                                 loop.quit();
+                                 return;
+                             }
                              samFrames.push_back(SamBody::downscaledForCapture(frame.image));
                              samTimes.push_back(frame.timeSec);
                          } else if (body) {
@@ -666,7 +678,7 @@ int run(int argc, char* argv[])
             MocapRecorder::BodyRecordOptions bodyOptions;
             bodyOptions.clipName = bodyReport.clipName;
             bodyOptions.rootMotion = rootMotion;
-            bodyReport = MocapRecorder::recordBodyMhr(entity, seq, static_cast<int>(fps), bodyOptions);
+            bodyReport = MocapRecorder::recordBodyMhr(entity, seq, 0, bodyOptions);   // the decoded timestamps
             bodyReport.framesProcessed = static_cast<int>(seq.jointQuat.size());
             if (seq.dropouts > 0)
                 CLIPipeline::writeCliError(QStringLiteral("Warning: %1 frame(s) had no person: the previous pose was held.\n").arg(seq.dropouts));

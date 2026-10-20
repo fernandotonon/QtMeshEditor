@@ -3335,6 +3335,7 @@ Rectangle {
                         id: previewMa
                         anchors.fill: parent
                         hoverEnabled: true
+                        enabled: !MocapController.busy
                         onClicked: {
                             if (MocapController.state === 0)
                                 MocapController.startPreview(
@@ -3872,6 +3873,7 @@ Rectangle {
                         id: recordMa
                         anchors.fill: parent
                         hoverEnabled: true
+                        enabled: !MocapController.busy      // a SAM solve is running: no second take on top of it
                         onClicked: recording ? MocapController.stopRecording()
                                              : MocapController.startRecording()
                     }

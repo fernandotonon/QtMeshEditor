@@ -9865,11 +9865,12 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                 QEventLoop samLoop;
                 bool samFinished = false;
                 QString samStreamError;
+                bool samTruncated = false;
+                const std::string samEntityName = entity->getName();   // by NAME: the entity may be gone after the event pumping below
                 QObject::connect(&samSource, &VideoFrameSource::frameReady, [&](const MocapFrame& f) {
-                    if (frames.size() < 1200) {
-                        frames.push_back(SamBody::downscaledForCapture(f.image));
-                        times.push_back(f.timeSec);
-                    }
+                    if (frames.size() >= 1200) { samTruncated = true; samFinished = true; samLoop.quit(); return; }   // stop decoding, report it
+                    frames.push_back(SamBody::downscaledForCapture(f.image));
+                    times.push_back(f.timeSec);
                     emit toolProgress(QStringLiteral("capture_body_from_video"), QStringLiteral("reading the video"), static_cast<int>(frames.size()), 0);
                     if (m_toolCancelRequested) { samFinished = true; samLoop.quit(); }
                 });
@@ -9893,9 +9894,14 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                 MocapRecorder::BodyRecordOptions samOptions;
                 samOptions.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
                 samOptions.algorithmUsed = QStringLiteral("sam3dbody");
-                const int samClipFps = static_cast<int>(std::lround(samFps));
                 return runOgreOp([&]() -> QJsonObject {
-                    auto* cmd = new RecordBodyClipCommand(entity->getName(), seq, samClipFps, samOptions);
+                    // re-resolve: solving pumps events for minutes, so the pointer taken before it may be dangling
+                    Ogre::Entity* target = nullptr;
+                    if (Manager* m2 = Manager::getSingletonPtr(); m2 && m2->getSceneMgr() && m2->getSceneMgr()->hasEntity(samEntityName))
+                        target = m2->getSceneMgr()->getEntity(samEntityName);
+                    if (!target)
+                        return makeErrorResult("Error: the target entity was removed while the capture ran");
+                    auto* cmd = new RecordBodyClipCommand(samEntityName, seq, 0, samOptions);   // the decoded timestamps
                     UndoManager::getSingleton()->push(cmd);
                     MocapRecorder::BodyRecordReport report = cmd->report();
                     report.framesProcessed = static_cast<int>(seq.jointQuat.size());
@@ -9903,7 +9909,7 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                         return makeErrorResult(QString("Error: %1").arg(report.error));
                     const QString outputPath = args.value("output_path").toString();
                     if (!outputPath.isEmpty()) {
-                        Ogre::SceneNode* node = entity->getParentSceneNode();
+                        Ogre::SceneNode* node = target->getParentSceneNode();
                         const QString fmt = CLIPipeline::formatForExtension(outputPath);
                         if (!node || MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
                             return makeErrorResult(QString("Error: recorded, but export to %1 failed").arg(outputPath));
@@ -9913,6 +9919,7 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                          {QStringLiteral("tracks"), static_cast<qint64>(report.tracksWritten)}},
                         GamificationManager::Surface::Mcp);
                     QJsonObject content;
+                    content["truncated"] = samTruncated;
                     content["ok"] = true;
                     content["clipName"] = report.clipName;
                     content["algorithmUsed"] = QStringLiteral("sam3dbody");
