@@ -204,6 +204,21 @@ RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSe
         out.error = QStringLiteral("need at least 2 solved frames");
         return out;
     }
+    if (qEnvironmentVariableIsSet("QTMESH_SAM_DUMP"))
+        for (size_t f = 0; f < seq.jointPos.size(); ++f) {
+            auto d = [&](const char* a, const char* b) {
+                const auto& p = seq.jointPos[f];
+                const int ia = mhrJointIndex(a), ib = mhrJointIndex(b);
+                Ogre::Vector3 v(p[size_t(ib) * 3] - p[size_t(ia) * 3], p[size_t(ib) * 3 + 1] - p[size_t(ia) * 3 + 1],
+                                p[size_t(ib) * 3 + 2] - p[size_t(ia) * 3 + 2]);
+                v.normalise();
+                return v;
+            };
+            const Ogre::Vector3 lu = d("l_uparm", "l_lowarm"), ll = d("l_lowarm", "l_wrist"), ru = d("r_uparm", "r_lowarm"),
+                                rl = d("r_lowarm", "r_wrist");
+            fprintf(stderr, "[sam-dump] f%zu t=%.2f LU(%.2f %.2f %.2f) LL(%.2f %.2f %.2f) RU(%.2f %.2f %.2f) RL(%.2f %.2f %.2f)\n", f,
+                    seq.times[f], lu.x, lu.y, lu.z, ll.x, ll.y, ll.z, ru.x, ru.y, ru.z, rl.x, rl.y, rl.z);
+        }
     const Retarget::RigDesc mhr = mhrRigDesc(seq.restPos, seq.restQuat);
     if (mhr.size() == 0) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
     std::vector<Retarget::LocalPose> frames;
