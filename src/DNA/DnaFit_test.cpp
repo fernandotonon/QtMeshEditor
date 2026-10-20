@@ -716,6 +716,24 @@ TEST(DnaAlignLimbs, BlendedLinearCarriesAVertexExactlyAsItsPositionMoved)
     }
 }
 
+TEST(DnaRegister, MetaHumanRigNamesOfMetasMhrBodyPairWithTheMetaHumanJoints)
+{
+    // Meta's Momentum Human Rig (the body model SAM 3D Body outputs) names its joints c_head / l_uparm / l_wrist / ...
+    std::vector<std::pair<QString, std::array<double, 3>>> bones;
+    double y = 0;
+    for (const char* n : {"root", "c_spine1", "c_spine3", "c_neck", "c_head", "l_uparm", "r_uparm", "l_lowarm", "r_lowarm", "l_wrist", "r_wrist",
+                          "l_upleg", "r_upleg", "l_lowleg", "r_lowleg", "l_foot", "r_foot", "Collision 3", "c_tongue0"})
+        bones.push_back({QString::fromLatin1(n), {0.0, y += 0.1, 0.0}});
+    QStringList unmatched;
+    const auto anchors = matchJointAnchors(bones, &unmatched);
+    EXPECT_EQ(anchors.size(), 17u);
+    EXPECT_TRUE(unmatched.isEmpty());
+    auto target = [&](const char* body) { for (const auto& a : anchors) if (a.bodyJoint == body) return a.target[1]; return -1.0; };
+    EXPECT_NEAR(target("pelvis"), 0.1, 1e-9);        // root
+    EXPECT_NEAR(target("upperarm_l"), 0.6, 1e-9);    // l_uparm
+    EXPECT_NEAR(target("hand_r"), 1.1, 1e-9);        // r_wrist
+}
+
 TEST(DnaRegister, ATargetFacingTheOtherWayTurnsTheBodyInsteadOfCrossingSides)
 {
     // The target is the rig turned 180 degrees about Y (it faces the other way, so its LEFT

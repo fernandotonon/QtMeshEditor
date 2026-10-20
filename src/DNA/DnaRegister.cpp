@@ -445,23 +445,23 @@ std::vector<std::pair<QString, QStringList>> defaultJointNameMap()
         out.push_back({QString::fromLatin1(base) + "_r", r});
     };
     std::vector<std::pair<QString, QStringList>> m;
-    m.push_back({"pelvis", {"Hips", "hips", "pelvis", "Pelvis", "mixamorig:Hips", "mixamorig_Hips"}});
-    m.push_back({"spine_03", {"Spine1", "spine1", "Spine_1", "mixamorig:Spine1", "mixamorig_Spine1"}});
-    m.push_back({"spine_05", {"Spine2", "spine2", "Chest", "UpperChest", "mixamorig:Spine2", "mixamorig_Spine2"}});
-    m.push_back({"neck_01", {"Neck", "neck", "mixamorig:Neck", "mixamorig_Neck"}});
-    m.push_back({"head", {"Head", "head", "mixamorig:Head", "mixamorig_Head"}});
-    side("upperarm", {"LeftArm", "left_arm", "L_UpperArm", "UpperArm_L", "mixamorig:LeftArm", "mixamorig_LeftArm"},
-         {"RightArm", "right_arm", "R_UpperArm", "UpperArm_R", "mixamorig:RightArm", "mixamorig_RightArm"}, m);
-    side("lowerarm", {"LeftForeArm", "left_forearm", "L_LowerArm", "LowerArm_L", "mixamorig:LeftForeArm", "mixamorig_LeftForeArm"},
-         {"RightForeArm", "right_forearm", "R_LowerArm", "LowerArm_R", "mixamorig:RightForeArm", "mixamorig_RightForeArm"}, m);
-    side("hand", {"LeftHand", "left_hand", "L_Hand", "Hand_L", "mixamorig:LeftHand", "mixamorig_LeftHand"},
-         {"RightHand", "right_hand", "R_Hand", "Hand_R", "mixamorig:RightHand", "mixamorig_RightHand"}, m);
-    side("thigh", {"LeftUpLeg", "left_upleg", "L_UpperLeg", "UpperLeg_L", "mixamorig:LeftUpLeg", "mixamorig_LeftUpLeg"},
-         {"RightUpLeg", "right_upleg", "R_UpperLeg", "UpperLeg_R", "mixamorig:RightUpLeg", "mixamorig_RightUpLeg"}, m);
-    side("calf", {"LeftLeg", "left_leg", "L_LowerLeg", "LowerLeg_L", "mixamorig:LeftLeg", "mixamorig_LeftLeg"},
-         {"RightLeg", "right_leg", "R_LowerLeg", "LowerLeg_R", "mixamorig:RightLeg", "mixamorig_RightLeg"}, m);
-    side("foot", {"LeftFoot", "left_foot", "L_Foot", "Foot_L", "mixamorig:LeftFoot", "mixamorig_LeftFoot"},
-         {"RightFoot", "right_foot", "R_Foot", "Foot_R", "mixamorig:RightFoot", "mixamorig_RightFoot"}, m);
+    m.push_back({"pelvis", {"Hips", "hips", "pelvis", "Pelvis", "mixamorig:Hips", "mixamorig_Hips", "root"}});
+    m.push_back({"spine_03", {"Spine1", "spine1", "Spine_1", "mixamorig:Spine1", "mixamorig_Spine1", "c_spine1"}});
+    m.push_back({"spine_05", {"Spine2", "spine2", "Chest", "UpperChest", "mixamorig:Spine2", "mixamorig_Spine2", "c_spine3"}});
+    m.push_back({"neck_01", {"Neck", "neck", "mixamorig:Neck", "mixamorig_Neck", "c_neck"}});
+    m.push_back({"head", {"Head", "head", "mixamorig:Head", "mixamorig_Head", "c_head"}});
+    side("upperarm", {"LeftArm", "left_arm", "L_UpperArm", "UpperArm_L", "mixamorig:LeftArm", "mixamorig_LeftArm", "l_uparm"},
+         {"RightArm", "right_arm", "R_UpperArm", "UpperArm_R", "mixamorig:RightArm", "mixamorig_RightArm", "r_uparm"}, m);
+    side("lowerarm", {"LeftForeArm", "left_forearm", "L_LowerArm", "LowerArm_L", "mixamorig:LeftForeArm", "mixamorig_LeftForeArm", "l_lowarm"},
+         {"RightForeArm", "right_forearm", "R_LowerArm", "LowerArm_R", "mixamorig:RightForeArm", "mixamorig_RightForeArm", "r_lowarm"}, m);
+    side("hand", {"LeftHand", "left_hand", "L_Hand", "Hand_L", "mixamorig:LeftHand", "mixamorig_LeftHand", "l_wrist"},
+         {"RightHand", "right_hand", "R_Hand", "Hand_R", "mixamorig:RightHand", "mixamorig_RightHand", "r_wrist"}, m);
+    side("thigh", {"LeftUpLeg", "left_upleg", "L_UpperLeg", "UpperLeg_L", "mixamorig:LeftUpLeg", "mixamorig_LeftUpLeg", "l_upleg"},
+         {"RightUpLeg", "right_upleg", "R_UpperLeg", "UpperLeg_R", "mixamorig:RightUpLeg", "mixamorig_RightUpLeg", "r_upleg"}, m);
+    side("calf", {"LeftLeg", "left_leg", "L_LowerLeg", "LowerLeg_L", "mixamorig:LeftLeg", "mixamorig_LeftLeg", "l_lowleg"},
+         {"RightLeg", "right_leg", "R_LowerLeg", "LowerLeg_R", "mixamorig:RightLeg", "mixamorig_RightLeg", "r_lowleg"}, m);
+    side("foot", {"LeftFoot", "left_foot", "L_Foot", "Foot_L", "mixamorig:LeftFoot", "mixamorig_LeftFoot", "l_foot"},
+         {"RightFoot", "right_foot", "R_Foot", "Foot_R", "mixamorig:RightFoot", "mixamorig_RightFoot", "r_foot"}, m);
     return m;
 }
 
