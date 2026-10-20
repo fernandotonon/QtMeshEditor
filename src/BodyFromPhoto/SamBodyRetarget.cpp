@@ -110,7 +110,7 @@ std::string mhrAlias(const std::string& n)
     return n;
 }
 
-Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& frames)
+Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& frames, float strength)
 {
     const int root = mhrJointIndex("root"), neck = mhrJointIndex("c_neck");
     Ogre::Vector3 sum = Ogre::Vector3::ZERO;
@@ -129,6 +129,12 @@ Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& frames
     // Shortest arc sum -> +Y, but only its horizontal part: project the rotation axis onto the ground plane (axis.y = 0) so
     // the heading is not changed. The axis of the arc is sum x Y, which is already horizontal.
     Ogre::Quaternion c = sum.getRotationTo(Ogre::Vector3::UNIT_Y);
+    c.normalise();
+    if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
+        fprintf(stderr, "[sam-upright] mean torso axis (%.3f %.3f %.3f) over %d frames\n", sum.x, sum.y, sum.z, n);
+    if (qEnvironmentVariableIsSet("QTMESH_SAM_UPRIGHT")) strength = qEnvironmentVariable("QTMESH_SAM_UPRIGHT").toFloat();
+    strength = std::clamp(strength, 0.0f, 1.0f);
+    if (strength < 1.0f) c = Ogre::Quaternion::Slerp(strength, Ogre::Quaternion::IDENTITY, c, true);
     c.normalise();
     return c;
 }

@@ -126,7 +126,7 @@ TEST(SamBodyRetarget, UprightCorrectionStandsTheTorsoUpWithoutTurningIt)
     const int neck = mhrJointIndex("c_neck");
     pos[size_t(neck) * 3 + 1] = 0.45f;
     pos[size_t(neck) * 3 + 2] = 0.20f;
-    const Ogre::Quaternion c = uprightCorrection({pos, pos, pos});
+    const Ogre::Quaternion c = uprightCorrection({pos, pos, pos}, 1.0f);
     const Ogre::Vector3 up = c * Ogre::Vector3(0.0f, 0.45f, 0.20f).normalisedCopy();
     EXPECT_NEAR(up.x, 0.0f, 1e-5f);
     EXPECT_NEAR(up.y, 1.0f, 1e-5f);
@@ -134,6 +134,11 @@ TEST(SamBodyRetarget, UprightCorrectionStandsTheTorsoUpWithoutTurningIt)
     // the facing direction (a horizontal vector perpendicular to the lean) is not turned
     const Ogre::Vector3 side = c * Ogre::Vector3::UNIT_X;
     EXPECT_NEAR(side.x, 1.0f, 1e-5f);
+    // half strength: half of the lean is kept
+    const Ogre::Quaternion half = uprightCorrection({pos, pos, pos}, 0.5f);
+    const Ogre::Vector3 h = half * Ogre::Vector3(0.0f, 0.45f, 0.20f).normalisedCopy();
+    const float full = std::atan2(0.20f, 0.45f), left = std::atan2(h.z, h.y);
+    EXPECT_NEAR(left, full * 0.5f, 1e-3f);
     // an upright torso, no frames, or malformed frames: nothing to correct
     pos[size_t(neck) * 3 + 2] = 0.0f;
     EXPECT_NEAR(uprightCorrection({pos}).w, 1.0f, 1e-6f);

@@ -35,7 +35,9 @@ Retarget::LocalPose mhrLocalPose(const Retarget::RigDesc& rig, const std::vector
 /// global rotation of 27 degrees, and 27 degrees off without it. `uprightCorrection` returns the world rotation that stands the
 /// clip's average torso axis (root -> neck) upright; `jointPosFrames` are Body::jointPos per frame. Identity when there is nothing
 /// to average. Rotates about the horizontal axis only, so the facing direction (yaw) is untouched.
-Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& jointPosFrames);
+/// `strength` 0..1 scales the correction (slerp from identity). A camera pitch and a genuinely leaning subject (a rifle aimer) are
+/// indistinguishable from the torso axis alone, so the default is partial: full correction made a leaning walk look tilted back.
+Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& jointPosFrames, float strength = 0.5f);
 
 /// Pre-multiply every joint's global rotation (127*4, x,y,z,w) by the world rotation `c`.
 void applyWorldRotation(std::vector<float>& jointQuat, const Ogre::Quaternion& c);
