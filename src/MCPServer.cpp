@@ -38,6 +38,7 @@
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
 #include "BodyFromPhoto/SamBodyPredictor.h"
+#include "BodyFromPhoto/SamBodySequence.h"
 #include "DNA/DnaCLI.h"
 #include "DNA/DnaCorrectiveManager.h"
 #include "DNA/DnaReader.h"
@@ -9717,6 +9718,14 @@ QJsonObject MCPServer::toolStartLiveCapture(const QJsonObject &args)
     if (args.contains("face")) c->setFaceEnabled(args.value("face").toBool());
     if (args.contains("head")) c->setHeadEnabled(args.value("head").toBool());
     if (args.contains("body")) c->setBodyEnabled(args.value("body").toBool());
+    if (args.contains("body_backend")) {
+        const QString b = args.value("body_backend").toString().toLower();
+        if (b != QLatin1String("landmarks") && b != QLatin1String("sam3dbody"))
+            return makeErrorResult("Error: 'body_backend' must be landmarks or sam3dbody");
+        if (b == QLatin1String("sam3dbody") && !c->samAvailable())
+            return makeErrorResult("Error: this build has no ONNX runtime for SAM 3D Body");
+        c->setBodyBackend(b == QLatin1String("sam3dbody") ? 1 : 0);
+    }
 
     // video_path drives from a file (the macOS-camera-blocked path); else the
     // webcam device_id (empty = default camera).
@@ -9833,6 +9842,92 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
             "Error: the entity is not skinned — body capture retargets onto a "
             "humanoid skeleton (auto_rig with skin:true first).");
 
+    // SAM 3D Body backend (#1100): decode the file, solve every kept frame, write ONE undoable clip through the retargeter.
+    // `algo` defaults to sam3dbody; it falls back to pose-ik (with the reason) when SAM is unavailable.
+    QString samFallback;
+    if (args.value("algo").toString(QStringLiteral("sam3dbody")) == QLatin1String("sam3dbody")) {
+        if (!SamBody::isAvailable()) {
+            samFallback = QStringLiteral("this build has no ONNX runtime");
+        } else {
+            QString why;
+            if (!SamBody::modelsPresent() && !SamBody::ensureModelsBlocking(&why)) {
+                samFallback = QStringLiteral("SAM 3D Body models unavailable: %1").arg(why);
+            } else {
+                double samFps = args.value("fps").toDouble(10.0);
+                if (samFps <= 0 || samFps > 30) samFps = 10.0;     // SAM needs seconds per frame: cap the decode rate
+                FileFrameSource samSource(videoPath, samFps);
+                QString samOpenError;
+                if (!samSource.open(&samOpenError))
+                    return makeErrorResult(QString("Error: %1").arg(samOpenError));
+                m_toolCancelRequested = false;
+                std::vector<QImage> frames;
+                std::vector<double> times;
+                QEventLoop samLoop;
+                bool samFinished = false;
+                QString samStreamError;
+                QObject::connect(&samSource, &VideoFrameSource::frameReady, [&](const MocapFrame& f) {
+                    if (frames.size() < 1200) {
+                        frames.push_back(SamBody::downscaledForCapture(f.image));
+                        times.push_back(f.timeSec);
+                    }
+                    emit toolProgress(QStringLiteral("capture_body_from_video"), QStringLiteral("reading the video"), static_cast<int>(frames.size()), 0);
+                    if (m_toolCancelRequested) { samFinished = true; samLoop.quit(); }
+                });
+                QObject::connect(&samSource, &VideoFrameSource::finished, [&] { samFinished = true; samLoop.quit(); });
+                QObject::connect(&samSource, &VideoFrameSource::errorOccurred, [&](const QString& m) { samStreamError = m; samFinished = true; samLoop.quit(); });
+                samSource.start();
+                if (!samFinished) samLoop.exec();
+                samSource.stop();
+                if (m_toolCancelRequested) return makeErrorResult("Error: cancelled");
+                if (!samStreamError.isEmpty()) return makeErrorResult(QString("Error: %1").arg(samStreamError));
+
+                SamBody::Runner runner;
+                const SamBody::MhrSequence seq = SamBody::solveSequence(runner, frames, times,
+                    [this](int done, int total, const QString&) {
+                        emit toolProgress(QStringLiteral("capture_body_from_video"), QStringLiteral("solving with SAM 3D Body"), done, total);
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                        return !m_toolCancelRequested;
+                    });
+                if (!seq.ok()) return makeErrorResult(QString("Error: %1").arg(seq.error));
+
+                MocapRecorder::BodyRecordOptions samOptions;
+                samOptions.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
+                samOptions.algorithmUsed = QStringLiteral("sam3dbody");
+                const int samClipFps = static_cast<int>(std::lround(samFps));
+                return runOgreOp([&]() -> QJsonObject {
+                    auto* cmd = new RecordBodyClipCommand(entity->getName(), seq, samClipFps, samOptions);
+                    UndoManager::getSingleton()->push(cmd);
+                    MocapRecorder::BodyRecordReport report = cmd->report();
+                    report.framesProcessed = static_cast<int>(seq.jointQuat.size());
+                    if (!report.ok())
+                        return makeErrorResult(QString("Error: %1").arg(report.error));
+                    const QString outputPath = args.value("output_path").toString();
+                    if (!outputPath.isEmpty()) {
+                        Ogre::SceneNode* node = entity->getParentSceneNode();
+                        const QString fmt = CLIPipeline::formatForExtension(outputPath);
+                        if (!node || MeshImporterExporter::exporter(node, QFileInfo(outputPath).absoluteFilePath(), fmt) != 0)
+                            return makeErrorResult(QString("Error: recorded, but export to %1 failed").arg(outputPath));
+                    }
+                    GamificationManager::noteOperation(QStringLiteral("mocap_body"),
+                        {{QStringLiteral("frames"), static_cast<qint64>(report.framesProcessed)},
+                         {QStringLiteral("tracks"), static_cast<qint64>(report.tracksWritten)}},
+                        GamificationManager::Surface::Mcp);
+                    QJsonObject content;
+                    content["ok"] = true;
+                    content["clipName"] = report.clipName;
+                    content["algorithmUsed"] = QStringLiteral("sam3dbody");
+                    content["framesProcessed"] = report.framesProcessed;
+                    content["dropouts"] = seq.dropouts;
+                    content["bonesMapped"] = report.tracksWritten;
+                    content["clipLength"] = report.clipLength;
+                    content["rootMotion"] = QStringLiteral("not estimated (rotation-only)");
+                    if (!outputPath.isEmpty()) content["output"] = outputPath;
+                    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+                });
+            }
+        }
+    }
+
     if (!PoseCapPredictor::modelsPresent()
         && PoseCapPredictor::ensureModelsBlocking().isEmpty())
         return makeErrorResult(
@@ -9891,8 +9986,7 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     options.rootMotion = args.value("root_motion").toBool(true);
     options.fallbackReason = algo == QLatin1String("pose-ik")
         ? QString()
-        : QStringLiteral("the MCP tool still uses pose-ik; sam3dbody body capture runs through "
-                         "`qtmesh mocap --body --algo sam3dbody`");
+        : (samFallback.isEmpty() ? QString() : QStringLiteral("sam3dbody unavailable (%1); used pose-ik").arg(samFallback));
 
     return runOgreOp([&]() -> QJsonObject {
         auto* cmd = new RecordBodyClipCommand(entity->getName(), std::move(bodyFrames),
@@ -14414,7 +14508,7 @@ QJsonArray MCPServer::buildToolsList()
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "Estimate root movement from the camera projection (default true); false records in place."}};
         props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
-        props["algo"] = QJsonObject{{"type", "string"}, {"description", "pose-ik is what this MCP tool runs; sam3dbody is accepted but falls back to pose-ik here. SAM 3D Body capture (MHR joint rotations) is available through the CLI: qtmesh mocap --body --algo sam3dbody."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (default): SAM 3D Body, accurate with fingers, seconds per frame (fps is capped at 30, default 10 for it; models ~3.6 GB on first use; falls back to pose-ik with the reason when unavailable) or pose-ik: MediaPipe landmarks, fast."}};
         QJsonArray required;
         required.append("video_path");
         appendTool(
@@ -14444,6 +14538,9 @@ QJsonArray MCPServer::buildToolsList()
         props["face"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Face (morph-target) drive. Default: leave current toggle."}};
         props["head"] = QJsonObject{{"type", "boolean"}, {"description", "Enable Head-bone drive."}};
         props["body"] = QJsonObject{{"type", "boolean"}, {"description", "Enable full-body drive (humanoid rig)."}};
+        props["body_backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"landmarks", "sam3dbody"}}, {"description",
+            "Body backend (persisted): landmarks = MediaPipe pose, fast, drives the rig live; sam3dbody = SAM 3D Body, accurate with fingers but "
+            "seconds per frame, so the body is recorded and solved when recording stops (no live body drive)."}};
         QJsonArray required;
         appendTool(
             "start_live_capture",

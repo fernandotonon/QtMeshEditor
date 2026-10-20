@@ -151,3 +151,36 @@ TEST(SamBodyRetarget, WorldRotationIsAppliedToEveryJoint)
         EXPECT_NEAR(q[size_t(i) * 4 + 3], c.w, 1e-6f);
     }
 }
+
+TEST(SamBodySequence, DownscalesOnlyWhatIsTooBigAndKeepsTheAspectRatio)
+{
+    EXPECT_TRUE(downscaledForCapture(QImage()).isNull());
+    QImage small(640, 480, QImage::Format_RGB32);
+    EXPECT_EQ(downscaledForCapture(small).size(), small.size());
+    QImage big(2560, 1440, QImage::Format_RGB32);
+    const QImage d = downscaledForCapture(big);
+    EXPECT_EQ(d.width(), 1280);
+    EXPECT_EQ(d.height(), 720);
+    EXPECT_EQ(downscaledForCapture(big, 640).width(), 640);
+}
+
+TEST(SamBodySequence, RefusesInconsistentInputBeforeAnyInference)
+{
+    Runner runner;
+    EXPECT_FALSE(solveSequence(runner, {QImage(8, 8, QImage::Format_RGB32)}, {0.0}).ok());                       // one frame
+    const MhrSequence mismatch = solveSequence(runner, {QImage(8, 8, QImage::Format_RGB32), QImage(8, 8, QImage::Format_RGB32)}, {0.0});
+    EXPECT_FALSE(mismatch.ok());
+    EXPECT_FALSE(mismatch.error.isEmpty());
+    EXPECT_EQ(mismatch.solved, 0);
+}
+
+TEST(SamBodySequence, ARetargetNeedsAConsistentSequence)
+{
+    MhrSequence seq;
+    EXPECT_FALSE(retargetSequenceToSkeleton(nullptr, seq, 10, "c", true).ok);                                      // empty
+    seq.jointQuat.assign(2, std::vector<float>(127 * 4, 0.0f));
+    seq.times = {0.0, 1.0};                                                                                        // jointPos missing
+    const RetargetOutcome o = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(o.ok);
+    EXPECT_FALSE(o.error.isEmpty());
+}

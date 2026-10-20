@@ -21,6 +21,7 @@
 #include "../Mocap/FaceCapMapper.h"
 #include "../Mocap/MocapRecorder.h"
 #include "../Mocap/MocapLiveTypes.h"
+#include "../BodyFromPhoto/SamBodySequence.h"
 
 #include <string>
 #include <vector>
@@ -65,6 +66,9 @@ public:
                           std::vector<BodyLiveFrame> liveFrames,
                           int fps, MocapRecorder::BodyRecordOptions options,
                           QUndoCommand* parent = nullptr);
+    // SAM 3D Body: a solved MHR sequence (fps 0 = use its own times).
+    RecordBodyClipCommand(std::string entityName, SamBody::MhrSequence sequence, int fps,
+                          MocapRecorder::BodyRecordOptions options, QUndoCommand* parent = nullptr);
     ~RecordBodyClipCommand() override;
 
     void undo() override;
@@ -78,6 +82,8 @@ private:
     std::string m_entityName;
     std::vector<std::vector<std::array<float, 4>>> m_clipQuats;
     std::vector<BodyLiveFrame> m_liveFrames;
+    SamBody::MhrSequence m_mhr;
+    bool m_useMhr = false;
     int m_fps;
     MocapRecorder::BodyRecordOptions m_options;
     MocapRecorder::BodyRecordReport m_report;

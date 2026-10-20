@@ -75,6 +75,12 @@ class MocapController : public QObject
                NOTIFY clipNameChanged)
     Q_PROPERTY(double smoothingCutoff READ smoothingCutoff
                WRITE setSmoothingCutoff NOTIFY smoothingChanged)
+    // Body backend (#1100): 0 = landmarks (MediaPipe pose, fast, live), 1 = SAM 3D Body (accurate, fingers, slower: the camera and
+    // video are recorded first and solved afterwards; pose photos are solved directly).
+    Q_PROPERTY(int bodyBackend READ bodyBackend WRITE setBodyBackend NOTIFY bodyBackendChanged)
+    Q_PROPERTY(bool samAvailable READ samAvailable CONSTANT)
+    Q_PROPERTY(QString samHint READ samHint NOTIFY bodyBackendChanged)
+    Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(bool showPoseDebug READ showPoseDebug WRITE setShowPoseDebug
                NOTIFY previewSettingsChanged)
 
@@ -112,6 +118,11 @@ public:
     void setClipName(const QString& name);
     double smoothingCutoff() const;
     void setSmoothingCutoff(double hz);
+    int bodyBackend() const;
+    void setBodyBackend(int backend);
+    bool samAvailable() const;
+    QString samHint() const;
+    bool busy() const;
     bool showPoseDebug() const;
     void setShowPoseDebug(bool on);
 
@@ -141,6 +152,10 @@ public:
     // between keys. `timesCsv` (optional, one ascending second value per
     // image) overrides `intervalSec` spacing. Synchronous, one undo step.
     // Returns "" on success or an error message.
+    // SAM 3D Body backend, VIDEO FILE: decode the file (playback speed), solve every kept frame with SAM and write ONE undoable body
+    // clip on the SELECTED humanoid. Synchronous (pumps events; cancel with cancelBodyCapture()). Returns "" on success or an error.
+    Q_INVOKABLE QString captureVideoBody(const QString& filePath);
+    Q_INVOKABLE void cancelBodyCapture();
     Q_INVOKABLE QStringList pickPoseImages();
     Q_INVOKABLE QString buildPoseKeyframes(const QStringList& imagePaths,
                                            double intervalSec,
@@ -170,6 +185,8 @@ signals:
     void clipNameChanged();
     void smoothingChanged();
     void previewSettingsChanged();
+    void bodyBackendChanged();
+    void busyChanged();
     void errorOccurred(const QString& message);
 
 private:

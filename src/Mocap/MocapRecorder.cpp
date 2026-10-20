@@ -1,6 +1,7 @@
 #ifdef ENABLE_MOCAP
 
 #include "MocapRecorder.h"
+#include "../BodyFromPhoto/SamBodyRetarget.h"
 #include "BodyRootMotion.h"
 #include "MocapPoseFix.h"
 
@@ -419,6 +420,36 @@ BodyRecordReport recordBody(
             .arg(report.framesProcessed)
             .arg(report.rolesResolved)
             .arg(report.tracksWritten));
+    return report;
+}
+
+BodyRecordReport recordBodyMhr(Ogre::Entity* entity, const SamBody::MhrSequence& sequence, int fps,
+                               const BodyRecordOptions& options)
+{
+    BodyRecordReport report;
+    report.clipName = options.clipName;
+    report.algorithmUsed = QStringLiteral("sam3dbody");
+    report.fallbackReason = options.fallbackReason;
+    report.framesProcessed = static_cast<int>(sequence.jointQuat.size());
+    if (!entity) { report.error = QStringLiteral("no entity"); return report; }
+    if (!entity->hasSkeleton() || !entity->getMesh() || !entity->getMesh()->getSkeleton()) {
+        report.error = QStringLiteral("the mesh is not skinned: body capture retargets onto a humanoid skeleton "
+                                      "(rig one first: qtmesh rig --skeleton humanoid --skin)");
+        return report;
+    }
+    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+    const SamBody::RetargetOutcome o =
+        SamBody::retargetSequenceToSkeleton(skel.get(), sequence, fps, options.clipName.toStdString(), options.replaceExisting);
+    if (!o.ok) { report.error = o.error.isEmpty() ? QStringLiteral("retarget failed") : o.error; return report; }
+    report.rolesResolved = o.mappedBones;
+    report.tracksWritten = o.mappedBones;
+    report.clipLength = fps > 0 ? static_cast<double>(sequence.jointQuat.size() - 1) / fps
+                                : sequence.times.back() - sequence.times.front();
+    entity->refreshAvailableAnimationState();
+    SentryReporter::addBreadcrumb("ai.assist.mocap_body",
+        QStringLiteral("recorded '%1' via sam3dbody: %2 frames (%3 solved, %4 dropouts), %5 bones (%6 finger)")
+            .arg(options.clipName).arg(report.framesProcessed).arg(sequence.solved).arg(sequence.dropouts)
+            .arg(o.mappedBones).arg(o.fingerBones));
     return report;
 }
 

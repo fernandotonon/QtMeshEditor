@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../AnimationRetargeter.h"
+#include "SamBodySequence.h"
 
 #include <QString>
 #include <QStringList>
@@ -54,6 +55,16 @@ std::string mhrAlias(const std::string& mhrJointName);
 
 /// Source names that must not take part in the auto-map: twist/corrective helpers, face and world joints.
 bool excludedFromMapping(const std::string& mhrJointName);
+
+/// Same, but at explicit `times` (seconds, ascending, one per frame): pose keyframes from photos are not uniformly spaced.
+RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
+                                   const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
+                                   const std::string& clip, bool replace);
+
+/// The whole pipeline for a solved sequence: MHR rest skeleton, upright correction (SAM's pose is camera-relative), local poses,
+/// retarget, write the clip. `fps` > 0 spaces the frames uniformly (video / camera takes); 0 uses `seq.times` (pose photos).
+RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
+                                           bool replace);
 
 /// Retarget `frames` (one LocalPose per sample on `mhr`, uniformly spaced at `fps`) onto `skeleton` as the skeletal animation
 /// `clip` (replaced when it exists and `replace` is set). Rotation-only: the target keeps its own bone lengths.

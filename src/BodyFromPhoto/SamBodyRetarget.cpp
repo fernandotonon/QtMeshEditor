@@ -151,12 +151,12 @@ bool excludedFromMapping(const std::string& n)
 }
 
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
-                                   const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
-                                   bool replace)
+                                   const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
+                                   const std::string& clip, bool replace)
 {
     RetargetOutcome out;
     if (!skeleton) { out.error = QStringLiteral("missing skeleton"); return out; }
-    if (frames.size() < 2 || fps <= 0) { out.error = QStringLiteral("need at least 2 pose frames"); return out; }
+    if (frames.size() < 2 || times.size() != frames.size()) { out.error = QStringLiteral("need at least 2 pose frames"); return out; }
     if (mhr.size() < 6) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
     if (skeleton->hasAnimation(clip) && !replace) {
         out.error = QStringLiteral("animation '%1' already exists").arg(QString::fromStdString(clip));
@@ -206,12 +206,44 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
     for (int i = 0; i < target.size(); ++i)
         if (!animated[size_t(i)]) out.unmappedTarget << QString::fromStdString(target.names[size_t(i)]);
 
-    std::vector<float> times(posed.size());
-    for (size_t i = 0; i < times.size(); ++i) times[i] = static_cast<float>(i) / static_cast<float>(fps);
     if (skeleton->hasAnimation(clip)) skeleton->removeAnimation(clip);   // only now that the take is known good
     if (!Retarget::writeRetargetedClip(skeleton, clip, times, posed, target, handles, animated, &out.error)) return out;
     out.ok = true;
     return out;
+}
+
+RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
+                                   const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
+                                   bool replace)
+{
+    std::vector<float> times(frames.size());
+    for (size_t i = 0; i < times.size(); ++i) times[i] = fps > 0 ? static_cast<float>(i) / static_cast<float>(fps) : 0.0f;
+    if (fps <= 0) { RetargetOutcome o; o.error = QStringLiteral("need at least 2 pose frames"); return o; }
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
+}
+
+RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
+                                           bool replace)
+{
+    RetargetOutcome out;
+    if (seq.jointQuat.size() < 2 || seq.jointQuat.size() != seq.jointPos.size() || seq.times.size() != seq.jointQuat.size()) {
+        out.error = QStringLiteral("need at least 2 solved frames");
+        return out;
+    }
+    const Retarget::RigDesc mhr = mhrRigDesc(seq.restPos, seq.restQuat);
+    if (mhr.size() == 0) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
+    const Ogre::Quaternion upright = uprightCorrection(seq.jointPos);
+    std::vector<Retarget::LocalPose> frames;
+    frames.reserve(seq.jointQuat.size());
+    for (auto q : seq.jointQuat) {
+        applyWorldRotation(q, upright);
+        frames.push_back(mhrLocalPose(mhr, q));
+    }
+    if (fps > 0) return retargetToSkeleton(skeleton, mhr, frames, fps, clip, replace);
+    std::vector<float> times(seq.times.begin(), seq.times.end());
+    const float t0 = times.front();
+    for (float& t : times) t -= t0;                                   // the clip starts at 0
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
 }
 
 } // namespace SamBody

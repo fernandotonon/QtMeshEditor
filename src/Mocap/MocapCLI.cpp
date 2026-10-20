@@ -424,9 +424,8 @@ int run(int argc, char* argv[])
     PoseCapPredictor posePredictor;
     // sam3dbody (#1100): the MHR pose regressor, per frame, no landmark detour. Joint rotations feed recordBody directly.
     std::unique_ptr<SamBody::Runner> samRunner;
-    std::vector<std::vector<float>> samJoints;          // per frame: 127*4 global MHR joint rotations
-    std::vector<std::vector<float>> samPositions;       // per frame: 127*3 joint positions (for the upright correction)
-    int samNoPerson = 0, samGood = 0;
+    std::vector<QImage> samFrames;                      // frames kept (downscaled) and solved AFTER the source finishes: a slow
+    std::vector<double> samTimes;                       // model must not stall a real-time video player
     if (body && algo == QLatin1String("sam3dbody") && !noModel && !poseKeyMode) {
         QString why;
         if (!SamBody::isAvailable())
@@ -567,38 +566,8 @@ int run(int argc, char* argv[])
                              samples.push_back(s);
                          }
                          if (body && samRunner) {
-                             SamBody::Options so;
-                             so.wantMesh = false;
-                             const SamBody::Result sr = samRunner->predict(frame.image, so);
-                             if (sr.ok && sr.personFound) {
-                                 samJoints.push_back(sr.body.jointQuat);
-                                 samPositions.push_back(sr.body.jointPos);
-                                 if (const QByteArray dumpPath = qgetenv("QTMESH_SAM_DUMP"); !dumpPath.isEmpty()) {
-                                     QFile df(QString::fromLocal8Bit(dumpPath));
-                                     if (df.open(QIODevice::Append | QIODevice::Text)) {
-                                         QJsonArray pos, quat;
-                                         for (float v : sr.body.jointPos) pos.append(static_cast<double>(v));
-                                         for (float v : sr.body.jointQuat) quat.append(static_cast<double>(v));
-                                         df.write(QJsonDocument(QJsonObject{{"pos", pos}, {"quat", quat}}).toJson(QJsonDocument::Compact) + "\n");
-                                     }
-                                 }
-                                 if (qEnvironmentVariableIsSet("QTMESH_SAM_DEBUG")) {
-                                     const int r = SamBody::mhrJointIndex("root"), n = SamBody::mhrJointIndex("c_neck");
-                                     const float* jp = sr.body.jointPos.data();
-                                     fprintf(stderr, "[sam] frame %d torso axis (root->neck) %.2f %.2f %.2f  cam_t %.2f %.2f %.2f\n", samGood,
-                                             jp[n * 3] - jp[r * 3], jp[n * 3 + 1] - jp[r * 3 + 1], jp[n * 3 + 2] - jp[r * 3 + 2],
-                                             sr.body.camT[0], sr.body.camT[1], sr.body.camT[2]);
-                                 }
-                                 ++samGood;
-                             } else {
-                                 // A dropout (no person / failed inference). recordBody keys the vector uniformly at 1/fps, so a
-                                 // dropped frame would shorten the take and pull every later pose earlier: HOLD the last good
-                                 // pose instead. Dropouts before the first good frame are skipped (nothing to hold yet).
-                                 ++samNoPerson;
-                                 CLIPipeline::writeCliError(QStringLiteral("Warning: frame at %1 s: %2\n").arg(frame.timeSec, 0, 'f', 2)
-                                     .arg(sr.ok ? QStringLiteral("no person found (held the previous pose)") : sr.error));
-                                 if (!samJoints.empty()) { samJoints.push_back(samJoints.back()); samPositions.push_back(samPositions.back()); }
-                             }
+                             samFrames.push_back(SamBody::downscaledForCapture(frame.image));
+                             samTimes.push_back(frame.timeSec);
                          } else if (body) {
                              poseSamples.push_back(bodyStream.process(posePredictor.predict(
                                  frame.image, frame.timeSec), frame.image.width(), frame.image.height()));
@@ -623,7 +592,7 @@ int run(int argc, char* argv[])
             QStringLiteral("Error: %1\n").arg(streamError));
         return 1;
     }
-    if (samples.empty() && poseSamples.empty() && samJoints.empty() && samNoPerson == 0) {
+    if (samples.empty() && poseSamples.empty() && samFrames.empty()) {
         CLIPipeline::writeCliError(
             QStringLiteral("Error: the source produced no frames.\n"));
         return 1;
@@ -680,53 +649,35 @@ int run(int argc, char* argv[])
     // --- record: body ------------------------------------------------------------
     MocapRecorder::BodyRecordReport bodyReport;
     if (body && samRunner) {
-        if (samGood < 2) {
-            CLIPipeline::writeCliError(QStringLiteral("Error: no person tracked in the source (%1 of %2 frames failed).\n")
-                                           .arg(samNoPerson).arg(samNoPerson + samGood));
-            if (!face || !report.ok()) return 1;
-            bodyReport.error = QStringLiteral("no person tracked");
+        // Solve the collected frames with SAM 3D Body, then write the clip through the incompatible-skeleton retargeter (#523):
+        // MHR rest pose = source rest, finger joints included, upright correction for the camera-relative pose.
+        bodyReport.clipName = face ? clipName + QStringLiteral("_Body") : clipName;
+        bodyReport.algorithmUsed = bodyAlgoUsed;
+        bodyReport.framesProcessed = static_cast<int>(samFrames.size());
+        const SamBody::MhrSequence seq = SamBody::solveSequence(*samRunner, samFrames, samTimes,
+            [&](int done, int total, const QString& what) {
+                if (done % 5 == 0 || done == total)
+                    CLIPipeline::writeCliError(QStringLiteral("SAM 3D Body: %1 (%2/%3)\n").arg(what).arg(done).arg(total));
+                return true;
+            });
+        if (!seq.ok()) {
+            bodyReport.error = seq.error;
         } else {
-            // Through the incompatible-skeleton retargeter (#523): MHR rest pose = source rest, finger joints included.
-            // (The CMU 22-role path takes deltas against frame 0 and so needs the take to START in the rig's rest pose.)
-            std::vector<float> restPos, restQuat;
-            QString restErr;
-            bodyReport.clipName = face ? clipName + QStringLiteral("_Body") : clipName;
-            bodyReport.algorithmUsed = bodyAlgoUsed;
-            bodyReport.framesProcessed = samGood + samNoPerson;
-            if (!entity->hasSkeleton() || !entity->getMesh() || !entity->getMesh()->getSkeleton()) {
-                bodyReport.error = QStringLiteral("the mesh is not skinned: body capture retargets onto a humanoid skeleton");
-            } else if (!samRunner->restPose(restPos, restQuat, &restErr)) {
-                bodyReport.error = restErr;
-            } else {
-                const Retarget::RigDesc mhr = SamBody::mhrRigDesc(restPos, restQuat);
-                std::vector<Retarget::LocalPose> frames;
-                frames.reserve(samJoints.size());
-                // SAM's pose is camera-relative: stand the clip's average torso upright first (a camera looking down on the
-                // person otherwise comes back as a body leaning forward).
-                const Ogre::Quaternion upright = SamBody::uprightCorrection(samPositions);
-                for (auto q : samJoints) {
-                    SamBody::applyWorldRotation(q, upright);
-                    frames.push_back(SamBody::mhrLocalPose(mhr, q));
-                }
-                const SamBody::RetargetOutcome ro = SamBody::retargetToSkeleton(
-                    entity->getMesh()->getSkeleton().get(), mhr, frames, static_cast<int>(fps),
-                    bodyReport.clipName.toStdString(), true);
-                if (!ro.ok) {
-                    bodyReport.error = ro.error;
-                } else {
-                    entity->refreshAvailableAnimationState();
-                    bodyReport.rolesResolved = ro.mappedBones;
-                    bodyReport.tracksWritten = ro.mappedBones;
-                    bodyReport.clipLength = static_cast<double>(frames.size() - 1) / fps;
-                    CLIPipeline::writeCliError(QStringLiteral(
-                        "Note: sam3dbody capture: %1 bones mapped (%2 finger bones), rotation-only (root translation is not "
-                        "estimated yet).\n").arg(ro.mappedBones).arg(ro.fingerBones));
-                }
-            }
-            if (!bodyReport.ok()) {
-                CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(bodyReport.error));
-                if (!face || !report.ok()) return 1;
-            }
+            MocapRecorder::BodyRecordOptions bodyOptions;
+            bodyOptions.clipName = bodyReport.clipName;
+            bodyOptions.rootMotion = rootMotion;
+            bodyReport = MocapRecorder::recordBodyMhr(entity, seq, static_cast<int>(fps), bodyOptions);
+            bodyReport.framesProcessed = static_cast<int>(seq.jointQuat.size());
+            if (seq.dropouts > 0)
+                CLIPipeline::writeCliError(QStringLiteral("Warning: %1 frame(s) had no person: the previous pose was held.\n").arg(seq.dropouts));
+            if (bodyReport.ok())
+                CLIPipeline::writeCliError(QStringLiteral(
+                    "Note: sam3dbody capture: %1 bones mapped, rotation-only (root translation is not estimated yet).\n")
+                                               .arg(bodyReport.tracksWritten));
+        }
+        if (!bodyReport.ok()) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(bodyReport.error));
+            if (!face || !report.ok()) return 1;
         }
     } else if (body) {
         std::vector<BodyLiveFrame> bodyFrames;

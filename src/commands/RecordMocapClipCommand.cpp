@@ -220,6 +220,19 @@ RecordBodyClipCommand::RecordBodyClipCommand(
     setText(QObject::tr("Record body capture '%1'").arg(m_options.clipName));
 }
 
+RecordBodyClipCommand::RecordBodyClipCommand(
+    std::string entityName, SamBody::MhrSequence sequence, int fps,
+    MocapRecorder::BodyRecordOptions options, QUndoCommand* parent)
+    : QUndoCommand(parent),
+      m_entityName(std::move(entityName)),
+      m_mhr(std::move(sequence)),
+      m_useMhr(true),
+      m_fps(fps),
+      m_options(std::move(options))
+{
+    setText(QObject::tr("Record body capture '%1'").arg(m_options.clipName));
+}
+
 RecordBodyClipCommand::~RecordBodyClipCommand() = default;
 
 void RecordBodyClipCommand::redo()
@@ -250,6 +263,10 @@ void RecordBodyClipCommand::redo()
         m_snapshotTaken = true;
     }
 
+    if (m_useMhr) {
+        m_report = MocapRecorder::recordBodyMhr(entity, m_mhr, m_fps, m_options);
+        return;
+    }
     m_report = !m_liveFrames.empty()
                    ? MocapRecorder::recordBodyLive(
                          entity, m_liveFrames, m_fps, m_options)

@@ -3199,6 +3199,51 @@ Rectangle {
                 }
             }
 
+            // Body backend (#1100): landmarks (fast, live) or SAM 3D Body (accurate + fingers, solved after recording). Applies to the
+            // camera, a video file and pose photos alike.
+            Column {
+                width: parent.width - 16
+                spacing: 3
+                visible: mocapReady && MocapController.bodyAvailable
+
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    Text {
+                        width: 72
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                        height: 26
+                        text: "Body backend"
+                    }
+                    ThemedComboBox {
+                        id: bodyBackendCombo
+                        width: parent.width - 78
+                        height: 26
+                        font.pixelSize: 11
+                        enabled: MocapController.state === 0 && !MocapController.busy
+                        model: ["Landmarks (fast, live)", "SAM 3D Body (accurate, fingers)"]
+                        currentIndex: MocapController.bodyBackend
+                        onActivated: MocapController.bodyBackend = currentIndex
+                    }
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    opacity: 0.75
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9
+                    text: MocapController.samHint
+                }
+                // a blocking SAM run (video / pose photos / the solve after a camera take) can be stopped from here
+                InspectorButton {
+                    visible: MocapController.busy
+                    text: "Cancel SAM capture"
+                    onClicked: MocapController.cancelBodyCapture()
+                }
+            }
+
             // One-Euro smoothing cutoff (Hz). Lower = smoother, less jitter.
             Column {
                 width: parent.width - 16
@@ -3333,7 +3378,7 @@ Rectangle {
                 width: parent.width - 16
                 height: 26
                 radius: 3
-                enabled: MocapController.state === 0
+                enabled: MocapController.state === 0 && !MocapController.busy
                 opacity: enabled ? 1.0 : 0.5
                 color: loadVideoMa.containsMouse
                     ? PropertiesPanelController.highlightColor
@@ -3344,17 +3389,25 @@ Rectangle {
                     anchors.centerIn: parent
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 11
-                    text: "Load Video…  (use instead of camera)"
+                    text: (MocapController.bodyBackend === 1 && MocapController.bodyEnabled)
+                          ? "Capture from Video…  (SAM 3D Body, solved offline)"
+                          : "Load Video…  (use instead of camera)"
                 }
                 MouseArea {
                     id: loadVideoMa
                     anchors.fill: parent
                     hoverEnabled: true
-                    enabled: MocapController.state === 0
+                    enabled: MocapController.state === 0 && !MocapController.busy
                     onClicked: {
                         var path = MocapController.openVideoDialog()
-                        if (path && path.length > 0)
-                            MocapController.startPreviewFromVideo(path)
+                        if (path && path.length > 0) {
+                            // SAM 3D Body solves the whole file offline (one undoable clip); landmarks keep the live preview
+                            if (MocapController.bodyBackend === 1 && MocapController.bodyEnabled
+                                    && MocapController.bodyAvailable && MocapController.samAvailable)
+                                MocapController.captureVideoBody(path)
+                            else
+                                MocapController.startPreviewFromVideo(path)
+                        }
                     }
                 }
             }
@@ -3647,6 +3700,7 @@ Rectangle {
                     text: "Create animation from poses"
                     clickEnabled: poseKeysCol.itemCount >= 2
                                   && MocapController.state === 0
+                                  && !MocapController.busy
                                   && poseKeysCol.timesError() === ""
                     onClicked: {
                         // Take focus off any time field first: its edit is only

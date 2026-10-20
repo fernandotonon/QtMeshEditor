@@ -9,6 +9,8 @@
 #include "UndoManager.h"
 
 #include "Mocap/MocapController.h"
+#include "BodyFromPhoto/SamBodyPredictor.h"
+#include <QSettings>
 #include "Mocap/MocapRecorder.h"
 
 #include <OgreAnimation.h>
@@ -171,6 +173,41 @@ TEST_F(MocapControllerTest, NoSelectionRefusesPreview)
     auto* c = MocapController::instance();
     EXPECT_FALSE(c->startPreviewWithSource(nullptr));
     EXPECT_EQ(c->state(), MocapController::Idle);
+}
+
+TEST_F(MocapControllerTest, BodyBackendDefaultsToLandmarksAndPersists)
+{
+    auto* c = MocapController::instance();
+    const int before = c->bodyBackend();
+    c->setBodyBackend(1);
+    EXPECT_EQ(c->bodyBackend(), 1);
+    EXPECT_EQ(QSettings().value(QStringLiteral("mocap/bodyBackend")).toInt(), 1);
+    EXPECT_FALSE(c->samHint().isEmpty());
+    c->setBodyBackend(0);
+    EXPECT_EQ(c->bodyBackend(), 0);
+    EXPECT_EQ(QSettings().value(QStringLiteral("mocap/bodyBackend")).toInt(), 0);
+    c->setBodyBackend(7);                                   // anything but 1 is the landmark backend
+    EXPECT_EQ(c->bodyBackend(), 0);
+    c->setBodyBackend(before);
+    EXPECT_EQ(c->samAvailable(), SamBody::isAvailable());
+    EXPECT_FALSE(c->busy());
+}
+
+TEST_F(MocapControllerTest, SamCaptureRefusesAnEntityThatIsNotAHumanoidRig)
+{
+    auto* c = MocapController::instance();
+    const int before = c->bodyBackend();
+    c->setBodyBackend(1);
+    // the face test mesh is not skinned: every SAM entry point must say so instead of starting a multi-minute solve
+    const QString video = c->captureVideoBody(QStringLiteral("/nonexistent/video.mp4"));
+    EXPECT_FALSE(video.isEmpty());
+    EXPECT_EQ(c->state(), MocapController::Idle);
+    EXPECT_FALSE(c->busy());
+    const QString poses = c->buildPoseKeyframes({QStringLiteral("a.png"), QStringLiteral("b.png")}, 0.5, QString(), QStringLiteral("PoseKeys"));
+    EXPECT_FALSE(poses.isEmpty());
+    EXPECT_FALSE(c->busy());
+    c->cancelBodyCapture();                                  // harmless when nothing runs
+    c->setBodyBackend(before);
 }
 
 #endif  // ENABLE_MOCAP

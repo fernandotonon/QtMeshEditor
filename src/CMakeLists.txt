@@ -236,6 +236,7 @@ BodyFromPhoto/SamBodyPredictor.cpp
 BodyFromPhoto/BodyFromPhotoCLI.cpp
 BodyFromPhoto/SamBodyMotion.cpp
 BodyFromPhoto/SamBodyRetarget.cpp
+BodyFromPhoto/SamBodySequence.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
