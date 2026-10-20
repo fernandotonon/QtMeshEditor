@@ -662,7 +662,7 @@ int run(int argc, char* argv[])
     MocapRecorder::BodyRecordReport bodyReport;
     if (body && samRunner) {
         // Solve the collected frames with SAM 3D Body, then write the clip through the incompatible-skeleton retargeter (#523):
-        // MHR rest pose = source rest, finger joints included, upright correction for the camera-relative pose.
+        // MHR rest pose = source rest, finger joints included.
         bodyReport.clipName = face ? clipName + QStringLiteral("_Body") : clipName;
         bodyReport.algorithmUsed = bodyAlgoUsed;
         bodyReport.framesProcessed = static_cast<int>(samFrames.size());

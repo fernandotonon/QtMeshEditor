@@ -30,17 +30,9 @@ Retarget::RigDesc mhrRigDesc(const std::vector<float>& restPos, const std::vecto
 /// against each parent, positions are the rig's bind positions (the bone lengths do not change).
 Retarget::LocalPose mhrLocalPose(const Retarget::RigDesc& rig, const std::vector<float>& jointQuat);
 
-/// SAM's pose is CAMERA-relative: a camera that looks down on the person (a phone held high, a turntable render) comes back as a body
-/// leaning forward. Measured on 12 rendered frames of a dance: SAM's joint directions were within 10 degrees of the truth after ONE
-/// global rotation of 27 degrees, and 27 degrees off without it. `uprightCorrection` returns the world rotation that stands the
-/// clip's average torso axis (root -> neck) upright; `jointPosFrames` are Body::jointPos per frame. Identity when there is nothing
-/// to average. Rotates about the horizontal axis only, so the facing direction (yaw) is untouched.
-/// `strength` 0..1 scales the correction (slerp from identity). A camera pitch and a genuinely leaning subject (a rifle aimer) are
-/// indistinguishable from the torso axis alone, so the default is partial: full correction made a leaning walk look tilted back.
-Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& jointPosFrames, float strength = 0.5f);
-
-/// Pre-multiply every joint's global rotation (127*4, x,y,z,w) by the world rotation `c`.
-void applyWorldRotation(std::vector<float>& jointQuat, const Ogre::Quaternion& c);
+/// SAM's pose is camera-relative, and there is deliberately NO upright correction: a camera pitch and a genuinely leaning subject
+/// (a rifle aimer) look identical from the torso axis, and standing the average torso upright made a leaning walk look tilted back.
+/// The rig keeps SAM's pose as predicted.
 
 struct RetargetOutcome {
     bool ok = false;
@@ -63,7 +55,7 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
                                    const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
                                    const std::string& clip, bool replace);
 
-/// The whole pipeline for a solved sequence: MHR rest skeleton, upright correction (SAM's pose is camera-relative), local poses,
+/// The whole pipeline for a solved sequence: MHR rest skeleton, local poses,
 /// retarget, write the clip. `fps` > 0 spaces the frames uniformly (video / camera takes); 0 uses `seq.times` (pose photos).
 RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
                                            bool replace);

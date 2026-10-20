@@ -119,44 +119,6 @@ TEST(SamBodyRetarget, AliasesUseTheStandardSpellingsAndStayUnique)
     EXPECT_GE(seen.size(), 45u);
 }
 
-TEST(SamBodyRetarget, UprightCorrectionStandsTheTorsoUpWithoutTurningIt)
-{
-    // torso axis (0, 0.45, 0.20): leaning towards +Z (the camera) by ~24 degrees
-    std::vector<float> pos(127 * 3, 0.0f);
-    const int neck = mhrJointIndex("c_neck");
-    pos[size_t(neck) * 3 + 1] = 0.45f;
-    pos[size_t(neck) * 3 + 2] = 0.20f;
-    const Ogre::Quaternion c = uprightCorrection({pos, pos, pos}, 1.0f);
-    const Ogre::Vector3 up = c * Ogre::Vector3(0.0f, 0.45f, 0.20f).normalisedCopy();
-    EXPECT_NEAR(up.x, 0.0f, 1e-5f);
-    EXPECT_NEAR(up.y, 1.0f, 1e-5f);
-    EXPECT_NEAR(up.z, 0.0f, 1e-5f);
-    // the facing direction (a horizontal vector perpendicular to the lean) is not turned
-    const Ogre::Vector3 side = c * Ogre::Vector3::UNIT_X;
-    EXPECT_NEAR(side.x, 1.0f, 1e-5f);
-    // half strength: half of the lean is kept
-    const Ogre::Quaternion half = uprightCorrection({pos, pos, pos}, 0.5f);
-    const Ogre::Vector3 h = half * Ogre::Vector3(0.0f, 0.45f, 0.20f).normalisedCopy();
-    const float full = std::atan2(0.20f, 0.45f), left = std::atan2(h.z, h.y);
-    EXPECT_NEAR(left, full * 0.5f, 1e-3f);
-    // an upright torso, no frames, or malformed frames: nothing to correct
-    pos[size_t(neck) * 3 + 2] = 0.0f;
-    EXPECT_NEAR(uprightCorrection({pos}).w, 1.0f, 1e-6f);
-    EXPECT_NEAR(uprightCorrection({}).w, 1.0f, 1e-6f);
-    EXPECT_NEAR(uprightCorrection({std::vector<float>(5)}).w, 1.0f, 1e-6f);
-}
-
-TEST(SamBodyRetarget, WorldRotationIsAppliedToEveryJoint)
-{
-    std::vector<float> q = identityGlobals();
-    Ogre::Quaternion c(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
-    applyWorldRotation(q, c);
-    for (int i = 0; i < 127; ++i) {
-        EXPECT_NEAR(q[size_t(i) * 4], c.x, 1e-6f);
-        EXPECT_NEAR(q[size_t(i) * 4 + 3], c.w, 1e-6f);
-    }
-}
-
 TEST(SamBodySequence, DownscalesOnlyWhatIsTooBigAndKeepsTheAspectRatio)
 {
     EXPECT_TRUE(downscaledForCapture(QImage()).isNull());

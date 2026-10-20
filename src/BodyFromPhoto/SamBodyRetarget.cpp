@@ -110,45 +110,6 @@ std::string mhrAlias(const std::string& n)
     return n;
 }
 
-Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& frames, float strength)
-{
-    const int root = mhrJointIndex("root"), neck = mhrJointIndex("c_neck");
-    Ogre::Vector3 sum = Ogre::Vector3::ZERO;
-    int n = 0;
-    for (const auto& f : frames) {
-        if (f.size() != size_t(127) * 3) continue;
-        Ogre::Vector3 a(f[size_t(neck) * 3] - f[size_t(root) * 3], f[size_t(neck) * 3 + 1] - f[size_t(root) * 3 + 1],
-                        f[size_t(neck) * 3 + 2] - f[size_t(root) * 3 + 2]);
-        if (a.length() < 1e-6f) continue;
-        a.normalise();
-        sum += a;
-        ++n;
-    }
-    if (n == 0 || sum.length() < 1e-6f) return Ogre::Quaternion::IDENTITY;
-    sum.normalise();
-    // Shortest arc sum -> +Y, but only its horizontal part: project the rotation axis onto the ground plane (axis.y = 0) so
-    // the heading is not changed. The axis of the arc is sum x Y, which is already horizontal.
-    Ogre::Quaternion c = sum.getRotationTo(Ogre::Vector3::UNIT_Y);
-    c.normalise();
-    if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
-        fprintf(stderr, "[sam-upright] mean torso axis (%.3f %.3f %.3f) over %d frames\n", sum.x, sum.y, sum.z, n);
-    if (qEnvironmentVariableIsSet("QTMESH_SAM_UPRIGHT")) strength = qEnvironmentVariable("QTMESH_SAM_UPRIGHT").toFloat();
-    strength = std::clamp(strength, 0.0f, 1.0f);
-    if (strength < 1.0f) c = Ogre::Quaternion::Slerp(strength, Ogre::Quaternion::IDENTITY, c, true);
-    c.normalise();
-    return c;
-}
-
-void applyWorldRotation(std::vector<float>& q, const Ogre::Quaternion& c)
-{
-    for (size_t i = 0; i + 3 < q.size(); i += 4) {
-        Ogre::Quaternion r(q[i + 3], q[i], q[i + 1], q[i + 2]);
-        Ogre::Quaternion o = c * r;
-        o.normalise();
-        q[i] = o.x; q[i + 1] = o.y; q[i + 2] = o.z; q[i + 3] = o.w;
-    }
-}
-
 bool excludedFromMapping(const std::string& n)
 {
     for (const char* bad : {"twist", "_proc", "_null", "body_world", "jaw", "teeth", "tongue", "eye"})
@@ -238,13 +199,9 @@ RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSe
     }
     const Retarget::RigDesc mhr = mhrRigDesc(seq.restPos, seq.restQuat);
     if (mhr.size() == 0) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
-    const Ogre::Quaternion upright = uprightCorrection(seq.jointPos);
     std::vector<Retarget::LocalPose> frames;
     frames.reserve(seq.jointQuat.size());
-    for (auto q : seq.jointQuat) {
-        applyWorldRotation(q, upright);
-        frames.push_back(mhrLocalPose(mhr, q));
-    }
+    for (const auto& q : seq.jointQuat) frames.push_back(mhrLocalPose(mhr, q));
     if (fps > 0) return retargetToSkeleton(skeleton, mhr, frames, fps, clip, replace);
     std::vector<float> times(seq.times.begin(), seq.times.end());
     const float t0 = times.front();
