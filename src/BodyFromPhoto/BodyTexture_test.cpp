@@ -190,3 +190,16 @@ TEST(BodyTextureGlb, IsAWellFormedSelfContainedGlTF)
     bad.faceUv.pop_back();
     EXPECT_TRUE(toTexturedGlb(s.pos, s.tris, bad, albedo, QImage(), QImage(), false).isEmpty());
 }
+
+TEST(BodyTextureTransfer, FailsWhenNoTexelMatchesTheSurface)
+{
+    // Every candidate rejected by the normal gate: reporting success with a transparent atlas would waste a multi-minute run.
+    const Sphere s = makeSphere(1.0f, 0.0f);
+    TransferOptions opt;
+    opt.textureSize = 64;
+    opt.nonRigid = false;
+    opt.minNormalDot = 2.0f;                       // no normal can agree this much
+    const TransferResult r = transferTexture(surfaceOf(s), s.pos, s.tris, layoutOf(s), opt);
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(r.error.isEmpty());
+}

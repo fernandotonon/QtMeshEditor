@@ -19,8 +19,11 @@
 
 namespace {
 
+// Pinned to a COMMIT, not `main`: the SHA-256 table below describes exactly these files, and a re-export uploaded to the same
+// paths on main would otherwise make every released build fail its digest check. After re-exporting, upload, then update this
+// revision AND the digests together.
 constexpr const char* kDefaultBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/sam3dbody/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/26daed748226af17fb8c402465cb79281f9a5ac1/sam3dbody/";
 constexpr const char* kBaseUrlSettingsKey = "ai/sam3dbodyModelBaseUrl";
 
 struct FileSpec { const char* name; const char* label; const char* sha256; };

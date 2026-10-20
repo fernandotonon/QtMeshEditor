@@ -296,6 +296,11 @@ TransferResult transferTexture(const TexturedSurface& source, const std::vector<
     }
     r.coverage = onBody ? static_cast<float>(matched) / static_cast<float>(onBody) : 0.0f;
     if (onBody == 0) { r.error = QStringLiteral("the UV layout covers no texels"); return r; }
+    if (matched == 0) {
+        r.error = QStringLiteral("no texel matched the textured surface (the body could not be aligned to it; mean wrap residual %1% of height)")
+                      .arg(r.meanDistanceFraction * 100.0f, 0, 'f', 1);
+        return r;
+    }
 
     // 4. fill what no surface matched (gutters, gaps) from the matched neighbours, a ring at a time
     std::vector<uint8_t> filled = state;

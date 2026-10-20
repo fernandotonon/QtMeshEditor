@@ -113,6 +113,10 @@ int run(int argc, char* argv[])
         return 0;
     }
     if (photoPath.isEmpty() || outPath.isEmpty()) { usage(); return 2; }
+    if (textureMode.isEmpty() && outPath.endsWith(QLatin1String(".glb"), Qt::CaseInsensitive)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: a .glb output needs --texture trellis2 (the untextured body is written as .obj)\n"));
+        return 2;
+    }
 
     // Honour EXIF orientation (a portrait phone JPEG would otherwise arrive sideways, and --bbox is in displayed pixels).
     QImageReader reader(photoPath);

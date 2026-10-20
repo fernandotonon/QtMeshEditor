@@ -3744,6 +3744,15 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
     const QString pose = args.value("pose").toString(QStringLiteral("neutral")).toLower();
     if (pose != QLatin1String("neutral") && pose != QLatin1String("posed"))
         return makeErrorResult("'pose' must be neutral or posed.");
+    // Validate every option BEFORE the model fetch and the inference (a typo must not cost minutes).
+    const QString textureMode = args.value("texture").toString().toLower();
+    if (!textureMode.isEmpty() && textureMode != QLatin1String("trellis2"))
+        return makeErrorResult("'texture' must be trellis2 (or omitted).");
+    const QString trellisPreset = args.value("trellis_preset").toString(QStringLiteral("balanced")).toLower();
+    if (trellisPreset != QLatin1String("fast") && trellisPreset != QLatin1String("balanced") && trellisPreset != QLatin1String("high"))
+        return makeErrorResult("'trellis_preset' must be fast, balanced or high.");
+    if (textureMode.isEmpty() && outPath.endsWith(QLatin1String(".glb"), Qt::CaseInsensitive))
+        return makeErrorResult("a .glb output needs texture=trellis2 (the untextured body is written as .obj).");
 
     QRectF bbox;
     if (args.contains("bbox")) {
@@ -3765,9 +3774,14 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
                                    .arg(srcPath, reader.errorString()));
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("generate_body_from_photo"));
+    m_toolCancelRequested = false;
+    emit toolProgress(QStringLiteral("generate_body_from_photo"), QStringLiteral("fetching models"), 0, 3);
     QString why;
     if (!SamBody::ensureModelsBlocking(&why))
         return makeErrorResult(QStringLiteral("SAM 3D Body models unavailable: %1").arg(why));
+    if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("cancelled"));
+    emit toolProgress(QStringLiteral("generate_body_from_photo"), QStringLiteral("predicting the body"), 1, 3);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
 
     SamBody::Options opts;
     opts.bbox = bbox;
@@ -3776,11 +3790,10 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
     if (!r.ok)
         return makeErrorResult(QStringLiteral("photo to body failed: %1").arg(r.error));
 
+    if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("cancelled"));
+    emit toolProgress(QStringLiteral("generate_body_from_photo"), QStringLiteral("body ready"), 2, 3);
     const auto& verts = pose == QLatin1String("posed") ? r.body.posedVertices : r.body.neutralVertices;
     const bool facingMinusZ = !args.value("facing_z").toBool(false);
-    const QString textureMode = args.value("texture").toString().toLower();
-    if (!textureMode.isEmpty() && textureMode != QLatin1String("trellis2"))
-        return makeErrorResult("'texture' must be trellis2 (or omitted).");
     QString textureNote;
     if (textureMode == QLatin1String("trellis2")) {
         const SamBody::UvLayout uv = SamBody::loadUvLayout(SamBody::uvPath());
@@ -3788,11 +3801,16 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
             return makeErrorResult(QStringLiteral("the MHR UV layout (%1) is missing or damaged; re-download the SAM 3D Body models.").arg(SamBody::uvPath()));
         SamBody::TexturedBodyOptions to;
         to.textureSize = qBound(256, args.value("texture_size").toInt(2048), 4096);
-        const QString preset = args.value("trellis_preset").toString(QStringLiteral("balanced")).toLower();
-        if (preset != QLatin1String("fast") && preset != QLatin1String("balanced") && preset != QLatin1String("high"))
-            return makeErrorResult("'trellis_preset' must be fast, balanced or high.");
-        to.trellisPreset = preset;
+        to.trellisPreset = trellisPreset;
+        QElapsedTimer pumpClock;
+        pumpClock.start();
+        to.progress = [this, &pumpClock](MeshGenPredictor::Stage, int done, int total) -> bool {
+            if (total > 0) emit toolProgress(QStringLiteral("generate_body_from_photo"), QStringLiteral("TRELLIS.2 texture"), done, total);
+            if (pumpClock.elapsed() >= 50) { pumpClock.restart(); QCoreApplication::processEvents(QEventLoop::AllEvents, 10); }
+            return !m_toolCancelRequested;
+        };
         const SamBody::TexturedBodyResult tr = SamBody::textureBodyFromTrellis(photo, verts, r.body.triangles, uv, to);
+        if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("cancelled"));
         if (!tr.ok) return makeErrorResult(QStringLiteral("texturing from TRELLIS.2 failed: %1").arg(tr.error));
         const QString we = SamBody::writeTexturedBody(outPath, verts, r.body.triangles, uv, tr.transfer, facingMinusZ);
         if (!we.isEmpty()) return makeErrorResult(we);

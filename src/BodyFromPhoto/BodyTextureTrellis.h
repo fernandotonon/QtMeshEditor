@@ -2,6 +2,7 @@
 
 #include "BodyTexture.h"
 #include "SamBodyPredictor.h"
+#include "../ImageTo3D/MeshGenPredictor.h"
 
 #include <QImage>
 #include <QString>
@@ -13,6 +14,8 @@ struct TexturedBodyOptions {
     QString trellisPreset = QStringLiteral("balanced");   ///< fast | balanced | high
     bool bakePbr = true;                                  ///< carry TRELLIS's roughness / metallic maps over
     TransferOptions transfer;
+    /// Forwarded to TRELLIS.2 (stage, done, total); return false to cancel. Empty = none.
+    MeshGenPredictor::ProgressFn progress;
 };
 
 struct TexturedBodyResult {

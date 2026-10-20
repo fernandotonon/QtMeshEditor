@@ -22,7 +22,7 @@ TexturedBodyResult textureBodyFromTrellis(const QImage& photo, const std::vector
     to.bakeTexture = true;
     to.textureSize = std::max(1024, std::min(options.textureSize, 4096));
     to.bakeNormalMap = false;                 // tangent-space normals of the TRELLIS surface mean nothing on the MHR atlas
-    const MeshGenPredictor::Result gen = Trellis2Predictor::predict(photo, to);
+    const MeshGenPredictor::Result gen = Trellis2Predictor::predict(photo, to, options.progress);
     if (!gen.ok) {
         out.error = QStringLiteral("TRELLIS.2 failed: %1").arg(gen.error);
         return out;

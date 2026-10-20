@@ -52,7 +52,7 @@ Pre-processing (person crop, affine warp, CLIFF condition, camera rays) lives in
   distributed under the **SAM License** (`LICENSE-SAM.txt`; Meta Platforms, Last Updated November 19, 2025).
   It is not an OSI open-source licence: it carries an indemnity clause, a litigation-termination clause, trade-control
   restrictions and Meta's right to update the terms. By using these files you accept it.
-* `mhr_body.onnx` and `mhr_faces.i32` derive from Meta's **MHR** release data, which is **Apache-2.0**
+* `mhr_body.onnx`, `mhr_faces.i32` and `mhr_uv.bin` derive from Meta's **MHR** release data, which is **Apache-2.0**
   (`LICENSE-MHR.txt`).
 * Hosting here follows the maintainer's own reading of the SAM License and is not legal advice.
 
