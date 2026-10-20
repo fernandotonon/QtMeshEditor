@@ -394,15 +394,21 @@ public:
     /// it when it regenerates a clip, and migrateArmSpaceKey() moves it on
     /// rename. Returns false (no-op) if the animation is missing or no arm
     /// role resolves on the rig.
+    /// `axis` picks the swing: Forward (default) = widen/tuck about the torso's forward axis (arms at the sides); Up = SPREAD about
+    /// the vertical axis (arms that point forward — an aiming/guard pose — move apart or together; the fix for rigs with narrow
+    /// shoulders, where the same arm directions leave the hands crossed). The two are independent and each tracks its own
+    /// absolute angle.
+    enum class ArmSwingAxis { Forward, Up };
     static bool adjustArmSpace(Ogre::Skeleton* skel,
                                const std::string& animName,
-                               float degrees);
+                               float degrees, ArmSwingAxis axis = ArmSwingAxis::Forward);
 
     /// The arm-space angle currently applied to `animName` (0 if none) — the
     /// value adjustArmSpace last stored this session. Lets a UI seed its
     /// slider with the clip's real state instead of assuming 0.
     static float currentArmSpace(Ogre::Skeleton* skel,
-                                 const std::string& animName);
+                                 const std::string& animName,
+                                 ArmSwingAxis axis = ArmSwingAxis::Forward);
 
     /// Move the tracked arm-space angle from oldAnim to newAnim on the given
     /// skeleton. Call from every animation-rename path so a renamed clip keeps

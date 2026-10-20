@@ -12261,12 +12261,17 @@ Rectangle {
                 var cur = AnimationControlController.currentArmSpace(animName, entity)
                 armSpaceSlider.value = cur
                 armSpaceSlider.lastApplied = cur
+                var sp = AnimationControlController.currentArmSpread(animName, entity)
+                armSpreadSlider.value = sp
+                armSpreadSlider.lastApplied = sp
             }
             function detachArmSpace() {
                 armSpaceAnim = ""
                 armSpaceEntity = ""
                 armSpaceSlider.value = 0
                 armSpaceSlider.lastApplied = 0
+                armSpreadSlider.value = 0
+                armSpreadSlider.lastApplied = 0
             }
 
             Connections {
@@ -12563,6 +12568,43 @@ Rectangle {
                 Text {
                     text: (armSpaceSlider.value > 0 ? "+" : "")
                           + Math.round(armSpaceSlider.value) + "°"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 42; horizontalAlignment: Text.AlignRight
+                }
+            }
+            // ── Arm spread: the SECOND axis. Arm space swings about the forward axis, which does nothing to arms that already
+            // point forward (aiming / guard poses); spread swings about the vertical axis and moves those apart (+) or together
+            // (−) — the fix for rigs with narrow shoulders whose hands end up crossed. Same absolute + idempotent contract.
+            Row {
+                width: parent.width - 16; spacing: 6
+                visible: armSpaceAnim.length > 0
+                Text {
+                    text: "Arm spread"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 62
+                    elide: Text.ElideRight
+                }
+                Slider {
+                    id: armSpreadSlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 62 - 42 - 12
+                    from: -45; to: 45; value: 0; stepSize: 1
+                    property real lastApplied: 0
+                    onValueChanged: {
+                        if (armSpaceAnim.length > 0
+                            && Math.round(value) !== Math.round(lastApplied)) {
+                            lastApplied = value
+                            AnimationControlController.adjustArmSpread(
+                                armSpaceAnim, value, armSpaceEntity)
+                        }
+                    }
+                    onPressedChanged: { if (!pressed) refreshAnimData() }
+                }
+                Text {
+                    text: (armSpreadSlider.value > 0 ? "+" : "")
+                          + Math.round(armSpreadSlider.value) + "°"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                     width: 42; horizontalAlignment: Text.AlignRight

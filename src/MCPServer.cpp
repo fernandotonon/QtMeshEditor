@@ -5815,8 +5815,13 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
         const QString animName = args.value("animation_name").toString();
         if (animName.isEmpty())
             return makeErrorResult("Error: animation_name is required.");
+        const bool haveSpace = args.contains("arm_space") || args.contains("degrees");
+        const bool haveSpread = args.contains("arm_spread");
+        if (!haveSpace && !haveSpread)
+            return makeErrorResult("Error: give arm_space and/or arm_spread (degrees).");
         const double degrees = args.value("arm_space").toDouble(
             args.value("degrees").toDouble(0.0));
+        const double spread = args.value("arm_spread").toDouble(0.0);
 
         const QString entityName = args.value("entity_name").toString();
         Ogre::Entity* entity = nullptr;
@@ -5844,10 +5849,14 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
             return makeErrorResult(
                 QString("Error: animation '%1' not found on entity.").arg(animName));
 
-        if (!AnimationMerger::adjustArmSpace(skel.get(), an,
-                                             static_cast<float>(degrees)))
+        if (haveSpace && !AnimationMerger::adjustArmSpace(skel.get(), an,
+                                                          static_cast<float>(degrees)))
             return makeErrorResult(
                 "Error: arm-space adjustment failed (no arm roles on this rig).");
+        if (haveSpread && !AnimationMerger::adjustArmSpace(skel.get(), an, static_cast<float>(spread),
+                                                           AnimationMerger::ArmSwingAxis::Up))
+            return makeErrorResult(
+                "Error: arm-spread adjustment failed (no arm roles on this rig).");
 
         if (auto* acc = AnimationControlController::instance())
             acc->notifyExternalAnimationEdit();
@@ -5865,7 +5874,8 @@ QJsonObject MCPServer::toolAdjustArmSpace(const QJsonObject &args)
         QJsonObject content;
         content["ok"] = true;
         content["animation"] = animName;
-        content["arm_space"] = degrees;
+        if (haveSpace) content["arm_space"] = degrees;
+        if (haveSpread) content["arm_spread"] = spread;
         content["entity"] = QString::fromStdString(entity->getName());
         if (!outPath.isEmpty()) content["exported"] = outPath;
         return makeSuccessResult(
@@ -12770,6 +12780,7 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to adjust, e.g. \"generated_walk\"."}};
         props["arm_space"] = QJsonObject{{"type", "number"}, {"description", "Absolute arm-space angle in degrees: positive widens the arms away from the body, negative tucks them in, 0 restores the original. Idempotent — re-applying reverts the previous value first."}};
+        props["arm_spread"] = QJsonObject{{"type", "number"}, {"description", "Absolute arm-SPREAD angle in degrees, a second independent swing about the VERTICAL axis: positive moves arms that point forward (aiming / guard poses) apart, negative brings them together, 0 restores. Use it when arm_space does nothing because the arms already point along the forward axis, or on rigs with narrow shoulders whose hands end up crossed."}};
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the rigged entity. If omitted, uses the first skinned entity."}};
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional path to re-export the mesh with the adjusted animation. If omitted, applied in-session only."}};
         appendTool(
@@ -12780,7 +12791,7 @@ QJsonArray MCPServer::buildToolsList()
             "hierarchy, and legs/spine are untouched. The angle is ABSOLUTE and idempotent (re-applying reverts "
             "the prior value), so it maps directly to a UI slider.",
             props,
-            QJsonArray{"animation_name", "arm_space"}
+            QJsonArray{"animation_name"}
         );
     }
 

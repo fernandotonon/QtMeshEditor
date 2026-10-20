@@ -1099,6 +1099,55 @@ TEST_F(AnimationMergerTest, ArmSpaceIsIdempotentAndAbsolute)
               0.9999f);
 }
 
+using ArmAxis = AnimationMerger::ArmSwingAxis;
+
+TEST_F(AnimationMergerTest, ArmSpreadSwingsAboutTheVerticalAxisSymmetrically)
+{
+    Ogre::Entity* ent = makeArmRigEntity("armspread_basic");
+    ASSERT_NE(ent, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+    const Ogre::Vector3 rBase = armWorldDir(skel, "RightArm", "RightForeArm");
+    const Ogre::Vector3 lBase = armWorldDir(skel, "LeftArm", "LeftForeArm");
+
+    ASSERT_TRUE(AnimationMerger::adjustArmSpace(skel, "clip", 30.0f, ArmAxis::Up));
+    const Ogre::Vector3 r = armWorldDir(skel, "RightArm", "RightForeArm");
+    const Ogre::Vector3 l = armWorldDir(skel, "LeftArm", "LeftForeArm");
+    EXPECT_NEAR(degBetween(rBase, r), 30.0f, 5.0f);
+    EXPECT_NEAR(degBetween(lBase, l), 30.0f, 5.0f);
+    // Mirror-symmetric: reflecting the right result across X gives the left one.
+    EXPECT_GT(Ogre::Vector3(-r.x, r.y, r.z).dotProduct(l), 0.98f);
+    // It is a rotation about the vertical axis, so heights do not change.
+    EXPECT_NEAR(r.y, rBase.y, 0.02f);
+    EXPECT_NEAR(l.y, lBase.y, 0.02f);
+    // And it is tracked separately from the forward swing.
+    EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip", ArmAxis::Up), 30.0f);
+    EXPECT_FLOAT_EQ(AnimationMerger::currentArmSpace(skel, "clip"), 0.0f);
+}
+
+TEST_F(AnimationMergerTest, ArmSpreadAndArmSpaceAreIndependent)
+{
+    Ogre::Entity* ent = makeArmRigEntity("armspread_indep");
+    Ogre::Entity* ref = makeArmRigEntity("armspread_indep_ref");
+    ASSERT_NE(ent, nullptr);
+    ASSERT_NE(ref, nullptr);
+    Ogre::SkeletonInstance* skel = ent->getSkeleton();
+    const Ogre::Vector3 base = armWorldDir(skel, "RightArm", "RightForeArm");
+
+    // Forward 20 first, then spread 15 on top; then forward back to 0: what is left must be the spread alone.
+    AnimationMerger::adjustArmSpace(skel, "clip", 20.0f);
+    AnimationMerger::adjustArmSpace(skel, "clip", 15.0f, ArmAxis::Up);
+    AnimationMerger::adjustArmSpace(skel, "clip", 0.0f);
+    AnimationMerger::adjustArmSpace(ref->getSkeleton(), "clip", 15.0f, ArmAxis::Up);
+    const Ogre::Vector3 got = armWorldDir(skel, "RightArm", "RightForeArm");
+    const Ogre::Vector3 want = armWorldDir(ref->getSkeleton(), "RightArm", "RightForeArm");
+    EXPECT_GT(got.dotProduct(want), 0.9999f)
+        << "changing the forward swing disturbed the spread";
+
+    // And back to zero on both axes restores the original pose.
+    AnimationMerger::adjustArmSpace(skel, "clip", 0.0f, ArmAxis::Up);
+    EXPECT_GT(base.dotProduct(armWorldDir(skel, "RightArm", "RightForeArm")), 0.9999f);
+}
+
 TEST_F(AnimationMergerTest, ArmSpaceLeavesNonArmBonesUntouched)
 {
     Ogre::Entity* ent = makeArmRigEntity("armspace_legs");
