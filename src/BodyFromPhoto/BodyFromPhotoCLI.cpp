@@ -90,6 +90,10 @@ int run(int argc, char* argv[])
         return 0;
     }
     if (photoPath.isEmpty() || outPath.isEmpty()) { usage(); return 2; }
+    if (!outPath.endsWith(QLatin1String(".obj"), Qt::CaseInsensitive)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: the body is written as .obj: -o must end in .obj\n"));
+        return 2;
+    }
 
     // Honour EXIF orientation (a portrait phone JPEG would otherwise arrive sideways, and --bbox is in displayed pixels).
     QImageReader reader(photoPath);

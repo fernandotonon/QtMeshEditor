@@ -16,11 +16,15 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <memory>
 
 namespace {
 
+// Pinned to a COMMIT, not `main`: the SHA-256 table below describes exactly these files, and a re-export uploaded to the same
+// paths on main would otherwise make every released build fail its digest check. After re-exporting, upload, then update this
+// revision AND the digests together.
 constexpr const char* kDefaultBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/sam3dbody/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/26daed748226af17fb8c402465cb79281f9a5ac1/sam3dbody/";
 constexpr const char* kBaseUrlSettingsKey = "ai/sam3dbodyModelBaseUrl";
 
 struct FileSpec { const char* name; const char* label; const char* sha256; };
@@ -209,6 +213,21 @@ bool ensureModelsBlocking(QString* error)
     if (error) *error = QStringLiteral("photo to body needs an ONNX build (rebuild with -DENABLE_ONNX)");
     return false;
 }
+struct Runner::Impl {};
+Runner::Runner() : d(std::make_unique<Impl>()) {}
+Runner::~Runner() = default;
+bool Runner::restPose(std::vector<float>&, std::vector<float>&, QString* error)
+{
+    if (error) *error = QStringLiteral("needs an ONNX build");
+    return false;
+}
+Result Runner::predict(const QImage&, const Options&)
+{
+    Result r;
+    r.error = QStringLiteral("photo to body needs an ONNX build (rebuild with -DENABLE_ONNX).");
+    return r;
+}
+
 Result predict(const QImage&, const Options&)
 {
     Result r;
@@ -267,53 +286,6 @@ namespace {
 
 struct NamedTensor { std::vector<float> data; std::vector<int64_t> shape; };
 
-Ort::SessionOptions makeOptions()
-{
-    Ort::SessionOptions so;
-    OnnxRuntimeSettings::configureSessionOptions(so);
-    return so;
-}
-
-std::vector<std::vector<float>> run(Ort::Env& env, const QString& file,
-                                    const std::map<std::string, NamedTensor>& inputs,
-                                    const std::vector<std::string>& outputNames)
-{
-    Ort::SessionOptions so = makeOptions();
-#ifdef _WIN32
-    Ort::Session session(env, file.toStdWString().c_str(), so);
-#else
-    Ort::Session session(env, file.toStdString().c_str(), so);
-#endif
-    Ort::AllocatorWithDefaultOptions alloc;
-    auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-
-    std::vector<Ort::AllocatedStringPtr> keep;
-    std::vector<const char*> inNames;
-    std::vector<Ort::Value> inValues;
-    for (size_t i = 0; i < session.GetInputCount(); ++i) {
-        keep.push_back(session.GetInputNameAllocated(i, alloc));
-        const std::string name = keep.back().get();
-        const auto it = inputs.find(name);
-        if (it == inputs.end())
-            throw std::runtime_error("graph input '" + name + "' has no value");
-        auto& t = const_cast<NamedTensor&>(it->second);
-        inNames.push_back(keep.back().get());
-        inValues.push_back(Ort::Value::CreateTensor<float>(mem, t.data.data(), t.data.size(),
-                                                           t.shape.data(), t.shape.size()));
-    }
-    std::vector<const char*> outNames;
-    for (const std::string& n : outputNames) outNames.push_back(n.c_str());
-    auto outs = session.Run(Ort::RunOptions{nullptr}, inNames.data(), inValues.data(), inValues.size(),
-                            outNames.data(), outNames.size());
-    std::vector<std::vector<float>> result;
-    for (auto& o : outs) {
-        const size_t n = o.GetTensorTypeAndShapeInfo().GetElementCount();
-        const float* d = o.GetTensorData<float>();
-        result.emplace_back(d, d + n);
-    }
-    return result;
-}
-
 bool allFinite(const std::vector<float>& v)
 {
     return std::all_of(v.begin(), v.end(), [](float x) { return std::isfinite(x); });
@@ -321,7 +293,59 @@ bool allFinite(const std::vector<float>& v)
 
 } // namespace
 
-Result predict(const QImage& photo, const Options& opts)
+/// The three ONNX Runtime sessions, created on first use and kept: a sequence pays the 3.4 GB backbone load once.
+struct Runner::Impl {
+    Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "qtmesh_sam3dbody"};
+    std::unique_ptr<Ort::Session> backbone, decoder, mhr;
+
+    static Ort::Session* open(Ort::Env& env, std::unique_ptr<Ort::Session>& slot, const QString& file)
+    {
+        if (!slot) {
+            Ort::SessionOptions so;
+            OnnxRuntimeSettings::configureSessionOptions(so);
+#ifdef _WIN32
+            slot = std::make_unique<Ort::Session>(env, file.toStdWString().c_str(), so);
+#else
+            slot = std::make_unique<Ort::Session>(env, file.toStdString().c_str(), so);
+#endif
+        }
+        return slot.get();
+    }
+
+    static std::vector<std::vector<float>> run(Ort::Session& session, const std::map<std::string, NamedTensor>& inputs,
+                                               const std::vector<std::string>& outputNames)
+    {
+        Ort::AllocatorWithDefaultOptions alloc;
+        auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        std::vector<Ort::AllocatedStringPtr> keep;
+        std::vector<const char*> inNames;
+        std::vector<Ort::Value> inValues;
+        for (size_t i = 0; i < session.GetInputCount(); ++i) {
+            keep.push_back(session.GetInputNameAllocated(i, alloc));
+            const std::string name = keep.back().get();
+            const auto it = inputs.find(name);
+            if (it == inputs.end()) throw std::runtime_error("graph input '" + name + "' has no value");
+            auto& t = const_cast<NamedTensor&>(it->second);
+            inNames.push_back(keep.back().get());
+            inValues.push_back(Ort::Value::CreateTensor<float>(mem, t.data.data(), t.data.size(), t.shape.data(), t.shape.size()));
+        }
+        std::vector<const char*> outNames;
+        for (const std::string& n : outputNames) outNames.push_back(n.c_str());
+        auto outs = session.Run(Ort::RunOptions{nullptr}, inNames.data(), inValues.data(), inValues.size(), outNames.data(), outNames.size());
+        std::vector<std::vector<float>> result;
+        for (auto& o : outs) {
+            const size_t n = o.GetTensorTypeAndShapeInfo().GetElementCount();
+            const float* d = o.GetTensorData<float>();
+            result.emplace_back(d, d + n);
+        }
+        return result;
+    }
+};
+
+Runner::Runner() : d(std::make_unique<Impl>()) {}
+Runner::~Runner() = default;
+
+Result Runner::predict(const QImage& photo, const Options& opts)
 {
     Result r;
     if (photo.isNull()) { r.error = QStringLiteral("empty photo"); return r; }
@@ -345,6 +369,8 @@ Result predict(const QImage& photo, const Options& opts)
             }
         }
         if (!(box.width() > 0))
+            r.personFound = false;
+        if (!(box.width() > 0))
             r.warning = QStringLiteral("could not find the person automatically; using the whole photo "
                                        "(pass an explicit box for a better fit)");
     }
@@ -356,11 +382,9 @@ Result predict(const QImage& photo, const Options& opts)
     r.geometry = geo;
 
     try {
-        Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_sam3dbody");
-
-        // 2. Backbone (3.4 GB of weights: the session is released before the decoder loads).
+        // 2. Backbone.
         NamedTensor img{warpCrop(photo, geo), {1, 3, kCropSize, kCropSize}};
-        auto feats = run(env, backbonePath(), {{"image", std::move(img)}}, {"features"});
+        auto feats = Impl::run(*Impl::open(d->env, d->backbone, backbonePath()), {{"image", std::move(img)}}, {"features"});
         if (feats.empty() || feats[0].size() != static_cast<size_t>(1280) * kFeatureSize * kFeatureSize
             || !allFinite(feats[0])) {
             r.error = QStringLiteral("the backbone returned unusable features");
@@ -378,7 +402,7 @@ Result predict(const QImage& photo, const Options& opts)
         in["cam_int"]     = {{geo.focal, 0, geo.principal[0], 0, geo.focal, geo.principal[1], 0, 0, 1}, {1, 3, 3}};
         in["affine"]      = {{geo.affine[0], geo.affine[1], geo.affine[2], geo.affine[3], geo.affine[4], geo.affine[5]}, {1, 2, 3}};
         in["crop_size"]   = {{static_cast<float>(kCropSize), static_cast<float>(kCropSize)}, {1, 2}};
-        auto dec = run(env, decoderPath(), in, {"shape", "model_params", "cam_t"});
+        auto dec = Impl::run(*Impl::open(d->env, d->decoder, decoderPath()), in, {"shape", "model_params", "cam_t"});
         if (dec.size() != 3 || dec[0].size() != kShapeComps || dec[1].size() != kModelParams
             || !allFinite(dec[0]) || !allFinite(dec[1])) {
             r.error = QStringLiteral("the decoder returned unusable parameters");
@@ -389,33 +413,72 @@ Result predict(const QImage& photo, const Options& opts)
         if (dec[2].size() >= 3) r.body.camT = {dec[2][0], dec[2][1], dec[2][2]};
         r.body.focalPx = geo.focal;
 
-        // 4. MHR forward: posed and neutral.
+        // 4. MHR forward: posed (+ neutral for a mesh).
+        Ort::Session& mhrSession = *Impl::open(d->env, d->mhr, mhrPath());
         auto mhr = [&](const std::vector<float>& params) {
             std::map<std::string, NamedTensor> m;
             m["shape"] = {r.body.shape, {1, kShapeComps}};
             m["model_params"] = {params, {1, kModelParams}};
-            return run(env, mhrPath(), m, {"vertices"});
+            return Impl::run(mhrSession, m, {"vertices", "joint_t", "joint_q"});
         };
         auto posed = mhr(r.body.modelParams);
-        auto neutral = mhr(neutralParams(r.body.modelParams));
         const size_t want = static_cast<size_t>(kVertexCount) * 3;
-        if (posed.empty() || neutral.empty() || posed[0].size() != want || neutral[0].size() != want
-            || !allFinite(posed[0]) || !allFinite(neutral[0])) {
-            r.error = QStringLiteral("the MHR body model returned an unusable mesh");
+        if (posed.size() != 3 || posed[0].size() != want || posed[1].size() != static_cast<size_t>(kJointCount) * 3
+            || posed[2].size() != static_cast<size_t>(kJointCount) * 4 || !allFinite(posed[0]) || !allFinite(posed[1])
+            || !allFinite(posed[2])) {
+            r.error = QStringLiteral("the MHR body model returned an unusable result");
             return r;
         }
-        for (auto* v : {&posed[0], &neutral[0]})
-            for (float& x : *v) x *= 0.01f;                  // cm -> m
+        for (float& x : posed[0]) x *= 0.01f;                // cm -> m
+        for (float& x : posed[1]) x *= 0.01f;
         r.body.posedVertices = std::move(posed[0]);
-        r.body.neutralVertices = std::move(neutral[0]);
-        r.body.triangles = loadFaces(facesPath());
-        if (r.body.triangles.empty()) { r.error = QStringLiteral("mhr_faces.i32 is unreadable"); return r; }
+        r.body.jointPos = std::move(posed[1]);
+        r.body.jointQuat = std::move(posed[2]);
+        if (opts.wantMesh) {
+            auto neutral = mhr(neutralParams(r.body.modelParams));
+            if (neutral.empty() || neutral[0].size() != want || !allFinite(neutral[0])) {
+                r.error = QStringLiteral("the MHR body model returned an unusable neutral mesh");
+                return r;
+            }
+            for (float& x : neutral[0]) x *= 0.01f;
+            r.body.neutralVertices = std::move(neutral[0]);
+            r.body.triangles = loadFaces(facesPath());
+            if (r.body.triangles.empty()) { r.error = QStringLiteral("mhr_faces.i32 is unreadable"); return r; }
+        }
         r.ok = true;
         return r;
     } catch (const std::exception& e) {
         r.error = QStringLiteral("SAM 3D Body inference failed: %1").arg(QString::fromUtf8(e.what()));
         return r;
     }
+}
+
+bool Runner::restPose(std::vector<float>& jointPos, std::vector<float>& jointQuat, QString* error)
+{
+    try {
+        std::map<std::string, NamedTensor> m;
+        m["shape"] = {std::vector<float>(kShapeComps, 0.0f), {1, kShapeComps}};
+        m["model_params"] = {std::vector<float>(kModelParams, 0.0f), {1, kModelParams}};
+        auto out = Impl::run(*Impl::open(d->env, d->mhr, mhrPath()), m, {"joint_t", "joint_q"});
+        if (out.size() != 2 || out[0].size() != size_t(kJointCount) * 3 || out[1].size() != size_t(kJointCount) * 4
+            || !allFinite(out[0]) || !allFinite(out[1])) {
+            if (error) *error = QStringLiteral("the MHR body model returned an unusable rest pose");
+            return false;
+        }
+        for (float& x : out[0]) x *= 0.01f;                  // cm -> m
+        jointPos = std::move(out[0]);
+        jointQuat = std::move(out[1]);
+        return true;
+    } catch (const std::exception& e) {
+        if (error) *error = QString::fromUtf8(e.what());
+        return false;
+    }
+}
+
+Result predict(const QImage& photo, const Options& opts)
+{
+    Runner runner;
+    return runner.predict(photo, opts);
 }
 
 #endif // ENABLE_ONNX

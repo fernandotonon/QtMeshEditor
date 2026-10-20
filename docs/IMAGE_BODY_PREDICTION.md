@@ -74,3 +74,19 @@ parameters are within 0.015 of Meta's body-only reference (the remainder is bf16
   `--register-joints --refine-surface`; the neutral OBJ alone is the surface-only route.
 * GUI action (Object mode) and an undoable "fit to this photo" that chains `generate_body_from_photo` → `fit_dna_body`.
 * Pose correctives for the posed output (664 MB; not needed for the neutral body the fit uses).
+
+## Animation from SAM 3D Body
+
+`qtmesh mocap <video|--frames-dir DIR> --body --mesh rig.fbx [--algo sam3dbody|pose-ik]`. Per frame: person box (matting) -> backbone -> decoder -> `mhr_body.onnx` (127 joint rotations and positions). The clip is then retargeted through the project's incompatible-skeleton retargeter with the MHR rest pose as the source rest (see CLAUDE.md for the mechanics and the measurements).
+
+**Fidelity** (`scripts/anim-bone-direction-error.py`, 12 rendered frames of a Mixamo dance, bone-direction error vs the original clip): pose-ik 27 deg; first SAM version (22 CMU roles, deltas against frame 0) 20 deg; current 11.3 deg (spine 5.6, legs 5.9, hands 16, arms 18).
+
+What the measurements showed, in order of impact: SAM's pose is camera-relative (a camera looking down read as a 24 deg forward lean; its joint directions were within 10 deg of truth after one global rotation), the first-frame calibration of the CMU path discards the starting pose, and rest-direction alignment must be limited to limbs (it bends the spine by the difference between two rigs' rest curvature).
+
+### Next
+* **Root translation** (rotation-only today): from the decoder's camera translation, gravity-aligned, with the One-Euro stabiliser.
+* **Arms (18 deg):** clavicle/shoulder mapping and SAM's per-arm accuracy; try the MHR twist joints for the forearm roll.
+* **One person box per sequence** (matting each frame costs ~1 s), batching, CoreML/GPU provider.
+* **MCP / GUI:** `capture_body_from_video` and the live capture panel still use pose-ik.
+* **Real footage:** the evaluation above is rendered frames; run a real video and judge by eye.
+* **Corpus use:** MHR joints from video as a cleaner source for the motion library than MediaPipe landmarks.

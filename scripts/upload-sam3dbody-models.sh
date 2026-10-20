@@ -8,6 +8,9 @@
 # The SAM License requires a copy of itself to accompany the SAM materials, so both licence texts are uploaded
 # next to the graphs and the dedicated repo's card (scripts/sam3dbody_model_card.md) states the terms.
 #
+# NB: the app's default URL is pinned to an HF COMMIT (kDefaultBaseUrl in SamBodyPredictor.cpp) together with the
+# SHA-256 table. After uploading NEW files, update the revision and the digests there.
+#
 # Prereqs: pip install -U "huggingface_hub[cli]" ; hf auth login (write token)
 # Usage:   OUT_DIR=/path/to/export_out ./scripts/upload-sam3dbody-models.sh
 # Big HF transfers drop connections routinely: each upload is retried (the CLI resumes).
@@ -17,7 +20,7 @@ AGG="${AGG:-fernandotonon/QtMeshEditor-models}"
 DED="${DED:-fernandotonon/QtMeshEditor-sam3dbody-onnx}"
 OUT_DIR="${OUT_DIR:?set OUT_DIR to the export output dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data)
+FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_uv.bin mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data)
 
 retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 8 ] && return 1; echo "retry $n..."; sleep 10; done; }
 

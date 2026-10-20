@@ -641,6 +641,8 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
         for (int t = 0; t < nt; ++t) {
             const int s = srcOf[size_t(t)];
             if (s < 0) continue;
+            if (std::find(opt.noAlignTargets.begin(), opt.noAlignTargets.end(), target.names[size_t(t)]) != opt.noAlignTargets.end())
+                continue;                                              // A stays identity for this bone
             // Which child defines this bone's direction. A BRANCHING bone
             // (chest → neck + both arms, hips → spine + both legs) must use
             // its CENTRAL child: aligning a chest toward one arm rolls the
@@ -908,6 +910,38 @@ std::string uniqueAnimationName(Ogre::Skeleton* skel, const std::string& base)
     return base + "_retarget";
 }
 
+bool writeRetargetedClip(Ogre::Skeleton* targetSkel, const std::string& newAnim, const std::vector<float>& times,
+                         const std::vector<LocalPose>& out, const RigDesc& tgt,
+                         const std::vector<unsigned short>& tgtHandles, const std::vector<char>& animated, QString* error)
+{
+    if (!targetSkel || times.empty() || times.size() != out.size()) {
+        if (error) *error = QStringLiteral("no frames to write");
+        return false;
+    }
+    if (targetSkel->hasAnimation(newAnim)) {
+        if (error) *error = QStringLiteral("the target already has an animation named '%1'").arg(QString::fromStdString(newAnim));
+        return false;
+    }
+    const float length = times.back();
+    Ogre::Animation* anim = targetSkel->createAnimation(newAnim, length > 0.0f ? length : 0.001f);
+    anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
+    for (int t = 0; t < tgt.size(); ++t) {
+        if (!animated[size_t(t)]) continue;
+        Ogre::Bone* bone = targetSkel->getBone(tgtHandles[size_t(t)]);
+        Ogre::NodeAnimationTrack* track = anim->createNodeTrack(tgtHandles[size_t(t)], bone);
+        const Ogre::Quaternion bindInv = tgt.bindRot[size_t(t)].Inverse();
+        for (size_t f = 0; f < out.size(); ++f) {
+            Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(times[f]);
+            Ogre::Quaternion q = bindInv * out[f].rot[size_t(t)];
+            q.normalise();
+            kf->setRotation(q);
+            kf->setTranslate(out[f].pos[size_t(t)] - tgt.bindPos[size_t(t)]);
+            kf->setScale(Ogre::Vector3::UNIT_SCALE);
+        }
+    }
+    return true;
+}
+
 Result retarget(Ogre::Skeleton* sourceSkel, const std::string& sourceAnim,
                 Ogre::Skeleton* targetSkel, const std::string& newAnim,
                 const BoneMap& map, const Options& options, int fps)
@@ -942,22 +976,7 @@ Result retarget(Ogre::Skeleton* sourceSkel, const std::string& sourceAnim,
     }
 
     const float length = times.back();
-    Ogre::Animation* anim = targetSkel->createAnimation(newAnim, length > 0.0f ? length : 0.001f);
-    anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
-    for (int t = 0; t < tgt.size(); ++t) {
-        if (!animated[size_t(t)]) continue;
-        Ogre::Bone* bone = targetSkel->getBone(tgtHandles[size_t(t)]);
-        Ogre::NodeAnimationTrack* track = anim->createNodeTrack(tgtHandles[size_t(t)], bone);
-        const Ogre::Quaternion bindInv = tgt.bindRot[size_t(t)].Inverse();
-        for (size_t f = 0; f < out.size(); ++f) {
-            Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(times[f]);
-            Ogre::Quaternion q = bindInv * out[f].rot[size_t(t)];
-            q.normalise();
-            kf->setRotation(q);
-            kf->setTranslate(out[f].pos[size_t(t)] - tgt.bindPos[size_t(t)]);
-            kf->setScale(Ogre::Vector3::UNIT_SCALE);
-        }
-    }
+    if (!writeRetargetedClip(targetSkel, newAnim, times, out, tgt, tgtHandles, animated, &res.error)) return res;
 
     if (std::getenv("QTMESH_RETARGET_DEBUG")) {
         // Verify the WRITTEN clip: play it on the target, play the source,

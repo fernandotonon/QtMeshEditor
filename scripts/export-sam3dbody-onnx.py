@@ -6,6 +6,7 @@ ONE-TIME, offline developer tool — NOT shipped. Produces, in --out-dir:
   sam3d_decoder.onnx                  features + ray/cond/affine/... -> shape/scale/pose/camera/model_params/vertices
   mhr_body.onnx                       shape[1,45] + model_params[1,204] -> vertices (cm), joint t, joint quat
   mhr_faces.i32                       MHR body topology (36,874 triangles, int32 LE)
+  mhr_uv.bin                          MHR UV layout (19,455 texcoords + per-face UV indices; see the writer below)
 and verifies each graph against the PyTorch module with onnxruntime. Upload with scripts/upload-sam3dbody-models.sh.
 
 Inputs you must have (this repo ships none of Meta's code or weights):
@@ -479,6 +480,13 @@ def main():
     got = sess(out("mhr_body.onnx")).run(None, {"shape": shape.numpy(), "model_params": mp.numpy()})
     check("mhr_body", [r.numpy() for r in ref], got)
     mt.faces.numpy().astype("<i4").tofile(out("mhr_faces.i32"))
+    # UV layout for texturing: int32 nt, int32 nf, float32 texcoords[nt,2], int32 texcoord_faces[nf,3] (indices into
+    # texcoords; one UV face per mesh face, so seams are UV-split vertices, not extra positions)
+    import struct
+    sd = torch.jit.load(mhr_pt, map_location="cpu").state_dict()
+    tc, tf = sd["character_torch.mesh.texcoords"].numpy().astype("<f4"), sd["character_torch.mesh.texcoord_faces"].numpy().astype("<i4")
+    with open(out("mhr_uv.bin"), "wb") as fh:
+        fh.write(struct.pack("<ii", tc.shape[0], tf.shape[0])); fh.write(tc.tobytes()); fh.write(tf.tobytes())
 
     # ---- backbone ----------------------------------------------------------------------------------------------
     if not a.skip_backbone:

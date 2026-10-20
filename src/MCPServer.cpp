@@ -3743,6 +3743,8 @@ QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
     const QString pose = args.value("pose").toString(QStringLiteral("neutral")).toLower();
     if (pose != QLatin1String("neutral") && pose != QLatin1String("posed"))
         return makeErrorResult("'pose' must be neutral or posed.");
+    if (!outPath.endsWith(QLatin1String(".obj"), Qt::CaseInsensitive))
+        return makeErrorResult("'output_path' must end in .obj (the body is written as OBJ).");
 
     QRectF bbox;
     if (args.contains("bbox")) {
@@ -9889,8 +9891,8 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
     options.rootMotion = args.value("root_motion").toBool(true);
     options.fallbackReason = algo == QLatin1String("pose-ik")
         ? QString()
-        : QStringLiteral("sam3dbody model not available (checkpoint access "
-                         "pending — see THIRD_PARTY_AI_MODELS.md); used pose-ik");
+        : QStringLiteral("the MCP tool still uses pose-ik; sam3dbody body capture runs through "
+                         "`qtmesh mocap --body --algo sam3dbody`");
 
     return runOgreOp([&]() -> QJsonObject {
         auto* cmd = new RecordBodyClipCommand(entity->getName(), std::move(bodyFrames),
@@ -14412,7 +14414,7 @@ QJsonArray MCPServer::buildToolsList()
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "Estimate root movement from the camera projection (default true); false records in place."}};
         props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
-        props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (quality path; falls back while its checkpoints are gated) or pose-ik."}};
+        props["algo"] = QJsonObject{{"type", "string"}, {"description", "pose-ik is what this MCP tool runs; sam3dbody is accepted but falls back to pose-ik here. SAM 3D Body capture (MHR joint rotations) is available through the CLI: qtmesh mocap --body --algo sam3dbody."}};
         QJsonArray required;
         required.append("video_path");
         appendTool(
