@@ -312,6 +312,12 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
         const QByteArray eb = mhr.readBytes(QStringLiteral("eye_drop"), nullptr);
         a.mhrEyeDrop.assign(eb.begin(), eb.end());
     }
+    for (auto [name, dst] : {std::pair<const char*, std::vector<int32_t>*>{"landmark_eye_l", &a.landmarkEyeL}, {"landmark_eye_r", &a.landmarkEyeR},
+                              {"landmark_lip", &a.landmarkLip}})
+        if (!mhr.shapeOf(QString::fromLatin1(name)).empty()) {
+            std::vector<int32_t> v;
+            if (needI(mhr, name, v)) *dst = std::move(v);
+        }
     if (!mhr.shapeOf(QStringLiteral("eye_open")).empty()) a.mhrEyeOpen = mhr.readFloat(QStringLiteral("eye_open"), nullptr);
     if (!needF(ict, "neutral", a.ictNeutral) || !needF(ict, "texcoords", a.ictTexcoords) || !needI(ict, "poly_size", a.polySize)
         || !needI(ict, "poly_vertex", a.polyVertex) || !needI(ict, "poly_texcoord", a.polyTexcoord)
@@ -971,6 +977,27 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int v = iris->v0; v <= iris->v1; ++v) { cx += headPos[size_t(v) * 3]; cy += headPos[size_t(v) * 3 + 1]; ++n; }
             if (n == 0) continue;
             cx /= float(n); cy /= float(n);
+            const auto& lmEye = cx > 0 ? a.landmarkEyeL : a.landmarkEyeR;
+            if (!lmEye.empty() && !a.landmarkLip.empty()) {
+                // Seat the eyeball relative to the eyelid layer of THIS face: its centre sits at a fixed offset from the centroid of the
+                // layer's vertices (the offset was fitted by hand on one character, so it holds for every head shape).
+                float cz0 = 0;
+                for (int v = iris->v0; v <= iris->v1; ++v) cz0 += headPos[size_t(v) * 3 + 2];
+                cz0 /= float(n);
+                double L[3] = {0, 0, 0};
+                for (int32_t v : lmEye) for (int k = 0; k < 3; ++k) L[k] += body.positions[size_t(v) * 3 + size_t(k)];
+                for (int k = 0; k < 3; ++k) L[k] /= double(lmEye.size());
+                const float tx = float(L[0]), ty = float(L[1]) + 0.000931f, tz = float(L[2]) - 0.005805f;   // offset: 0.9 mm up, 5.8 mm behind the layer
+                const float shrink = 0.90f;   // a little smaller than ICT's (the MHR socket is narrower)
+                for (const IctPart* q : {scl, iris})
+                    for (int v = q->v0; v <= q->v1; ++v) {
+                        float* h = &headPos[size_t(v) * 3];
+                        h[0] = tx + (h[0] - cx) * shrink;
+                        h[1] = ty + (h[1] - cy) * shrink;
+                        h[2] = tz + (h[2] - cz0) * shrink;
+                    }
+                continue;
+            }
             const float dyLift = 0.0072f + 0.00505f;   // + the hand-fitted offset (up 5.05 mm)   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
             for (const IctPart* q : {scl, iris})
                 for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 1] += dyLift;
@@ -998,6 +1025,21 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                     h[1] = cy + (h[1] - cy) * shrink;
                     h[2] = cz + (h[2] - cz) * shrink;
                 }
+        }
+    }
+    // The mouth interior (ICT gums, tongue, teeth) follows the lips of this face: its centre sits at a fixed offset from the centroid
+    // of the lip sheet's vertices (fitted by hand on one character).
+    float mouthShift[3] = {0.0f, 0.008065f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
+    if (p.nativeHead && !a.landmarkLip.empty()) {
+        double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
+        for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
+        int cn = 0;
+        for (const char* pn : {"gums_tongue", "teeth"})
+            if (const IctPart* q = a.part(QString::fromLatin1(pn)))
+                for (int v = q->v0; v <= q->v1; ++v) { for (int k = 0; k < 3; ++k) C[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn; }
+        if (cn > 0) {
+            const double om[3] = {0.0, -0.008544, -0.031834};   // offset from the lip landmark: 8.5 mm below, 31.8 mm behind
+            for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
     for (const Group& g : groups) {
@@ -1047,10 +1089,10 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         local[size_t(gv)] = int(globalOf.size());
                         globalOf.push_back(gv);
                         for (int i = 0; i < 3; ++i) m.positions.push_back(headPos[size_t(gv) * 3 + i]);
-                        // the MHR mouth sits 43.6 mm further forward and 8.1 mm higher than ICT's (hand-fitted from an edited mesh)
                         if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) {
-                            m.positions.back() += 0.0436f;                          // z (the coordinate pushed last)
-                            m.positions[m.positions.size() - 2] += 0.008065f;       // y
+                            m.positions.back() += mouthShift[2];
+                            m.positions[m.positions.size() - 2] += mouthShift[1];
+                            m.positions[m.positions.size() - 3] += mouthShift[0];
                         }
                     }
                     const uint32_t li = uint32_t(local[size_t(gv)]), ti = uint32_t(a.polyTexcoord[b + k]);

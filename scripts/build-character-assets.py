@@ -48,6 +48,9 @@ def meta_blob(obj):
 
 
 
+LIP_VERTS = set()
+
+
 def clean_faces(base, faces, wjaw):
     """Triangles to drop (returns a keep mask): the zero-thickness SHEET that closes the lips (an edge of a few tenths of a mm whose
     jaw weight jumps from upper-lip to lower-lip values: it stretches over the opening when the jaw moves) and sliver triangles."""
@@ -58,6 +61,7 @@ def clean_faces(base, faces, wjaw):
             if (abs(wjaw[va] - wjaw[vb]) > 0.35 and np.linalg.norm(base[va] - base[vb]) < 0.4
                     and base[va][2] > 11 and 154 < base[va][1] < 159):
                 keep[t] = False
+                LIP_VERTS.update(int(x) for x in f)
     A = 0.5 * np.linalg.norm(np.cross(base[faces[:, 1]] - base[faces[:, 0]], base[faces[:, 2]] - base[faces[:, 0]]), axis=1)
     e2 = sum(np.sum((base[faces[:, i]] - base[faces[:, (i + 1) % 3]]) ** 2, axis=1) for i in range(3))
     keep &= (4 * np.sqrt(3) * A / e2) >= 0.1
@@ -302,6 +306,13 @@ if __name__ == "__main__":
         d, j2 = tree.query(cen[i] * np.array([-1.0, 1.0, 1.0]))
         if d < 0.05: drop[j2] = True
     print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
+    # landmarks the generator seats the eyeballs and the mouth interior on, so they follow the head shape: the vertices of the eyelid layer
+    # (per side, +x = the character's left) and of the lip sheet
+    ev = np.unique(F[drop].reshape(-1))
+    mhr["landmark_eye_l"] = ev[Bm[ev, 0] > 0].astype(np.int32)
+    mhr["landmark_eye_r"] = ev[Bm[ev, 0] < 0].astype(np.int32)
+    mhr["landmark_lip"] = np.array(sorted(LIP_VERTS), np.int32)
+    print(f"landmarks: eye L {len(mhr['landmark_eye_l'])}, eye R {len(mhr['landmark_eye_r'])}, lip {len(mhr['landmark_lip'])}")
     mhr["eye_drop"] = drop.astype(np.uint8)   # applied at build time only when the eyes are opened (the lids stay intact otherwise)
     mhr["eye_open"] = eye_open.astype(np.float16)
     mhr["arkit_delta"] = arkit.astype(np.float16)

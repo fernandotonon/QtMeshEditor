@@ -199,7 +199,7 @@ QString CharacterController::shapeLabel(int m) const
         "Weight (belly, chest)", "Torso fullness", "Waist and hips", "Belly depth", "Chest and waist", "Belly forward or flat",
         "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
         "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
-        "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Head shape 5", "Head shape 6",
+        "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Age (face)", "Head shape 6",
         "Head shape 7", "Head shape 8", "Head shape 9", "Head shape 10", "Head shape 11", "Head shape 12", "Head shape 13",
         "Head shape 14", "Head shape 15", "Head shape 16", "Head shape 17", "Head shape 18", "Head shape 19", "Head shape 20",
         "Arms", "Arms detail 2", "Arms detail 3", "Arms detail 4", "Arms detail 5"};
