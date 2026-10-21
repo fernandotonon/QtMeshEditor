@@ -19,6 +19,7 @@
 #include "AudioToFace/LipsyncCLI.h"
 #include "DNA/DnaCLI.h"
 #include "BodyFromPhoto/BodyFromPhotoCLI.h"
+#include "CharacterGen/CharacterCLI.h"
 #ifdef ENABLE_MOCAP
 #include "Mocap/MocapCameraHints.h"
 #endif
@@ -1735,6 +1736,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "lipsync") rc = AudioToFace::LipsyncCLI::run(argc, argv);
     else if (cmd == "dna") rc = Dna::DnaCLI::run(argc, argv);
     else if (cmd == "body") rc = SamBody::BodyCLI::run(argc, argv);
+    else if (cmd == "character") rc = CharacterGen::CharacterCLI::run(argc, argv);
     else if (cmd == "retopo") rc = cmdRetopo(argc, argv);
     else if (cmd == "skin") rc = cmdSkin(argc, argv);
     else if (cmd == "rig") rc = cmdRig(argc, argv);

@@ -230,6 +230,10 @@ VertexAnimationManager.cpp
 AlembicImporter.cpp
 PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
+CharacterGen/QmcBundle.cpp
+CharacterGen/CharacterModel.cpp
+CharacterGen/CharacterScene.cpp
+CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
 BodyFromPhoto/SamBodyPredictor.cpp
