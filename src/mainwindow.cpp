@@ -1291,10 +1291,14 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<CharacterController>("PropertiesPanel", 1, 0, "CharacterController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 auto* c = CharacterController::qmlInstance(engine, nullptr);
-                QObject::connect(c, &CharacterController::browseDnaRequested, c, [c]() {
-                    const QString f = QFileDialog::getOpenFileName(nullptr, QObject::tr("Select a MetaHuman body DNA"), QString(), QObject::tr("MetaHuman DNA (*.dna)"));
-                    if (!f.isEmpty()) c->setDnaPath(f);
-                }, Qt::UniqueConnection);
+                static bool wired = false;   // (a lambda cannot use Qt::UniqueConnection)
+                if (!wired) {
+                    wired = true;
+                    QObject::connect(c, &CharacterController::browseDnaRequested, c, [c]() {
+                        const QString f = QFileDialog::getOpenFileName(QApplication::activeWindow(), QObject::tr("Select a MetaHuman body DNA"), QString(), QObject::tr("MetaHuman DNA (*.dna);;All files (*)"));
+                        if (!f.isEmpty()) c->setDnaPath(f);
+                    });
+                }
                 return c;
             });
         qmlRegisterSingletonType<DnaFitController>("PropertiesPanel", 1, 0, "DnaFitController",

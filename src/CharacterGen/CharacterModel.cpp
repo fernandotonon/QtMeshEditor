@@ -741,6 +741,43 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             body.faces.push_back(std::move(face));
         }
     }
+    // Soften the crease below the joint: relax the body rows just under the hole (the hole's own edge stays put, the strip is
+    // stitched to it) so the body's slope eases into the head's flare instead of meeting it at an angle.
+    if (!cutPoly.empty() && !p.bodyOnly) {
+        std::vector<std::vector<int>> adj(static_cast<size_t>(V));
+        std::vector<char> nearHole(static_cast<size_t>(V), 0);
+        for (size_t f = 0; f + 2 < a.mhrFaces.size(); f += 3) {
+            const int t[3] = {a.mhrFaces[f], a.mhrFaces[f + 1], a.mhrFaces[f + 2]};
+            bool anyGone = false;
+            for (int k = 0; k < 3; ++k) anyGone = anyGone || gone[size_t(t[k])];
+            for (int k = 0; k < 3; ++k) {
+                if (gone[size_t(t[k])]) continue;
+                if (anyGone) nearHole[size_t(t[k])] = 1;
+                for (int j = 0; j < 3; ++j)
+                    if (j != k && !gone[size_t(t[j])]) adj[size_t(t[k])].push_back(t[j]);
+            }
+        }
+        std::vector<int> band;
+        for (int v = 0; v < V; ++v) {
+            const float y = body.positions[size_t(v) * 3 + 1];
+            if (!gone[size_t(v)] && !nearHole[size_t(v)] && y > neckCutY - 0.07f && y < neckCutY + 0.02f && !adj[size_t(v)].empty()) band.push_back(v);
+        }
+        for (int it = 0; it < 14; ++it) {
+            std::vector<float> next(band.size() * 3);
+            for (size_t i = 0; i < band.size(); ++i) {
+                const int v = band[i];
+                float avg[3] = {0, 0, 0};
+                for (int n : adj[size_t(v)]) for (int c = 0; c < 3; ++c) avg[c] += body.positions[size_t(n) * 3 + size_t(c)];
+                const float inv = 1.0f / float(adj[size_t(v)].size());
+                for (int c = 0; c < 3; ++c) {
+                    const float cur = body.positions[size_t(v) * 3 + size_t(c)];
+                    next[i * 3 + size_t(c)] = cur + 0.5f * (avg[c] * inv - cur);
+                }
+            }
+            for (size_t i = 0; i < band.size(); ++i)
+                for (int c = 0; c < 3; ++c) body.positions[size_t(band[i]) * 3 + size_t(c)] = next[i * 3 + size_t(c)];
+        }
+    }
     // ---- stitch the seam: a triangle strip between the body's neck hole and the head's neck rim ---------------------------
     // The strip belongs to the body mesh; it ends on COPIES of the head's rim vertices (same positions), so the two meshes meet
     // exactly and nothing is left to see through. The copies take the weights of the nearest body vertex on the hole's edge.
