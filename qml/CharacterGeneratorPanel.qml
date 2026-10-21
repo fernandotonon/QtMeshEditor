@@ -79,6 +79,13 @@ Column {
         Label { width: 52; height: 22; text: "Face" }
         Field { id: faceField; width: sec.width - 60; placeholderText: "0=1,4=-0.8 (100 modes)" }
     }
+    Row {
+        spacing: 4
+        Label { width: 52; height: 22; text: "DNA" }
+        Field { id: dnaField; width: sec.width - 60 - 66; text: CharacterController.dnaPath; placeholderText: "optional MetaHuman body .dna"; onEditingFinished: CharacterController.dnaPath = text }
+        ToolBtn { label: "Browse…"; onClicked: CharacterController.browseDna() }
+    }
+    Note { text: "With a MetaHuman body DNA you own (not shipped with the editor), the generated shape is fitted onto it: you get its rig, skin and correctives." }
     CheckBox { id: averageBox; text: "Average character (ignore seed)"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor }
 
     ToolBtn {

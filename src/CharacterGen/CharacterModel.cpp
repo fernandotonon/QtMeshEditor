@@ -744,7 +744,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     // ---- stitch the seam: a triangle strip between the body's neck hole and the head's neck rim ---------------------------
     // The strip belongs to the body mesh; it ends on COPIES of the head's rim vertices (same positions), so the two meshes meet
     // exactly and nothing is left to see through. The copies take the weights of the nearest body vertex on the hole's edge.
-    if (haveRing) {
+    if (haveRing && !p.bodyOnly) {
         std::unordered_map<EdgeKey, std::array<int, 2>> edgeUse;   // [kept faces, removed faces]
         for (size_t f = 0; f + 2 < a.mhrFaces.size(); f += 3) {
             int removed = 0;
@@ -908,6 +908,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
 
     for (const Group& g : groups) {
+        if (p.bodyOnly) break;
         Dna::Mesh m;
         m.name = QString::fromLatin1(g.mesh);
         std::vector<int> local(size_t(a.ictVertices), -1);

@@ -1,6 +1,9 @@
 #include "CharacterScene.h"
 
+#include "../Manager.h"
 #include "../SentryReporter.h"
+#include "../DNA/DnaCLI.h"
+#include "../commands/AddFittedDnaCharacterCommand.h"
 
 #include <OgreEntity.h>
 #include <OgreMaterialManager.h>
@@ -82,6 +85,50 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.character"),
                                   QStringLiteral("create vertices=%1 morphs=%2").arg(rep.import.vertices).arg(rep.import.morphTargets));
     return node;
+}
+
+bool fitDnaToGeneratedBody(const Assets& assets, Params params, const QString& dnaPath, const QString& mode, DnaFit* out, QString* error)
+{
+    auto fail = [&](const QString& m) { if (error) *error = m; return false; };
+    if (!out) return fail(QStringLiteral("no output"));
+    params.bodyOnly = true;
+    params.bustDepth = 0.0f;
+    QString err;
+    Ogre::SceneNode* node = createCharacterInScene(assets, params, QStringLiteral("dna_target"), nullptr, &err);
+    if (!node) return fail(err);
+    Ogre::Entity* entity = nullptr;
+    for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
+        Ogre::MovableObject* mo = it.getNext();
+        if (mo->getMovableType() == "Entity") { entity = static_cast<Ogre::Entity*>(mo); break; }
+    }
+    if (!entity) { Manager::getSingleton()->destroySceneNode(node); return fail(QStringLiteral("the generated body has no entity")); }
+    const auto snapshot = Dna::DnaCLI::snapshotTarget(entity);
+    Manager::getSingleton()->destroySceneNode(node);   // the snapshot owns copies of everything the fit reads
+
+    Dna::DnaCLI::FitOptions o;
+    o.mode = mode.isEmpty() ? QStringLiteral("joints+surface") : mode;
+    o.poses = true;
+    o.poseSpace = true;
+    out->rig = std::make_shared<Dna::Rig>();
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.character"), QStringLiteral("fit dna mode=%1").arg(o.mode));
+    try {
+        if (!Dna::DnaCLI::fitSnapshotReport(dnaPath, snapshot, o, out->rig.get(), &out->report, &err, &out->poseSpace))
+            return fail(err);
+    } catch (const std::exception& e) {
+        return fail(QString::fromUtf8(e.what()));
+    }
+    return true;
+}
+
+Ogre::SceneNode* addFittedCharacter(const DnaFit& fit, const QString& dnaPath, const QString& baseName, QString* error)
+{
+    AddFittedDnaCharacterCommand cmd(fit.rig, dnaPath, baseName, fit.poseSpace);
+    cmd.redo();
+    if (!cmd.created()) { if (error) *error = cmd.error(); return nullptr; }
+    for (auto* n : Manager::getSingleton()->getSceneNodes())
+        if (QString::fromStdString(n->getName()) == cmd.nodeName()) return n;
+    if (error) *error = QStringLiteral("the fitted character node was not found");
+    return nullptr;
 }
 
 }  // namespace CharacterGen

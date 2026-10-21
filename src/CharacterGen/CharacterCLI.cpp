@@ -30,6 +30,7 @@ void usage()
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey>]\n"
         "                        [--facing-z] [--bust [--bust-depth M]] [--assets DIR] [--json]\n"
+        "       qtmesh character --dna <body.dna> [--dna-mode joints+surface|surface|joints] ...   shape a MetaHuman body DNA you own like the generated body\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -45,7 +46,7 @@ QString assetsDir() { return CharacterAssets::dir(); }
 
 int run(int argc, char* argv[])
 {
-    QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
+    QString outPath, bodyArg, faceArg, skinArg, eyeArg, dnaPath, dnaMode, assets = assetsDir();
     bool havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
@@ -58,6 +59,8 @@ int run(int argc, char* argv[])
         else if (a == "--variety") variety = next().toFloat();
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
+        else if (a == "--dna") dnaPath = next();
+        else if (a == "--dna-mode") dnaMode = next();
         else if (a == "--skin") skinArg = next();
         else if (a == "--eye") eyeArg = next();
         else if (a == "--assets") assets = next();
@@ -130,6 +133,22 @@ int run(int argc, char* argv[])
     }
 
     if (!CLIPipeline::initOgreHeadless()) return 1;
+    if (!dnaPath.isEmpty()) {
+        if (!QFileInfo::exists(dnaPath)) { CLIPipeline::writeCliError(QStringLiteral("Error: DNA file not found: %1\n").arg(dnaPath)); return 2; }
+        DnaFit fit;
+        if (!fitDnaToGeneratedBody(data, p, dnaPath, dnaMode, &fit, &err)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: fitting the DNA failed: %1\n").arg(err));
+            return 1;
+        }
+        Ogre::SceneNode* dn = addFittedCharacter(fit, dnaPath, QStringLiteral("character"), &err);
+        if (!dn) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err)); return 1; }
+        if (MeshImporterExporter::exporter(dn, QFileInfo(outPath).absoluteFilePath(), CLIPipeline::formatForExtension(outPath)) != 0) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: export to %1 failed.\n").arg(outPath));
+            return 1;
+        }
+        CLIPipeline::writeOutput(QStringLiteral("Character (MetaHuman DNA %1) → %2\n").arg(QFileInfo(dnaPath).fileName(), QFileInfo(outPath).fileName()));
+        return 0;
+    }
     SceneBuild sb;
     Ogre::SceneNode* node = createCharacterInScene(data, p, QStringLiteral("character"), &sb, &err);
     if (!node) {
