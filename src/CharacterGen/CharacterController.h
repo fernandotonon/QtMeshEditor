@@ -26,6 +26,7 @@ class CharacterController : public QObject
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     /// A MetaHuman BODY .dna the user owns (never shipped): the generated body shape is used as a target and the DNA body is fitted to it.
+    Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
     Q_PROPERTY(QString dnaPath READ dnaPath WRITE setDnaPath NOTIFY dnaPathChanged)
 
 public:
@@ -36,6 +37,8 @@ public:
     bool assetsPresent() const;
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    bool openEyes() const { return m_openEyes; }
+    void setOpenEyes(bool v) { if (v != m_openEyes) { m_openEyes = v; emit openEyesChanged(); } }
     QString dnaPath() const { return m_dnaPath; }
     void setDnaPath(const QString& p);
     Q_INVOKABLE void browseDna() { emit browseDnaRequested(); }
@@ -49,6 +52,7 @@ public:
 signals:
     void statusChanged();
     void dnaPathChanged();
+    void openEyesChanged();
     void browseDnaRequested();   ///< MainWindow runs the QFileDialog
 
 private:
@@ -58,6 +62,7 @@ private:
     bool m_busy = false;
     QString m_status;
     QString m_dnaPath;
+    bool m_openEyes = false;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };

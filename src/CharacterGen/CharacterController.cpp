@@ -141,6 +141,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
 
     Params p;
     p.nativeHead = !m_assets->mhrArkit.empty();
+    p.openEyes = m_openEyes;
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);
         p.faceIdentity = randomCoefficients(uint32_t(seed) * 2u + 2u, m_assets->ictIdentities, float(variety), 40);

@@ -294,7 +294,7 @@ if __name__ == "__main__":
         almond |= r2 < 1.0
     drop = (spans & (area < 0.05) & sheet[F].all(1)) | almond   # + everything inside the eye opening (the lid's inner sheet)
     print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
-    mhr["faces"], mhr["texcoord_faces"] = F[~drop], TF[~drop]
+    mhr["eye_drop"] = drop.astype(np.uint8)   # applied at build time only when the eyes are opened (the lids stay intact otherwise)
     mhr["eye_open"] = eye_open.astype(np.float16)
     mhr["arkit_delta"] = arkit.astype(np.float16)
     mhr["meta"] = meta_blob({"joint_names": names, "arkit_names": arkit_names})

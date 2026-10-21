@@ -308,6 +308,10 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
         a.mhrArkit = mhr.readFloat(QStringLiteral("arkit_delta"), &e2);
         if (a.mhrArkit.empty()) return fail(error, QStringLiteral("MHR bundle: arkit_delta: %1").arg(e2));
     }
+    if (!mhr.shapeOf(QStringLiteral("eye_drop")).empty()) {
+        const QByteArray eb = mhr.readBytes(QStringLiteral("eye_drop"), nullptr);
+        a.mhrEyeDrop.assign(eb.begin(), eb.end());
+    }
     if (!mhr.shapeOf(QStringLiteral("eye_open")).empty()) a.mhrEyeOpen = mhr.readFloat(QStringLiteral("eye_open"), nullptr);
     if (!needF(ict, "neutral", a.ictNeutral) || !needF(ict, "texcoords", a.ictTexcoords) || !needI(ict, "poly_size", a.polySize)
         || !needI(ict, "poly_vertex", a.polyVertex) || !needI(ict, "poly_texcoord", a.polyTexcoord)
@@ -660,7 +664,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     body.positions.resize(shaped.size());
     for (size_t i = 0; i < shaped.size(); ++i) body.positions[i] = shaped[i] * kCmToM;
     body.uvs = a.mhrTexcoords;
-    if (p.nativeHead && a.mhrEyeOpen.size() == body.positions.size() && !qEnvironmentVariableIsSet("QTMESH_NO_EYE_OPEN"))
+    if (p.nativeHead && p.openEyes && a.mhrEyeOpen.size() == body.positions.size())
         for (size_t i = 0; i < body.positions.size(); ++i) body.positions[i] += a.mhrEyeOpen[i] * kCmToM;
 
     std::vector<char> gone(size_t(V), 0);
@@ -732,6 +736,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             int removed = 0;
             for (int k = 0; k < 3; ++k) removed += gone[size_t(a.mhrFaces[f + k])] ? 1 : 0;
             if (removed >= 2) continue;
+            if (p.nativeHead && p.openEyes && f / 3 < a.mhrEyeDrop.size() && a.mhrEyeDrop[f / 3]) continue;
             if (p.bustDepth > 0.0f) {
                 float cy = 0;
                 for (int k = 0; k < 3; ++k) cy += body.positions[size_t(a.mhrFaces[f + k]) * 3 + 1];
@@ -1000,6 +1005,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
         if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_lashes") == 0)) continue;
+        if (p.nativeHead && !p.openEyes && (std::strcmp(g.mesh, "head_sclera") == 0 || std::strcmp(g.mesh, "head_iris") == 0)) continue;   // hidden behind shut lids
         Dna::Mesh m;
         m.name = QString::fromLatin1(g.mesh);
         std::vector<int> local(size_t(a.ictVertices), -1);

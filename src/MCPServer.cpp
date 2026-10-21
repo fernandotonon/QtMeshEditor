@@ -3749,6 +3749,7 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
 
     Params p;
     p.nativeHead = args.value("head").toString() != QLatin1String("ict") && !data.mhrArkit.empty();
+    p.openEyes = args.value("open_eyes").toBool(false);
     p.facePlusZ = args.value("facing_z").toBool(false);
     const float variety = float(args.value("variety").toDouble(1.0));
     const bool haveSeed = args.contains("seed");
@@ -13655,6 +13656,7 @@ QJsonArray MCPServer::buildToolsList()
         props["skin"] = QJsonObject{{"type", "string"}, {"description", "Skin colour: #rrggbb or pale/light/tan/brown/dark."}};
         props["eye"] = QJsonObject{{"type", "string"}, {"description", "Eye colour: #rrggbb or blue/green/brown/hazel/grey."}};
         props["bust"] = QJsonObject{{"type", "boolean"}, {"description", "Head and shoulders only (previews)."}};
+        props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Cut an opening through the MHR lids so the eyeballs (eye colour, gaze) show (experimental; default false keeps the lids as sculpted, eyes shut)."}};
         props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};
         props["facing_z"] = QJsonObject{{"type", "boolean"}, {"description", "Keep +Z facing instead of the editor's -Z."}};
         props["name"] = QJsonObject{{"type", "string"}, {"description", "Scene node base name (default character)."}};
