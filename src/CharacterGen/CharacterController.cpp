@@ -103,6 +103,14 @@ bool CharacterController::assetsPresent() const { return CharacterGen::Character
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
+QVariantList CharacterController::seedBody(int seed, double variety, int count) const
+{
+    QVariantList out;
+    const std::vector<float> v = CharacterGen::randomCoefficients(uint32_t(seed) * 2u + 1u, 45, float(variety), 16);
+    for (int i = 0; i < count && size_t(i) < v.size(); ++i) out << double(v[size_t(i)]);
+    return out;
+}
+
 void CharacterController::setDnaPath(const QString& p)
 {
     if (p == m_dnaPath) return;

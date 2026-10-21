@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QQmlEngine>
 #include <QString>
+#include <QVariantList>
 #include <QStringList>
 
 #include <memory>
@@ -41,6 +42,8 @@ public:
     void setOpenEyes(bool v) { if (v != m_openEyes) { m_openEyes = v; emit openEyesChanged(); } }
     QString dnaPath() const { return m_dnaPath; }
     void setDnaPath(const QString& p);
+    /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
+    Q_INVOKABLE QVariantList seedBody(int seed, double variety, int count) const;
     Q_INVOKABLE void browseDna() { emit browseDnaRequested(); }
     QStringList skinNames() const;
     QStringList eyeNames() const;

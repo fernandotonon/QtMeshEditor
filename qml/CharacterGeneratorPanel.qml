@@ -13,6 +13,11 @@ Column {
     width: parent ? parent.width : 300
     spacing: 6
     property int seed: 1
+    readonly property int modeCount: 10
+    property var bodyVals: [0,0,0,0,0,0,0,0,0,0]
+    function reseed() { bodyVals = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, modeCount) }
+    function bodyString() { var parts = []; for (var i = 0; i < bodyVals.length; ++i) parts.push(i + "=" + bodyVals[i].toFixed(3)); return parts.join(",") }
+    Component.onCompleted: reseed()
 
     component Label: Text {
         color: AnimationControlController.textColor
@@ -43,6 +48,31 @@ Column {
         Text { id: lblT; anchors.centerIn: parent; text: parent.label; color: AnimationControlController.buttonTextColor; font.pixelSize: 11 }
         MouseArea { id: maT; anchors.fill: parent; hoverEnabled: true; enabled: parent.enabled; onClicked: parent.clicked() }
     }
+    component InspectorCheckBox: CheckBox {
+        id: icb
+        spacing: 6
+        indicator: Rectangle {
+            x: icb.leftPadding
+            y: icb.height / 2 - height / 2
+            implicitWidth: 16; implicitHeight: 16; radius: 2
+            color: icb.checked ? AnimationControlController.highlightColor : AnimationControlController.inputColor
+            border.color: icb.activeFocus ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+            opacity: icb.enabled ? 1.0 : 0.45
+            Text {
+                anchors.centerIn: parent; visible: icb.checked; text: "✓"
+                color: AnimationControlController.textColor; font.pixelSize: 12; font.bold: true
+            }
+        }
+        contentItem: Text {
+            visible: icb.text !== ""
+            text: icb.text
+            color: AnimationControlController.textColor
+            font.pixelSize: 11
+            leftPadding: icb.indicator.width + icb.spacing
+            verticalAlignment: Text.AlignVCenter
+            opacity: icb.enabled ? 1.0 : 0.45
+        }
+    }
     component Field: TextField {
         height: 22; font.pixelSize: 11
         color: AnimationControlController.textColor
@@ -54,10 +84,10 @@ Column {
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Seed" }
-        Field { id: seedField; width: 60; text: String(sec.seed); inputMethodHints: Qt.ImhDigitsOnly; onEditingFinished: sec.seed = parseInt(text) || 0 }
-        ToolBtn { label: "Random"; onClicked: { sec.seed = Math.floor(Math.random() * 100000); seedField.text = String(sec.seed) } }
+        Field { id: seedField; width: 60; text: String(sec.seed); inputMethodHints: Qt.ImhDigitsOnly; onEditingFinished: { sec.seed = parseInt(text) || 0; sec.reseed() } }
+        ToolBtn { label: "Random"; onClicked: { sec.seed = Math.floor(Math.random() * 100000); seedField.text = String(sec.seed); sec.reseed() } }
         Label { height: 22; text: "Variety" }
-        Field { id: varietyField; width: 40; text: "1.0" }
+        Field { id: varietyField; width: 40; text: "1.0"; onEditingFinished: sec.reseed() }
     }
     Row {
         spacing: 4
@@ -69,15 +99,29 @@ Column {
         Label { width: 52; height: 22; text: "Eyes" }
         ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames) }
     }
-    Row {
-        spacing: 4
-        Label { width: 52; height: 22; text: "Body" }
-        Field { id: bodyField; width: sec.width - 60; placeholderText: "0=1.2,3=-0.5 (45 modes)" }
+    Label { height: 18; text: "Body shape" }
+    Repeater {
+        model: sec.modeCount
+        delegate: Row {
+            id: sliderRow
+            required property int index
+            spacing: 6
+            Label { width: 52; height: 22; text: "Shape " + (sliderRow.index + 1) }
+            Slider {
+                id: modeSlider
+                width: sec.width - 52 - 44 - 12
+                height: 22
+                from: -3; to: 3; stepSize: 0.1
+                value: sec.bodyVals[sliderRow.index]
+                onMoved: { var v = sec.bodyVals.slice(); v[sliderRow.index] = value; sec.bodyVals = v }
+            }
+            Label { width: 38; height: 22; horizontalAlignment: Text.AlignRight; text: modeSlider.value.toFixed(1) }
+        }
     }
     Row {
         spacing: 4
-        Label { width: 52; height: 22; text: "Face" }
-        Field { id: faceField; width: sec.width - 60; placeholderText: "0=1,4=-0.8 (100 modes)" }
+        ToolBtn { label: "Reset shape"; onClicked: sec.bodyVals = [0,0,0,0,0,0,0,0,0,0] }
+        ToolBtn { label: "From seed"; onClicked: sec.reseed() }
     }
     Row {
         spacing: 4
@@ -86,15 +130,15 @@ Column {
         ToolBtn { label: "Browse…"; onClicked: CharacterController.browseDna() }
     }
     Note { text: "With a MetaHuman body DNA you own (not shipped with the editor), the generated shape is fitted onto it: you get its rig, skin and correctives." }
-    CheckBox { text: "Open eyes"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor; checked: CharacterController.openEyes; onToggled: CharacterController.openEyes = checked }
-    CheckBox { id: averageBox; text: "Average character (ignore seed)"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor }
+    InspectorCheckBox { text: "Open eyes"; checked: CharacterController.openEyes; onToggled: CharacterController.openEyes = checked }
+    InspectorCheckBox { id: averageBox; text: "Average character (ignore seed)"; onToggled: { if (checked) sec.bodyVals = [0,0,0,0,0,0,0,0,0,0]; else sec.reseed() } }
 
     ToolBtn {
         label: CharacterController.busy ? "Working…" : "Generate character"
         accent: true
         enabled: !CharacterController.busy
         onClicked: CharacterController.generate(averageBox.checked ? -1 : sec.seed, parseFloat(varietyField.text) || 1.0,
-                                                bodyField.text, faceField.text,
+                                                sec.bodyString(), "",
                                                 skinBox.currentIndex > 0 ? CharacterController.skinNames[skinBox.currentIndex - 1] : "",
                                                 eyeBox.currentIndex > 0 ? CharacterController.eyeNames[eyeBox.currentIndex - 1] : "")
     }
