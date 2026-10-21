@@ -17,7 +17,7 @@ constexpr const char* kDefaultBaseUrl = "https://huggingface.co/fernandotonon/Qt
 
 struct FileSpec { const char* name; const char* label; const char* sha256; };
 constexpr FileSpec kFiles[] = {
-    {"mhr_character.qmcb", "character body (MHR)", "62e5909f008c9ccad58df4a2ad4c6a9769f84e7d4f9c95f021df572708fc9b7e"},
+    {"mhr_character.qmcb", "character body (MHR)", "b9be7f974e46fce205291608b2a07b55f4c8fadff01952a2fca3d00c5b498491"},
     {"ict_character.qmcb", "character head (ICT-FaceKit)", "f1b74cebf2bc8e21276e7f1ce717b0c52122bb1def9cb214052364952ae657f1"},
     {"LICENSE-MHR.txt", "MHR licence", "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
     {"LICENSE-ICT-FaceKit.txt", "ICT-FaceKit licence", "b20a78d8fc51657e14f3e00c8abb538d786ad00aa63210328c22565e583167e1"},

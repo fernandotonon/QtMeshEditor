@@ -219,8 +219,8 @@ def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
     out = symmetrize(out, names, base)
     return out, names, eye_open, sheet, core, [c + np.array([0.0, EYE_GROOVE_DY, 0.0]) for c in cs]
 
-ALMOND_A, ALMOND_B = 1.28, 0.60   # cm half axes of the eye opening
-UPPER_LID, LOWER_LID = 0.40, 0.20   # cm the lids part by (the upper lid folds up into the crease)
+ALMOND_A, ALMOND_B, ALMOND_B_LOW, ALMOND_SHIFT = 1.28, 0.66, 0.30, 0.22   # cm half axes of the eye opening
+UPPER_LID, LOWER_LID = 0.40, 0.06   # cm the lids part by (the upper lid folds up into the crease)
 CORE_DROP = 2.0   # (disabled: the lids keep their sculpted skin; only the sealing sheet between them is cut)
 EYE_GROOVE_DY = -0.65   # cm
 PARTS = [  # README of ICT-FaceKit: name, vertex range, polygon range (inclusive)
@@ -289,7 +289,8 @@ if __name__ == "__main__":
     cen = Bm[F].mean(1)
     almond = np.zeros(len(F), bool)
     for c in eye_c:   # an almond-shaped opening through the lid skin; the skin around it stays as the lids
-        r2 = ((cen[:, 0] - c[0]) / ALMOND_A) ** 2 + ((cen[:, 1] - (c[1] + 0.10)) / ALMOND_B) ** 2
+        dyc = cen[:, 1] - (c[1] + ALMOND_SHIFT)
+        r2 = ((cen[:, 0] - c[0]) / ALMOND_A) ** 2 + (dyc / np.where(dyc > 0, ALMOND_B, ALMOND_B_LOW)) ** 2   # a lower lid that stays close
         almond |= r2 < 1.0
     drop = (spans & (area < 0.05) & sheet[F].all(1)) | almond   # + everything inside the eye opening (the lid's inner sheet)
     print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
