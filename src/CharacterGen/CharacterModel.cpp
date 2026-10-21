@@ -636,7 +636,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                     float* hp = &headPos[size_t(v) * 3];
                     if (hp[1] >= top) continue;
                     float w = std::min(1.0f, std::max(0.0f, (top - hp[1]) / std::max(0.01f, top - bottom)));
-                    w = w * w * (3.0f - 2.0f * w);
+                    w = w * w;   // flat at the chin end, steepest at the rim so the flare carries on into the body's own slope
                     const float dx = hp[0] - rh.cx, dz = hp[2] - rh.cz;
                     const float th = std::atan2(dz, dx);
                     const float ratio = std::min(6.0f, std::max(0.5f, bodyRing.at(th) / std::max(1e-4f, headRingPolar.at(th))));
@@ -673,6 +673,21 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         const float dx = (body.positions[size_t(v) * 3] - rh.cx) / (p.neckRadiusRatio * rh.rx),
                     dz = (body.positions[size_t(v) * 3 + 2] - rh.cz) / (p.neckRadiusRatio * rh.rz);
         if (dx * dx + dz * dz < 1.0f) gone[size_t(v)] = 1;
+    }
+    if (!cutPoly.empty()) {
+        // the surface just outside the hole is higher than the cut plane (the neck/shoulder slope): left alone it stands as a
+        // ledge around the joint. Let it fall smoothly to the plane over a short band so the junction sits low and flush.
+        const float band = 0.05f;
+        for (int v = 0; v < V; ++v) {
+            float& y = body.positions[size_t(v) * 3 + 1];
+            if (gone[size_t(v)] || y <= neckCutY) continue;
+            const float rx = body.positions[size_t(v) * 3] - rh.cx, rz = body.positions[size_t(v) * 3 + 2] - rh.cz;
+            const float d = std::sqrt(rx * rx + rz * rz) - (p.neckRadiusRatio * 1.3f * bodyRing.at(std::atan2(rz, rx)) + 0.015f);
+            if (d >= band) continue;
+            float t = std::max(0.0f, d) / band;
+            t = t * t * (3.0f - 2.0f * t);
+            y = neckCutY + (y - neckCutY) * t;
+        }
     }
     body.skin.resize(size_t(V));
     for (int v = 0; v < V; ++v) {
@@ -802,7 +817,6 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             }
             if (bodyRing.valid()) {
                 // straight horizontal ring on both sides: the body's hole edge and the head's rim share the cut plane and outline
-                for (uint32_t v : A) body.positions[size_t(v) * 3 + 1] = neckCutY;
                 for (uint32_t v : B) {
                     float* hp = &headPos[size_t(v) * 3];
                     const float dx = hp[0] - rh.cx, dz = hp[2] - rh.cz;
