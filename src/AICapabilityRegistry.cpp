@@ -68,7 +68,7 @@ QHash<QString, QString> buildTaxonomy()
                     "add_arkit_blendshapes"});
     add("segmentation", {"segment_mesh", "split_mesh_by_segments", "explode_mesh_parts", "join_mesh_parts"});
     add("mesh_deform", {"lattice_begin", "lattice_get", "lattice_set_points", "lattice_apply", "lattice_cancel", "lattice_deform"});
-    add("generation_3d", {"generate_mesh_from_image", "generate_body_from_photo"});
+    add("generation_3d", {"generate_mesh_from_image", "generate_body_from_photo", "generate_character"});
     add("animation", {"animate", "list_skeletal_animations", "get_animation_info", "set_animation_length",
                       "set_animation_time", "add_keyframe", "remove_keyframe", "play_animation",
                       "merge_animations", "resample_animation", "simplify_animation", "analyze_animation",
