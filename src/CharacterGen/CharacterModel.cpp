@@ -980,8 +980,19 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             }
             if (zn < 8) continue;
             const float dz = float(zs / zn) + 0.0010f - frontZ;
+            // a little smaller than ICT's (the MHR socket is narrower) and drawn slightly towards the nose
+            const float shrink = 0.97f, medial = (cx > 0 ? -1.0f : 1.0f) * 0.0018f;
+            float cz = 0;
+            for (int v = iris->v0; v <= iris->v1; ++v) cz += headPos[size_t(v) * 3 + 2];
+            cz = cz / float(n) + dz;
             for (const IctPart* q : {scl, iris})
-                for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 2] += dz;
+                for (int v = q->v0; v <= q->v1; ++v) {
+                    float* h = &headPos[size_t(v) * 3];
+                    h[2] += dz;
+                    h[0] = cx + (h[0] - cx) * shrink + medial;
+                    h[1] = cy + (h[1] - cy) * shrink;
+                    h[2] = cz + (h[2] - cz) * shrink;
+                }
         }
     }
     for (const Group& g : groups) {
