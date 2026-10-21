@@ -1,6 +1,7 @@
 #ifndef ANIMATIONCONTROLCONTROLLER_H
 #define ANIMATIONCONTROLCONTROLLER_H
 
+#include "AnimationMerger.h"
 #include <QObject>
 #include <QVariantList>
 #include <QStringList>
@@ -401,6 +402,13 @@ public:
     Q_INVOKABLE double currentArmSpace(const QString& animName,
                                        const QString& entityName = QString());
 
+    /// Arm SPREAD: a second, independent swing about the VERTICAL axis — moves arms that point forward (aiming / guard poses)
+    /// apart (positive) or together (negative). Same contract as adjustArmSpace (absolute, idempotent, slider-friendly).
+    Q_INVOKABLE bool adjustArmSpread(const QString& animName, double degrees,
+                                     const QString& entityName = QString());
+    Q_INVOKABLE double currentArmSpread(const QString& animName,
+                                        const QString& entityName = QString());
+
     /// Whole-animation bake helpers: temporarily suppress the per-
     /// segment QML refresh emitted by resampleCurveSegment so a
     /// thousands-of-segments macro doesn't fire thousands of dope
@@ -430,6 +438,11 @@ signals:
     void boneRowsChanged();
 
 private:
+    bool adjustArmSwing(const QString& animName, double degrees, const QString& entityName,
+                        AnimationMerger::ArmSwingAxis axis);
+    double currentArmSwing(const QString& animName, const QString& entityName,
+                           AnimationMerger::ArmSwingAxis axis);
+
     AnimationControlController();
     ~AnimationControlController() override = default;
 

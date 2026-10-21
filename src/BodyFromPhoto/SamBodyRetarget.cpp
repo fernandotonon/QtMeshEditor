@@ -110,39 +110,6 @@ std::string mhrAlias(const std::string& n)
     return n;
 }
 
-Ogre::Quaternion uprightCorrection(const std::vector<std::vector<float>>& frames)
-{
-    const int root = mhrJointIndex("root"), neck = mhrJointIndex("c_neck");
-    Ogre::Vector3 sum = Ogre::Vector3::ZERO;
-    int n = 0;
-    for (const auto& f : frames) {
-        if (f.size() != size_t(127) * 3) continue;
-        Ogre::Vector3 a(f[size_t(neck) * 3] - f[size_t(root) * 3], f[size_t(neck) * 3 + 1] - f[size_t(root) * 3 + 1],
-                        f[size_t(neck) * 3 + 2] - f[size_t(root) * 3 + 2]);
-        if (a.length() < 1e-6f) continue;
-        a.normalise();
-        sum += a;
-        ++n;
-    }
-    if (n == 0 || sum.length() < 1e-6f) return Ogre::Quaternion::IDENTITY;
-    sum.normalise();
-    // Shortest arc sum -> +Y, but only its horizontal part: project the rotation axis onto the ground plane (axis.y = 0) so
-    // the heading is not changed. The axis of the arc is sum x Y, which is already horizontal.
-    Ogre::Quaternion c = sum.getRotationTo(Ogre::Vector3::UNIT_Y);
-    c.normalise();
-    return c;
-}
-
-void applyWorldRotation(std::vector<float>& q, const Ogre::Quaternion& c)
-{
-    for (size_t i = 0; i + 3 < q.size(); i += 4) {
-        Ogre::Quaternion r(q[i + 3], q[i], q[i + 1], q[i + 2]);
-        Ogre::Quaternion o = c * r;
-        o.normalise();
-        q[i] = o.x; q[i + 1] = o.y; q[i + 2] = o.z; q[i + 3] = o.w;
-    }
-}
-
 bool excludedFromMapping(const std::string& n)
 {
     for (const char* bad : {"twist", "_proc", "_null", "body_world", "jaw", "teeth", "tongue", "eye"})
@@ -151,12 +118,12 @@ bool excludedFromMapping(const std::string& n)
 }
 
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
-                                   const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
-                                   bool replace)
+                                   const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
+                                   const std::string& clip, bool replace)
 {
     RetargetOutcome out;
     if (!skeleton) { out.error = QStringLiteral("missing skeleton"); return out; }
-    if (frames.size() < 2 || fps <= 0) { out.error = QStringLiteral("need at least 2 pose frames"); return out; }
+    if (frames.size() < 2 || times.size() != frames.size()) { out.error = QStringLiteral("need at least 2 pose frames"); return out; }
     if (mhr.size() < 6) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
     if (skeleton->hasAnimation(clip) && !replace) {
         out.error = QStringLiteral("animation '%1' already exists").arg(QString::fromStdString(clip));
@@ -186,6 +153,13 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
     for (const std::string& name : target.names)
         if (const int role = MotionInbetween::canonicalIndexForBone(QString::fromStdString(name)); role >= 0 && role <= 5)
             options.noAlignTargets.push_back(name);
+    // Feet and toes too: their rest "direction" is ankle -> toe, which depends on the ankle HEIGHT of each rig (Mixamo 35 degrees
+    // down, MHR 16), not on how the foot is posed. Aligning those directions pitched a flat foot's toes up by the difference.
+    for (const std::string& name : target.names) {
+        QString lower = QString::fromStdString(name).toLower();
+        if (lower.contains(QLatin1String("foot")) || lower.contains(QLatin1String("toe")))
+            options.noAlignTargets.push_back(name);
+    }
     options.sourceRest = Retarget::SourceRest::Bind;
     const std::vector<Retarget::LocalPose> posed =
         Retarget::retargetFrames(aliased, frames, target, mapped.map, options, &out.report);
@@ -206,12 +180,62 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
     for (int i = 0; i < target.size(); ++i)
         if (!animated[size_t(i)]) out.unmappedTarget << QString::fromStdString(target.names[size_t(i)]);
 
-    std::vector<float> times(posed.size());
-    for (size_t i = 0; i < times.size(); ++i) times[i] = static_cast<float>(i) / static_cast<float>(fps);
     if (skeleton->hasAnimation(clip)) skeleton->removeAnimation(clip);   // only now that the take is known good
     if (!Retarget::writeRetargetedClip(skeleton, clip, times, posed, target, handles, animated, &out.error)) return out;
     out.ok = true;
     return out;
+}
+
+RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
+                                   const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
+                                   bool replace)
+{
+    std::vector<float> times(frames.size());
+    for (size_t i = 0; i < times.size(); ++i) times[i] = fps > 0 ? static_cast<float>(i) / static_cast<float>(fps) : 0.0f;
+    if (fps <= 0) { RetargetOutcome o; o.error = QStringLiteral("need at least 2 pose frames"); return o; }
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
+}
+
+RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
+                                           bool replace)
+{
+    RetargetOutcome out;
+    if (seq.jointQuat.size() < 2 || seq.jointQuat.size() != seq.jointPos.size() || seq.times.size() != seq.jointQuat.size()) {
+        out.error = QStringLiteral("need at least 2 solved frames");
+        return out;
+    }
+    // Every frame must carry the full MHR skeleton: a short one would be read past its end below (diagnostics) or silently
+    // replaced by a bind pose (mhrLocalPose).
+    for (size_t f = 0; f < seq.jointQuat.size(); ++f)
+        if (seq.jointQuat[f].size() != size_t(127) * 4 || seq.jointPos[f].size() != size_t(127) * 3) {
+            out.error = QStringLiteral("solved frame %1 is incomplete").arg(f);
+            return out;
+        }
+    if (qEnvironmentVariableIsSet("QTMESH_SAM_DUMP"))
+        for (size_t f = 0; f < seq.jointPos.size(); ++f) {
+            auto d = [&](const char* a, const char* b) {
+                const auto& p = seq.jointPos[f];
+                const int ia = mhrJointIndex(a), ib = mhrJointIndex(b);
+                Ogre::Vector3 v(p[size_t(ib) * 3] - p[size_t(ia) * 3], p[size_t(ib) * 3 + 1] - p[size_t(ia) * 3 + 1],
+                                p[size_t(ib) * 3 + 2] - p[size_t(ia) * 3 + 2]);
+                v.normalise();
+                return v;
+            };
+            const Ogre::Vector3 lu = d("l_uparm", "l_lowarm"), ll = d("l_lowarm", "l_wrist"), ru = d("r_uparm", "r_lowarm"),
+                                rl = d("r_lowarm", "r_wrist");
+            fprintf(stderr, "[sam-dump] f%zu t=%.2f LU(%.2f %.2f %.2f) LL(%.2f %.2f %.2f) RU(%.2f %.2f %.2f) RL(%.2f %.2f %.2f)\n", f,
+                    seq.times[f], lu.x, lu.y, lu.z, ll.x, ll.y, ll.z, ru.x, ru.y, ru.z, rl.x, rl.y, rl.z);
+        }
+    const Retarget::RigDesc mhr = mhrRigDesc(seq.restPos, seq.restQuat);
+    if (mhr.size() == 0) { out.error = QStringLiteral("the MHR rest skeleton is not available"); return out; }
+    std::vector<Retarget::LocalPose> frames;
+    frames.reserve(seq.jointQuat.size());
+    for (const auto& q : seq.jointQuat) frames.push_back(mhrLocalPose(mhr, q));
+    if (fps > 0) return retargetToSkeleton(skeleton, mhr, frames, fps, clip, replace);
+    std::vector<float> times(seq.times.begin(), seq.times.end());
+    const float t0 = times.front();
+    for (float& t : times) t -= t0;                                   // the clip starts at 0
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
 }
 
 } // namespace SamBody

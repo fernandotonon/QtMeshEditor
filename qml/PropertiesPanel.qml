@@ -3199,6 +3199,92 @@ Rectangle {
                 }
             }
 
+            // Body backend (#1100): landmarks (fast, live) or SAM 3D Body (accurate + fingers, solved after recording). Applies to the
+            // camera, a video file and pose photos alike.
+            Column {
+                width: parent.width - 16
+                spacing: 3
+                visible: mocapReady && MocapController.bodyAvailable
+
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    Text {
+                        width: 72
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        verticalAlignment: Text.AlignVCenter
+                        height: 26
+                        text: "Body backend"
+                    }
+                    ThemedComboBox {
+                        id: bodyBackendCombo
+                        width: parent.width - 78
+                        height: 26
+                        font.pixelSize: 11
+                        enabled: MocapController.state === 0 && !MocapController.busy
+                        model: ["Landmarks (fast, live)", "SAM 3D Body (accurate, fingers)"]
+                        currentIndex: MocapController.bodyBackend
+                        onActivated: MocapController.bodyBackend = currentIndex
+                    }
+                }
+                Text {
+                    width: parent.width
+                    wrapMode: Text.Wrap
+                    opacity: 0.75
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 9
+                    text: MocapController.samHint
+                }
+                // SAM work (reading a video, solving it, the solve after a camera take, pose photos) runs on a worker thread:
+                // label + bar + Cancel, the same shape as the other AI processes. progress < 0 = indeterminate (length unknown).
+                Column {
+                    width: parent.width
+                    spacing: 4
+                    visible: MocapController.busy
+
+                    Text {
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        text: MocapController.progressLabel !== "" ? MocapController.progressLabel : "Working…"
+                    }
+                    Rectangle {
+                        width: parent.width
+                        height: 6
+                        radius: 3
+                        color: PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: 1
+                        clip: true
+                        Rectangle {
+                            id: samFill
+                            readonly property bool indeterminate: MocapController.progress < 0
+                            height: parent.height - 2
+                            y: 1
+                            x: indeterminate ? 1 + (parent.width - width - 2) * parent.samSweep : 1
+                            radius: 2
+                            color: PropertiesPanelController.highlightColor
+                            width: indeterminate ? (parent.width - 2) * 0.3
+                                                 : Math.max(3, (parent.width - 2) * Math.min(1, MocapController.progress))
+                            Behavior on width { enabled: !samFill.indeterminate; NumberAnimation { duration: 150 } }
+                        }
+                        property real samSweep: 0
+                        SequentialAnimation on samSweep {
+                            running: MocapController.busy && MocapController.progress < 0
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 0; to: 1; duration: 900; easing.type: Easing.InOutQuad }
+                            NumberAnimation { from: 1; to: 0; duration: 900; easing.type: Easing.InOutQuad }
+                        }
+                    }
+                    InspectorButton {
+                        text: "Cancel"
+                        onClicked: MocapController.cancelBodyCapture()
+                    }
+                }
+            }
+
             // One-Euro smoothing cutoff (Hz). Lower = smoother, less jitter.
             Column {
                 width: parent.width - 16
@@ -3290,6 +3376,7 @@ Rectangle {
                         id: previewMa
                         anchors.fill: parent
                         hoverEnabled: true
+                        enabled: !MocapController.busy
                         onClicked: {
                             if (MocapController.state === 0)
                                 MocapController.startPreview(
@@ -3333,7 +3420,7 @@ Rectangle {
                 width: parent.width - 16
                 height: 26
                 radius: 3
-                enabled: MocapController.state === 0
+                enabled: MocapController.state === 0 && !MocapController.busy
                 opacity: enabled ? 1.0 : 0.5
                 color: loadVideoMa.containsMouse
                     ? PropertiesPanelController.highlightColor
@@ -3344,17 +3431,25 @@ Rectangle {
                     anchors.centerIn: parent
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 11
-                    text: "Load Video…  (use instead of camera)"
+                    text: (MocapController.bodyBackend === 1 && MocapController.bodyEnabled)
+                          ? "Capture from Video…  (SAM 3D Body, solved offline)"
+                          : "Load Video…  (use instead of camera)"
                 }
                 MouseArea {
                     id: loadVideoMa
                     anchors.fill: parent
                     hoverEnabled: true
-                    enabled: MocapController.state === 0
+                    enabled: MocapController.state === 0 && !MocapController.busy
                     onClicked: {
                         var path = MocapController.openVideoDialog()
-                        if (path && path.length > 0)
-                            MocapController.startPreviewFromVideo(path)
+                        if (path && path.length > 0) {
+                            // SAM 3D Body solves the whole file offline (one undoable clip); landmarks keep the live preview
+                            if (MocapController.bodyBackend === 1 && MocapController.bodyEnabled
+                                    && MocapController.bodyAvailable && MocapController.samAvailable)
+                                MocapController.captureVideoBody(path)
+                            else
+                                MocapController.startPreviewFromVideo(path)
+                        }
                     }
                 }
             }
@@ -3647,6 +3742,7 @@ Rectangle {
                     text: "Create animation from poses"
                     clickEnabled: poseKeysCol.itemCount >= 2
                                   && MocapController.state === 0
+                                  && !MocapController.busy
                                   && poseKeysCol.timesError() === ""
                     onClicked: {
                         // Take focus off any time field first: its edit is only
@@ -3818,6 +3914,7 @@ Rectangle {
                         id: recordMa
                         anchors.fill: parent
                         hoverEnabled: true
+                        enabled: !MocapController.busy      // a SAM solve is running: no second take on top of it
                         onClicked: recording ? MocapController.stopRecording()
                                              : MocapController.startRecording()
                     }
@@ -12164,12 +12261,17 @@ Rectangle {
                 var cur = AnimationControlController.currentArmSpace(animName, entity)
                 armSpaceSlider.value = cur
                 armSpaceSlider.lastApplied = cur
+                var sp = AnimationControlController.currentArmSpread(animName, entity)
+                armSpreadSlider.value = sp
+                armSpreadSlider.lastApplied = sp
             }
             function detachArmSpace() {
                 armSpaceAnim = ""
                 armSpaceEntity = ""
                 armSpaceSlider.value = 0
                 armSpaceSlider.lastApplied = 0
+                armSpreadSlider.value = 0
+                armSpreadSlider.lastApplied = 0
             }
 
             Connections {
@@ -12466,6 +12568,43 @@ Rectangle {
                 Text {
                     text: (armSpaceSlider.value > 0 ? "+" : "")
                           + Math.round(armSpaceSlider.value) + "°"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 42; horizontalAlignment: Text.AlignRight
+                }
+            }
+            // ── Arm spread: the SECOND axis. Arm space swings about the forward axis, which does nothing to arms that already
+            // point forward (aiming / guard poses); spread swings about the vertical axis and moves those apart (+) or together
+            // (−) — the fix for rigs with narrow shoulders whose hands end up crossed. Same absolute + idempotent contract.
+            Row {
+                width: parent.width - 16; spacing: 6
+                visible: armSpaceAnim.length > 0
+                Text {
+                    text: "Arm spread"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 62
+                    elide: Text.ElideRight
+                }
+                Slider {
+                    id: armSpreadSlider
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 62 - 42 - 12
+                    from: -45; to: 45; value: 0; stepSize: 1
+                    property real lastApplied: 0
+                    onValueChanged: {
+                        if (armSpaceAnim.length > 0
+                            && Math.round(value) !== Math.round(lastApplied)) {
+                            lastApplied = value
+                            AnimationControlController.adjustArmSpread(
+                                armSpaceAnim, value, armSpaceEntity)
+                        }
+                    }
+                    onPressedChanged: { if (!pressed) refreshAnimData() }
+                }
+                Text {
+                    text: (armSpreadSlider.value > 0 ? "+" : "")
+                          + Math.round(armSpreadSlider.value) + "°"
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                     width: 42; horizontalAlignment: Text.AlignRight

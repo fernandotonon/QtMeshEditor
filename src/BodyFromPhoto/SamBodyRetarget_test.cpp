@@ -119,35 +119,47 @@ TEST(SamBodyRetarget, AliasesUseTheStandardSpellingsAndStayUnique)
     EXPECT_GE(seen.size(), 45u);
 }
 
-TEST(SamBodyRetarget, UprightCorrectionStandsTheTorsoUpWithoutTurningIt)
+TEST(SamBodySequence, DownscalesOnlyWhatIsTooBigAndKeepsTheAspectRatio)
 {
-    // torso axis (0, 0.45, 0.20): leaning towards +Z (the camera) by ~24 degrees
-    std::vector<float> pos(127 * 3, 0.0f);
-    const int neck = mhrJointIndex("c_neck");
-    pos[size_t(neck) * 3 + 1] = 0.45f;
-    pos[size_t(neck) * 3 + 2] = 0.20f;
-    const Ogre::Quaternion c = uprightCorrection({pos, pos, pos});
-    const Ogre::Vector3 up = c * Ogre::Vector3(0.0f, 0.45f, 0.20f).normalisedCopy();
-    EXPECT_NEAR(up.x, 0.0f, 1e-5f);
-    EXPECT_NEAR(up.y, 1.0f, 1e-5f);
-    EXPECT_NEAR(up.z, 0.0f, 1e-5f);
-    // the facing direction (a horizontal vector perpendicular to the lean) is not turned
-    const Ogre::Vector3 side = c * Ogre::Vector3::UNIT_X;
-    EXPECT_NEAR(side.x, 1.0f, 1e-5f);
-    // an upright torso, no frames, or malformed frames: nothing to correct
-    pos[size_t(neck) * 3 + 2] = 0.0f;
-    EXPECT_NEAR(uprightCorrection({pos}).w, 1.0f, 1e-6f);
-    EXPECT_NEAR(uprightCorrection({}).w, 1.0f, 1e-6f);
-    EXPECT_NEAR(uprightCorrection({std::vector<float>(5)}).w, 1.0f, 1e-6f);
+    EXPECT_TRUE(downscaledForCapture(QImage()).isNull());
+    QImage small(640, 480, QImage::Format_RGB32);
+    EXPECT_EQ(downscaledForCapture(small).size(), small.size());
+    QImage big(2560, 1440, QImage::Format_RGB32);
+    const QImage d = downscaledForCapture(big);
+    EXPECT_EQ(d.width(), 1280);
+    EXPECT_EQ(d.height(), 720);
+    EXPECT_EQ(downscaledForCapture(big, 640).width(), 640);
 }
 
-TEST(SamBodyRetarget, WorldRotationIsAppliedToEveryJoint)
+TEST(SamBodySequence, RefusesInconsistentInputBeforeAnyInference)
 {
-    std::vector<float> q = identityGlobals();
-    Ogre::Quaternion c(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
-    applyWorldRotation(q, c);
-    for (int i = 0; i < 127; ++i) {
-        EXPECT_NEAR(q[size_t(i) * 4], c.x, 1e-6f);
-        EXPECT_NEAR(q[size_t(i) * 4 + 3], c.w, 1e-6f);
-    }
+    Runner runner;
+    EXPECT_FALSE(solveSequence(runner, {QImage(8, 8, QImage::Format_RGB32)}, {0.0}).ok());                       // one frame
+    const MhrSequence mismatch = solveSequence(runner, {QImage(8, 8, QImage::Format_RGB32), QImage(8, 8, QImage::Format_RGB32)}, {0.0});
+    EXPECT_FALSE(mismatch.ok());
+    EXPECT_FALSE(mismatch.error.isEmpty());
+    EXPECT_EQ(mismatch.solved, 0);
+}
+
+TEST(SamBodySequence, ARetargetNeedsAConsistentSequence)
+{
+    MhrSequence seq;
+    EXPECT_FALSE(retargetSequenceToSkeleton(nullptr, seq, 10, "c", true).ok);                                      // empty
+    seq.jointQuat.assign(2, std::vector<float>(127 * 4, 0.0f));
+    seq.times = {0.0, 1.0};                                                                                        // jointPos missing
+    const RetargetOutcome o = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(o.ok);
+    EXPECT_FALSE(o.error.isEmpty());
+
+    // consistent outer sizes but a SHORT frame: rejected up front, never read past its end or replaced by a bind pose
+    seq.jointPos.assign(2, std::vector<float>(127 * 3, 0.0f));
+    seq.jointPos[1].resize(5);
+    const RetargetOutcome shortPos = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(shortPos.ok);
+    EXPECT_NE(shortPos.error.indexOf(QLatin1String("incomplete")), -1);
+    seq.jointPos[1].assign(127 * 3, 0.0f);
+    seq.jointQuat[0].resize(7);
+    const RetargetOutcome shortQuat = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(shortQuat.ok);
+    EXPECT_NE(shortQuat.error.indexOf(QLatin1String("incomplete")), -1);
 }

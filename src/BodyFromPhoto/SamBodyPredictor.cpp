@@ -357,7 +357,7 @@ Result Runner::predict(const QImage& photo, const Options& opts)
     // 1. Where is the person?
     QRectF box = opts.bbox;
     if (!(box.width() > 0 && box.height() > 0) && opts.autoDetect) {
-        QString rembg = BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast);
+        QString rembg = opts.matteModel.isEmpty() ? BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast) : opts.matteModel;
         if (!rembg.isEmpty()) {
             BackgroundRemover::Options ro;
             const auto cut = BackgroundRemover::removeBackground(photo, rembg, ro);

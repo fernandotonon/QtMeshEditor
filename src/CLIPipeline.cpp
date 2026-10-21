@@ -3309,6 +3309,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
+    float armSpreadDeg = 0.0f;        // --arm-spread: swing about the VERTICAL axis (forward-pointing arms move apart)
+    bool armSpreadSet = false;
     bool generateFootPin = true;      // #856: pin feet after --generate (default ON)
     bool footPinSet = false;          // --foot-pin given (standalone post-process)
     bool generateDescent = true;      // #838: lower body on crouch/pickup (default ON)
@@ -3452,6 +3454,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         if (arg == "--duration" && i + 1 < argc) {
             generateDuration = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (arg == "--arm-spread" && i + 1 < argc) {
+            armSpreadDeg = QString(argv[++i]).toFloat();
+            armSpreadSet = true;
             continue;
         }
         if (arg == "--arm-space" && i + 1 < argc) {
@@ -3858,9 +3865,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #854 standalone: post-adjust the arm space of an EXISTING animation
     // (no --generate). `qtmesh anim <file> --arm-space <deg> --animation <name> -o out`.
-    if (armSpaceSet) {
+    if (armSpaceSet || armSpreadSet) {
         if (animationFilter.isEmpty()) {
-            err() << "Error: --arm-space (standalone) requires --animation <name>."
+            err() << "Error: --arm-space / --arm-spread (standalone) requires --animation <name>."
                   << Qt::endl;
             return 2;
         }
@@ -3880,9 +3887,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                   << Qt::endl;
             return 1;
         }
-        if (!AnimationMerger::adjustArmSpace(skel.get(), an, armSpaceDeg)) {
+        if (armSpaceSet && !AnimationMerger::adjustArmSpace(skel.get(), an, armSpaceDeg)) {
             err() << "Error: arm-space adjustment failed (no arm roles on this rig)."
                   << Qt::endl;
+            return 1;
+        }
+        if (armSpreadSet && !AnimationMerger::adjustArmSpace(skel.get(), an, armSpreadDeg,
+                                                             AnimationMerger::ArmSwingAxis::Up)) {
+            err() << "Error: arm-spread adjustment failed (no arm roles on this rig)." << Qt::endl;
             return 1;
         }
         SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"),
@@ -3893,8 +3905,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                                            formatForExtension(out)) != 0) {
             err() << "Error: export failed." << Qt::endl; return 1;
         }
-        cliWrite(QString("Adjusted arm space of '%1' to %2 deg → %3\n")
-                     .arg(animationFilter).arg(armSpaceDeg)
+        cliWrite(QString("Adjusted arms of '%1' (space %2 deg, spread %3 deg) → %4\n")
+                     .arg(animationFilter).arg(armSpaceSet ? armSpaceDeg : 0.0f)
+                     .arg(armSpreadSet ? armSpreadDeg : 0.0f)
                      .arg(QFileInfo(out).fileName()));
         return 0;
     }

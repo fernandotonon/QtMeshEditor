@@ -2016,6 +2016,20 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
                                                 double degrees,
                                                 const QString& entityName)
 {
+    return adjustArmSwing(animName, degrees, entityName, AnimationMerger::ArmSwingAxis::Forward);
+}
+
+bool AnimationControlController::adjustArmSpread(const QString& animName,
+                                                 double degrees,
+                                                 const QString& entityName)
+{
+    return adjustArmSwing(animName, degrees, entityName, AnimationMerger::ArmSwingAxis::Up);
+}
+
+bool AnimationControlController::adjustArmSwing(const QString& animName, double degrees,
+                                                const QString& entityName,
+                                                AnimationMerger::ArmSwingAxis axis)
+{
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return false;
     const std::string want = entityName.isEmpty()
@@ -2031,9 +2045,10 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
     if (!skel || !skel->hasAnimation(an)) return false;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-        QStringLiteral("GUI arm_space %1 deg").arg(degrees));
+        QStringLiteral("GUI arm_%1 %2 deg")
+            .arg(axis == AnimationMerger::ArmSwingAxis::Up ? "spread" : "space").arg(degrees));
     if (!AnimationMerger::adjustArmSpace(skel.get(), an,
-                                         static_cast<float>(degrees)))
+                                         static_cast<float>(degrees), axis))
         return false;
 
     // Re-pose the mesh NOW, even when the clip is paused. Rewriting keyframes
@@ -2059,6 +2074,18 @@ bool AnimationControlController::adjustArmSpace(const QString& animName,
 double AnimationControlController::currentArmSpace(const QString& animName,
                                                    const QString& entityName)
 {
+    return currentArmSwing(animName, entityName, AnimationMerger::ArmSwingAxis::Forward);
+}
+
+double AnimationControlController::currentArmSpread(const QString& animName,
+                                                    const QString& entityName)
+{
+    return currentArmSwing(animName, entityName, AnimationMerger::ArmSwingAxis::Up);
+}
+
+double AnimationControlController::currentArmSwing(const QString& animName, const QString& entityName,
+                                                   AnimationMerger::ArmSwingAxis axis)
+{
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return 0.0;
     const std::string want = entityName.isEmpty()
@@ -2068,7 +2095,7 @@ double AnimationControlController::currentArmSpace(const QString& animName,
         if (want.empty() || e->getName() == want) {
             Ogre::SkeletonPtr skel = e->getMesh()->getSkeleton();
             return skel ? AnimationMerger::currentArmSpace(
-                              skel.get(), animName.toStdString()) : 0.0;
+                              skel.get(), animName.toStdString(), axis) : 0.0;
         }
     }
     return 0.0;

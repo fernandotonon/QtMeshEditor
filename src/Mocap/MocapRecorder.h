@@ -27,6 +27,7 @@
 #include "FaceCapMapper.h"
 #include "FaceCapPredictor.h"
 #include "MocapLiveTypes.h"
+#include "../BodyFromPhoto/SamBodySequence.h"
 
 #include <QString>
 #include <QStringList>
@@ -119,6 +120,13 @@ BodyRecordReport recordBody(
 BodyRecordReport recordBodyLive(
     Ogre::Entity* entity,
     const std::vector<BodyLiveFrame>& frames, int fps,
+    const BodyRecordOptions& options = {});
+
+// SAM 3D Body path (#1100): a solved MHR sequence (SamBody::solveSequence) written onto the entity's rig through the
+// incompatible-skeleton retargeter, finger joints included. `fps` > 0 spaces the frames uniformly (video / camera takes),
+// 0 uses the sequence's own times (pose photos). Replaces `options.clipName` when it exists.
+BodyRecordReport recordBodyMhr(
+    Ogre::Entity* entity, const SamBody::MhrSequence& sequence, int fps,
     const BodyRecordOptions& options = {});
 
 // Head-bone resolution (exposed for the GUI gate + tests): the first bone of

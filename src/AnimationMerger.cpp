@@ -35,23 +35,27 @@ static QMap<QString, int> s_skeletonUpAxis;
 // under a per-animation key, so it lives and dies with the skeleton and is
 // naturally isolated. Session-scoped only; export bakes the final keyframes.
 namespace {
-std::string armSpaceKey(const std::string& animName)
+// Two independent swings: Forward (widen/tuck, about the torso's forward axis) and Up (spread, about the vertical axis —
+// the one that moves arms which point FORWARD, e.g. a rifle aim on a rig with narrow shoulders).
+std::string armSpaceKey(const std::string& animName,
+                        AnimationMerger::ArmSwingAxis axis = AnimationMerger::ArmSwingAxis::Forward)
 {
-    return "qtme.armspace." + animName;
+    return (axis == AnimationMerger::ArmSwingAxis::Forward ? "qtme.armspace." : "qtme.armspread.") + animName;
 }
-float getStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName)
+float getStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName,
+                        AnimationMerger::ArmSwingAxis axis = AnimationMerger::ArmSwingAxis::Forward)
 {
     if (!skel || skel->getNumBones() == 0) return 0.0f;
     const Ogre::Any& a = skel->getBone(0)->getUserObjectBindings()
-                             .getUserAny(armSpaceKey(animName));
+                             .getUserAny(armSpaceKey(animName, axis));
     return a.has_value() ? Ogre::any_cast<float>(a) : 0.0f;
 }
-void setStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName,
-                       float degrees)
+void setStoredArmSpace(Ogre::Skeleton* skel, const std::string& animName, float degrees,
+                       AnimationMerger::ArmSwingAxis axis = AnimationMerger::ArmSwingAxis::Forward)
 {
     if (!skel || skel->getNumBones() == 0) return;
     skel->getBone(0)->getUserObjectBindings().setUserAny(
-        armSpaceKey(animName), Ogre::Any(degrees));
+        armSpaceKey(animName, axis), Ogre::Any(degrees));
 }
 } // namespace
 
@@ -282,10 +286,12 @@ void AnimationMerger::migrateArmSpaceKey(Ogre::Skeleton* skel,
 {
     if (!skel || oldAnim == newAnim || skel->getNumBones() == 0) return;
     auto& uob = skel->getBone(0)->getUserObjectBindings();
-    const Ogre::Any& a = uob.getUserAny(armSpaceKey(oldAnim));
-    if (a.has_value()) {
-        setStoredArmSpace(skel, newAnim, Ogre::any_cast<float>(a));
-        uob.eraseUserAny(armSpaceKey(oldAnim));
+    for (auto axis : {ArmSwingAxis::Forward, ArmSwingAxis::Up}) {
+        const Ogre::Any& a = uob.getUserAny(armSpaceKey(oldAnim, axis));
+        if (a.has_value()) {
+            setStoredArmSpace(skel, newAnim, Ogre::any_cast<float>(a), axis);
+            uob.eraseUserAny(armSpaceKey(oldAnim, axis));
+        }
     }
 }
 
@@ -3001,14 +3007,14 @@ void BodyRetargeter::resetLiveNeutral()
 }
 
 float AnimationMerger::currentArmSpace(Ogre::Skeleton* skel,
-                                       const std::string& animName)
+                                       const std::string& animName, ArmSwingAxis axis)
 {
-    return getStoredArmSpace(skel, animName);
+    return getStoredArmSpace(skel, animName, axis);
 }
 
 bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
                                      const std::string& animName,
-                                     float degrees)
+                                     float degrees, ArmSwingAxis axis)
 {
     if (!skel || !skel->hasAnimation(animName))
         return false;
@@ -3023,7 +3029,9 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     // process-global map, which would pollute across entities and tests.
     // currentArmSpace() exposes it so a UI can seed the slider. Export bakes
     // the final keyframes, so cross-session persistence isn't required.
-    const float stored = getStoredArmSpace(skel, animName);
+    const float stored = getStoredArmSpace(skel, animName, axis);
+    const float storedOther = getStoredArmSpace(
+        skel, animName, axis == ArmSwingAxis::Forward ? ArmSwingAxis::Up : ArmSwingAxis::Forward);
     const float delta = degrees - stored;
     if (std::abs(delta) < 1e-4f)
         return true;   // already at target — nothing to do (still success)
@@ -3044,18 +3052,12 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     const Ogre::Vector3 fwd =
         (tb.Ct.Inverse() * Ogre::Vector3::UNIT_Z).normalisedCopy();
 
-    // Per side: swing about the torso forward axis, sign mirrored between
-    // sides so a POSITIVE `degrees` swings BOTH arms AWAY from the body
-    // (widen) and negative tucks them in. About canonical +Z (forward) with
-    // +Y up / +X left, a NEGATIVE rotation lifts the right arm outward and a
-    // positive one lifts the left, so the right side takes −ang. Collars get
-    // a fractional share (a small part of the reach).
-    const Ogre::Radian ang = Ogre::Radian(Ogre::Degree(delta));
+    // Per side, mirrored so a POSITIVE `degrees` moves BOTH arms the same way: Forward = away from the body (widen), Up = apart
+    // (spread: arms pointing forward move away from each other). About canonical +Z (forward) with +Y up / +X left a positive
+    // rotation lifts the left arm; about +Y it swings a forward vector towards the left. So the left side takes +ang and the
+    // right side -ang on both axes. Collars get a fractional share.
+    const Ogre::Vector3 up = (tb.Ct.Inverse() * Ogre::Vector3::UNIT_Y).normalisedCopy();
     const float kCollarShare = 0.25f;
-    const Ogre::Quaternion swingR(-ang, fwd);
-    const Ogre::Quaternion swingL(ang, fwd);
-    const Ogre::Quaternion swingRc(ang * (-kCollarShare), fwd);
-    const Ogre::Quaternion swingLc(ang * kCollarShare, fwd);
 
     // Distribute the role's swing across duplicate bones (multi-segment
     // shoulders) so the chain's total matches the requested angle.
@@ -3065,22 +3067,26 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
         if (boneToCanon[static_cast<size_t>(i)] >= 0)
             ++canonDup[static_cast<size_t>(boneToCanon[static_cast<size_t>(i)])];
 
-    // Roles that carry an arm-space swing → the world swing for that role.
-    auto worldSwingForRole = [&](int c) -> const Ogre::Quaternion* {
+    // World swing for a role about one axis; identity for roles that carry no swing.
+    auto swingFor = [&](int c, ArmSwingAxis ax, float deg) -> Ogre::Quaternion {
+        float sign = 0.0f;
         switch (c) {
-            case 7:  return &swingR;    // rshoulder
-            case 11: return &swingL;    // lshoulder
-            case 6:  return &swingRc;   // rcollar (fractional)
-            case 10: return &swingLc;   // lcollar (fractional)
-            default: return nullptr;
+            case 7:  sign = -1.0f; break;                  // rshoulder
+            case 11: sign = 1.0f; break;                   // lshoulder
+            case 6:  sign = -kCollarShare; break;          // rcollar (fractional)
+            case 10: sign = kCollarShare; break;           // lcollar (fractional)
+            default: return Ogre::Quaternion::IDENTITY;
         }
+        const Ogre::Quaternion q(Ogre::Radian(Ogre::Degree(deg * sign)), ax == ArmSwingAxis::Forward ? fwd : up);
+        const int dup = std::max(1, canonDup[static_cast<size_t>(c)]);
+        return dup > 1 ? Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup), Ogre::Quaternion::IDENTITY, q, true) : q;
     };
+    auto hasSwing = [](int c) { return c == 6 || c == 7 || c == 10 || c == 11; };
 
     bool touchedAny = false;
     for (int i = 0; i < nBones; ++i) {
         const int c = boneToCanon[static_cast<size_t>(i)];
-        const Ogre::Quaternion* Sworld = worldSwingForRole(c);
-        if (!Sworld)
+        if (!hasSwing(c))
             continue;
         Ogre::NodeAnimationTrack* trk = nullptr;
         if (anim->hasNodeTrack(static_cast<unsigned short>(i)))
@@ -3088,13 +3094,16 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
         if (!trk || trk->getNumKeyFrames() == 0)
             continue;
 
-        // Fractional swing when the role spans several bones.
-        const int dup = std::max(1, canonDup[static_cast<size_t>(c)]);
-        Ogre::Quaternion S = *Sworld;
-        if (dup > 1)
-            S = Ogre::Quaternion::Slerp(1.0f / static_cast<float>(dup),
-                                        Ogre::Quaternion::IDENTITY, S,
-                                        /*shortestPath=*/true);
+        // The Up swing is always the OUTERMOST rotation (current = Su · Sf · kf0), so changing it is a plain left-multiply, while
+        // changing the Forward swing must slip underneath it: Su · Sf(Δ) · Su⁻¹. Without this the two axes would not be independent
+        // (swinging forward after spreading would not undo cleanly).
+        Ogre::Quaternion S;
+        if (axis == ArmSwingAxis::Up) {
+            S = swingFor(c, ArmSwingAxis::Up, delta);
+        } else {
+            const Ogre::Quaternion Su = swingFor(c, ArmSwingAxis::Up, storedOther);
+            S = Su * swingFor(c, ArmSwingAxis::Forward, delta) * Su.Inverse();
+        }
 
         // applyToNode composes the keyframe as localApplied = bindLocal · kf,
         // and world = W_parent · localApplied = W_shoulder_bind · kf. To add
@@ -3121,7 +3130,7 @@ bool AnimationMerger::adjustArmSpace(Ogre::Skeleton* skel,
     if (!touchedAny)
         return false;   // no arm role on this rig
 
-    setStoredArmSpace(skel, animName, degrees);
+    setStoredArmSpace(skel, animName, degrees, axis);
     return true;
 }
 
@@ -4517,6 +4526,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
     if (skel->getNumBones() > 0) {
         skel->getBone(0)->getUserObjectBindings().eraseUserAny(
             armSpaceKey(animName));
+        skel->getBone(0)->getUserObjectBindings().eraseUserAny(
+            armSpaceKey(animName, ArmSwingAxis::Up));
         // #856: same for the foot-pin marker — a regenerated clip is unpinned.
         skel->getBone(0)->getUserObjectBindings().eraseUserAny(
             "qtme.footpin." + animName);
