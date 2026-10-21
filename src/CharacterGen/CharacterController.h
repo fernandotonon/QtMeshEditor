@@ -12,6 +12,7 @@
 namespace CharacterGen {
 struct Assets;
 }
+#include "CharacterModel.h"
 
 /// Inspector "Character Generator" (Object mode): random / hand-tuned body + face, skin and eye colour, one undoable Generate.
 /// Assets are fetched on first use (CharacterAssets); the heavy build runs on the main thread (Ogre) in ~1-2 s.
@@ -43,14 +44,20 @@ public:
     QString dnaPath() const { return m_dnaPath; }
     void setDnaPath(const QString& p);
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
-    Q_INVOKABLE QVariantList seedBody(int seed, double variety, int count) const;
+    Q_INVOKABLE QVariantList seedBody(int seed, double variety) const;   // all 45 coefficients
     Q_INVOKABLE void browseDna() { emit browseDnaRequested(); }
     QStringList skinNames() const;
     QStringList eyeNames() const;
 
     /// body/face are "index=value,..." lists; seed < 0 = the average character. Returns "" on success, else an error.
+    /// replace = true: swap the character this panel made last (live preview; consecutive swaps merge into one undo step).
     Q_INVOKABLE QString generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
-                                 const QString& eye);
+                                 const QString& eye, bool replace = false);
+    /// A character made by this panel is still in the scene (so a slider change can edit it in place).
+    Q_INVOKABLE bool hasCharacter() const;
+    /// A short human name for body-shape mode `mode` (what it mostly changes), and what it does in a sentence.
+    Q_INVOKABLE QString shapeLabel(int mode) const;
+    Q_INVOKABLE QString shapeHint(int mode) const;
 
 signals:
     void statusChanged();
@@ -65,6 +72,9 @@ private:
     bool m_busy = false;
     QString m_status;
     QString m_dnaPath;
+    QString m_currentNode;
+    CharacterGen::Params m_currentParams;
+    bool m_haveParams = false;
     bool m_openEyes = true;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;

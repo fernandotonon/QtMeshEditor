@@ -23,7 +23,7 @@ namespace {
 class AddCharacterCommand : public QUndoCommand
 {
 public:
-    struct Outcome { bool created = false; QString error; };
+    struct Outcome { bool created = false; QString error, nodeName; };
 
     AddCharacterCommand(std::shared_ptr<CharacterGen::Assets> assets, CharacterGen::Params params, std::shared_ptr<Outcome> out)
         : m_assets(std::move(assets)), m_params(std::move(params)), m_out(std::move(out))
@@ -50,6 +50,7 @@ public:
         m_node = QString::fromStdString(node->getName());
         m_created = true;
         m_out->created = true;
+        m_out->nodeName = m_node;
         SelectionSet::getSingleton()->selectOne(node);
     }
 
@@ -73,6 +74,76 @@ private:
     bool m_created = false;
     int m_revision = 0;
     int m_serial = 0;
+};
+
+
+bool destroyNodeByName(const QString& name)
+{
+    for (auto* n : Manager::getSingleton()->getSceneNodes())
+        if (QString::fromStdString(n->getName()) == name) {
+            SelectionSet::getSingleton()->clearList();
+            Manager::getSingleton()->destroySceneNode(n);
+            return true;
+        }
+    return false;
+}
+
+/// Live preview: swaps the character on the scene for one built from new parameters. Consecutive swaps (dragging a slider) merge, so
+/// the whole editing session is ONE undo step that goes back to the character as it was before the first change.
+class ReplaceCharacterCommand : public QUndoCommand
+{
+public:
+    ReplaceCharacterCommand(std::shared_ptr<CharacterGen::Assets> assets, CharacterGen::Params oldParams, CharacterGen::Params newParams,
+                            QString existingNode, std::shared_ptr<AddCharacterCommand::Outcome> out)
+        : m_assets(std::move(assets)), m_old(std::move(oldParams)), m_new(std::move(newParams)), m_before(std::move(existingNode)),
+          m_out(std::move(out))
+    {
+        static int serial = 1000;
+        m_serial = ++serial;
+        setText(QObject::tr("Edit character"));
+    }
+    int id() const override { return 7421; }
+
+    void redo() override
+    {
+        destroyNodeByName(m_before);
+        QString err;
+        Ogre::SceneNode* node = CharacterGen::createCharacterInScene(
+            *m_assets, m_new, QStringLiteral("character_%1_%2").arg(m_serial).arg(++m_revision), nullptr, &err);
+        if (!node) { m_out->error = err; return; }
+        m_after = QString::fromStdString(node->getName());
+        m_out->created = true;
+        m_out->nodeName = m_after;
+        SelectionSet::getSingleton()->selectOne(node);
+    }
+
+    void undo() override
+    {
+        destroyNodeByName(m_after);
+        QString err;
+        Ogre::SceneNode* node = CharacterGen::createCharacterInScene(
+            *m_assets, m_old, QStringLiteral("character_%1_%2").arg(m_serial).arg(++m_revision), nullptr, &err);
+        if (node) {
+            m_before = QString::fromStdString(node->getName());
+            SelectionSet::getSingleton()->selectOne(node);
+        }
+    }
+
+    bool mergeWith(const QUndoCommand* other) override
+    {
+        const auto* o = dynamic_cast<const ReplaceCharacterCommand*>(other);
+        if (!o || o->m_before != m_after) return false;
+        m_new = o->m_new;
+        m_after = o->m_after;
+        return true;
+    }
+
+private:
+    std::shared_ptr<CharacterGen::Assets> m_assets;
+    CharacterGen::Params m_old, m_new;
+    QString m_before, m_after;
+    std::shared_ptr<AddCharacterCommand::Outcome> m_out;
+    int m_serial = 0, m_revision = 0;
 };
 
 }  // namespace
@@ -103,12 +174,46 @@ bool CharacterController::assetsPresent() const { return CharacterGen::Character
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
-QVariantList CharacterController::seedBody(int seed, double variety, int count) const
+QVariantList CharacterController::seedBody(int seed, double variety) const
 {
     QVariantList out;
-    const std::vector<float> v = CharacterGen::randomCoefficients(uint32_t(seed) * 2u + 1u, 45, float(variety), 16);
-    for (int i = 0; i < count && size_t(i) < v.size(); ++i) out << double(v[size_t(i)]);
+    std::vector<float> v(45, 0.0f);
+    if (seed >= 0) v = CharacterGen::randomCoefficients(uint32_t(seed) * 2u + 1u, 45, float(variety), 16);
+    for (float x : v) out << double(x);
     return out;
+}
+
+bool CharacterController::hasCharacter() const
+{
+    if (m_currentNode.isEmpty() || !Manager::getSingletonPtr()) return false;
+    for (auto* n : Manager::getSingleton()->getSceneNodes())
+        if (QString::fromStdString(n->getName()) == m_currentNode) return true;
+    return false;
+}
+
+// What each MHR body-shape mode does, from measuring it: displacement per body region, height and girth change of each mode
+// (modes 0-19 shape the torso, 20-39 the head and neck, 40-44 the arms; the later modes of each group are small refinements).
+QString CharacterController::shapeLabel(int m) const
+{
+    static const char* k[] = {
+        "Weight (belly, chest)", "Torso fullness", "Waist and hips", "Belly depth", "Chest and waist", "Belly forward or flat",
+        "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
+        "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
+        "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Head shape 5", "Head shape 6",
+        "Head shape 7", "Head shape 8", "Head shape 9", "Head shape 10", "Head shape 11", "Head shape 12", "Head shape 13",
+        "Head shape 14", "Head shape 15", "Head shape 16", "Head shape 17", "Head shape 18", "Head shape 19", "Head shape 20",
+        "Arms", "Arms detail 2", "Arms detail 3", "Arms detail 4", "Arms detail 5"};
+    return (m >= 0 && m < 45) ? QString::fromLatin1(k[m]) : QStringLiteral("Shape %1").arg(m + 1);
+}
+
+QString CharacterController::shapeHint(int m) const
+{
+    if (m == 0) return tr("The biggest body change: overall weight, mostly belly and chest.");
+    if (m >= 1 && m < 8) return tr("Torso proportions: fullness, waist, hips, belly or chest.");
+    if (m < 20) return tr("A smaller refinement of the torso and hips.");
+    if (m == 20 || m == 21) return tr("Neck length and the size of the head.");
+    if (m < 40) return tr("A subtle change of the head's shape.");
+    return tr("A subtle change of the arms.");
 }
 
 void CharacterController::setDnaPath(const QString& p)
@@ -127,7 +232,7 @@ void CharacterController::setStatus(const QString& s, bool busy)
 }
 
 QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
-                                      const QString& eye)
+                                      const QString& eye, bool replace)
 {
     using namespace CharacterGen;
     if (m_busy) return QStringLiteral("busy");
@@ -187,11 +292,17 @@ QString CharacterController::generate(int seed, double variety, const QString& b
 
     setStatus(tr("Building character…"), true);
     auto out = std::make_shared<AddCharacterCommand::Outcome>();
-    UndoManager::getSingleton()->push(new AddCharacterCommand(m_assets, p, out));
+    if (replace && m_haveParams && hasCharacter())
+        UndoManager::getSingleton()->push(new ReplaceCharacterCommand(m_assets, m_currentParams, p, m_currentNode, out));
+    else
+        UndoManager::getSingleton()->push(new AddCharacterCommand(m_assets, p, out));
     if (!out->created) {
         setStatus(out->error, false);
         return out->error.isEmpty() ? QStringLiteral("failed") : out->error;
     }
-    setStatus(tr("Character created (Ctrl+Z removes it)."), false);
+    m_currentNode = out->nodeName;
+    m_currentParams = p;
+    m_haveParams = true;
+    setStatus(tr("Character ready (Ctrl+Z goes back)."), false);
     return {};
 }
