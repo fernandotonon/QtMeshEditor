@@ -971,7 +971,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int v = iris->v0; v <= iris->v1; ++v) { cx += headPos[size_t(v) * 3]; cy += headPos[size_t(v) * 3 + 1]; ++n; }
             if (n == 0) continue;
             cx /= float(n); cy /= float(n);
-            const float dyLift = 0.0072f;   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
+            const float dyLift = 0.0072f + 0.00505f;   // + the hand-fitted offset (up 5.05 mm)   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
             for (const IctPart* q : {scl, iris})
                 for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 1] += dyLift;
             cy += dyLift;
@@ -984,7 +984,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 if (dx * dx + dy * dy < 1.0f && body.positions[size_t(v) * 3 + 2] > frontZ - 0.03f) { zs += body.positions[size_t(v) * 3 + 2]; ++zn; }
             }
             if (zn < 8) continue;
-            const float dz = float(zs / zn) + 0.0010f - frontZ;
+            const float dz = float(zs / zn) + 0.0010f - frontZ + 0.004693f;   // + the hand-fitted offset (forward ~4.7 mm after the shrink pivot)
             // a little smaller than ICT's (the MHR socket is narrower) and drawn slightly towards the nose
             const float shrink = 0.90f, medial = (cx > 0 ? -1.0f : 1.0f) * 0.0018f;
             float cz = 0;
@@ -1047,6 +1047,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         local[size_t(gv)] = int(globalOf.size());
                         globalOf.push_back(gv);
                         for (int i = 0; i < 3; ++i) m.positions.push_back(headPos[size_t(gv) * 3 + i]);
+                        // the MHR mouth sits 43.6 mm further forward than ICT's (hand-fitted from an edited mesh)
+                        if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) m.positions.back() += 0.0436f;
                     }
                     const uint32_t li = uint32_t(local[size_t(gv)]), ti = uint32_t(a.polyTexcoord[b + k]);
                     const uint64_t key = (uint64_t(li) << 32) | ti;
