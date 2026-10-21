@@ -231,6 +231,7 @@ AlembicImporter.cpp
 PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
 CharacterGen/QmcBundle.cpp
+CharacterGen/CharacterAssets.cpp
 CharacterGen/CharacterModel.cpp
 CharacterGen/CharacterScene.cpp
 CharacterGen/CharacterCLI.cpp

@@ -2,11 +2,13 @@
 
 #include "../BodyFromPhoto/SamBodyRetarget.h"
 
+#include <QColor>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <QHash>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -264,6 +266,48 @@ std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int
         if (i < modes) c[size_t(i)] = g * sigma;
     }
     return c;
+}
+
+bool parseCoefficients(const QString& text, std::vector<float>& out, int limit, QString* error)
+{
+    for (const QString& item : text.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+        const QStringList kv = item.split(QLatin1Char('='));
+        bool ok1 = false, ok2 = false;
+        const int idx = kv.size() == 2 ? kv[0].trimmed().toInt(&ok1) : -1;
+        const float v = kv.size() == 2 ? kv[1].trimmed().toFloat(&ok2) : 0.0f;
+        if (!ok1 || !ok2 || idx < 0 || idx >= limit || !std::isfinite(v)) {
+            if (error) *error = QStringLiteral("bad coefficient '%1' (want index=value, index 0..%2)").arg(item).arg(limit - 1);
+            return false;
+        }
+        if (out.size() < size_t(limit)) out.resize(size_t(limit), 0.0f);
+        out[size_t(idx)] = v;
+    }
+    return true;
+}
+
+namespace {
+const QHash<QString, QString>& colourTable(ColourKind kind)
+{
+    static const QHash<QString, QString> skin = {{"pale", "#f1cdb3"}, {"light", "#e0ac8c"}, {"tan", "#c68c63"}, {"brown", "#8d5a3b"}, {"dark", "#4f3224"}};
+    static const QHash<QString, QString> eye = {{"blue", "#3f6fa8"}, {"green", "#4c8a5a"}, {"brown", "#5a3a22"}, {"hazel", "#8a6a2e"}, {"grey", "#7d8a94"}};
+    return kind == ColourKind::Skin ? skin : eye;
+}
+}  // namespace
+
+bool parseColour(const QString& text, ColourKind kind, Rgb* out)
+{
+    const QString named = colourTable(kind).value(text.trimmed().toLower());
+    QColor c(named.isEmpty() ? text.trimmed() : named);
+    if (!c.isValid()) return false;
+    if (out) *out = {float(c.redF()), float(c.greenF()), float(c.blueF())};
+    return true;
+}
+
+QStringList colourNames(ColourKind kind)
+{
+    QStringList n = colourTable(kind).keys();
+    n.sort();
+    return n;
 }
 
 bool surfaceForMesh(const QString& meshName, Surface* out)

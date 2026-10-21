@@ -1,5 +1,6 @@
 #include "CharacterCLI.h"
 
+#include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
 #include "../CLIPipeline.h"
@@ -29,6 +30,7 @@ void usage()
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey>]\n"
         "                        [--facing-z] [--bust [--bust-depth M]] [--assets DIR] [--json]\n"
+        "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
         "separate parts (100 face identity modes, the 51 ARKit expression shapes as morph targets). --seed picks a random body and\n"
@@ -37,45 +39,14 @@ void usage()
         "Asset bundles are read from --assets, QTMESH_CHARACTER_DIR or <AppData>/ai_models/character (scripts/build-character-assets.py).\n"));
 }
 
-bool parseCoefficients(const QString& text, std::vector<float>& out, int limit, QString* error)
-{
-    for (const QString& item : text.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
-        const QStringList kv = item.split(QLatin1Char('='));
-        bool ok1 = false, ok2 = false;
-        const int idx = kv.size() == 2 ? kv[0].trimmed().toInt(&ok1) : -1;
-        const float v = kv.size() == 2 ? kv[1].trimmed().toFloat(&ok2) : 0.0f;
-        if (!ok1 || !ok2 || idx < 0 || idx >= limit || !std::isfinite(v)) {
-            if (error) *error = QStringLiteral("bad coefficient '%1' (want index=value, index 0..%2)").arg(item).arg(limit - 1);
-            return false;
-        }
-        if (out.size() < size_t(limit)) out.resize(size_t(limit), 0.0f);
-        out[size_t(idx)] = v;
-    }
-    return true;
-}
-
-bool parseColour(const QString& text, const QHash<QString, QColor>& names, Rgb* out)
-{
-    QColor c = names.value(text.toLower());
-    if (!c.isValid()) c = QColor(text);
-    if (!c.isValid()) return false;
-    *out = {float(c.redF()), float(c.greenF()), float(c.blueF())};
-    return true;
-}
-
 }  // namespace
 
-QString assetsDir()
-{
-    const QString env = qEnvironmentVariable("QTMESH_CHARACTER_DIR");
-    if (!env.isEmpty()) return env;
-    return QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) + QStringLiteral("/ai_models/character");
-}
+QString assetsDir() { return CharacterAssets::dir(); }
 
 int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
-    bool havePlusZ = false, json = false, haveSeed = false, bust = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    bool havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -99,8 +70,18 @@ int run(int argc, char* argv[])
         else if (a == "--keep-names") keepNames = true;
         else if (a == "--bust-depth") { bustDepth = next().toFloat(); bust = true; }
         else if (a == "--json") json = true;
+        else if (a == "--download") download = true;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown option '%1'\n").arg(a)); usage(); return 2; }
+    }
+    if (download) {
+        QString dlErr;
+        if (!CharacterAssets::ensureBlocking(&dlErr)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: the character assets could not be fetched: %1\n").arg(dlErr));
+            return 1;
+        }
+        CLIPipeline::writeOutput(QStringLiteral("Character assets are in %1\n").arg(CharacterAssets::dir()));
+        if (outPath.isEmpty()) return 0;
     }
     if (outPath.isEmpty()) { usage(); return 2; }
     if (!(variety >= 0.0f && variety <= 5.0f)) {
@@ -109,6 +90,11 @@ int run(int argc, char* argv[])
     }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("character cli"));
 
+    if (assets == CharacterAssets::dir() && !CharacterAssets::present()) {
+        QString dlErr;
+        if (!CharacterAssets::ensureBlocking(&dlErr))
+            CLIPipeline::writeCliError(QStringLiteral("Note: the character assets are not installed and could not be fetched (%1).\n").arg(dlErr));
+    }
     Assets data;
     QString err;
     if (!loadAssetsFromDir(assets, data, &err)) {
@@ -130,20 +116,16 @@ int run(int argc, char* argv[])
         p.bodyShape = randomCoefficients(seed * 2u + 1u, data.mhrShapes, variety, 16);
         p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);
     }
-    if (!parseCoefficients(bodyArg, p.bodyShape, data.mhrShapes, &err) || !parseCoefficients(faceArg, p.faceIdentity, data.ictIdentities, &err)) {
+    if (!CharacterGen::parseCoefficients(bodyArg, p.bodyShape, data.mhrShapes, &err) || !CharacterGen::parseCoefficients(faceArg, p.faceIdentity, data.ictIdentities, &err)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err));
         return 2;
     }
-    static const QHash<QString, QColor> skinNames = {{"pale", QColor("#f1cdb3")}, {"light", QColor("#e0ac8c")}, {"tan", QColor("#c68c63")},
-                                                     {"brown", QColor("#8d5a3b")}, {"dark", QColor("#4f3224")}};
-    static const QHash<QString, QColor> eyeNames = {{"blue", QColor("#3f6fa8")}, {"green", QColor("#4c8a5a")}, {"brown", QColor("#5a3a22")},
-                                                    {"hazel", QColor("#8a6a2e")}, {"grey", QColor("#7d8a94")}};
-    if (!skinArg.isEmpty() && !parseColour(skinArg, skinNames, &p.skin)) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: unknown skin colour '%1'.\n").arg(skinArg));
+    if (!skinArg.isEmpty() && !parseColour(skinArg, ColourKind::Skin, &p.skin)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown skin colour '%1' (names: %2).\n").arg(skinArg, colourNames(ColourKind::Skin).join(QLatin1Char(' '))));
         return 2;
     }
-    if (!eyeArg.isEmpty() && !parseColour(eyeArg, eyeNames, &p.eye)) {
-        CLIPipeline::writeCliError(QStringLiteral("Error: unknown eye colour '%1'.\n").arg(eyeArg));
+    if (!eyeArg.isEmpty() && !parseColour(eyeArg, ColourKind::Eye, &p.eye)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown eye colour '%1' (names: %2).\n").arg(eyeArg, colourNames(ColourKind::Eye).join(QLatin1Char(' '))));
         return 2;
     }
 

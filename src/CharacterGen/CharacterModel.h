@@ -109,6 +109,15 @@ struct Params {
 /// modes carry the large, readable differences; a long tail of tiny noise only adds weight).
 std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int modes);
 
+/// "0=1.2,3=-0.5" -> coefficient list (resized to `limit`, untouched entries 0). False + `error` on a malformed or out-of-range item.
+bool parseCoefficients(const QString& text, std::vector<float>& out, int limit, QString* error = nullptr);
+
+enum class ColourKind { Skin, Eye };
+/// A colour name (skin: pale light tan brown dark; eye: blue green brown hazel grey) or any QColor spelling (#rrggbb ...).
+bool parseColour(const QString& text, ColourKind kind, Rgb* out);
+/// The named colours of a kind, for pickers.
+QStringList colourNames(ColourKind kind);
+
 struct BuildReport {
     int bodyVertices = 0, bodyTriangles = 0;
     int headVertices = 0, headTriangles = 0;
