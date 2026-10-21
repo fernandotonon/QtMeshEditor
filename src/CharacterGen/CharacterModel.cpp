@@ -647,6 +647,21 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         if (hole && rim && hole->size() >= 3 && rim->size() >= 3) {
             std::vector<uint32_t> A = *hole, B = *rim;
             if ((loopArea(A, body.positions) < 0) != (loopArea(B, headPos) < 0)) std::reverse(B.begin(), B.end());
+            // The hole's edge follows the mesh's vertex rows, so it zig-zags by a vertex spacing: left as is, the strip inherits a
+            // sawtooth. Relax the loop along itself (tangential smoothing) so the seam is one clean curve.
+            for (int it = 0; it < 14; ++it) {
+                std::vector<float> next(A.size() * 3);
+                for (size_t i = 0; i < A.size(); ++i) {
+                    const size_t pv = (i + A.size() - 1) % A.size(), nx = (i + 1) % A.size();
+                    for (int c = 0; c < 3; ++c) {
+                        const float cur = body.positions[size_t(A[i]) * 3 + size_t(c)];
+                        const float avg = 0.5f * (body.positions[size_t(A[pv]) * 3 + size_t(c)] + body.positions[size_t(A[nx]) * 3 + size_t(c)]);
+                        next[i * 3 + size_t(c)] = cur + 0.5f * (avg - cur);
+                    }
+                }
+                for (size_t i = 0; i < A.size(); ++i)
+                    for (int c = 0; c < 3; ++c) body.positions[size_t(A[i]) * 3 + size_t(c)] = next[i * 3 + size_t(c)];
+            }
             std::vector<std::array<float, 3>> pa, pb;
             for (uint32_t v : A) pa.push_back({body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 1], body.positions[size_t(v) * 3 + 2]});
             for (uint32_t v : B) pb.push_back({headPos[size_t(v) * 3], headPos[size_t(v) * 3 + 1], headPos[size_t(v) * 3 + 2]});
