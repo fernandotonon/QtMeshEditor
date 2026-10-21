@@ -10,6 +10,7 @@
 
 #include <QHash>
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -105,6 +106,101 @@ std::vector<std::vector<uint32_t>> chainLoops(const std::vector<std::pair<uint32
         if (closed && loop.size() >= 3) loops.push_back(std::move(loop));
     }
     return loops;
+}
+
+
+/// A closed ring seen from an axis: radius as a function of angle (piecewise linear, wraps around).
+struct PolarRing {
+    std::vector<std::pair<float, float>> pts;   // (angle, radius) sorted by angle
+    bool valid() const { return pts.size() >= 3; }
+    float at(float th) const
+    {
+        const size_t n = pts.size();
+        size_t hi = 0;
+        while (hi < n && pts[hi].first < th) ++hi;
+        const size_t lo = (hi + n - 1) % n;
+        hi %= n;
+        float a0 = pts[lo].first, a1 = pts[hi].first, t = th;
+        const float tp = 6.2831853f;
+        if (a1 < a0) a1 += tp;
+        if (t < a0) t += tp;
+        const float u = a1 > a0 ? std::min(1.0f, std::max(0.0f, (t - a0) / (a1 - a0))) : 0.0f;
+        return pts[lo].second + u * (pts[hi].second - pts[lo].second);
+    }
+    /// Build from scattered (x,z) points around the axis (cx,cz): the outermost point per angular bin; empty bins borrow a neighbour.
+    static PolarRing fromScatter(const std::vector<std::array<float, 2>>& xz, float cx, float cz, int bins = 48)
+    {
+        std::vector<float> r(size_t(bins), -1.0f);
+        for (const auto& q : xz) {
+            const float dx = q[0] - cx, dz = q[1] - cz;
+            int b = int((std::atan2(dz, dx) + 3.14159265f) / 6.2831853f * float(bins));
+            b = std::min(bins - 1, std::max(0, b));
+            r[size_t(b)] = std::max(r[size_t(b)], std::sqrt(dx * dx + dz * dz));
+        }
+        PolarRing out;
+        for (int pass = 0; pass < bins; ++pass)
+            for (int b = 0; b < bins; ++b)
+                if (r[size_t(b)] < 0) {
+                    const float l = r[size_t((b + bins - 1) % bins)], h = r[size_t((b + 1) % bins)];
+                    if (l >= 0 && h >= 0) r[size_t(b)] = 0.5f * (l + h); else if (l >= 0) r[size_t(b)] = l; else if (h >= 0) r[size_t(b)] = h;
+                }
+        for (int b = 0; b < bins; ++b)
+            if (r[size_t(b)] >= 0) out.pts.push_back({(float(b) + 0.5f) / float(bins) * 6.2831853f - 3.14159265f, r[size_t(b)]});
+        return out;
+    }
+};
+
+bool pointInPolygon(float x, float z, const std::vector<std::array<float, 2>>& poly)
+{
+    bool in = false;
+    for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+        if (((poly[i][1] > z) != (poly[j][1] > z)) && (x < (poly[j][0] - poly[i][0]) * (z - poly[i][1]) / (poly[j][1] - poly[i][1]) + poly[i][0]))
+            in = !in;
+    return in;
+}
+
+/// The closed outline where the mesh crosses the horizontal plane y = planeY, as (x,z); the loop enclosing (cx,cz) with the smallest
+/// area (the neck, not the shoulders or an arm). Empty when none encloses it.
+std::vector<std::array<float, 2>> sliceLoopAround(const std::vector<float>& posM, const std::vector<int>& faces, float planeY, float cx, float cz)
+{
+    std::unordered_map<EdgeKey, uint32_t> id;
+    std::vector<std::array<float, 2>> pt;
+    std::vector<std::pair<uint32_t, uint32_t>> segs;
+    auto crossing = [&](int a, int b) -> uint32_t {
+        auto it = id.find(edgeKey(uint32_t(a), uint32_t(b)));
+        if (it != id.end()) return it->second;
+        const float ya = posM[size_t(a) * 3 + 1], yb = posM[size_t(b) * 3 + 1];
+        const float t = (planeY - ya) / (yb - ya);
+        pt.push_back({posM[size_t(a) * 3] + t * (posM[size_t(b) * 3] - posM[size_t(a) * 3]),
+                      posM[size_t(a) * 3 + 2] + t * (posM[size_t(b) * 3 + 2] - posM[size_t(a) * 3 + 2])});
+        const uint32_t n = uint32_t(pt.size() - 1);
+        id.emplace(edgeKey(uint32_t(a), uint32_t(b)), n);
+        return n;
+    };
+    for (size_t f = 0; f + 2 < faces.size(); f += 3) {
+        uint32_t c[2] = {0, 0};
+        int nc = 0;
+        for (int k = 0; k < 3; ++k) {
+            const int a = faces[f + size_t(k)], b = faces[f + size_t((k + 1) % 3)];
+            const float da = posM[size_t(a) * 3 + 1] - planeY, db = posM[size_t(b) * 3 + 1] - planeY;
+            if ((da < 0) != (db < 0) && da != db) { if (nc < 2) c[nc] = crossing(a, b); ++nc; }
+        }
+        if (nc == 2 && c[0] != c[1]) segs.push_back({c[0], c[1]});
+    }
+    std::vector<std::array<float, 2>> best;
+    double bestArea = 1e30;
+    for (const auto& loop : chainLoops(segs)) {
+        std::vector<std::array<float, 2>> poly;
+        double a = 0;
+        for (size_t i = 0; i < loop.size(); ++i) {
+            poly.push_back(pt[loop[i]]);
+            const auto& u = pt[loop[i]]; const auto& v = pt[loop[(i + 1) % loop.size()]];
+            a += double(u[0]) * v[1] - double(v[0]) * u[1];
+        }
+        a = std::fabs(0.5 * a);
+        if (pointInPolygon(cx, cz, poly) && a < bestArea) { bestArea = a; best = std::move(poly); }
+    }
+    return best;
 }
 
 /// Signed area of a loop in the x/z plane (positive = counter-clockwise seen from +Y... sign only matters for comparing two loops).
@@ -458,7 +554,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     auto toWorldCm = [&](float x, float y, float z) {
         return std::array<float, 3>{(x - chinIx) * s, (y - chinIy) * s + chinMy, (z - chinIz) * s + chinMz};
     };
-    const float neckCutY = (chinMy + (p.neckRimIct - chinIy) * s) * kCmToM;   // world y (m) of the neck cut
+    const float neckCutY = (chinMy + (p.neckRimIct - chinIy) * s) * kCmToM;   // world y (m) of the neck cut (may move up, see below)
     rep.neckCutY = neckCutY;
 
     // ---- head: identity-shaped positions for every ICT vertex (world metres) ----------------------------------------
@@ -520,6 +616,38 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     if (!haveRing)
         rep.warnings << QStringLiteral("The head's neck ring could not be measured (%1 vertices); the seam is not matched.").arg(rh.n);
 
+    // ---- the straight horizontal cut ------------------------------------------------------------------------------------
+    // Cut the body on the plane of the head's neck rim (y = neckCutY). The outline where the body crosses that plane is its real
+    // neck/shoulder cross-section; everything above the plane inside that outline goes (the MHR head and neck). The head's neck
+    // rows below the chin are warped radially so the head's rim lands on that same outline - the neck flares along the body's own
+    // slope into the shoulders - and the two rings are then joined vertex to vertex.
+    std::vector<std::array<float, 2>> cutPoly;
+    PolarRing bodyRing;
+    if (haveRing) {
+        std::vector<float> bodyM(shaped.size());
+        for (size_t i = 0; i < shaped.size(); ++i) bodyM[i] = shaped[i] * kCmToM;
+        cutPoly = sliceLoopAround(bodyM, a.mhrFaces, neckCutY, rh.cx, rh.cz);
+        const PolarRing headRingPolar = PolarRing::fromScatter(headRing, rh.cx, rh.cz, 72);
+        if (cutPoly.size() >= 8 && headRingPolar.valid()) {
+            bodyRing = PolarRing::fromScatter(cutPoly, rh.cx, rh.cz, 72);
+            if (bodyRing.valid()) {
+                const float top = chinWy - 0.005f, bottom = neckCutY;
+                for (int v = 0; v < a.ictVertices; ++v) {
+                    float* hp = &headPos[size_t(v) * 3];
+                    if (hp[1] >= top) continue;
+                    float w = std::min(1.0f, std::max(0.0f, (top - hp[1]) / std::max(0.01f, top - bottom)));
+                    w = w * w * (3.0f - 2.0f * w);
+                    const float dx = hp[0] - rh.cx, dz = hp[2] - rh.cz;
+                    const float th = std::atan2(dz, dx);
+                    const float ratio = std::min(6.0f, std::max(0.5f, bodyRing.at(th) / std::max(1e-4f, headRingPolar.at(th))));
+                    const float k = 1.0f + w * (ratio - 1.0f);
+                    hp[0] = rh.cx + dx * k;
+                    hp[2] = rh.cz + dz * k;
+                }
+            }
+        }
+        if (!bodyRing.valid()) cutPoly.clear();
+    }
     Dna::Mesh body;
     body.name = QStringLiteral("body");
     body.positions.resize(shaped.size());
@@ -529,7 +657,17 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     std::vector<char> gone(size_t(V), 0);
     for (int v = 0; v < V; ++v) {
         const int dom = dominant[size_t(v)];
-        if (body.positions[size_t(v) * 3 + 1] <= neckCutY) continue;   // below the rim nothing is removed (no stray pockets)
+        if (body.positions[size_t(v) * 3 + 1] <= neckCutY) continue;   // below the plane nothing is removed (no stray pockets)
+        if (!cutPoly.empty()) {
+            // inside the outline, or within a margin of it: the collar bones / trapezius rise above the plane just outside the neck's
+            // own outline and would otherwise stand around the head's neck like a wall
+            const float rx = body.positions[size_t(v) * 3] - rh.cx, rz = body.positions[size_t(v) * 3 + 2] - rh.cz;
+            if (pointInPolygon(body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 2], cutPoly)
+                || std::sqrt(rx * rx + rz * rz) < p.neckRadiusRatio * 1.3f * bodyRing.at(std::atan2(rz, rx)) + 0.015f)
+                gone[size_t(v)] = 1;
+            else if (dom >= 0 && headish[size_t(dom)] && body.positions[size_t(v) * 3 + 1] > chinWy) gone[size_t(v)] = 1;
+            continue;
+        }
         if (dom >= 0 && headish[size_t(dom)]) { gone[size_t(v)] = 1; continue; }
         if (!haveRing) continue;
         const float dx = (body.positions[size_t(v) * 3] - rh.cx) / (p.neckRadiusRatio * rh.rx),
@@ -661,6 +799,18 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 }
                 for (size_t i = 0; i < A.size(); ++i)
                     for (int c = 0; c < 3; ++c) body.positions[size_t(A[i]) * 3 + size_t(c)] = next[i * 3 + size_t(c)];
+            }
+            if (bodyRing.valid()) {
+                // straight horizontal ring on both sides: the body's hole edge and the head's rim share the cut plane and outline
+                for (uint32_t v : A) body.positions[size_t(v) * 3 + 1] = neckCutY;
+                for (uint32_t v : B) {
+                    float* hp = &headPos[size_t(v) * 3];
+                    const float dx = hp[0] - rh.cx, dz = hp[2] - rh.cz;
+                    const float th = std::atan2(dz, dx), r = bodyRing.at(th);
+                    hp[0] = rh.cx + r * std::cos(th);
+                    hp[2] = rh.cz + r * std::sin(th);
+                    hp[1] = neckCutY;
+                }
             }
             std::vector<std::array<float, 3>> pa, pb;
             for (uint32_t v : A) pa.push_back({body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 1], body.positions[size_t(v) * 3 + 2]});
