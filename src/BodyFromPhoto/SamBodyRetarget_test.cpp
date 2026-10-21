@@ -150,4 +150,16 @@ TEST(SamBodySequence, ARetargetNeedsAConsistentSequence)
     const RetargetOutcome o = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
     EXPECT_FALSE(o.ok);
     EXPECT_FALSE(o.error.isEmpty());
+
+    // consistent outer sizes but a SHORT frame: rejected up front, never read past its end or replaced by a bind pose
+    seq.jointPos.assign(2, std::vector<float>(127 * 3, 0.0f));
+    seq.jointPos[1].resize(5);
+    const RetargetOutcome shortPos = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(shortPos.ok);
+    EXPECT_NE(shortPos.error.indexOf(QLatin1String("incomplete")), -1);
+    seq.jointPos[1].assign(127 * 3, 0.0f);
+    seq.jointQuat[0].resize(7);
+    const RetargetOutcome shortQuat = retargetSequenceToSkeleton(nullptr, seq, 10, "c", true);
+    EXPECT_FALSE(shortQuat.ok);
+    EXPECT_NE(shortQuat.error.indexOf(QLatin1String("incomplete")), -1);
 }

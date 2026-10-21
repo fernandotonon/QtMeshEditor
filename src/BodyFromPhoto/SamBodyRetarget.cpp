@@ -204,6 +204,13 @@ RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSe
         out.error = QStringLiteral("need at least 2 solved frames");
         return out;
     }
+    // Every frame must carry the full MHR skeleton: a short one would be read past its end below (diagnostics) or silently
+    // replaced by a bind pose (mhrLocalPose).
+    for (size_t f = 0; f < seq.jointQuat.size(); ++f)
+        if (seq.jointQuat[f].size() != size_t(127) * 4 || seq.jointPos[f].size() != size_t(127) * 3) {
+            out.error = QStringLiteral("solved frame %1 is incomplete").arg(f);
+            return out;
+        }
     if (qEnvironmentVariableIsSet("QTMESH_SAM_DUMP"))
         for (size_t f = 0; f < seq.jointPos.size(); ++f) {
             auto d = [&](const char* a, const char* b) {

@@ -827,8 +827,12 @@ void MocapController::setProgress(double fraction, const QString& label)
 void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double> times,
                                   std::function<void(const SamBody::MhrSequence&)> onDone)
 {
-    d->busy = true;
-    emit busyChanged();
+    // Callers that prepare for a long time first (model download, reading photos) reserve `busy` themselves so a queued second
+    // request cannot slip past their guard while events are pumped.
+    if (!d->busy) {
+        d->busy = true;
+        emit busyChanged();
+    }
     d->cancelCapture = false;
     setProgress(0.0, tr("Preparing SAM 3D Body…"));
     // resolving the matting model may download it, which needs the main thread: do it here, hand the path to the worker
@@ -2103,12 +2107,20 @@ QString MocapController::captureVideoBody(const QString& filePath)
         return fail(tr("Select a humanoid rigged entity first."));
     if (!d->bodyRigOk)
         return fail(tr("The selection is not a humanoid rig (need a skinned mesh resolving at least half of the body roles)."));
+    // Reserve `busy` BEFORE the first processEvents() below: a queued second request would otherwise pass the guard above.
+    d->busy = true;
+    emit busyChanged();
+    auto failBusy = [&](const QString& msg) {
+        d->busy = false;
+        emit busyChanged();
+        return fail(msg);
+    };
     if (!SamBody::modelsPresent()) {
         setStatusMessage(tr("Downloading SAM 3D Body models (~3.6 GB)…"));
         QCoreApplication::processEvents();
         QString why;
         if (!SamBody::ensureModelsBlocking(&why))
-            return fail(tr("SAM 3D Body models unavailable: %1").arg(why));
+            return failBusy(tr("SAM 3D Body models unavailable: %1").arg(why));
     }
 
     // Phase 1 — read the file at playback speed (a slow model inside the frame handler would stall the real-time player).
@@ -2126,10 +2138,8 @@ QString MocapController::captureVideoBody(const QString& filePath)
     QString openError;
     if (!d->videoSource->open(&openError)) {
         d->videoSource.reset();
-        return fail(openError);
+        return failBusy(openError);
     }
-    d->busy = true;
-    emit busyChanged();
     setProgress(-1.0, tr("Reading the video…"));
     VideoFrameSource* src = d->videoSource.get();
     connect(src, &VideoFrameSource::frameReady, this, [this](const MocapFrame& f) {
@@ -2302,13 +2312,21 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
     const std::string targetEntity = entity->getName();
 
     if (d->bodyBackend == 1 && SamBody::isAvailable()) {
-        // SAM 3D Body: each photo is solved directly and keyed at its own time (no temporal filter, no landmarks)
+        // SAM 3D Body: each photo is solved directly and keyed at its own time (no temporal filter, no landmarks).
+        // Reserve `busy` before preparing (model download pumps events): see captureVideoBody.
+        d->busy = true;
+        emit busyChanged();
+        auto failBusy = [&](const QString& msg) {
+            d->busy = false;
+            emit busyChanged();
+            return fail(msg);
+        };
         if (!SamBody::modelsPresent()) {
             setStatusMessage(tr("Downloading SAM 3D Body models (~3.6 GB)…"));
             QCoreApplication::processEvents();
             QString why;
             if (!SamBody::ensureModelsBlocking(&why))
-                return fail(tr("SAM 3D Body models unavailable: %1").arg(why));
+                return failBusy(tr("SAM 3D Body models unavailable: %1").arg(why));
         }
         std::vector<QImage> images;
         std::vector<double> imageTimes;
@@ -2317,7 +2335,7 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
             reader.setAutoTransform(true);   // phone photos carry an EXIF rotation
             const QImage img = reader.read();
             if (img.isNull())
-                return fail(tr("Cannot read image %1").arg(imagePaths[i]));
+                return failBusy(tr("Cannot read image %1").arg(imagePaths[i]));
             images.push_back(SamBody::downscaledForCapture(img));
             imageTimes.push_back(times[size_t(i)]);
         }
