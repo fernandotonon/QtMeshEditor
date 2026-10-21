@@ -242,12 +242,7 @@ DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
 DNA/DnaPsdBake.cpp
 DNA/DnaTextures.cpp
-DNA/DnaFit.cpp
-DNA/DnaRegister.cpp
-DNA/DnaFitWrite.cpp
 DNA/DnaCorrectiveManager.cpp
-DNA/DnaFitController.cpp
-commands/AddFittedDnaCharacterCommand.cpp
 Mocap/VideoFrameSource.cpp
 Mocap/OneEuroFilter.cpp
 Mocap/FaceCapMapper.cpp

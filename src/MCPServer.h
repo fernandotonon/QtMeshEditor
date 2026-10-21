@@ -471,7 +471,6 @@ private:
     QJsonObject toolListConstraints(const QJsonObject &args);
     QJsonObject toolGetDnaCorrectives(const QJsonObject &args);
     QJsonObject toolSetDnaCorrectives(const QJsonObject &args);
-    QJsonObject toolFitDnaBody(const QJsonObject &args);
     QJsonObject toolAddConstraint(const QJsonObject &args);
     QJsonObject toolSetConstraint(const QJsonObject &args);
     QJsonObject toolMoveConstraint(const QJsonObject &args);

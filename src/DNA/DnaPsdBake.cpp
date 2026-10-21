@@ -71,27 +71,6 @@ void orthogonalWithSize(double J[3][3])
 
 }  // namespace
 
-void applyVertexLinear(std::vector<PoseSpace::Set>& sets, const std::vector<std::vector<std::array<float, 9>>>& lin)
-{
-    std::vector<size_t> start;
-    size_t total = 0;
-    for (const auto& m : lin) { start.push_back(total); total += m.size(); }
-    for (PoseSpace::Set& set : sets)
-        for (PoseSpace::Sample& sm : set.samples)
-            for (size_t k = 0; k < sm.vertices.size(); ++k) {
-                const uint32_t g = sm.vertices[k];
-                size_t mi = start.size();
-                while (mi-- > 0) if (g >= start[mi]) break;
-                if (mi >= lin.size() || g - start[mi] >= lin[mi].size()) continue;
-                const auto& A = lin[mi][g - start[mi]];
-                float* d = &sm.deltas[k * 3];
-                const double x = d[0], y = d[1], z = d[2];
-                d[0] = float(A[0] * x + A[1] * y + A[2] * z);
-                d[1] = float(A[3] * x + A[4] * y + A[5] * z);
-                d[2] = float(A[6] * x + A[7] * y + A[8] * z);
-            }
-}
-
 std::vector<PoseSpace::Set> cachedBake(const QString& path, const Rig& rig, RigEvaluator& ev, QStringList* notes)
 {
     const QFileInfo fi(path);
@@ -167,43 +146,6 @@ int appendAsBlendShapes(Rig& rig, const std::vector<PoseSpace::Set>& sets)
             ++added;
         }
     return added;
-}
-
-void transferThroughWarp(std::vector<PoseSpace::Set>& sets, const Rig& original, const Fit::Warp& warp)
-{
-    if (!warp.valid) return;
-    std::vector<const Mesh*> meshOf;
-    std::vector<size_t> startOf;
-    size_t total = 0;
-    for (const Mesh& m : original.meshes) { startOf.push_back(total); total += m.positions.size() / 3; meshOf.push_back(&m); }
-    auto locate = [&](uint32_t g, std::array<double, 3>& p) {
-        size_t mi = startOf.size();
-        while (mi-- > 0) if (g >= startOf[mi]) break;
-        if (mi >= meshOf.size()) return false;
-        const size_t v = g - startOf[mi];
-        if (v * 3 + 2 >= meshOf[mi]->positions.size()) return false;
-        p = {double(meshOf[mi]->positions[v * 3]), double(meshOf[mi]->positions[v * 3 + 1]), double(meshOf[mi]->positions[v * 3 + 2])};
-        return true;
-    };
-    const double h = 1e-3;   // metres
-    for (PoseSpace::Set& set : sets)
-        for (PoseSpace::Sample& sm : set.samples)
-            for (size_t k = 0; k < sm.vertices.size(); ++k) {
-                std::array<double, 3> p;
-                if (!locate(sm.vertices[k], p)) continue;
-                double J[3][3];   // J[row][col] = d(p'_row)/dp_col
-                for (int c = 0; c < 3; ++c) {
-                    std::array<double, 3> a = p, b = p;
-                    a[size_t(c)] += h;
-                    b[size_t(c)] -= h;
-                    const auto da = warp.displacement(a), db = warp.displacement(b);
-                    for (int r = 0; r < 3; ++r) J[r][c] = (r == c ? 1.0 : 0.0) + (da[size_t(r)] - db[size_t(r)]) / (2 * h);
-                }
-                orthogonalWithSize(J);
-                float* d = &sm.deltas[k * 3];
-                const double x = d[0], y = d[1], z = d[2];
-                for (int r = 0; r < 3; ++r) d[r] = float(J[r][0] * x + J[r][1] * y + J[r][2] * z);
-            }
 }
 
 QList<QPair<QString, std::array<double, 4>>> toRotations(const QStringList& drivers, const std::vector<Quat>& q)

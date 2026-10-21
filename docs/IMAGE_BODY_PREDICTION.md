@@ -1,3 +1,5 @@
+> **Note:** the Fit action / `qtmesh dna fit` this document refers to has been removed (poor results); a predicted MHR body is now an OBJ you can use directly.
+
 # Image-based body prediction (#1100) — licence check and spike
 
 OpenRigLogic is the rig layer; it reconstructs nothing from a photo. A photo → body step needs a human mesh recovery
