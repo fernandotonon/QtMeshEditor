@@ -47,7 +47,23 @@ def meta_blob(obj):
     return np.frombuffer(json.dumps(obj).encode(), dtype="u1")
 
 
-def build_mhr(model_pt):
+
+def clean_faces(base, faces, wjaw):
+    """Triangles to drop (returns a keep mask): the zero-thickness SHEET that closes the lips (an edge of a few tenths of a mm whose
+    jaw weight jumps from upper-lip to lower-lip values: it stretches over the opening when the jaw moves) and sliver triangles."""
+    keep = np.ones(len(faces), bool)
+    for t, f in enumerate(faces):
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            va, vb = f[a], f[b]
+            if (abs(wjaw[va] - wjaw[vb]) > 0.35 and np.linalg.norm(base[va] - base[vb]) < 0.4
+                    and base[va][2] > 11 and 154 < base[va][1] < 159):
+                keep[t] = False
+    A = 0.5 * np.linalg.norm(np.cross(base[faces[:, 1]] - base[faces[:, 0]], base[faces[:, 2]] - base[faces[:, 0]]), axis=1)
+    e2 = sum(np.sum((base[faces[:, i]] - base[faces[:, (i + 1) % 3]]) ** 2, axis=1) for i in range(3))
+    keep &= (4 * np.sqrt(3) * A / e2) >= 0.1
+    return keep
+
+def build_mhr(model_pt, joint_names=None):
     import torch
     sd = {k: v.detach().numpy() for k, v in torch.jit.load(model_pt, map_location="cpu").state_dict().items()}
     g = lambda k: sd["character_torch." + k]
@@ -63,10 +79,38 @@ def build_mhr(model_pt):
     order = np.argsort(sv, kind="stable")
     sj, sw, sv = sj[order].astype(np.int32), sw[order].astype(np.float32), sv[order]
     counts = np.bincount(sv, minlength=base.shape[0]).astype(np.int32)
+    if joint_names and "c_jaw" in joint_names:
+        jaw = joint_names.index("c_jaw")
+        wj = np.zeros(base.shape[0])
+        for j, w, v in zip(sj, sw, sv):
+            if j == jaw: wj[v] = w
+        keep = clean_faces(base.astype(np.float64), faces, wj)
+        print(f"cleaned {int((~keep).sum())} triangles (lip seam sheet + slivers)")
+        faces, tf = faces[keep], tf[keep]
     return {"base": base, "shape_vectors": vecs, "faces": faces, "texcoords": tc, "texcoord_faces": tf, "parents": parents,
             "joint_offsets": offs, "joint_prerot": prerot, "skin_count": counts, "skin_joint": sj, "skin_weight": sw}
 
 
+
+
+def symmetrize(out, names, base):
+    """Make the shapes exactly left/right symmetric: a symmetric shape equals its mirror, a Left/Right pair are each other's mirror."""
+    from scipy.spatial import cKDTree
+    d, m = cKDTree(base).query(base * np.array([-1.0, 1.0, 1.0]))
+    S = np.array([-1.0, 1.0, 1.0])
+    mirror = lambda f: f[m] * S
+    idx = {n: i for i, n in enumerate(names)}
+    done = set()
+    for n, i in idx.items():
+        if n in done: continue
+        if n.endswith("Left") and n[:-4] + "Right" in idx:
+            j = idx[n[:-4] + "Right"]
+            L = 0.5 * (out[i] + mirror(out[j]))
+            out[i] = L; out[j] = mirror(L); done |= {n, n[:-4] + "Right"}
+        elif not n.endswith(("Left", "Right")):
+            out[i] = 0.5 * (out[i] + mirror(out[i])); done.add(n)
+    print("mirror map max distance", float(d.max()))
+    return out
 
 def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
     """Express the 51 ARKit shapes with MHR's OWN 72 face-expression vectors so the MHR head can be animated natively.
@@ -95,6 +139,7 @@ def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
     ichin = N[966]
     sc = (base[:, 1].max() - base[chin, 1]) / (N[:, 1].max() - ichin[1])
     W = (N - ichin) * sc + base[chin]
+    W[:, 0] = N[:, 0] * sc   # ICT and MHR are both symmetric about x = 0: do not inherit the chin vertex's tiny lateral offset
     head = np.where(ish & (base[:, 1] > base[chin, 1] - 1.0))[0]
     dist, idx = cKDTree(W).query(base[head])
     ok = dist < 1.2
@@ -152,8 +197,27 @@ def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
         out[k] = field.astype(np.float32)
         if nm not in jaw_shapes:
             print(f"  {nm:22s} target max {np.abs(t).max():.2f} cm, fitted max {np.abs(field[H]).max():.2f} cm")
-    return out, names
+    # The MHR face rests with the eyes SHUT (a groove where the lids meet): open them a little in the neutral pose so the eyeballs
+    # show, and make the blink shapes the way back to shut.
+    eye_open = np.zeros((V, 3), np.float32)
+    cs = sorted(eyeC, key=lambda c: -c[0])
+    sheet = np.zeros(V, bool)
+    for side, c in enumerate(cs):
+        c = c + np.array([0.0, EYE_GROOVE_DY, 0.0])   # the MHR lid groove sits ~7 mm above the ICT eyeball centre
+        slit = c[1]
+        dx = (base[:, 0] - c[0]) / 1.9; dy = (base[:, 1] - c[1]) / 1.2
+        m = np.clip(1 - dx * dx - dy * dy, 0, 1) ** 0.7
+        m = m * ((base[:, 2] > c[2] - 0.5) & ((base[:, 2] - c[2]) < 4.0))
+        eye_open[:, 1] += (np.sign(base[:, 1] - slit) * 0.55 * m).astype(np.float32)
+        sheet |= (m > 0.15) & (np.abs(base[:, 1] - slit) < 1.0)
+        nm = "eyeBlink" + ("Left" if side == 0 else "Right")
+        k = names.index(nm)
+        out[k] = np.zeros((V, 3), np.float32)
+        out[k][:, 1] = -(np.sign(base[:, 1] - slit) * 0.55 * m)
+    out = symmetrize(out, names, base)
+    return out, names, eye_open, sheet
 
+EYE_GROOVE_DY = -0.65   # cm
 PARTS = [  # README of ICT-FaceKit: name, vertex range, polygon range (inclusive)
     ("face", 0, 9408, 0, 9229), ("head_neck", 9409, 11247, 9230, 11143), ("mouth_socket", 11248, 13293, 11144, 13225),
     ("eye_socket_l", 13294, 13677, 13226, 13629), ("eye_socket_r", 13678, 14061, 13630, 14033),
@@ -207,11 +271,20 @@ if __name__ == "__main__":
     ap.add_argument("--mhr-license", help="MHR LICENSE text (Apache-2.0); copied to LICENSE-MHR.txt")
     ap.add_argument("--ict-license", help="ICT-FaceKit LICENSE text (MIT); copied to LICENSE-ICT-FaceKit.txt")
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
-    mhr = build_mhr(a.mhr_model)
     names = json.load(open(a.mhr_joint_names)) if a.mhr_joint_names else []
+    mhr = build_mhr(a.mhr_model, names)
     import torch
     sd_all = {k: v.detach().numpy() for k, v in torch.jit.load(a.mhr_model, map_location="cpu").state_dict().items()}
-    arkit, arkit_names = build_arkit_on_mhr(sd_all, names, a.ict_npz)
+    arkit, arkit_names, eye_open, sheet = build_arkit_on_mhr(sd_all, names, a.ict_npz)
+    # open the eye slits for real: drop the thin triangles that seal the lids together (they span the slit once the lids part)
+    F = mhr["faces"]; TF = mhr["texcoord_faces"]; Bm = mhr["base"].astype(np.float64)
+    area = 0.5 * np.linalg.norm(np.cross(Bm[F[:, 1]] - Bm[F[:, 0]], Bm[F[:, 2]] - Bm[F[:, 0]]), axis=1)
+    ys = eye_open[:, 1]
+    spans = (ys[F].max(1) > 0.05) & (ys[F].min(1) < -0.05)
+    drop = spans & (area < 0.05) & sheet[F].all(1)
+    print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
+    mhr["faces"], mhr["texcoord_faces"] = F[~drop], TF[~drop]
+    mhr["eye_open"] = eye_open.astype(np.float16)
     mhr["arkit_delta"] = arkit.astype(np.float16)
     mhr["meta"] = meta_blob({"joint_names": names, "arkit_names": arkit_names})
     write_bundle(os.path.join(a.out, "mhr_character.qmcb"), mhr)

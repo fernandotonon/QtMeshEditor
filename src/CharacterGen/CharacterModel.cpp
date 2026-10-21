@@ -308,6 +308,7 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
         a.mhrArkit = mhr.readFloat(QStringLiteral("arkit_delta"), &e2);
         if (a.mhrArkit.empty()) return fail(error, QStringLiteral("MHR bundle: arkit_delta: %1").arg(e2));
     }
+    if (!mhr.shapeOf(QStringLiteral("eye_open")).empty()) a.mhrEyeOpen = mhr.readFloat(QStringLiteral("eye_open"), nullptr);
     if (!needF(ict, "neutral", a.ictNeutral) || !needF(ict, "texcoords", a.ictTexcoords) || !needI(ict, "poly_size", a.polySize)
         || !needI(ict, "poly_vertex", a.polyVertex) || !needI(ict, "poly_texcoord", a.polyTexcoord)
         || !needF(ict, "identity", a.ictIdentity) || !needF(ict, "expression", a.ictExpression))
@@ -558,7 +559,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     (void)chinIx;
     // world (cm, MHR frame) of an ICT-space point
     auto toWorldCm = [&](float x, float y, float z) {
-        return std::array<float, 3>{(x - chinIx) * s, (y - chinIy) * s + chinMy, (z - chinIz) * s + chinMz};
+        return std::array<float, 3>{x * s, (y - chinIy) * s + chinMy, (z - chinIz) * s + chinMz};   // x: both models are symmetric about x = 0
     };
     const float neckCutY = (chinMy + (p.neckRimIct - chinIy) * s) * kCmToM;   // world y (m) of the neck cut (may move up, see below)
     rep.neckCutY = neckCutY;
@@ -659,6 +660,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     body.positions.resize(shaped.size());
     for (size_t i = 0; i < shaped.size(); ++i) body.positions[i] = shaped[i] * kCmToM;
     body.uvs = a.mhrTexcoords;
+    if (p.nativeHead && a.mhrEyeOpen.size() == body.positions.size() && !qEnvironmentVariableIsSet("QTMESH_NO_EYE_OPEN"))
+        for (size_t i = 0; i < body.positions.size(); ++i) body.positions[i] += a.mhrEyeOpen[i] * kCmToM;
 
     std::vector<char> gone(size_t(V), 0);
     for (int v = 0; v < V; ++v) {
@@ -951,11 +954,41 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         if (y < neckCutY + 0.03f && y > neckCutY - 0.08f) seamBody.push_back(v);
     }
 
+    if (p.nativeHead && !p.bodyOnly) {
+        // Seat each ICT eyeball in the MHR face: the identity shapes move the lids forwards or back by up to a centimetre, so
+        // the eyeball is pushed along z until its front sits just ahead of the (opened) lid margin of THIS face.
+        for (const char* side : {"l", "r"}) {
+            const IctPart* scl = a.part(QStringLiteral("sclera_") + QLatin1String(side));
+            const IctPart* iris = a.part(QStringLiteral("iris_") + QLatin1String(side));
+            if (!scl || !iris) continue;
+            float cx = 0, cy = 0, frontZ = -1e9f;
+            int n = 0;
+            for (int v = iris->v0; v <= iris->v1; ++v) { cx += headPos[size_t(v) * 3]; cy += headPos[size_t(v) * 3 + 1]; ++n; }
+            if (n == 0) continue;
+            cx /= float(n); cy /= float(n);
+            const float dyLift = 0.0075f;   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
+            for (const IctPart* q : {scl, iris})
+                for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 1] += dyLift;
+            cy += dyLift;
+            for (const IctPart* q : {scl, iris})
+                for (int v = q->v0; v <= q->v1; ++v) frontZ = std::max(frontZ, headPos[size_t(v) * 3 + 2]);
+            double zs = 0;
+            int zn = 0;
+            for (int v = 0; v < V; ++v) {
+                const float dx = (body.positions[size_t(v) * 3] - cx) / 0.016f, dy = (body.positions[size_t(v) * 3 + 1] - cy) / 0.011f;
+                if (dx * dx + dy * dy < 1.0f && body.positions[size_t(v) * 3 + 2] > frontZ - 0.03f) { zs += body.positions[size_t(v) * 3 + 2]; ++zn; }
+            }
+            if (zn < 8) continue;
+            const float dz = float(zs / zn) + 0.0010f - frontZ;
+            for (const IctPart* q : {scl, iris})
+                for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 2] += dz;
+        }
+    }
     for (const Group& g : groups) {
         if (p.bodyOnly) break;
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
-        if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_mouth") != 0 && std::strcmp(g.mesh, "head_teeth") != 0)) continue;
+        if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_lashes") == 0)) continue;
         Dna::Mesh m;
         m.name = QString::fromLatin1(g.mesh);
         std::vector<int> local(size_t(a.ictVertices), -1);

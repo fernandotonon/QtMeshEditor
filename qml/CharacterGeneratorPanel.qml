@@ -94,8 +94,8 @@ Column {
         enabled: !CharacterController.busy
         onClicked: CharacterController.generate(averageBox.checked ? -1 : sec.seed, parseFloat(varietyField.text) || 1.0,
                                                 bodyField.text, faceField.text,
-                                                skinBox.currentIndex > 0 ? skinBox.currentText : "",
-                                                eyeBox.currentIndex > 0 ? eyeBox.currentText : "")
+                                                skinBox.currentIndex > 0 ? CharacterController.skinNames[skinBox.currentIndex - 1] : "",
+                                                eyeBox.currentIndex > 0 ? CharacterController.eyeNames[eyeBox.currentIndex - 1] : "")
     }
     Note {
         visible: CharacterController.status !== ""

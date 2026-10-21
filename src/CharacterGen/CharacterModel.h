@@ -49,6 +49,7 @@ struct Assets {
     std::vector<int32_t> skinJoint;          ///< concatenated, vertex order
     std::vector<float> skinWeight;
     std::vector<uint32_t> skinStart;         ///< V+1 prefix sums over skinCount (filled by loadAssets)
+    std::vector<float> mhrEyeOpen;           ///< optional: V*3 cm, opens the lids of the (shut) MHR neutral so the eyeballs show
     std::vector<float> mhrArkit;             ///< optional: E*V*3 cm, the 51 ARKit shapes expressed on the MHR head (empty in old bundles)
     // ICT head
     int ictVertices = 0;
