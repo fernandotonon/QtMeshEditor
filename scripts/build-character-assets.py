@@ -209,17 +209,19 @@ def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
         dx = (base[:, 0] - c[0]) / 1.9; dy = (base[:, 1] - c[1]) / 1.2
         m = np.clip(1 - dx * dx - dy * dy, 0, 1) ** 0.7
         m = m * ((base[:, 2] > c[2] - 0.5) & ((base[:, 2] - c[2]) < 4.0))
-        eye_open[:, 1] += (np.sign(base[:, 1] - slit) * 0.55 * m).astype(np.float32)
+        eye_open[:, 1] += (np.where(base[:, 1] > slit, UPPER_LID, -LOWER_LID) * m).astype(np.float32)
         sheet |= (m > 0.15) & (np.abs(base[:, 1] - slit) < 1.0)
         core = np.maximum(core, m)
         nm = "eyeBlink" + ("Left" if side == 0 else "Right")
         k = names.index(nm)
         out[k] = np.zeros((V, 3), np.float32)
-        out[k][:, 1] = -(np.sign(base[:, 1] - slit) * 0.55 * m)
+        out[k][:, 1] = -(np.where(base[:, 1] > slit, UPPER_LID, -LOWER_LID) * m)
     out = symmetrize(out, names, base)
-    return out, names, eye_open, sheet, core
+    return out, names, eye_open, sheet, core, [c + np.array([0.0, EYE_GROOVE_DY, 0.0]) for c in cs]
 
-CORE_DROP = 0.55
+ALMOND_A, ALMOND_B = 1.28, 0.60   # cm half axes of the eye opening
+UPPER_LID, LOWER_LID = 0.40, 0.20   # cm the lids part by (the upper lid folds up into the crease)
+CORE_DROP = 2.0   # (disabled: the lids keep their sculpted skin; only the sealing sheet between them is cut)
 EYE_GROOVE_DY = -0.65   # cm
 PARTS = [  # README of ICT-FaceKit: name, vertex range, polygon range (inclusive)
     ("face", 0, 9408, 0, 9229), ("head_neck", 9409, 11247, 9230, 11143), ("mouth_socket", 11248, 13293, 11144, 13225),
@@ -278,13 +280,18 @@ if __name__ == "__main__":
     mhr = build_mhr(a.mhr_model, names)
     import torch
     sd_all = {k: v.detach().numpy() for k, v in torch.jit.load(a.mhr_model, map_location="cpu").state_dict().items()}
-    arkit, arkit_names, eye_open, sheet, core = build_arkit_on_mhr(sd_all, names, a.ict_npz)
+    arkit, arkit_names, eye_open, sheet, core, eye_c = build_arkit_on_mhr(sd_all, names, a.ict_npz)
     # open the eye slits for real: drop the thin triangles that seal the lids together (they span the slit once the lids part)
     F = mhr["faces"]; TF = mhr["texcoord_faces"]; Bm = mhr["base"].astype(np.float64)
     area = 0.5 * np.linalg.norm(np.cross(Bm[F[:, 1]] - Bm[F[:, 0]], Bm[F[:, 2]] - Bm[F[:, 0]]), axis=1)
     ys = eye_open[:, 1]
     spans = (ys[F].max(1) > 0.05) & (ys[F].min(1) < -0.05)
-    drop = (spans & (area < 0.05) & sheet[F].all(1)) | (core[F].mean(1) > CORE_DROP)   # + everything inside the eye opening (the lid's inner sheet)
+    cen = Bm[F].mean(1)
+    almond = np.zeros(len(F), bool)
+    for c in eye_c:   # an almond-shaped opening through the lid skin; the skin around it stays as the lids
+        r2 = ((cen[:, 0] - c[0]) / ALMOND_A) ** 2 + ((cen[:, 1] - (c[1] + 0.10)) / ALMOND_B) ** 2
+        almond |= r2 < 1.0
+    drop = (spans & (area < 0.05) & sheet[F].all(1)) | almond   # + everything inside the eye opening (the lid's inner sheet)
     print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
     mhr["faces"], mhr["texcoord_faces"] = F[~drop], TF[~drop]
     mhr["eye_open"] = eye_open.astype(np.float16)
