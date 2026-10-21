@@ -85,6 +85,15 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// > 0: keep only the part of the body this many metres below the neck cut and above (head + shoulders; previews/thumbnails).
     float bustDepth = 0.0f;
+    /// Build the skeleton with identity bone orientations (same joint positions): the convention the animation tools assume.
+    /// Keep only the standard-named (Mixamo-style) joints: ~52 bones, the skeleton every animation tool expects. Implies identity
+    /// bone orientations and standard names. When false the full 127-joint MHR rig is built (with the options below).
+    bool standardSkeleton = true;
+    bool identityBones = true;
+    /// Name the main bones like a Mixamo rig (Hips, Spine, LeftArm, LeftHandIndex1, ...).
+    bool standardNames = true;
+    /// Fold the procedurally driven helper joints ("_proc" twist joints, "_null") into their real ancestor.
+    bool foldHelperJoints = true;
     bool facePlusZ = false;             ///< false = the editor's -Z facing (a turn of 180 degrees about Y)
     /// ICT-space height (cm) where the head's neck is cut. ICT's neck is a short cylinder that flares into shoulders below about
     /// y=-12; cutting above the flare keeps the head's neck a clean ring that can meet the body's own neck.

@@ -1,5 +1,7 @@
 #include "CharacterModel.h"
 
+#include "../BodyFromPhoto/SamBodyRetarget.h"
+
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -298,24 +300,68 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     std::vector<std::array<float, 3>> gt(static_cast<size_t>(J));
     std::vector<Quat> gq(static_cast<size_t>(J));
     for (int j = 0; j < J; ++j) {
-        Dna::Joint dj;
-        dj.name = a.jointNames[j];
-        dj.parent = a.jointParents[size_t(j)];
         const std::array<float, 3> lt = {a.jointOffsets[size_t(j) * 3], a.jointOffsets[size_t(j) * 3 + 1], a.jointOffsets[size_t(j) * 3 + 2]};
         const Quat lq = {a.jointPrerot[size_t(j) * 4], a.jointPrerot[size_t(j) * 4 + 1], a.jointPrerot[size_t(j) * 4 + 2], a.jointPrerot[size_t(j) * 4 + 3]};
-        dj.translation = {double(lt[0]) * kCmToM, double(lt[1]) * kCmToM, double(lt[2]) * kCmToM};
-        dj.orientation = {lq.w, lq.x, lq.y, lq.z};
-        rig.joints.push_back(dj);
-        if (dj.parent < 0) { gt[size_t(j)] = lt; gq[size_t(j)] = lq; }
+        const int par = a.jointParents[size_t(j)];
+        if (par < 0) { gt[size_t(j)] = lt; gq[size_t(j)] = lq; }
         else {
-            const auto r = rotate(gq[size_t(dj.parent)], lt);
-            const auto& pt = gt[size_t(dj.parent)];
+            const auto r = rotate(gq[size_t(par)], lt);
+            const auto& pt = gt[size_t(par)];
             gt[size_t(j)] = {pt[0] + r[0], pt[1] + r[1], pt[2] + r[2]};
-            gq[size_t(j)] = mul(gq[size_t(dj.parent)], lq);
+            gq[size_t(j)] = mul(gq[size_t(par)], lq);
         }
-        rig.lodJointIndices.push_back(j);
     }
-    rep.joints = J;
+    // Which joints are kept. MHR carries ~127 joints: the standard body (spine, limbs, fingers: the ones with a standard name),
+    // plus procedural helpers (twist joints driven by its runtime), sub-joints (wrist twist, ankle sub-joints, metacarpals) and the
+    // face joints. Animation tools drive plain rotations of a Mixamo-style skeleton and know nothing about the extras: left in, they
+    // sit undriven between driven bones and the skin around them collapses into blades on forearms, hands and feet. So the default
+    // keeps only the standard-named joints; everything else is FOLDED: its skin weights go to the nearest kept ancestor (exactly what
+    // it does when undriven) and its children are re-parented to that ancestor, keeping their world positions.
+    std::vector<char> keep(static_cast<size_t>(J), 1);
+    for (int j = 0; j < J; ++j) {
+        const QString& n = a.jointNames[j];
+        if (p.standardSkeleton)
+            keep[size_t(j)] = QString::fromStdString(SamBody::mhrAlias(n.toStdString())) != n;
+        else if (p.foldHelperJoints)
+            keep[size_t(j)] = !(n.contains(QLatin1String("_proc")) || n.endsWith(QLatin1String("_null")));
+    }
+    std::vector<int> foldTo(static_cast<size_t>(J), -1), newIndex(static_cast<size_t>(J), -1);   // kept ancestor-or-self; index in the rig
+    int kept = 0;
+    for (int j = 0; j < J; ++j) {
+        const int par = a.jointParents[size_t(j)];
+        foldTo[size_t(j)] = keep[size_t(j)] ? j : (par >= 0 ? foldTo[size_t(par)] : -1);
+        if (keep[size_t(j)]) newIndex[size_t(j)] = kept++;
+    }
+    for (int j = 0; j < J; ++j) {
+        if (!keep[size_t(j)]) continue;
+        Dna::Joint dj;
+        // standard (Mixamo-style) names for the main bones, so text-to-motion, retargeting and capture recognise the rig
+        dj.name = (p.standardNames || p.standardSkeleton) ? QString::fromStdString(SamBody::mhrAlias(a.jointNames[j].toStdString())) : a.jointNames[j];
+        const int par = a.jointParents[size_t(j)];
+        const int keptParent = par >= 0 ? foldTo[size_t(par)] : -1;
+        dj.parent = keptParent >= 0 ? newIndex[size_t(keptParent)] : -1;
+        if (p.identityBones || p.standardSkeleton) {
+            // World-aligned bones: every rest rotation is the identity and the offset is the world-space difference of the joint
+            // positions (to the KEPT parent). Skinning at rest only depends on the positions, so the mesh is unchanged, but the rig
+            // follows the convention the animation tools assume (a Mixamo rig's bones are identity at rest). MHR's own bones carry
+            // per-bone prerotations that those tools do not account for.
+            const std::array<float, 3> pp = keptParent < 0 ? std::array<float, 3>{0, 0, 0} : gt[size_t(keptParent)];
+            dj.translation = {double(gt[size_t(j)][0] - pp[0]) * kCmToM, double(gt[size_t(j)][1] - pp[1]) * kCmToM,
+                              double(gt[size_t(j)][2] - pp[2]) * kCmToM};
+            dj.orientation = {1.0, 0.0, 0.0, 0.0};
+        } else {
+            const std::array<float, 3> lt = {a.jointOffsets[size_t(j) * 3], a.jointOffsets[size_t(j) * 3 + 1], a.jointOffsets[size_t(j) * 3 + 2]};
+            dj.translation = {double(lt[0]) * kCmToM, double(lt[1]) * kCmToM, double(lt[2]) * kCmToM};
+            dj.orientation = {a.jointPrerot[size_t(j) * 4 + 3], a.jointPrerot[size_t(j) * 4], a.jointPrerot[size_t(j) * 4 + 1], a.jointPrerot[size_t(j) * 4 + 2]};
+        }
+        rig.lodJointIndices.push_back(int(rig.joints.size()));
+        rig.joints.push_back(dj);
+    }
+    rep.joints = int(rig.joints.size());
+    if (newIndex[size_t(cHead)] < 0) {
+        fail(error, QStringLiteral("The head joint is not part of the kept skeleton."));
+        return rig;
+    }
     // ---- body: shaped positions ------------------------------------------------------------------------------------
     const int V = a.mhrVertices;
     std::vector<float> shaped(a.mhrBase);
@@ -449,8 +495,14 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     body.skin.resize(size_t(V));
     for (int v = 0; v < V; ++v) {
         std::vector<Dna::SkinInfluence> inf;
-        for (uint32_t k = a.skinStart[size_t(v)]; k < a.skinStart[size_t(v) + 1]; ++k)
-            inf.push_back({uint16_t(a.skinJoint[k]), a.skinWeight[k]});
+        for (uint32_t k = a.skinStart[size_t(v)]; k < a.skinStart[size_t(v) + 1]; ++k) {
+            const int keptJ = foldTo[size_t(a.skinJoint[k])];
+            if (keptJ < 0) continue;
+            const uint16_t j = uint16_t(newIndex[size_t(keptJ)]);
+            bool merged = false;
+            for (auto& e : inf) if (e.joint == j) { e.weight += a.skinWeight[k]; merged = true; break; }
+            if (!merged) inf.push_back({j, a.skinWeight[k]});
+        }
         std::sort(inf.begin(), inf.end(), [](const auto& x, const auto& y) { return x.weight > y.weight; });
         if (inf.size() > 4) inf.resize(4);
         float sum = 0;
@@ -642,8 +694,25 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         for (const char* pn : g.parts) {
             const IctPart* part = a.part(QString::fromLatin1(pn));
             if (!part) { rep.warnings << QStringLiteral("ICT part '%1' is missing").arg(QString::fromLatin1(pn)); continue; }
+            // ICT's sclera is a full shell in FRONT of the iris (meant to be translucent over it). With flat colours it would hide
+            // the iris, so the front cap of each sclera is cut open (the iris dome shows through, a little wider than the cap).
+            float capZ = 1e30f;
+            if (part->name.startsWith(QLatin1String("sclera_"))) {
+                const IctPart* iris = a.part(QStringLiteral("iris_") + part->name.mid(7));
+                double cz = 0;
+                int cnt = 0;
+                for (const IctPart* q : {part, iris})
+                    if (q)
+                        for (int v = q->v0; v <= q->v1; ++v) { cz += a.ictNeutral[size_t(v) * 3 + 2]; ++cnt; }
+                if (cnt > 0) capZ = float(cz / cnt) + 0.85f;   // cm, ICT space
+            }
             for (int pi = part->p0; pi <= part->p1; ++pi) {
                 const uint32_t b = a.polyStart[size_t(pi)], n = uint32_t(a.polySize[size_t(pi)]);
+                if (capZ < 1e29f) {
+                    float z = 0;
+                    for (uint32_t k = 0; k < n; ++k) z += a.ictNeutral[size_t(a.polyVertex[b + k]) * 3 + 2];
+                    if (z / float(n) > capZ) continue;
+                }
                 if (g.neck) {
                     bool below = false;
                     for (uint32_t k = 0; k < n; ++k)
@@ -694,8 +763,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             }
             bool merged = false;
             for (auto& x : inf)
-                if (x.joint == uint16_t(cHead)) { x.weight += 1.0f - t; merged = true; }
-            if (!merged && t < 1.0f) inf.push_back({uint16_t(cHead), 1.0f - t});
+                if (x.joint == uint16_t(newIndex[size_t(cHead)])) { x.weight += 1.0f - t; merged = true; }
+            if (!merged && t < 1.0f) inf.push_back({uint16_t(newIndex[size_t(cHead)]), 1.0f - t});
             m.skin[i] = std::move(inf);
         }
 
@@ -720,6 +789,25 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.meshNames.prepend(body.name);
     rig.meshes.insert(rig.meshes.begin(), std::move(body));
     rig.blendShapeChannels = a.expressionNames;
+    // Every part carries every channel. glTF puts all the parts of a node into ONE mesh whose primitives must share the same morph
+    // targets in the same order (and takes the target names from the first primitive, which is the body): a part that skipped a
+    // channel it does not deform would scramble the targets or lose the names on export. A channel a part does not move gets a
+    // single zero delta.
+    for (auto& m : rig.meshes) {
+        std::vector<char> has(size_t(std::max(0, int(rig.blendShapeChannels.size()))), 0);
+        for (const auto& bt : m.blendShapeTargets)
+            if (bt.channel >= 0 && size_t(bt.channel) < has.size()) has[size_t(bt.channel)] = 1;
+        for (size_t e = 0; e < has.size(); ++e) {
+            if (has[e]) continue;
+            Dna::BlendShapeTarget bt;
+            bt.channel = int(e);
+            bt.vertexIndices = {m.layouts.empty() ? 0u : m.layouts.front().position};   // a position the mesh really uses
+            bt.deltas = {0.0f, 0.0f, 0.0f};
+            m.blendShapeTargets.push_back(std::move(bt));
+        }
+        std::sort(m.blendShapeTargets.begin(), m.blendShapeTargets.end(),
+                  [](const auto& x, const auto& y) { return x.channel < y.channel; });
+    }
     rep.morphTargets = a.ictExpressions;
     if (rig.meshes.size() < 2) rep.warnings << QStringLiteral("The head produced no geometry.");
 

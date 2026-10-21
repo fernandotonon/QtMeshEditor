@@ -28,7 +28,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey>]\n"
-        "                        [--facing-z] [--bust] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--assets DIR] [--json]\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
         "separate parts (100 face identity modes, the 51 ARKit expression shapes as morph targets). --seed picks a random body and\n"
@@ -75,9 +75,9 @@ QString assetsDir()
 int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
-    bool havePlusZ = false, json = false, haveSeed = false, bust = false;
+    bool havePlusZ = false, json = false, haveSeed = false, bust = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
-    float variety = 1.0f;
+    float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
         auto next = [&]() { return i + 1 < argc ? QString::fromLocal8Bit(argv[++i]) : QString(); };
@@ -92,6 +92,12 @@ int run(int argc, char* argv[])
         else if (a == "--assets") assets = next();
         else if (a == "--facing-z") havePlusZ = true;
         else if (a == "--bust") bust = true;
+        else if (a == "--raw-rig") rawRig = true;
+        else if (a == "--full-skeleton") fullSkeleton = true;
+        else if (a == "--no-fold") noFold = true;
+        else if (a == "--keep-bone-axes") keepAxes = true;
+        else if (a == "--keep-names") keepNames = true;
+        else if (a == "--bust-depth") { bustDepth = next().toFloat(); bust = true; }
         else if (a == "--json") json = true;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown option '%1'\n").arg(a)); usage(); return 2; }
@@ -114,7 +120,12 @@ int run(int argc, char* argv[])
 
     Params p;
     p.facePlusZ = havePlusZ;
-    if (bust) p.bustDepth = 0.30f;
+    if (rawRig) { p.standardSkeleton = false; p.identityBones = false; p.standardNames = false; p.foldHelperJoints = false; }
+    if (fullSkeleton) p.standardSkeleton = false;
+    if (noFold) p.foldHelperJoints = false;
+    if (keepAxes) p.identityBones = false;
+    if (keepNames) p.standardNames = false;
+    if (bust) p.bustDepth = std::max(0.005f, bustDepth);
     if (haveSeed) {
         p.bodyShape = randomCoefficients(seed * 2u + 1u, data.mhrShapes, variety, 16);
         p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);

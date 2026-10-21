@@ -80,7 +80,11 @@ TEST(CharacterModel, BuildsABodyAndTheHeadGroupsAsSeparateMeshes)
     const Dna::Rig rig = buildRig(a, Params(), &rep, &err);
     ASSERT_FALSE(rig.meshes.empty()) << err.toStdString();
     EXPECT_EQ(rig.meshes.front().name, "body");
-    EXPECT_EQ(rig.joints.size(), 4u);
+    // the default skeleton keeps only the standard-named joints (the fixture has Neck and Head among its 4)
+    ASSERT_EQ(rig.joints.size(), 2u);
+    EXPECT_EQ(rig.joints[0].name, "Neck");
+    EXPECT_EQ(rig.joints[1].name, "Head");
+    EXPECT_EQ(rig.joints[1].parent, 0);
     EXPECT_EQ(rig.blendShapeChannels, a.expressionNames);
     EXPECT_GT(vertexCountOf(rig, "head_skin"), 0);
     EXPECT_GT(vertexCountOf(rig, "head_teeth"), 0);
@@ -90,6 +94,36 @@ TEST(CharacterModel, BuildsABodyAndTheHeadGroupsAsSeparateMeshes)
     // the rim sits below the head (top at 1.72 m on the fixture) and well above the hips
     EXPECT_LT(rep.neckCutY, 1.60f);
     EXPECT_GT(rep.neckCutY, 1.20f);
+}
+
+TEST(CharacterModel, TheFullSkeletonKeepsEveryJointAndItsOwnNames)
+{
+    const Assets a = syntheticAssets();
+    Params p;
+    p.standardSkeleton = false;
+    p.standardNames = false;
+    p.foldHelperJoints = false;
+    p.identityBones = false;
+    const Dna::Rig rig = buildRig(a, p);
+    ASSERT_EQ(rig.joints.size(), 4u);
+    EXPECT_EQ(rig.joints[1].name, "c_neck");
+    EXPECT_EQ(rig.joints[3].parent, 2);
+    // with the real prerotations kept the orientation is the asset's (identity in the fixture) and the offset is parent-relative cm -> m
+    EXPECT_NEAR(rig.joints[1].translation[1], 0.44, 1e-5);
+}
+
+TEST(CharacterModel, FoldedJointsKeepTheirWorldPositionsForTheirChildren)
+{
+    // Neck (kept) -> c_jaw (folded away) -> Head (kept): Head's offset must now be measured from Neck, with c_jaw's included
+    Assets a = syntheticAssets();
+    a.jointNames = {"body_world", "c_neck", "c_jaw", "c_head"};
+    a.jointParents = {-1, 0, 1, 2};
+    a.jointOffsets = {0, 100, 0,   0, 44, 0,   0, 4, 1,   0, 6, 2};   // cm: Head ends up 10 cm above and 3 cm in front of the neck
+    for (auto& w : a.skinJoint) w = (w == 2) ? 3 : w;
+    const Dna::Rig rig = buildRig(a, Params());
+    ASSERT_EQ(rig.joints.size(), 2u);
+    EXPECT_NEAR(rig.joints[1].translation[1], 0.10, 1e-5);
+    EXPECT_NEAR(std::fabs(rig.joints[1].translation[2]), 0.03, 1e-5);   // z may be mirrored by the facing turn
 }
 
 TEST(CharacterModel, TheBodyLosesItsHeadAboveTheNeckCut)
