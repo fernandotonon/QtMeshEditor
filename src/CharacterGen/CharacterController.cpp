@@ -28,6 +28,10 @@ public:
     AddCharacterCommand(std::shared_ptr<CharacterGen::Assets> assets, CharacterGen::Params params, std::shared_ptr<Outcome> out)
         : m_assets(std::move(assets)), m_params(std::move(params)), m_out(std::move(out))
     {
+        // Materials are named after the node. A name reused from an earlier character would keep that character's tint: the shader
+        // generated for it caches the old colours, so a new skin / eye colour would not show.
+        static int serial = 0;
+        m_serial = ++serial;
         setText(QObject::tr("Generate character"));
     }
 
@@ -37,7 +41,7 @@ public:
         QString err;
         CharacterGen::SceneBuild sb;
         Ogre::SceneNode* node = CharacterGen::createCharacterInScene(
-            *m_assets, m_params, QStringLiteral("character_%1").arg(++m_revision), &sb, &err);
+            *m_assets, m_params, QStringLiteral("character_%1_%2").arg(m_serial).arg(++m_revision), &sb, &err);
         if (!node) {
             m_out->error = err;
             setObsolete(true);
@@ -68,6 +72,7 @@ private:
     QString m_node;
     bool m_created = false;
     int m_revision = 0;
+    int m_serial = 0;
 };
 
 }  // namespace
