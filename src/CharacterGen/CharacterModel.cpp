@@ -1047,8 +1047,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         local[size_t(gv)] = int(globalOf.size());
                         globalOf.push_back(gv);
                         for (int i = 0; i < 3; ++i) m.positions.push_back(headPos[size_t(gv) * 3 + i]);
-                        // the MHR mouth sits 43.6 mm further forward than ICT's (hand-fitted from an edited mesh)
-                        if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) m.positions.back() += 0.0436f;
+                        // the MHR mouth sits 43.6 mm further forward and 8.1 mm higher than ICT's (hand-fitted from an edited mesh)
+                        if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) {
+                            if (i == 2) m.positions.back() += 0.0436f;
+                            else if (i == 1) m.positions.back() += 0.008065f;
+                        }
                     }
                     const uint32_t li = uint32_t(local[size_t(gv)]), ti = uint32_t(a.polyTexcoord[b + k]);
                     const uint64_t key = (uint64_t(li) << 32) | ti;
