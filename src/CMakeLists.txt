@@ -232,6 +232,7 @@ PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
 CharacterGen/QmcBundle.cpp
 CharacterGen/CharacterAssets.cpp
+CharacterGen/CharacterController.cpp
 CharacterGen/CharacterModel.cpp
 CharacterGen/CharacterScene.cpp
 CharacterGen/CharacterCLI.cpp

@@ -265,3 +265,32 @@ TEST(CharacterModel, RefusesAnSkeletonWithoutTheNeckAndHeadJoints)
     EXPECT_TRUE(rig.meshes.empty());
     EXPECT_FALSE(err.isEmpty());
 }
+
+TEST(CharacterParsing, CoefficientListsAreParsedAndRangeChecked)
+{
+    std::vector<float> c;
+    QString err;
+    EXPECT_TRUE(CharacterGen::parseCoefficients(QStringLiteral("0=1.5, 3=-2"), c, 5, &err));
+    ASSERT_EQ(c.size(), 5u);
+    EXPECT_FLOAT_EQ(c[0], 1.5f);
+    EXPECT_FLOAT_EQ(c[3], -2.0f);
+    EXPECT_FLOAT_EQ(c[1], 0.0f);
+    EXPECT_FALSE(CharacterGen::parseCoefficients(QStringLiteral("5=1"), c, 5, &err));
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_FALSE(CharacterGen::parseCoefficients(QStringLiteral("x=1"), c, 5, &err));
+    EXPECT_FALSE(CharacterGen::parseCoefficients(QStringLiteral("1=nan"), c, 5, &err));
+    std::vector<float> none;
+    EXPECT_TRUE(CharacterGen::parseCoefficients(QString(), none, 5, &err));
+    EXPECT_TRUE(none.empty());
+}
+
+TEST(CharacterParsing, ColoursAcceptNamesAndHex)
+{
+    CharacterGen::Rgb c{};
+    EXPECT_TRUE(CharacterGen::parseColour(QStringLiteral("Tan"), CharacterGen::ColourKind::Skin, &c));
+    EXPECT_TRUE(CharacterGen::parseColour(QStringLiteral("#ff0000"), CharacterGen::ColourKind::Eye, &c));
+    EXPECT_FLOAT_EQ(c[0], 1.0f);
+    EXPECT_TRUE(CharacterGen::parseColour(QStringLiteral("blue"), CharacterGen::ColourKind::Skin, &c)) << "falls back to the CSS colour name";
+    EXPECT_FALSE(CharacterGen::parseColour(QStringLiteral("zzz"), CharacterGen::ColourKind::Eye, &c));
+    EXPECT_TRUE(CharacterGen::colourNames(CharacterGen::ColourKind::Eye).contains(QStringLiteral("hazel")));
+}

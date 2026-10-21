@@ -155,6 +155,7 @@
 #include "ConstraintManager.h"
 #include "DNA/DnaCorrectiveManager.h"
 #include "DNA/DnaFitController.h"
+#include "CharacterGen/CharacterController.h"
 #include "MotionGraphManager.h"
 #include "ImageTo3D/MeshGenController.h"
 #include "Mocap/MocapController.h"
@@ -901,6 +902,7 @@ MainWindow::~MainWindow()
         ConstraintManager::kill();
         DnaCorrectiveManager::kill();
         DnaFitController::kill();
+        CharacterController::kill();
         MotionGraphManager::kill();
         MeshGenController::kill();
         MocapController::kill();
@@ -1285,6 +1287,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<DnaCorrectiveManager>("PropertiesPanel", 1, 0, "DnaCorrectiveManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return DnaCorrectiveManager::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<CharacterController>("PropertiesPanel", 1, 0, "CharacterController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return CharacterController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<DnaFitController>("PropertiesPanel", 1, 0, "DnaFitController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

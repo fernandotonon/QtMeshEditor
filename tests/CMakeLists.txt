@@ -241,11 +241,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaReader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterAssets.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterAssets_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor.cpp

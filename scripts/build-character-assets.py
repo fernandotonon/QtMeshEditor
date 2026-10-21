@@ -117,9 +117,14 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--mhr-model", required=True); ap.add_argument("--mhr-joint-names")
     ap.add_argument("--ict-dir", required=True); ap.add_argument("--ict-npz", required=True); ap.add_argument("--out", required=True)
+    ap.add_argument("--mhr-license", help="MHR LICENSE text (Apache-2.0); copied to LICENSE-MHR.txt")
+    ap.add_argument("--ict-license", help="ICT-FaceKit LICENSE text (MIT); copied to LICENSE-ICT-FaceKit.txt")
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
     mhr = build_mhr(a.mhr_model)
     names = json.load(open(a.mhr_joint_names)) if a.mhr_joint_names else []
     mhr["meta"] = meta_blob({"joint_names": names})
     write_bundle(os.path.join(a.out, "mhr_character.qmcb"), mhr)
     write_bundle(os.path.join(a.out, "ict_character.qmcb"), build_ict(a.ict_dir, a.ict_npz))
+    import shutil
+    for src, name in ((a.mhr_license, "LICENSE-MHR.txt"), (a.ict_license, "LICENSE-ICT-FaceKit.txt")):
+        if src: shutil.copyfile(src, os.path.join(a.out, name))
