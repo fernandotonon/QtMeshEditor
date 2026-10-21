@@ -92,6 +92,7 @@ bool fitDnaToGeneratedBody(const Assets& assets, Params params, const QString& d
     auto fail = [&](const QString& m) { if (error) *error = m; return false; };
     if (!out) return fail(QStringLiteral("no output"));
     params.bodyOnly = true;
+    params.nativeHead = false;   // the fit target is the body cut at the neck
     params.bustDepth = 0.0f;
     QString err;
     Ogre::SceneNode* node = createCharacterInScene(assets, params, QStringLiteral("dna_target"), nullptr, &err);
@@ -113,7 +114,9 @@ bool fitDnaToGeneratedBody(const Assets& assets, Params params, const QString& d
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.character"), QStringLiteral("fit dna mode=%1").arg(o.mode));
     try {
         if (!Dna::DnaCLI::fitSnapshotReport(dnaPath, snapshot, o, out->rig.get(), &out->report, &err, &out->poseSpace))
-            return fail(err);
+            return fail(err.contains(QLatin1String("could be paired"))
+                            ? err + QStringLiteral("\nThis looks like a DNA without a body skeleton (a face-only file such as SKM_Face.dna). Use a body DNA, or a combined body+head DNA.")
+                            : err);
     } catch (const std::exception& e) {
         return fail(QString::fromUtf8(e.what()));
     }

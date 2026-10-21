@@ -11,6 +11,7 @@
 #include <QHash>
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <cmath>
 #include <limits>
 #include <random>
@@ -302,6 +303,11 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
     for (int32_t f : a.mhrTexFaces)
         if (f < 0 || size_t(f) * 2 + 1 >= a.mhrTexcoords.size()) return fail(error, QStringLiteral("MHR bundle: texcoord index out of range"));
 
+    if (!mhr.shapeOf(QStringLiteral("arkit_delta")).empty()) {
+        QString e2;
+        a.mhrArkit = mhr.readFloat(QStringLiteral("arkit_delta"), &e2);
+        if (a.mhrArkit.empty()) return fail(error, QStringLiteral("MHR bundle: arkit_delta: %1").arg(e2));
+    }
     if (!needF(ict, "neutral", a.ictNeutral) || !needF(ict, "texcoords", a.ictTexcoords) || !needI(ict, "poly_size", a.polySize)
         || !needI(ict, "poly_vertex", a.polyVertex) || !needI(ict, "poly_texcoord", a.polyTexcoord)
         || !needF(ict, "identity", a.ictIdentity) || !needF(ict, "expression", a.ictExpression))
@@ -561,7 +567,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     std::vector<float> headPos(size_t(a.ictVertices) * 3);
     {
         std::vector<float> id(a.ictNeutral);
-        for (int k = 0; k < a.ictIdentities && k < int(p.faceIdentity.size()); ++k) {
+        for (int k = 0; k < a.ictIdentities && k < int(p.faceIdentity.size()) && !p.nativeHead; ++k) {   // (the MHR head is the face in native mode)
             const float c = p.faceIdentity[size_t(k)];
             if (c == 0.0f) continue;
             const float* vec = a.ictIdentity.data() + size_t(k) * a.ictNeutral.size();
@@ -612,8 +618,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 if (y >= trimY && y <= trimY + 0.015f) headRing.push_back({headPos[size_t(v) * 3], headPos[size_t(v) * 3 + 2]});
             }
     const Ring rh = measure(headRing);
-    const bool haveRing = rh.n >= 6 && rh.rx > 1e-4f && rh.rz > 1e-4f;
-    if (!haveRing)
+    const bool haveRing = !p.nativeHead && rh.n >= 6 && rh.rx > 1e-4f && rh.rz > 1e-4f;
+    if (!haveRing && !p.nativeHead)
         rep.warnings << QStringLiteral("The head's neck ring could not be measured (%1 vertices); the seam is not matched.").arg(rh.n);
 
     // ---- the straight horizontal cut ------------------------------------------------------------------------------------
@@ -657,6 +663,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     std::vector<char> gone(size_t(V), 0);
     for (int v = 0; v < V; ++v) {
         const int dom = dominant[size_t(v)];
+        if (p.nativeHead) continue;
         if (body.positions[size_t(v) * 3 + 1] <= neckCutY) continue;   // below the plane nothing is removed (no stray pockets)
         if (!cutPoly.empty()) {
             // inside the outline, or within a margin of it: the collar bones / trapezius rise above the plane just outside the neck's
@@ -946,6 +953,9 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
 
     for (const Group& g : groups) {
         if (p.bodyOnly) break;
+        // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
+        // them: only the mouth interior (gums, tongue, teeth) comes from ICT
+        if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_mouth") != 0 && std::strcmp(g.mesh, "head_teeth") != 0)) continue;
         Dna::Mesh m;
         m.name = QString::fromLatin1(g.mesh);
         std::vector<int> local(size_t(a.ictVertices), -1);
@@ -1046,6 +1056,22 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));
+    }
+    if (p.nativeHead && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
+        for (int e = 0; e < a.ictExpressions; ++e) {
+            Dna::BlendShapeTarget bt;
+            bt.channel = e;
+            const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
+            for (int v = 0; v < V; ++v) {
+                const float* dv = d + size_t(v) * 3;
+                if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;
+                bt.vertexIndices.push_back(uint32_t(v));
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * kCmToM);
+            }
+            if (!bt.vertexIndices.empty()) body.blendShapeTargets.push_back(std::move(bt));
+        }
+    } else if (p.nativeHead) {
+        rep.warnings << QStringLiteral("This asset bundle has no MHR expression data (arkit_delta); rebuild the bundles with scripts/build-character-assets.py.");
     }
     rep.meshNames.prepend(body.name);
     rig.meshes.insert(rig.meshes.begin(), std::move(body));

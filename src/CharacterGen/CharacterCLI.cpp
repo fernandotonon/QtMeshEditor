@@ -29,7 +29,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--assets DIR] [--json]\n"
         "       qtmesh character --dna <body.dna> [--dna-mode joints+surface|surface|joints] ...   shape a MetaHuman body DNA you own like the generated body\n"
         "       qtmesh character --download\n"
         "\n"
@@ -47,7 +47,7 @@ QString assetsDir() { return CharacterAssets::dir(); }
 int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, dnaPath, dnaMode, assets = assetsDir();
-    bool havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    bool ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -59,6 +59,7 @@ int run(int argc, char* argv[])
         else if (a == "--variety") variety = next().toFloat();
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
+        else if (a == "--ict-head") ictHead = true;
         else if (a == "--dna") dnaPath = next();
         else if (a == "--dna-mode") dnaMode = next();
         else if (a == "--skin") skinArg = next();
@@ -108,6 +109,7 @@ int run(int argc, char* argv[])
     }
 
     Params p;
+    p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
     p.facePlusZ = havePlusZ;
     if (rawRig) { p.standardSkeleton = false; p.identityBones = false; p.standardNames = false; p.foldHelperJoints = false; }
     if (fullSkeleton) p.standardSkeleton = false;

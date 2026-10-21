@@ -49,6 +49,7 @@ struct Assets {
     std::vector<int32_t> skinJoint;          ///< concatenated, vertex order
     std::vector<float> skinWeight;
     std::vector<uint32_t> skinStart;         ///< V+1 prefix sums over skinCount (filled by loadAssets)
+    std::vector<float> mhrArkit;             ///< optional: E*V*3 cm, the 51 ARKit shapes expressed on the MHR head (empty in old bundles)
     // ICT head
     int ictVertices = 0;
     int ictIdentities = 0;
@@ -87,6 +88,8 @@ struct Params {
     float bustDepth = 0.0f;
     /// Body only (no head parts, no neck seam): the shape target a MetaHuman body DNA is fitted to.
     bool bodyOnly = false;
+    /// Keep the MHR body's own head (no neck cut, no ICT head): the expression shapes are MHR's native ones fitted to the ARKit set.
+    bool nativeHead = false;
     /// Build the skeleton with identity bone orientations (same joint positions): the convention the animation tools assume.
     /// Keep only the standard-named (Mixamo-style) joints: ~52 bones, the skeleton every animation tool expects. Implies identity
     /// bone orientations and standard names. When false the full 127-joint MHR rig is built (with the options below).

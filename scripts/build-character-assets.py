@@ -67,6 +67,93 @@ def build_mhr(model_pt):
             "joint_offsets": offs, "joint_prerot": prerot, "skin_count": counts, "skin_joint": sj, "skin_weight": sw}
 
 
+
+def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
+    """Express the 51 ARKit shapes with MHR's OWN 72 face-expression vectors so the MHR head can be animated natively.
+
+    Each ICT shape is transferred to the MHR head (ICT neutral aligned to MHR by chin + head height, nearest-vertex delta), then
+    projected on the 72 expression vectors with a bounded ridge least squares; the eyelid shapes (blink / squint / wide), which the
+    expression basis cannot express, are transferred directly in a mask around each eye. Returns (51, V, 3) float32 deltas in cm.
+    """
+    from scipy.optimize import lsq_linear
+    from scipy.spatial import cKDTree
+    E = sd["face_expressions_model.shape_vectors"].astype(np.float64)
+    base = sd["character_torch.blend_shape.base_shape"].astype(np.float64)
+    V = base.shape[0]
+    sj = sd["character_torch.linear_blend_skinning.skin_indices_flattened"]
+    sw = sd["character_torch.linear_blend_skinning.skin_weights_flattened"]
+    sv = sd["character_torch.linear_blend_skinning.vert_indices_flattened"]
+    dom = -np.ones(V, int); best = np.zeros(V)
+    for j, w, v in zip(sj, sw, sv):
+        if w > best[v]: best[v] = w; dom[v] = j
+    headish = np.array([any(t in n for t in ("head", "jaw", "eye", "tongue", "teeth")) for n in joint_names])
+    ish = headish[dom]
+    cand = np.where(ish & (base[:, 2] > np.mean(base[ish, 2]) + 4))[0]
+    chin = cand[np.argmin(base[cand, 1])]
+    z = np.load(ict_npz)
+    N = z["neutral"].astype(np.float64); D = z["deltas"].astype(np.float64); names = [str(x) for x in z["names"]]
+    ichin = N[966]
+    sc = (base[:, 1].max() - base[chin, 1]) / (N[:, 1].max() - ichin[1])
+    W = (N - ichin) * sc + base[chin]
+    head = np.where(ish & (base[:, 1] > base[chin, 1] - 1.0))[0]
+    dist, idx = cKDTree(W).query(base[head])
+    ok = dist < 1.2
+    H, I = head[ok], idx[ok]
+    Eh = E[:, H, :].reshape(72, -1).T
+    # eye centres in MHR space: mean of the ICT iris vertices (parts iris_l 22221..23020, iris_r 23791..24590)
+    eyeC = [W[22221:23021].mean(0), W[23791:24591].mean(0)]
+    # the jaw is a ROTATION about the c_jaw joint: a linear mix of expression vectors cannot reproduce it (the fit saturated and tore
+    # the nose), so the jaw shapes are the real skinned motion of the jaw joint: v' = v + w_jaw * (R (v - pivot) + pivot - v)
+    par = sd["character_torch.skeleton.joint_parents"].astype(int)
+    off = sd["character_torch.skeleton.joint_translation_offsets"].astype(np.float64)
+    pre = sd["character_torch.skeleton.joint_prerotations"].astype(np.float64)
+    def quat_mat(q):
+        x, y, zq, w = q / np.linalg.norm(q)
+        return np.array([[1-2*(y*y+zq*zq), 2*(x*y-zq*w), 2*(x*zq+y*w)], [2*(x*y+zq*w), 1-2*(x*x+zq*zq), 2*(y*zq-x*w)], [2*(x*zq-y*w), 2*(y*zq+x*w), 1-2*(x*x+y*y)]])
+    Rg = [None] * len(par); Pg = [None] * len(par)
+    for j in range(len(par)):
+        Rl = quat_mat(pre[j])
+        if par[j] < 0: Rg[j] = Rl; Pg[j] = off[j]
+        else: Rg[j] = Rg[par[j]] @ Rl; Pg[j] = Pg[par[j]] + Rg[par[j]] @ off[j]
+    jaw = joint_names.index("c_jaw")
+    wjaw = np.zeros(V)
+    for j, w, v in zip(sj, sw, sv):
+        if j == jaw: wjaw[v] = w
+    pivot = Pg[jaw]
+    def rot(axis, deg):
+        t = np.radians(deg); c, s_ = np.cos(t), np.sin(t)
+        if axis == "x": return np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]])
+        return np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+    def jaw_field(R, shift=(0, 0, 0)):
+        moved = (base - pivot) @ R.T + pivot + np.array(shift)
+        return (moved - base) * wjaw[:, None]
+    jaw_shapes = {"jawOpen": jaw_field(rot("x", 22.0)), "jawLeft": jaw_field(rot("y", 9.0)), "jawRight": jaw_field(rot("y", -9.0)),
+                  "jawForward": jaw_field(np.eye(3), (0, 0, 1.2))}
+    out = np.zeros((len(names), V, 3), np.float32)
+    ridge = 0.03 * np.linalg.norm(Eh, axis=0).mean()   # relative to the basis scale
+    A = np.vstack([Eh, ridge * np.eye(72)])
+    for k, nm in enumerate(names):
+        t = (D[k][I] * sc).reshape(-1)
+        r = lsq_linear(A, np.concatenate([t, np.zeros(72)]), bounds=(-3, 3), lsmr_tol="auto", max_iter=300)
+        field = np.tensordot(r.x, E, axes=(0, 0))                      # (V, 3)
+        if nm.startswith(("eyeBlink", "eyeSquint", "eyeWide", "browDown")) or nm.startswith("eyeLook") is False and False:
+            pass
+        if nm.startswith(("eyeBlink", "eyeSquint", "eyeWide")):
+            side = 0 if nm.endswith("Left") else 1
+            # the ICT "left" eye is at +x in ICT; pick the centre by sign of x to be safe
+            cs = sorted(eyeC, key=lambda c: -c[0])
+            c = cs[0] if nm.endswith("Left") else cs[1]
+            d = np.linalg.norm(base[head] - c, axis=1)
+            m = np.clip(1 - (d / 3.2) ** 2, 0, 1) * ok
+            direct = np.zeros((V, 3)); direct[H] = D[k][I] * sc
+            mm = np.zeros(V); mm[head] = m
+            field = field * (1 - mm[:, None]) + direct * mm[:, None]
+        if nm in jaw_shapes: field = jaw_shapes[nm]
+        out[k] = field.astype(np.float32)
+        if nm not in jaw_shapes:
+            print(f"  {nm:22s} target max {np.abs(t).max():.2f} cm, fitted max {np.abs(field[H]).max():.2f} cm")
+    return out, names
+
 PARTS = [  # README of ICT-FaceKit: name, vertex range, polygon range (inclusive)
     ("face", 0, 9408, 0, 9229), ("head_neck", 9409, 11247, 9230, 11143), ("mouth_socket", 11248, 13293, 11144, 13225),
     ("eye_socket_l", 13294, 13677, 13226, 13629), ("eye_socket_r", 13678, 14061, 13630, 14033),
@@ -122,7 +209,11 @@ if __name__ == "__main__":
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
     mhr = build_mhr(a.mhr_model)
     names = json.load(open(a.mhr_joint_names)) if a.mhr_joint_names else []
-    mhr["meta"] = meta_blob({"joint_names": names})
+    import torch
+    sd_all = {k: v.detach().numpy() for k, v in torch.jit.load(a.mhr_model, map_location="cpu").state_dict().items()}
+    arkit, arkit_names = build_arkit_on_mhr(sd_all, names, a.ict_npz)
+    mhr["arkit_delta"] = arkit.astype(np.float16)
+    mhr["meta"] = meta_blob({"joint_names": names, "arkit_names": arkit_names})
     write_bundle(os.path.join(a.out, "mhr_character.qmcb"), mhr)
     write_bundle(os.path.join(a.out, "ict_character.qmcb"), build_ict(a.ict_dir, a.ict_npz))
     import shutil
