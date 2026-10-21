@@ -764,7 +764,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     // Soften the crease below the joint: relax the body rows just under the hole (the hole's own edge stays put, the strip is
     // stitched to it) so the body's slope eases into the head's flare instead of meeting it at an angle.
-    if (!cutPoly.empty() && !p.bodyOnly) {
+    if (!cutPoly.empty()) {
         std::vector<std::vector<int>> adj(static_cast<size_t>(V));
         std::vector<char> nearHole(static_cast<size_t>(V), 0);
         for (size_t f = 0; f + 2 < a.mhrFaces.size(); f += 3) {
@@ -802,7 +802,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     // ---- stitch the seam: a triangle strip between the body's neck hole and the head's neck rim ---------------------------
     // The strip belongs to the body mesh; it ends on COPIES of the head's rim vertices (same positions), so the two meshes meet
     // exactly and nothing is left to see through. The copies take the weights of the nearest body vertex on the hole's edge.
-    if (haveRing && !p.bodyOnly) {
+    if (haveRing) {
         std::unordered_map<EdgeKey, std::array<int, 2>> edgeUse;   // [kept faces, removed faces]
         for (size_t f = 0; f + 2 < a.mhrFaces.size(); f += 3) {
             int removed = 0;
@@ -965,7 +965,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         if (y < neckCutY + 0.03f && y > neckCutY - 0.08f) seamBody.push_back(v);
     }
 
-    if (p.nativeHead && !p.bodyOnly) {
+    if (p.nativeHead) {
         // Seat each ICT eyeball in the MHR face: the identity shapes move the lids forwards or back by up to a centimetre, so
         // the eyeball is pushed along z until its front sits just ahead of the (opened) lid margin of THIS face.
         for (const char* side : {"l", "r"}) {
@@ -1043,7 +1043,6 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         }
     }
     for (const Group& g : groups) {
-        if (p.bodyOnly) break;
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
         if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_lashes") == 0)) continue;

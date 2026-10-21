@@ -7,7 +7,6 @@
 #include "../SelectionSet.h"
 #include "../SentryReporter.h"
 #include "../UndoManager.h"
-#include "../commands/AddFittedDnaCharacterCommand.h"
 
 #include <QFileInfo>
 #include <QSettings>
@@ -216,13 +215,6 @@ QString CharacterController::shapeHint(int m) const
     return tr("A subtle change of the arms.");
 }
 
-void CharacterController::setDnaPath(const QString& p)
-{
-    if (p == m_dnaPath) return;
-    m_dnaPath = p;
-    emit dnaPathChanged();
-}
-
 void CharacterController::setStatus(const QString& s, bool busy)
 {
     m_status = s;
@@ -270,25 +262,6 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     }
     if (!skin.isEmpty() && !parseColour(skin, ColourKind::Skin, &p.skin)) { err = tr("Unknown skin colour '%1'").arg(skin); setStatus(err, false); return err; }
     if (!eye.isEmpty() && !parseColour(eye, ColourKind::Eye, &p.eye)) { err = tr("Unknown eye colour '%1'").arg(eye); setStatus(err, false); return err; }
-
-    if (!m_dnaPath.isEmpty()) {
-        if (!QFileInfo::exists(m_dnaPath)) { err = tr("DNA file not found: %1").arg(m_dnaPath); setStatus(err, false); return err; }
-        setStatus(tr("Fitting the MetaHuman DNA to the generated body (this takes a few seconds)…"), true);
-        DnaFit fit;
-        if (!fitDnaToGeneratedBody(*m_assets, p, m_dnaPath, QString(), &fit, &err)) {
-            setStatus(tr("DNA fit failed: %1").arg(err), false);
-            return err;
-        }
-        auto* cmd = new AddFittedDnaCharacterCommand(fit.rig, m_dnaPath, QFileInfo(m_dnaPath).completeBaseName() + QStringLiteral("_generated"), fit.poseSpace);
-        const auto outcome = cmd->outcome();
-        UndoManager::getSingleton()->push(cmd);
-        if (!outcome->created) {
-            setStatus(outcome->error, false);
-            return outcome->error;
-        }
-        setStatus(tr("MetaHuman character created (Ctrl+Z removes it)."), false);
-        return {};
-    }
 
     setStatus(tr("Building character…"), true);
     auto out = std::make_shared<AddCharacterCommand::Outcome>();

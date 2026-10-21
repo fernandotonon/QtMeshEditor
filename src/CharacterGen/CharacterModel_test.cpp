@@ -294,15 +294,3 @@ TEST(CharacterParsing, ColoursAcceptNamesAndHex)
     EXPECT_FALSE(CharacterGen::parseColour(QStringLiteral("zzz"), CharacterGen::ColourKind::Eye, &c));
     EXPECT_TRUE(CharacterGen::colourNames(CharacterGen::ColourKind::Eye).contains(QStringLiteral("hazel")));
 }
-
-TEST(CharacterModel, BodyOnlyBuildsNoHeadParts)
-{
-    const Assets a = syntheticAssets();
-    Params p;
-    p.bodyOnly = true;
-    QString err;
-    const Dna::Rig rig = buildRig(a, p, nullptr, &err);
-    ASSERT_FALSE(rig.meshes.empty()) << err.toStdString();
-    EXPECT_EQ(rig.meshes.size(), 1u);
-    EXPECT_EQ(rig.meshes.front().name, "body");
-}

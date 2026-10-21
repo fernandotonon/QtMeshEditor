@@ -27,9 +27,7 @@ class CharacterController : public QObject
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
-    /// A MetaHuman BODY .dna the user owns (never shipped): the generated body shape is used as a target and the DNA body is fitted to it.
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
-    Q_PROPERTY(QString dnaPath READ dnaPath WRITE setDnaPath NOTIFY dnaPathChanged)
 
 public:
     static CharacterController* instance();
@@ -41,11 +39,8 @@ public:
     QString status() const { return m_status; }
     bool openEyes() const { return m_openEyes; }
     void setOpenEyes(bool v) { if (v != m_openEyes) { m_openEyes = v; emit openEyesChanged(); } }
-    QString dnaPath() const { return m_dnaPath; }
-    void setDnaPath(const QString& p);
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
     Q_INVOKABLE QVariantList seedBody(int seed, double variety) const;   // all 45 coefficients
-    Q_INVOKABLE void browseDna() { emit browseDnaRequested(); }
     QStringList skinNames() const;
     QStringList eyeNames() const;
 
@@ -61,9 +56,7 @@ public:
 
 signals:
     void statusChanged();
-    void dnaPathChanged();
     void openEyesChanged();
-    void browseDnaRequested();   ///< MainWindow runs the QFileDialog
 
 private:
     CharacterController() = default;
@@ -71,7 +64,6 @@ private:
 
     bool m_busy = false;
     QString m_status;
-    QString m_dnaPath;
     QString m_currentNode;
     CharacterGen::Params m_currentParams;
     bool m_haveParams = false;

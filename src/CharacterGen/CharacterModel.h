@@ -89,8 +89,6 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// > 0: keep only the part of the body this many metres below the neck cut and above (head + shoulders; previews/thumbnails).
     float bustDepth = 0.0f;
-    /// Body only (no head parts, no neck seam): the shape target a MetaHuman body DNA is fitted to.
-    bool bodyOnly = false;
     /// Keep the MHR body's own head (no neck cut, no ICT head): the expression shapes are MHR's native ones fitted to the ARKit set.
     bool nativeHead = false;
     /// Cut an almond opening through the MHR lids and part them so the eyeballs show. Off: the MHR lids stay as sculpted (eyes shut).

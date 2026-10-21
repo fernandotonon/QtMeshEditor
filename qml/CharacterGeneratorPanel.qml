@@ -26,7 +26,7 @@ Column {
                                      pick(skinBox, CharacterController.skinNames), pick(eyeBox, CharacterController.eyeNames), replace)
     }
     // live preview: swap the character this panel made (merged into one undo step) once a slider is released
-    function liveUpdate() { if (live && CharacterController.dnaPath === "" && CharacterController.hasCharacter()) generate(true) }
+    function liveUpdate() { if (live && CharacterController.hasCharacter()) generate(true) }
     Component.onCompleted: reseed()
 
     component Label: Text {
@@ -139,13 +139,6 @@ Column {
         ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); sec.liveUpdate() } }
         ToolBtn { label: "From seed"; onClicked: sec.reseed() }
     }
-    Row {
-        spacing: 4
-        Label { width: 52; height: 22; text: "DNA" }
-        Field { id: dnaField; width: sec.width - 60 - 66; text: CharacterController.dnaPath; placeholderText: "optional MetaHuman body .dna"; onEditingFinished: CharacterController.dnaPath = text }
-        ToolBtn { label: "Browse…"; onClicked: CharacterController.browseDna() }
-    }
-    Note { text: "With a MetaHuman body DNA you own (not shipped with the editor), the generated shape is fitted onto it: you get its rig, skin and correctives." }
     InspectorCheckBox { text: "Open eyes"; checked: CharacterController.openEyes; onToggled: { CharacterController.openEyes = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Live preview (edits the character in place)"; checked: sec.live; onToggled: sec.live = checked }
     InspectorCheckBox { id: averageBox; text: "Average character (ignore seed)"; onToggled: sec.reseed() }

@@ -3768,25 +3768,6 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
         return makeErrorResult(QStringLiteral("unknown eye colour '%1' (names: %2)").arg(eye, colourNames(ColourKind::Eye).join(' ')));
     if (args.value("bust").toBool(false)) p.bustDepth = 0.30f;
 
-    const QString dnaPath = args.value("dna_path").toString();
-    if (!dnaPath.isEmpty()) {
-        if (!QFileInfo::exists(dnaPath)) return makeErrorResult(QStringLiteral("DNA file not found: %1").arg(dnaPath));
-        DnaFit fit;
-        if (!fitDnaToGeneratedBody(data, p, dnaPath, args.value("dna_mode").toString(), &fit, &err))
-            return makeErrorResult(QStringLiteral("Fitting the DNA failed: %1").arg(err));
-        Ogre::SceneNode* dn = addFittedCharacter(fit, dnaPath, args.value("name").toString(QStringLiteral("character")), &err);
-        if (!dn) return makeErrorResult(err);
-        QJsonObject r = makeSuccessResult(QStringLiteral("Created a character from the MetaHuman DNA '%1'.").arg(QFileInfo(dnaPath).fileName()));
-        r["node"] = QString::fromStdString(dn->getName());
-        r["fit"] = QJsonObject::fromVariantMap(fit.report);
-        const QString outP = args.value("output_path").toString();
-        if (!outP.isEmpty()) {
-            if (MeshImporterExporter::exporter(dn, QFileInfo(outP).absoluteFilePath(), CLIPipeline::formatForExtension(outP)) != 0)
-                return makeErrorResult(QStringLiteral("Character created but export to %1 failed.").arg(outP));
-            r["outputPath"] = outP;
-        }
-        return r;
-    }
     SceneBuild sb;
     const QString name = args.value("name").toString(QStringLiteral("character"));
     Ogre::SceneNode* node = createCharacterInScene(data, p, name, &sb, &err);
@@ -13660,8 +13641,6 @@ QJsonArray MCPServer::buildToolsList()
         props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};
         props["facing_z"] = QJsonObject{{"type", "boolean"}, {"description", "Keep +Z facing instead of the editor's -Z."}};
         props["name"] = QJsonObject{{"type", "string"}, {"description", "Scene node base name (default character)."}};
-        props["dna_path"] = QJsonObject{{"type", "string"}, {"description", "Optional: a MetaHuman BODY .dna file the user owns. The generated body shape is used as a target and the DNA body is fitted to it (skeleton, skin weights and correctives of the DNA, our proportions). Not distributed with the editor."}};
-        props["dna_mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"joints+surface", "surface", "joints"}}, {"description", "Fit mode for dna_path (default joints+surface)."}};
         props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional: also export the character (glb/fbx/...)."}};
         appendTool(
             "generate_character",

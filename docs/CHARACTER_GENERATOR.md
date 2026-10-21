@@ -25,12 +25,5 @@ has no deformation) so glTF export keeps the target names.
 * Undriven MHR twist/helper joints fold into the nearest kept ancestor; bones are world-aligned (identity orientations) — without that, limbs collapse under animation.
 * Assets: `QTMESH_CHARACTER_DIR` or `<AppData>/ai_models/character` (`mhr_character.qmcb`, `ict_character.qmcb`, licence texts), downloaded on first use with pinned SHA-256s. Build them with `scripts/build-character-assets.py`; host with `scripts/upload-character-assets.sh`.
 
-## Your own MetaHuman DNA (optional)
-MetaHuman DNA files cannot be redistributed, so none ships with the editor. If you have a MetaHuman **body** `.dna` (you are responsible
-for its licence), `qtmesh character --dna body.dna [--dna-mode joints+surface|surface|joints] -o out.glb`, MCP `generate_character {dna_path}` or the
-panel's DNA field fit that body onto the generated shape: you get the DNA's own skeleton, skin weights and body correctives with our
-proportions. The generated body (no head) is the target; the fit is the same one as `qtmesh dna fit` / the Fit DNA Body panel. A body DNA
-has no head: attach one separately (e.g. `qtmesh dna face` on a face DNA).
-
 ## Not yet
 Hair, photo-driven creation (SAM body shape + face colour sampling), clothing.
