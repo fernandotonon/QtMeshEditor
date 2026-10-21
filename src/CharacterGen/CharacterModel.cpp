@@ -372,10 +372,20 @@ bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error)
 std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int modes)
 {
     std::vector<float> c(size_t(std::max(0, count)), 0.0f);
-    std::mt19937 rng(seed);
-    std::normal_distribution<float> n(0.0f, 1.0f);
+    // A small deterministic generator (splitmix64 + Box-Muller): the same seed gives the same character on every platform, which
+    // std::normal_distribution does not promise. Not for security purposes: it only picks a random-looking body shape.
+    uint64_t state = uint64_t(seed) * 0x9E3779B97F4A7C15ull + 0x1234567ull;
+    auto next01 = [&state]() {
+        state += 0x9E3779B97F4A7C15ull;
+        uint64_t z = state;
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        z ^= z >> 31;
+        return (double(z >> 11) + 0.5) / 9007199254740992.0;   // (0,1)
+    };
     for (int i = 0; i < count; ++i) {
-        const float g = std::clamp(n(rng), -3.0f, 3.0f);
+        const double u1 = next01(), u2 = next01();
+        const float g = std::clamp(float(std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2)), -3.0f, 3.0f);
         if (i < modes) c[size_t(i)] = g * sigma;
     }
     return c;
@@ -942,10 +952,26 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         }
     }
     body.normals = positionNormals(body.positions, body.faces, body.layouts);
-    // both sides of the stitching strip render (normals were taken from the outward side above)
-    for (size_t fi : seamFaces) {
-        std::vector<uint32_t> rev(body.faces[fi].rbegin(), body.faces[fi].rend());
-        body.faces.push_back(std::move(rev));
+    // both sides of the stitching strip render: the back faces get their own layouts with the normals negated, so they shade
+    // like a surface facing the other way instead of going dark
+    {
+        std::unordered_map<uint32_t, uint32_t> flipped;   // original layout -> flipped layout
+        for (size_t fi : seamFaces) {
+            std::vector<uint32_t> rev(body.faces[fi].rbegin(), body.faces[fi].rend());
+            for (uint32_t& li : rev) {
+                auto it = flipped.find(li);
+                if (it == flipped.end()) {
+                    Dna::Mesh::Layout l = body.layouts[li];
+                    const uint32_t ni = uint32_t(body.normals.size() / 3);
+                    for (int k = 0; k < 3; ++k) body.normals.push_back(-body.normals[size_t(l.normal) * 3 + size_t(k)]);
+                    l.normal = ni;
+                    body.layouts.push_back(l);
+                    it = flipped.emplace(li, uint32_t(body.layouts.size() - 1)).first;
+                }
+                li = it->second;
+            }
+            body.faces.push_back(std::move(rev));
+        }
     }
     rep.bodyVertices = int(body.positions.size() / 3);
     rep.bodyTriangles = int(body.faces.size());

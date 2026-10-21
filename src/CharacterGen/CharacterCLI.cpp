@@ -17,6 +17,7 @@
 
 #include <OgreSceneNode.h>
 
+#include <cmath>
 #include <cstdlib>
 
 namespace CharacterGen {
@@ -51,11 +52,38 @@ int run(int argc, char* argv[])
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
-        auto next = [&]() { return i + 1 < argc ? QString::fromLocal8Bit(argv[++i]) : QString(); };
+        bool missing = false;
+        // the value of an option; a missing value (end of the arguments, or the next option) is an error, not an empty string
+        auto next = [&]() {
+            if (i + 1 >= argc || QString::fromLocal8Bit(argv[i + 1]).startsWith(QLatin1String("-")) ) {
+                const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
+                bool isNumber = false;
+                v.toDouble(&isNumber);   // a negative number is a value, not an option
+                if (!isNumber) { missing = true; return QString(); }
+            }
+            return QString::fromLocal8Bit(argv[++i]);
+        };
+        auto number = [&](bool* ok) {
+            const QString v = next();
+            double d = v.toDouble(ok);
+            if (missing) *ok = false;
+            return d;
+        };
         if (a == "--cli" || a == "--verbose" || a == "--no-telemetry" || a == "character") continue;
         if (a == "-o" || a == "--output") outPath = next();
-        else if (a == "--seed") { seed = next().toUInt(); haveSeed = true; }
-        else if (a == "--variety") variety = next().toFloat();
+        else if (a == "--seed") {
+            bool ok = false;
+            const double d = number(&ok);
+            if (!ok || d < 0 || d > 4294967295.0 || d != std::floor(d)) { CLIPipeline::writeCliError(QStringLiteral("Error: --seed expects an integer between 0 and 4294967295.\n")); return 2; }
+            seed = uint32_t(d);
+            haveSeed = true;
+        }
+        else if (a == "--variety") {
+            bool ok = false;
+            const double d = number(&ok);
+            if (!ok) { CLIPipeline::writeCliError(QStringLiteral("Error: --variety expects a number.\n")); return 2; }
+            variety = float(d);
+        }
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -71,11 +99,18 @@ int run(int argc, char* argv[])
         else if (a == "--no-fold") noFold = true;
         else if (a == "--keep-bone-axes") keepAxes = true;
         else if (a == "--keep-names") keepNames = true;
-        else if (a == "--bust-depth") { bustDepth = next().toFloat(); bust = true; }
+        else if (a == "--bust-depth") {
+            bool ok = false;
+            const double d = number(&ok);
+            if (!ok || d <= 0) { CLIPipeline::writeCliError(QStringLiteral("Error: --bust-depth expects a positive number of metres.\n")); return 2; }
+            bustDepth = float(d);
+            bust = true;
+        }
         else if (a == "--json") json = true;
         else if (a == "--download") download = true;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { CLIPipeline::writeCliError(QStringLiteral("Error: unknown option '%1'\n").arg(a)); usage(); return 2; }
+        if (missing) { CLIPipeline::writeCliError(QStringLiteral("Error: option '%1' needs a value.\n").arg(a)); return 2; }
     }
     if (download) {
         QString dlErr;
@@ -93,10 +128,12 @@ int run(int argc, char* argv[])
     }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("character cli"));
 
-    if (assets == CharacterAssets::dir() && !CharacterAssets::present()) {
+    if (assets == CharacterAssets::dir()) {   // fetch when missing, and verify the pinned digests of the default bundle every time
         QString dlErr;
-        if (!CharacterAssets::ensureBlocking(&dlErr))
-            CLIPipeline::writeCliError(QStringLiteral("Note: the character assets are not installed and could not be fetched (%1).\n").arg(dlErr));
+        if (!CharacterAssets::ensureBlocking(&dlErr)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: the character assets are not available (%1).\n").arg(dlErr));
+            return 1;
+        }
     }
     Assets data;
     QString err;

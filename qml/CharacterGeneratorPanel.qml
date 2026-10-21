@@ -19,9 +19,11 @@ Column {
     property var coeffs: new Array(45).fill(0)
     property bool live: true
     function reseed() { coeffs = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0); liveUpdate() }
-    function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) if (coeffs[i] !== 0) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
+    // every coefficient is sent, zeros included: the sliders are authoritative (a zero must not fall back to the seed's random value)
+    function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
     function pick(box, names) { return box.currentIndex > 0 ? names[box.currentIndex - 1] : "" }
     function generate(replace) {
+        seed = parseInt(seedField.text) || 0   // take the seed as typed even if the field has not lost focus yet
         CharacterController.generate(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, bodyString(), "",
                                      pick(skinBox, CharacterController.skinNames), pick(eyeBox, CharacterController.eyeNames), replace)
     }

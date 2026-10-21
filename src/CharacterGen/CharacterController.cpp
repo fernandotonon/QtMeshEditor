@@ -175,6 +175,7 @@ QStringList CharacterController::eyeNames() const { return CharacterGen::colourN
 
 QVariantList CharacterController::seedBody(int seed, double variety) const
 {
+    variety = std::min(5.0, std::max(0.0, variety));
     QVariantList out;
     std::vector<float> v(45, 0.0f);
     if (seed >= 0) v = CharacterGen::randomCoefficients(uint32_t(seed) * 2u + 1u, 45, float(variety), 16);
@@ -227,13 +228,14 @@ QString CharacterController::generate(int seed, double variety, const QString& b
                                       const QString& eye, bool replace)
 {
     using namespace CharacterGen;
+    variety = std::min(5.0, std::max(0.0, variety));
     if (m_busy) return QStringLiteral("busy");
     if (!Manager::getSingletonPtr()) return QStringLiteral("No active scene.");
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
     QString err;
 
-    if (!CharacterAssets::present()) {
-        setStatus(tr("Downloading character assets…"), true);
+    {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is
+        if (!CharacterAssets::present()) setStatus(tr("Downloading character assets…"), true);
         if (!CharacterAssets::ensureBlocking(&err)) {
             setStatus(tr("Character assets unavailable: %1").arg(err), false);
             return err;

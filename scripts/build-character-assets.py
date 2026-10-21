@@ -17,8 +17,8 @@ CONTAINER ("QMCB1")  little-endian
 A "meta" u8 blob carries JSON (parts, joint names, expression names).
 
 USAGE
-  python scripts/build-character-assets.py --mhr-model mhr_model.pt --ict-dir .character_work/ict \\
-      --ict-npz .character_work/ict.npz --out .character_work/out
+  python scripts/build-character-assets.py --mhr-model mhr_model.pt --mhr-joint-names mhr_joint_names.json \\
+      --ict-dir .character_work/ict --ict-npz .character_work/ict.npz --out .character_work/out
 """
 import argparse, json, os, struct
 import numpy as np
@@ -277,12 +277,14 @@ def build_ict(ict_dir, npz):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mhr-model", required=True); ap.add_argument("--mhr-joint-names")
+    ap.add_argument("--mhr-model", required=True)
+    ap.add_argument("--mhr-joint-names", required=True, help="JSON list of the 127 MHR joint names, in skeleton order (the loader rejects a bundle without them)")
     ap.add_argument("--ict-dir", required=True); ap.add_argument("--ict-npz", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--mhr-license", help="MHR LICENSE text (Apache-2.0); copied to LICENSE-MHR.txt")
     ap.add_argument("--ict-license", help="ICT-FaceKit LICENSE text (MIT); copied to LICENSE-ICT-FaceKit.txt")
     a = ap.parse_args(); os.makedirs(a.out, exist_ok=True)
-    names = json.load(open(a.mhr_joint_names)) if a.mhr_joint_names else []
+    names = json.load(open(a.mhr_joint_names))
+    if len(names) != 127: raise SystemExit(f"--mhr-joint-names has {len(names)} names, the MHR skeleton has 127")
     mhr = build_mhr(a.mhr_model, names)
     import torch
     sd_all = {k: v.detach().numpy() for k, v in torch.jit.load(a.mhr_model, map_location="cpu").state_dict().items()}
