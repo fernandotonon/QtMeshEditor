@@ -62,7 +62,7 @@ private:
     bool m_busy = false;
     QString m_status;
     QString m_dnaPath;
-    bool m_openEyes = false;
+    bool m_openEyes = true;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };

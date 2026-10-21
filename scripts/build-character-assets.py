@@ -86,6 +86,8 @@ def build_mhr(model_pt, joint_names=None):
             if j == jaw: wj[v] = w
         keep = clean_faces(base.astype(np.float64), faces, wj)
         print(f"cleaned {int((~keep).sum())} triangles (lip seam sheet + slivers)")
+        global KEEP_MASK
+        KEEP_MASK = keep
         faces, tf = faces[keep], tf[keep]
     return {"base": base, "shape_vectors": vecs, "faces": faces, "texcoords": tc, "texcoord_faces": tf, "parents": parents,
             "joint_offsets": offs, "joint_prerot": prerot, "skin_count": counts, "skin_joint": sj, "skin_weight": sw}
@@ -220,9 +222,9 @@ def build_arkit_on_mhr(sd, joint_names, ict_npz, ict_dir_neutral=None):
     return out, names, eye_open, sheet, core, [c + np.array([0.0, EYE_GROOVE_DY, 0.0]) for c in cs]
 
 ALMOND_A, ALMOND_B, ALMOND_B_LOW, ALMOND_SHIFT = 1.28, 0.66, 0.30, 0.22   # cm half axes of the eye opening
-UPPER_LID, LOWER_LID = 0.40, 0.06   # cm the lids part by (the upper lid folds up into the crease)
+UPPER_LID, LOWER_LID = 0.30, 0.05   # cm the lids part by (the upper lid folds up into the crease)
 CORE_DROP = 2.0   # (disabled: the lids keep their sculpted skin; only the sealing sheet between them is cut)
-EYE_GROOVE_DY = -0.65   # cm
+EYE_GROOVE_DY = -0.45   # cm
 PARTS = [  # README of ICT-FaceKit: name, vertex range, polygon range (inclusive)
     ("face", 0, 9408, 0, 9229), ("head_neck", 9409, 11247, 9230, 11143), ("mouth_socket", 11248, 13293, 11144, 13225),
     ("eye_socket_l", 13294, 13677, 13226, 13629), ("eye_socket_r", 13678, 14061, 13630, 14033),
@@ -286,13 +288,19 @@ if __name__ == "__main__":
     area = 0.5 * np.linalg.norm(np.cross(Bm[F[:, 1]] - Bm[F[:, 0]], Bm[F[:, 2]] - Bm[F[:, 0]]), axis=1)
     ys = eye_open[:, 1]
     spans = (ys[F].max(1) > 0.05) & (ys[F].min(1) < -0.05)
+    # the thin layer between the lids: the exact triangles a user removed by hand from a generated mesh (scripts/mhr_eye_layer_faces.json,
+    # indices into MHR's ORIGINAL face list), made left/right symmetric. Nothing else of the lid skin is cut.
+    layer = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mhr_eye_layer_faces.json")))["faces"]
+    orig_to_now = {int(o): i for i, o in enumerate(np.where(KEEP_MASK)[0])}
+    drop = np.zeros(len(F), bool)
+    for o in layer:
+        if o in orig_to_now: drop[orig_to_now[o]] = True
     cen = Bm[F].mean(1)
-    almond = np.zeros(len(F), bool)
-    for c in eye_c:   # an almond-shaped opening through the lid skin; the skin around it stays as the lids
-        dyc = cen[:, 1] - (c[1] + ALMOND_SHIFT)
-        r2 = ((cen[:, 0] - c[0]) / ALMOND_A) ** 2 + (dyc / np.where(dyc > 0, ALMOND_B, ALMOND_B_LOW)) ** 2   # a lower lid that stays close
-        almond |= r2 < 1.0
-    drop = (spans & (area < 0.05) & sheet[F].all(1)) | almond   # + everything inside the eye opening (the lid's inner sheet)
+    from scipy.spatial import cKDTree
+    tree = cKDTree(cen)
+    for i in np.where(drop)[0]:
+        d, j2 = tree.query(cen[i] * np.array([-1.0, 1.0, 1.0]))
+        if d < 0.05: drop[j2] = True
     print(f"opened the eye slits: dropped {int(drop.sum())} sealing triangles")
     mhr["eye_drop"] = drop.astype(np.uint8)   # applied at build time only when the eyes are opened (the lids stay intact otherwise)
     mhr["eye_open"] = eye_open.astype(np.float16)

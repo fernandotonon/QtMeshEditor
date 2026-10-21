@@ -86,7 +86,7 @@ Column {
         ToolBtn { label: "Browse…"; onClicked: CharacterController.browseDna() }
     }
     Note { text: "With a MetaHuman body DNA you own (not shipped with the editor), the generated shape is fitted onto it: you get its rig, skin and correctives." }
-    CheckBox { text: "Open eyes (experimental: cuts the lids)"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor; checked: CharacterController.openEyes; onToggled: CharacterController.openEyes = checked }
+    CheckBox { text: "Open eyes"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor; checked: CharacterController.openEyes; onToggled: CharacterController.openEyes = checked }
     CheckBox { id: averageBox; text: "Average character (ignore seed)"; font.pixelSize: 11; palette.windowText: AnimationControlController.textColor }
 
     ToolBtn {

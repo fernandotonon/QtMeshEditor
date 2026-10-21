@@ -971,7 +971,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int v = iris->v0; v <= iris->v1; ++v) { cx += headPos[size_t(v) * 3]; cy += headPos[size_t(v) * 3 + 1]; ++n; }
             if (n == 0) continue;
             cx /= float(n); cy /= float(n);
-            const float dyLift = 0.0075f;   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
+            const float dyLift = 0.0072f;   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
             for (const IctPart* q : {scl, iris})
                 for (int v = q->v0; v <= q->v1; ++v) headPos[size_t(v) * 3 + 1] += dyLift;
             cy += dyLift;
