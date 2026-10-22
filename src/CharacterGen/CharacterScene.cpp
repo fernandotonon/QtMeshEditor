@@ -5,6 +5,9 @@
 #include "../SentryReporter.h"
 
 #include <QDir>
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include <QFile>
 #include <QFileInfo>
 #include <OgreEntity.h>
@@ -52,16 +55,21 @@ const char* surfaceName(Surface s)
 // The iris texture whose colour is closest to the requested eye colour (blue / brown / grey / green / hazel / dark).
 QByteArray irisTextureFor(const Rgb& c)
 {
-    static const struct { const char* file; Rgb ref; } tiles[] = {
+    struct IrisTile {
+        const char* file;
+        Rgb ref;
+    };
+    static const std::array<IrisTile, 6> tiles = {{
         {"iris_blue.png", {0.35f, 0.50f, 0.65f}},  {"iris_brown.png", {0.45f, 0.25f, 0.10f}}, {"iris_grey.png", {0.55f, 0.58f, 0.60f}},
-        {"iris_green.png", {0.30f, 0.50f, 0.20f}}, {"iris_hazel.png", {0.50f, 0.40f, 0.15f}}, {"iris_dark.png", {0.20f, 0.10f, 0.07f}}};
-    float best = 1e9f;
-    const char* pick = tiles[0].file;
-    for (const auto& t : tiles) {
-        const float d = (c[0] - t.ref[0]) * (c[0] - t.ref[0]) + (c[1] - t.ref[1]) * (c[1] - t.ref[1]) + (c[2] - t.ref[2]) * (c[2] - t.ref[2]);
-        if (d < best) { best = d; pick = t.file; }
-    }
-    return QByteArray(pick);
+        {"iris_green.png", {0.30f, 0.50f, 0.20f}}, {"iris_hazel.png", {0.50f, 0.40f, 0.15f}}, {"iris_dark.png", {0.20f, 0.10f, 0.07f}}}};
+    auto distance = [&c](const IrisTile& t) {
+        const float dr = c[0] - t.ref[0];
+        const float dg = c[1] - t.ref[1];
+        const float db = c[2] - t.ref[2];
+        return dr * dr + dg * dg + db * db;
+    };
+    const auto best = std::min_element(tiles.begin(), tiles.end(), [&](const IrisTile& x, const IrisTile& y) { return distance(x) < distance(y); });
+    return QByteArray(best->file);
 }
 
 // Ogre's texture manager is global by name, so the resource is named after the directory it came from: another asset that
@@ -80,9 +88,24 @@ void loadEyeTexture(const QString& dir, const char* file)
     if (!f.open(QIODevice::ReadOnly)) return;
     const QByteArray bytes = f.readAll();
     Ogre::Image image;
-    Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(const_cast<char*>(bytes.constData()), size_t(bytes.size()), false, true));
+    auto* stream = new Ogre::MemoryDataStream(size_t(bytes.size()));   // owns a copy of the file
+    std::memcpy(stream->getPtr(), bytes.constData(), size_t(bytes.size()));
+    Ogre::DataStreamPtr ds(stream);
     image.load(ds, "png");
     Ogre::TextureManager::getSingleton().loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
+}
+// Textures of the opt-in textured eye: the iris matching the eye colour, from the directory QTMESH_CHARACTER_EYE_TEX names.
+void bindEyeTextures(Ogre::Pass* pass, const Rgb& eyeColour)
+{
+    const QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
+    if (dir.isEmpty() || pass->getNumTextureUnitStates() != 0) return;
+    const QByteArray irisFile = irisTextureFor(eyeColour);
+    loadEyeTexture(dir, irisFile.constData());
+    pass->setDiffuse(Ogre::ColourValue::White);
+    pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
+    const std::string name = eyeTextureName(dir, irisFile.constData());
+    pass->createTextureUnitState(name)->setName("diffuse_map");
+    pass->createTextureUnitState(name)->setName("albedo");
 }
 }  // namespace
 
@@ -109,20 +132,7 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         if (surface == Surface::Eye) {   // wet cornea
             pass->setSpecular(Ogre::ColourValue(0.7f, 0.7f, 0.7f));
             pass->setShininess(96.0f);
-        }
-        if (surface == Surface::Eye) {
-            // prototype: textures from QTMESH_CHARACTER_EYE_TEX (basecolor / normal / roughness PNGs)
-            const QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
-            if (!dir.isEmpty() && pass->getNumTextureUnitStates() == 0) {
-                const QByteArray irisFile = irisTextureFor(params.eye);
-                loadEyeTexture(dir, irisFile.constData());
-                pass->setDiffuse(Ogre::ColourValue::White);
-                pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
-                Ogre::TextureUnitState* t = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
-                t->setName("diffuse_map");
-                Ogre::TextureUnitState* t2 = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
-                t2->setName("albedo");
-            }
+            bindEyeTextures(pass, params.eye);
             RTShaderHelper::syncMaterialForViewport(mat);
         }
         mat->compile();
