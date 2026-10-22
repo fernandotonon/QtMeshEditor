@@ -630,8 +630,8 @@ NippleFrame nippleFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ
     NippleFrame nipples;
     const size_t count = a.mhrBase.size() / 3;
     if (count == 0 || body.positions.size() < count * 3) return nipples;
-    constexpr float kHalfSpacing = 10.0f;   // cm, on the mean body
-    constexpr float kHeightRatio = 0.73f;
+    constexpr float kHalfSpacing = 11.6f;   // cm, on the mean body
+    constexpr float kHeightRatio = 0.742f;
     float top = 0.0f;
     for (size_t v = 0; v < count; ++v) top = std::max(top, a.mhrBase[v * 3 + 1]);
     const float turn = facePlusZ ? 1.0f : -1.0f;
