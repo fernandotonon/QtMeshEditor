@@ -596,6 +596,30 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
     return m;
 }
 
+// The lips of the built body: the lip-seam landmarks give the centre and the width of the mouth (the seam covers the middle ~70 % of
+// it). Expressed in the final coordinates, i.e. after the 180 degree turn about Y that faces the character towards -Z.
+LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    LipFrame lips;
+    if (a.landmarkLip.empty()) return lips;
+    std::array<double, 3> sum{};
+    float minX = 1e9f;
+    float maxX = -1e9f;
+    for (int32_t v : a.landmarkLip) {
+        if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return LipFrame();
+        for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+        minX = std::min(minX, body.positions[size_t(v) * 3]);
+        maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+    }
+    const double n = double(a.landmarkLip.size());
+    const float turn = facePlusZ ? 1.0f : -1.0f;   // x and z change sign under the turn
+    lips.centre = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+    lips.halfWidth = 0.5f * (maxX - minX) * 1.38f;
+    lips.forward = turn;
+    lips.valid = lips.halfWidth > 1e-4f;
+    return lips;
+}
+
 // MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
 // skeleton lean 13-25 degrees front/back and the clavicles point 30 degrees off the shoulder line. Retargeting aims every bone
 // at the source's direction, so a vertical source straightens those leans bone by bone: Spine2 turned by 30-40 degrees and
@@ -1424,6 +1448,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.morphTargets = a.ictExpressions;
     if (rig.meshes.size() < 2) rep.warnings << QStringLiteral("The head produced no geometry.");
 
+    rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }

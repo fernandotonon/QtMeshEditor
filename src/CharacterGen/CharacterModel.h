@@ -134,6 +134,15 @@ bool parseColour(const QString& text, ColourKind kind, Rgb* out);
 /// The named colours of a kind, for pickers.
 QStringList colourNames(ColourKind kind);
 
+/// Where the lips are on the built body (final coordinates, metres): the centre of the lip seam, the half width of the mouth and
+/// which way the face looks (+1 / -1 along z). Valid only for the native head (it comes from the lip landmarks).
+struct LipFrame {
+    bool valid = false;
+    std::array<float, 3> centre{};
+    float halfWidth = 0.0f;
+    float forward = 1.0f;
+};
+
 struct BuildReport {
     int bodyVertices = 0, bodyTriangles = 0;
     int headVertices = 0, headTriangles = 0;
@@ -142,6 +151,7 @@ struct BuildReport {
     int morphTargets = 0;
     float neckCutY = 0.0f;           ///< world y (m) of the neck cut
     float headScale = 1.0f;
+    LipFrame lips;
     QStringList meshNames;
     QStringList warnings;
 };

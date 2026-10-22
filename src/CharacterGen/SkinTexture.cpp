@@ -160,6 +160,35 @@ void dilate(QImage& image, std::vector<char>& covered, int passes)
 
 }  // namespace
 
+Rgb lipColourFor(const Rgb& skin)
+{
+    const float fair = std::clamp((luminance(skin) - 0.30f) / 0.45f, 0.0f, 1.0f);
+    const Rgb pink = {0.70f, 0.40f, 0.40f};
+    const Rgb warm = scaled(skin, 0.92f, 0.64f, 0.62f);
+    return mix(scaled(skin, 0.80f, 0.50f, 0.50f), mix(warm, pink, 0.4f * fair), 0.8f);
+}
+
+float lipMask(const std::array<float, 3>& p, const SkinLips& lips)
+{
+    if (!lips.valid) return 0.0f;
+    const float w = lips.halfWidth;
+    const float scale = w / 0.026f;                            // a 52 mm wide mouth is the reference
+    const float dx = p[0] - lips.centre[0];
+    const float s = std::fabs(dx) / w;
+    if (s >= 1.0f) return 0.0f;
+    const float dz = (p[2] - lips.centre[2]) * lips.forward;   // > 0 in front of the seam
+    if (dz < -0.030f * scale || dz > 0.020f * scale) return 0.0f;
+    const float line = lips.centre[1] - 0.0028f * scale * s * s;   // the corners of the mouth sit a little lower
+    const float dy = p[1] - line;
+    const float edge = 1.0f - s * s;
+    const float upper = 0.0085f * scale * std::pow(edge, 0.55f);
+    const float lower = 0.0112f * scale * std::pow(edge, 0.60f);
+    const float inside = dy >= 0.0f ? upper - dy : lower + dy;   // distance to the lip border, metres
+    const float side = (1.0f - s) * w * 0.6f;
+    const float feather = 0.0016f * scale;
+    return smooth(std::clamp(std::min(inside, side) / feather, 0.0f, 1.0f));
+}
+
 Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextureOptions& o)
 {
     // large-scale tone: patches a few centimetres across, brighter / darker
@@ -177,6 +206,16 @@ Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextu
     if (density > 0.0f) {
         const float f = freckleMask(p, 0.012f, density, o.seed + 31u) * (0.6f + 0.4f * blush);
         c = mix(c, scaled(skin, 0.74f, 0.62f, 0.52f), 0.55f * f);
+    }
+
+    // lips: warm colour with fine vertical creases and a darker line along the seam
+    const float lip = lipMask(p, o.lips);
+    if (lip > 0.0f) {
+        const float crease = valueNoise({p[0] * 1100.0f, p[1] * 90.0f, p[2] * 90.0f}, o.seed + 97u);
+        Rgb lc = scaled(lipColourFor(skin), 1.0f + 0.07f * crease, 1.0f + 0.07f * crease, 1.0f + 0.07f * crease);
+        const float seam = 1.0f - std::clamp(std::fabs(p[1] - o.lips.centre[1] + 0.0028f * (o.lips.halfWidth / 0.026f) * (p[0] - o.lips.centre[0]) * (p[0] - o.lips.centre[0]) / (o.lips.halfWidth * o.lips.halfWidth)) / 0.0006f, 0.0f, 1.0f);
+        lc = scaled(lc, 1.0f - 0.28f * seam, 1.0f - 0.28f * seam, 1.0f - 0.28f * seam);
+        c = mix(c, lc, 0.85f * lip);
     }
 
     // pores and fine grain

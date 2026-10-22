@@ -158,12 +158,13 @@ uint32_t skinSeedOf(const Params& p)
 }
 
 // Bake the body's skin texture to <AppData>/generated_textures/<unique>_skin.png. Empty when it is off or cannot be written.
-QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& unique)
+QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& unique, const LipFrame& lips)
 {
     if (!params.skinTexture || !params.nativeHead || rig.meshes.empty()) return QString();
     SkinTextureOptions options;
     options.size = params.skinTextureSize;
     options.seed = skinSeedOf(params);
+    options.lips = lips;
     const QImage image = bakeSkinAlbedo(rig.meshes.front(), params.skin, options);
     if (image.isNull()) return QString();
     const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
@@ -222,7 +223,7 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     if (rig.meshes.empty()) return nullptr;
     Ogre::SceneNode* node = Dna::importRigToScene(rig, baseName, &rep.import, error);
     if (!node) return nullptr;
-    const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()));
+    const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()), rep.build.lips);
     for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
         Ogre::MovableObject* mo = it.getNext();
         if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile);   // node names are unique: a reused material would keep the old tint

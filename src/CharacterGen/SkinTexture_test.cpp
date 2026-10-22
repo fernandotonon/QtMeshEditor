@@ -83,3 +83,35 @@ TEST(SkinTexture, PoresCanBeSwitchedOffAndAMeshWithoutUvsGivesNoImage)
     none.positions = {0, 0, 0};
     EXPECT_TRUE(bakeSkinAlbedo(none, skin).isNull());
 }
+
+TEST(SkinTexture, LipsAreAWarmBandAroundTheSeamAndNothingElse)
+{
+    SkinLips lips;
+    lips.valid = true;
+    lips.centre = {0.0f, 1.55f, -0.10f};
+    lips.halfWidth = 0.026f;
+    lips.forward = -1.0f;
+    const std::array<float, 3> onLip = {0.0f, 1.55f + 0.004f, -0.10f - 0.002f};      // just above the seam, in front
+    const std::array<float, 3> aboveLip = {0.0f, 1.55f + 0.03f, -0.10f - 0.002f};    // the philtrum / nose area
+    const std::array<float, 3> belowLip = {0.0f, 1.55f - 0.04f, -0.10f - 0.002f};    // chin
+    const std::array<float, 3> sideOfMouth = {0.05f, 1.55f, -0.10f};
+    const std::array<float, 3> behind = {0.0f, 1.55f + 0.004f, -0.10f + 0.06f};      // the back of the head
+    EXPECT_GT(lipMask(onLip, lips), 0.9f);
+    EXPECT_EQ(lipMask(aboveLip, lips), 0.0f);
+    EXPECT_EQ(lipMask(belowLip, lips), 0.0f);
+    EXPECT_EQ(lipMask(sideOfMouth, lips), 0.0f);
+    EXPECT_EQ(lipMask(behind, lips), 0.0f);
+    SkinLips none;
+    EXPECT_EQ(lipMask(onLip, none), 0.0f);
+    // both lips, symmetric left and right
+    EXPECT_GT(lipMask({0.0f, 1.55f - 0.006f, -0.102f}, lips), 0.9f);
+    EXPECT_FLOAT_EQ(lipMask({0.01f, 1.552f, -0.102f}, lips), lipMask({-0.01f, 1.552f, -0.102f}, lips));
+}
+
+TEST(SkinTexture, LipColourIsRedderThanTheSkinOnEveryTone)
+{
+    for (const Rgb skin : {Rgb{0.90f, 0.72f, 0.62f}, Rgb{0.80f, 0.60f, 0.48f}, Rgb{0.50f, 0.34f, 0.26f}, Rgb{0.30f, 0.20f, 0.15f}}) {
+        const Rgb lip = lipColourFor(skin);
+        EXPECT_GT(lip[0] / (lip[1] + 1e-3f), skin[0] / (skin[1] + 1e-3f)) << "red-to-green ratio";
+    }
+}
