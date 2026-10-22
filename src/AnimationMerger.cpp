@@ -5387,6 +5387,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                                          * twistGainAt(c);
                         if (std::abs(th) > 1e-5f) {
                             Ogre::Vector3 axis = ds;
+                            // Collars keep the target's own bind direction (not
+                            // the source's), so the roll is about THAT aimed
+                            // axis; twisting about ds would tilt the clavicle.
+                            if ((c == 6 || c == 10)
+                                && tb.tgtBindDir[static_cast<size_t>(c)]
+                                       .squaredLength() > 1e-8f)
+                                axis = R * tb.tgtBindDir[static_cast<size_t>(c)];
                             axis.normalise();
                             Wt = Ogre::Quaternion(Ogre::Radian(th), axis) * Wt;
                         }
