@@ -12981,9 +12981,9 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
     // Edit mode (image + prompt) needs FLUX.2's reference conditioning —
     // check BEFORE the (multi-GB, minutes-long) model load, not after.
     if (!refImagePath.isEmpty()
-        && chosenModel != SDManager::flux2KleinModelName()) {
+        && !SDManager::isFluxKleinModelName(chosenModel)) {
         err() << "Error: editing an image with a prompt needs FLUX.2-klein-4B "
-                 "(download it in AI Model Settings)." << Qt::endl;
+                 "or FLUX.3 Image Klein (download one in AI Model Settings)." << Qt::endl;
         return 1;
     }
 
@@ -13024,7 +13024,7 @@ int CLIPipeline::generateSourceImageFromPrompt(const QString& prompt,
     // non-klein checkpoint as 512 ran SDXL at a quarter of its pixel count.
     const QString lowerModel = chosenModel.toLower();
     const bool is1024Model =
-        chosenModel == SDManager::flux2KleinModelName()
+        SDManager::isFluxKleinModelName(chosenModel)
         || lowerModel.contains(QLatin1String("sdxl"))
         || lowerModel.contains(QLatin1String("sd_xl"));
     const int genSize = is1024Model ? 1024 : 512;

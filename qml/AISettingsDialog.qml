@@ -518,7 +518,8 @@ Dialog {
                                                         id: statusText
                                                         anchors.centerIn: parent
                                                         text: modelData.downloaded ? "Downloaded"
-                                                              : modelData.partial ? "Partial" : "Not downloaded"
+                                                              : modelData.partial ? "Partial"
+                                                              : !modelData.available ? "Unavailable in this build" : "Not downloaded"
                                                         color: modelData.downloaded ? "#2e7d32"
                                                              : modelData.partial ? "#e65100" : textColor
                                                         font.pointSize: 8
@@ -538,9 +539,15 @@ Dialog {
                                         }
 
                                         Local.ThemedButton {
-                                            text: "Download"
+                                            text: modelData.available ? "Download" : "Unavailable"
                                             enabled: modelData.available && !modelData.downloaded && !AIModelCatalog.busy
                                             onClicked: AIModelCatalog.downloadModel(modelData.id)
+                                            // A disabled button gives no feedback, so say WHY.
+                                            ToolTip.visible: hovered && !enabled
+                                            ToolTip.delay: 300
+                                            ToolTip.text: !modelData.available ? modelData.buildRequirement
+                                                        : modelData.downloaded ? "Already downloaded"
+                                                        : "Another download is in progress"
                                         }
                                         Local.ThemedButton {
                                             text: "Delete"
@@ -1014,6 +1021,27 @@ Dialog {
                                     }
                                     Text {
                                         text: "distilled model; 8 resolves hands, 12+ invents extra objects"
+                                        color: textColor; opacity: 0.6
+                                        font.pixelSize: 10
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
+                                // FLUX.3 Image Klein runs in the helper process
+                                // and, like FLUX.2, ignores the Steps/CFG above.
+                                Text {
+                                    text: "FLUX.3 Steps:"; color: textColor
+                                }
+                                RowLayout {
+                                    SpinBox {
+                                        from: 8; to: 30
+                                        value: SDManager.flux3Steps
+                                        onValueModified: SDManager.flux3Steps = value
+                                        editable: true
+                                    }
+                                    Text {
+                                        text: "distilled model; 16 is the documented default"
                                         color: textColor; opacity: 0.6
                                         font.pixelSize: 10
                                         wrapMode: Text.Wrap

@@ -2,7 +2,11 @@
 #include "AppStorage.h"
 
 #include "ModelDownloader.h"
+#include "SDWorker.h"
 #include "SentryReporter.h"
+#ifdef ENABLE_STABLE_DIFFUSION
+#include "SDManager.h"
+#endif
 
 #include <QDateTime>
 #include <QDir>
@@ -62,6 +66,21 @@ AIModelCatalog* AIModelCatalog::qmlInstance(QQmlEngine*, QJSEngine*)
 AIModelCatalog::AIModelCatalog(QObject* parent)
     : QObject(parent)
 {
+#ifdef ENABLE_STABLE_DIFFUSION
+    // The image-model dropdown (SDManager::availableModels) is only scanned at
+    // startup / on "Refresh", so a FLUX component set finished (or deleted)
+    // here never showed up until the user hit Refresh. Rescan whenever the
+    // catalog's contents change; deferred so a burst of per-file signals
+    // collapses into cheap directory listings after the event is handled.
+    // existingInstance(): never CREATE the manager from here — its constructor
+    // schedules an auto-load of the last (multi-GB) model.
+    connect(this, &AIModelCatalog::modelsChanged, this, []() {
+        QTimer::singleShot(0, []() {
+            if (SDManager* sd = SDManager::existingInstance())
+                sd->scanForModels();
+        });
+    });
+#endif
     auto* dl = ModelDownloader::instance();
     connect(dl, &ModelDownloader::downloadCompleted, this,
             [this](const QString& name, const QString&) {
@@ -330,6 +349,45 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
                      path(QStringLiteral("flux2_klein/Qwen3-4B-Q4_K_M.gguf")),
                      QStringLiteral("https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"),
                      QStringLiteral("Qwen3-4B text encoder (Q4_K_M)")},
+        }};
+    // FLUX.3 Image Klein — OPT-IN alternative to FLUX.2-klein. NOT Apache-2.0:
+    // the FLUX Kommunity License v1.0 is personal and non-sublicensable, free
+    // commercial use of outputs only under US$5M annual revenue, and it asks
+    // Qualifying Users to filter/review outputs. We never bundle or mirror the
+    // weights; the user downloads them straight from the community GGUF repo.
+    // FLUX.2-klein stays the default (see THIRD_PARTY_AI_MODELS.md).
+    out << ModelSpec{
+        QStringLiteral("flux3-klein-gguf"), tr("FLUX.3 Image Klein (text to image, optional)"), tr("Image to 3D"),
+        tr("Black Forest Labs FLUX.3 Image Klein (5.6B). OPTIONAL alternative to "
+           "FLUX.2-klein, which stays the default. LICENSE: FLUX Kommunity "
+           "License v1.0 — NOT Apache-2.0. Personal use and commercial use of "
+           "outputs only if your (and your affiliates') annual revenue is under "
+           "US$5M; commercial fine-tuning/redistribution needs a separate "
+           "licence from Black Forest Labs, and outputs should be filtered or "
+           "reviewed. By downloading you accept those terms. Select it with "
+           "--image-model FLUX.3-Image-Klein or by loading it in the AI "
+           "settings. Components: diffusion GGUF (Q4_0), FLUX.2 VAE, "
+           "Qwen3-VL-4B text encoder (Apache-2.0)."),
+        QStringLiteral("~6.4 GB"),
+        !sdAvailable ? tr("Requires a stable-diffusion build")
+            : !SDWorker::flux3Available()
+                ? tr("This build does not include the qtmesh_sdcli helper that runs FLUX.3 "
+                     "(FLUX.2-klein is unaffected).")
+                : QString(),
+        sdAvailable && SDWorker::flux3Available(),
+        {
+            FileSpec{QStringLiteral("flux3-image-klein-Q4_0.gguf"),
+                     path(QStringLiteral("flux3_klein/flux3-image-klein-Q4_0.gguf")),
+                     QStringLiteral("https://huggingface.co/leejet/flux-3-image-klein-GGUF/resolve/main/flux3-image-klein-Q4_0.gguf"),
+                     QStringLiteral("FLUX.3 Image Klein diffusion (Q4_0)")},
+            FileSpec{QStringLiteral("flux2-vae.safetensors"),
+                     path(QStringLiteral("flux3_klein/flux2-vae.safetensors")),
+                     QStringLiteral("https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b/resolve/main/split_files/vae/flux2-vae.safetensors"),
+                     QStringLiteral("FLUX.2 VAE (shared with FLUX.3)")},
+            FileSpec{QStringLiteral("Qwen3VL-4B-Instruct-Q4_K_M.gguf"),
+                     path(QStringLiteral("flux3_klein/Qwen3VL-4B-Instruct-Q4_K_M.gguf")),
+                     QStringLiteral("https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf"),
+                     QStringLiteral("Qwen3-VL-4B text encoder (Q4_K_M)")},
         }};
     out << ModelSpec{
         QStringLiteral("background-removal"), tr("Background Removal"), tr("Image to 3D"),

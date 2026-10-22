@@ -296,6 +296,22 @@ if(ENABLE_STABLE_DIFFUSION)
     message(STATUS "AI texture generation enabled with stable-diffusion.cpp")
 endif()
 ##############################################################
+#  qtmesh_sdcli — sd-cli helper for FLUX.3 (out-of-process, own ggml)
+#  See cmake/SdCliHelper.cmake for why this is not just an sd.cpp bump.
+##############################################################
+if(ENABLE_STABLE_DIFFUSION AND (APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux"))
+    set(_sdcli_default ON)
+else()
+    set(_sdcli_default OFF)
+endif()
+option(ENABLE_SD_CLI_HELPER
+    "Build and bundle the sd-cli helper that runs FLUX.3 Image Klein" ${_sdcli_default})
+if(ENABLE_SD_CLI_HELPER)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/SdCliHelper.cmake)
+    message(STATUS "Bundling the sd-cli helper (qtmesh_sdcli) for FLUX.3")
+endif()
+
+##############################################################
 #  Bundled trellis.cpp runtime — TRELLIS.2 image-to-3D needs no install
 ##############################################################
 option(ENABLE_TRELLIS_CPP

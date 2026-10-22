@@ -59,6 +59,7 @@ class SDManager : public QObject
     /// Sampling steps for a guidance-distilled FLUX.2 model, which ignores
     /// `steps` and `cfgScale`. More steps resolve anatomy; clamped to [4,20].
     Q_PROPERTY(int flux2Steps READ flux2Steps WRITE setFlux2Steps NOTIFY settingsChanged)
+    Q_PROPERTY(int flux3Steps READ flux3Steps WRITE setFlux3Steps NOTIFY settingsChanged)
     Q_PROPERTY(float cfgScale READ cfgScale WRITE setCfgScale NOTIFY settingsChanged)
     Q_PROPERTY(QString negativePrompt READ negativePrompt WRITE setNegativePrompt NOTIFY settingsChanged)
     Q_PROPERTY(int generationStep READ generationStep NOTIFY generationProgressChanged)
@@ -68,6 +69,10 @@ class SDManager : public QObject
 
 public:
     static SDManager* instance();
+    /// The singleton if it already exists, WITHOUT creating it (the constructor
+    /// scans models and schedules an auto-load of the last one — a side effect
+    /// callers that merely want to notify must not trigger).
+    static SDManager* existingInstance() { return s_instance; }
     static SDManager* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
 
     // Model management
@@ -90,6 +95,8 @@ public:
     int steps() const { return m_settings.steps; }
     int flux2Steps() const { return m_settings.flux2Steps; }
     void setFlux2Steps(int steps);
+    int flux3Steps() const { return m_settings.flux3Steps; }
+    void setFlux3Steps(int steps);
     /// Stored RNG seed; -1 (the default) means "random per generation".
     /// Fixing it makes a run reproducible, which is what makes an A/B of
     /// sampling settings meaningful — otherwise two runs differ by noise.
@@ -110,6 +117,13 @@ public:
     /// is listed under in the model dropdown when present.
     static QString flux2KleinDirectory();
     static QString flux2KleinModelName();
+    /// FLUX.3 Image Klein (opt-in; FLUX Kommunity License, not Apache-2.0 —
+    /// see THIRD_PARTY_AI_MODELS.md). Same directory-shaped component set.
+    static QString flux3KleinDirectory();
+    static QString flux3KleinModelName();
+    /// Either FLUX component-set model (both do reference-image editing,
+    /// both are 1024² distilled flow models).
+    static bool isFluxKleinModelName(const QString &name);
 
     // Generation state
     bool isGenerating() const;

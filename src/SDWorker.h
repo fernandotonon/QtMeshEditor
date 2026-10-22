@@ -24,6 +24,10 @@ struct SDSettings {
     // default is 8. Clamped to [4,20] in SDWorker: below 4 the model has not
     // converged, and beyond ~20 a distilled model stops improving.
     int flux2Steps = 8;
+    // FLUX.3 Image Klein (distilled) is documented by stable-diffusion.cpp at
+    // 16 steps / cfg 1.0 / euler — twice the FLUX.2 default. Clamped to
+    // [8,30] in SDWorker.
+    int flux3Steps = 16;
     float cfgScale = 7.0f;
     int64_t seed = -1; // -1 = random
     QString negativePrompt = "blurry, low quality, distorted, simple, cartoon";
@@ -65,6 +69,19 @@ public:
         }
     };
     static Flux2Set detectFlux2Set(const QString &dir);
+
+    /// True when a resolved diffusion file belongs to the FLUX.3 family
+    /// ("flux3-image-klein-Q4_0.gguf", "flux-3-image-klein.safetensors"). The
+    /// FLUX.3 set loads through the same three params as FLUX.2 (diffusion +
+    /// VAE + LLM), so the only per-family difference is the step default.
+    /// Pure — unit-tested in every build.
+    static bool isFlux3Diffusion(const QString &diffusionPath);
+
+    /// FLUX.3 is generated OUT OF PROCESS (SdCliHelper / `qtmesh_sdcli`, built
+    /// from a newer stable-diffusion.cpp with its own ggml): the in-process
+    /// sd.cpp shares llama.cpp's ggml and aborts on newer sd.cpp builds. So
+    /// FLUX.3 is only offered when that helper is installed next to the editor.
+    static bool flux3Available();
 
     /// Accepts either a single checkpoint FILE (the historical behavior) or
     /// a DIRECTORY holding a FLUX.2 component set (detectFlux2Set).
@@ -113,7 +130,9 @@ signals:
 private:
     QString m_modelPath;
     Flux2Set m_flux2;          ///< resolved component set when m_isFlux2
-    bool m_isFlux2 = false;    ///< model loaded as a FLUX.2 component set
+    bool m_isFlux2 = false;    ///< model loaded as a FLUX.2/3 component set
+    bool m_isFlux3 = false;    ///< ...and that set is the FLUX.3 family
+    bool m_helperMode = false; ///< FLUX.3: no in-process context, generate via SdCliHelper
     QImage m_refImage;         ///< one-shot reference image (setRefImage)
     SDSettings m_settings;
     std::atomic<bool> m_stopRequested{false};
@@ -122,6 +141,8 @@ private:
     mutable QMutex m_mutex;
 
     void unloadModelInternal();
+    void generateWithHelper(const QString &prompt, const QImage &controlImage,
+                            const QString &outputPath);
 
 #ifdef ENABLE_STABLE_DIFFUSION
     sd_ctx_t *m_ctx = nullptr;

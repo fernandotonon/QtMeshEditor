@@ -87,6 +87,7 @@ MeshInfoOverlay.cpp
 RTShaderHelper.cpp
 ViewCube/ViewCubeController.cpp
 SDWorker.cpp
+SdCliHelper.cpp
 SDManager.cpp
 UndoManager.cpp
 SubMeshTransform.cpp
@@ -427,6 +428,7 @@ MeshInfoOverlay.h
 RTShaderHelper.h
 ViewCube/ViewCubeController.h
 SDWorker.h
+SdCliHelper.h
 SDManager.h
 UndoManager.h
 SubMeshTransform.h
@@ -927,6 +929,34 @@ if(ENABLE_ONNX)
                 COMMENT "Copying ONNX Runtime lib ${_ortlib} next to QtMeshEditor")
         endforeach()
     endif()
+endif()
+
+if(ENABLE_SD_CLI_HELPER AND TARGET qtmesh_sdcli)
+    # Ship the FLUX.3 helper next to the editor binary (macOS: Contents/MacOS,
+    # where the codesign loop signs every executable). SdCliHelper probes this
+    # location; it is a self-contained static binary (see cmake/SdCliHelper.cmake).
+    add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_sdcli)
+    # MIT compliance: ship the sd.cpp and ggml copyright + permission notices
+    # with the binary, in every package (ConcatFiles errors on a missing/empty
+    # input — a 0-byte notices file once shipped for trellis-cli).
+    set(_sdcli_lic "${CMAKE_BINARY_DIR}/qtmesh_sdcli.THIRD_PARTY_LICENSES.txt")
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+                -DOUT=${_sdcli_lic}
+                "-DIN=${QTMESH_SDCLI_SRC}/LICENSE|${QTMESH_SDCLI_SRC}/ggml/LICENSE"
+                -P ${CMAKE_SOURCE_DIR}/cmake/ConcatFiles.cmake
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${QTMESH_SDCLI_BINARY}"
+                "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/qtmesh_sdcli"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_sdcli_lic}"
+                "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMENT "Copying the FLUX.3 helper (qtmesh_sdcli) next to QtMeshEditor"
+        VERBATIM)
+    # `make install` (the CI packaging path) must carry the helper too.
+    install(PROGRAMS "${QTMESH_SDCLI_BINARY}"
+            DESTINATION ${CMAKE_INSTALL_PREFIX} RENAME qtmesh_sdcli)
+    install(FILES "${_sdcli_lic}" DESTINATION ${CMAKE_INSTALL_PREFIX})
 endif()
 
 if(ENABLE_TRELLIS_CPP AND TARGET qtmesh_trelliscpp)

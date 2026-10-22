@@ -117,6 +117,7 @@ TEST_F(SDWorkerTest, GenerateWithoutModel)
 #include <gtest/gtest.h>
 #include "SDWorker.h"
 #endif
+#include "SDManager.h"
 
 namespace {
 void touch(const QString& path)
@@ -171,4 +172,48 @@ TEST(SDWorkerFlux2Test, VaeNameIsNotMistakenForDiffusion)
     EXPECT_TRUE(set.diffusion.endsWith("flux-2-klein-base-4b.safetensors"));
     EXPECT_TRUE(set.vae.endsWith("flux2-vae.safetensors"));
     EXPECT_TRUE(set.llm.endsWith("mistral-small.gguf"));
+}
+
+TEST(SDWorkerFlux3Test, DetectsCompleteFlux3Set)
+{
+    // The exact filenames the catalog installs for FLUX.3 Image Klein.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    touch(dir.filePath("flux3-image-klein-Q4_0.gguf"));
+    touch(dir.filePath("flux2-vae.safetensors"));
+    touch(dir.filePath("Qwen3VL-4B-Instruct-Q4_K_M.gguf"));
+
+    const auto set = SDWorker::detectFlux2Set(dir.path());
+    EXPECT_TRUE(set.valid());
+    EXPECT_TRUE(set.diffusion.endsWith("flux3-image-klein-Q4_0.gguf"));
+    EXPECT_TRUE(set.vae.endsWith("flux2-vae.safetensors"));
+    EXPECT_TRUE(set.llm.endsWith("Qwen3VL-4B-Instruct-Q4_K_M.gguf"));
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion(set.diffusion));
+}
+
+TEST(SDWorkerFlux3Test, FamilyDetectionDistinguishesFlux2)
+{
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion("/m/flux-3-image-klein.safetensors"));
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion("/m/FLUX3-image-klein-base.gguf"));
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion("/m/flux-2-klein-4b-Q4_0.gguf"));
+    // A directory named flux3 must not make a FLUX.2 file read as FLUX.3.
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion("/ai_models/flux3_klein/flux-2-klein-4b.gguf"));
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion(QString()));
+}
+
+// Model-name helpers: pure, so they run in every build (the CLI and the
+// image-to-3D panel gate FLUX reference-image editing / 1024^2 on them).
+TEST(SDManagerFluxNamesTest, FluxKleinModelNamesAreRecognisedForBothGenerations)
+{
+    EXPECT_TRUE(SDManager::isFluxKleinModelName(SDManager::flux2KleinModelName()));
+    EXPECT_TRUE(SDManager::isFluxKleinModelName(SDManager::flux3KleinModelName()));
+    EXPECT_FALSE(SDManager::isFluxKleinModelName(QStringLiteral("sd_xl_base_1.0")));
+    EXPECT_FALSE(SDManager::isFluxKleinModelName(QString()));
+    EXPECT_NE(SDManager::flux2KleinModelName(), SDManager::flux3KleinModelName());
+}
+
+TEST(SDManagerFluxNamesTest, Flux3HasItsOwnDirectoryApartFromFlux2)
+{
+    EXPECT_NE(SDManager::flux3KleinDirectory(), SDManager::flux2KleinDirectory());
+    EXPECT_TRUE(SDManager::flux3KleinDirectory().endsWith(QStringLiteral("flux3_klein")));
 }

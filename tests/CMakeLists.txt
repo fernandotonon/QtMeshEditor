@@ -77,6 +77,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelFetch_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SdCliHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
@@ -493,6 +494,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SDWorker.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SdCliHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.h

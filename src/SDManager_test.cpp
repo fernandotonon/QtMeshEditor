@@ -674,4 +674,22 @@ TEST_F(SDManagerTest, QmlInstanceReturnsSameAsSingleton)
     EXPECT_EQ(qmlInst, manager);
 }
 
+TEST_F(SDManagerTest, Flux3StepsDefaultsToSixteenAndClampsToTheUsefulRange)
+{
+    const int restore = manager->flux3Steps();
+    manager->setFlux3Steps(16);
+    EXPECT_EQ(manager->flux3Steps(), 16);
+
+    manager->setFlux3Steps(2);
+    EXPECT_EQ(manager->flux3Steps(), 8) << "below the useful minimum -> 8";
+    manager->setFlux3Steps(999);
+    EXPECT_EQ(manager->flux3Steps(), 30) << "a distilled model stops improving -> 30";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setFlux3Steps(manager->flux3Steps());
+    EXPECT_EQ(spy.count(), 0) << "setting the same value must not churn settings";
+
+    manager->setFlux3Steps(restore);
+}
+
 #endif // ENABLE_STABLE_DIFFUSION

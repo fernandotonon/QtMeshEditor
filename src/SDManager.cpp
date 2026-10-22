@@ -234,6 +234,17 @@ void SDManager::setFlux2Steps(int steps)
     emit settingsChanged();
 }
 
+void SDManager::setFlux3Steps(int steps)
+{
+    // Same contract as setFlux2Steps: clamp here so the persisted/QML-visible
+    // value is the one the helper will actually run (SDWorker clamps to 8..30).
+    const int clamped = std::clamp(steps, 8, 30);
+    if (m_settings.flux3Steps == clamped) return;
+    m_settings.flux3Steps = clamped;
+    saveSettings();
+    emit settingsChanged();
+}
+
 void SDManager::setSeed(qint64 seed)
 {
     const qint64 v = seed < 0 ? -1 : seed;   // any negative means "random"
@@ -428,6 +439,9 @@ void SDManager::scanForModels()
     // DIRECTORY-shaped model — list it when the full set is present.
     if (SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
         m_availableModels.append(flux2KleinModelName());
+    if (SDWorker::flux3Available()
+        && SDWorker::detectFlux2Set(flux3KleinDirectory()).valid())
+        m_availableModels.append(flux3KleinModelName());
 
     // Update recommended models download status
     for (int i = 0; i < m_recommendedModels.size(); ++i) {
@@ -633,6 +647,7 @@ void SDManager::saveSettings()
     settings.setValue("height", m_settings.height);
     settings.setValue("steps", m_settings.steps);
     settings.setValue("flux2Steps", m_settings.flux2Steps);
+    settings.setValue("flux3Steps", m_settings.flux3Steps);
     settings.setValue("cfgScale", static_cast<double>(m_settings.cfgScale));
     settings.setValue("seed", QVariant::fromValue(m_settings.seed));
     settings.setValue("negativePrompt", m_settings.negativePrompt);
@@ -657,6 +672,7 @@ void SDManager::loadSettings()
     // clamp on read too: an out-of-range value from an older build or a
     // hand-edited config must not reach the sampler
     m_settings.flux2Steps = std::clamp(settings.value("flux2Steps", 8).toInt(), 4, 20);
+    m_settings.flux3Steps = std::clamp(settings.value("flux3Steps", 16).toInt(), 8, 30);
     m_settings.cfgScale = settings.value("cfgScale", 7.0).toFloat();
     m_settings.seed = settings.value("seed", -1).toLongLong();
     m_settings.negativePrompt = settings.value("negativePrompt", "").toString();
@@ -681,6 +697,21 @@ QString SDManager::flux2KleinModelName()
     return QStringLiteral("FLUX.2-klein-4B");
 }
 
+QString SDManager::flux3KleinDirectory()
+{
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("flux3_klein"));
+}
+
+QString SDManager::flux3KleinModelName()
+{
+    return QStringLiteral("FLUX.3-Image-Klein");
+}
+
+bool SDManager::isFluxKleinModelName(const QString &name)
+{
+    return name == flux2KleinModelName() || name == flux3KleinModelName();
+}
+
 QString SDManager::getModelFilePath(const QString &modelName) const
 {
     // The FLUX.2 set is a directory-shaped model (SDWorker loads the
@@ -688,6 +719,9 @@ QString SDManager::getModelFilePath(const QString &modelName) const
     if (modelName == flux2KleinModelName()
         && SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
         return flux2KleinDirectory();
+    if (SDWorker::flux3Available() && modelName == flux3KleinModelName()
+        && SDWorker::detectFlux2Set(flux3KleinDirectory()).valid())
+        return flux3KleinDirectory();
 
     QDir modelsDir(m_modelsDirectory);
 
