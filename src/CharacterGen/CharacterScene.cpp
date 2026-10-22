@@ -127,6 +127,10 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         }
         mat->compile();
         entity->getSubEntity(kv.second)->setMaterialName(matName);
+        // ...and on the MESH's submesh too: Entity::_initialise(true) (applying an animation, editing the skeleton or a morph)
+        // rebuilds the sub-entities from the submesh materials, which dropped every per-entity override (the character came
+        // back with the default material: no skin colour, no eye texture).
+        entity->getMesh()->getSubMesh(kv.second)->setMaterialName(matName);
     }
 }
 

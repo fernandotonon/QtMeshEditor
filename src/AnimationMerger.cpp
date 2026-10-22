@@ -4593,6 +4593,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             // animation is involved.
             std::vector<Ogre::Vector3> srcLocalAxis(
                 static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+            std::vector<Ogre::Vector3> srcRestDirCt(
+                static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
             for (int c = 0; c < Jc; ++c) {
                 const auto& sd = clipRestDir[static_cast<size_t>(c)];
                 Ogre::Vector3 srcDir(sd[0], sd[1], sd[2]);
@@ -4604,6 +4606,7 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                     const Ogre::Quaternion restQ(q[3], q[0], q[1], q[2]);
                     srcLocalAxis[static_cast<size_t>(c)] =
                         restQ.Inverse() * srcDir;
+                    srcRestDirCt[static_cast<size_t>(c)] = CtInv * srcDir;
                 }
             }
             auto clipQ = [&](int frame, int joint) -> Ogre::Quaternion {
@@ -5106,9 +5109,14 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                 if (c >= 0 && c < Jc
                     && srcLocalAxis[static_cast<size_t>(c)].squaredLength()
                            > 1e-8f) {
+                    // Collars keep the target's own bind direction (their
+                    // per-frame swing below is relative to the source's
+                    // reference, see the collar note there).
                     Qbase[static_cast<size_t>(i)] =
-                        tb.tgtBindDir[static_cast<size_t>(c)]
-                            .getRotationTo(dref[static_cast<size_t>(c)])
+                        ((c == 6 || c == 10)
+                             ? Ogre::Quaternion::IDENTITY
+                             : tb.tgtBindDir[static_cast<size_t>(c)]
+                                   .getRotationTo(dref[static_cast<size_t>(c)]))
                         * tb.bindWorld[static_cast<size_t>(i)];
                     // NOTE (2026-08-02 investigation): this minimal-arc baseline
                     // keeps the TARGET-BIND's roll about the bone axis, dropping
@@ -5348,8 +5356,21 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                         const Ogre::Vector3 ds = CtInv *
                             (clipQ(f, c)
                              * srcLocalAxis[static_cast<size_t>(c)]);
-                        const Ogre::Quaternion R =
+                        Ogre::Quaternion R =
                             dref[static_cast<size_t>(c)].getRotationTo(ds);
+                        // COLLARS follow the source's MOTION, not its absolute
+                        // direction: a source whose clavicles slope down in its
+                        // own bind (A-pose rigs; measured 17-35 degrees) would
+                        // otherwise aim the target's clavicles down by the same
+                        // absolute angle and drop the shoulders in every clip,
+                        // whatever the target's own bind is. The swing from the
+                        // source's reference direction to its animated one is
+                        // applied to the target's bind direction instead.
+                        if ((c == 6 || c == 10)
+                            && srcRestDirCt[static_cast<size_t>(c)]
+                                   .squaredLength() > 1e-8f)
+                            R = srcRestDirCt[static_cast<size_t>(c)]
+                                    .getRotationTo(ds);
                         Ogre::Quaternion Wt =
                             R * Qbase[static_cast<size_t>(i)];
                         // #857: re-apply the source's roll about the aimed
@@ -5366,6 +5387,13 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
                                          * twistGainAt(c);
                         if (std::abs(th) > 1e-5f) {
                             Ogre::Vector3 axis = ds;
+                            // Collars keep the target's own bind direction (not
+                            // the source's), so the roll is about THAT aimed
+                            // axis; twisting about ds would tilt the clavicle.
+                            if ((c == 6 || c == 10)
+                                && tb.tgtBindDir[static_cast<size_t>(c)]
+                                       .squaredLength() > 1e-8f)
+                                axis = R * tb.tgtBindDir[static_cast<size_t>(c)];
                             axis.normalise();
                             Wt = Ogre::Quaternion(Ogre::Radian(th), axis) * Wt;
                         }
