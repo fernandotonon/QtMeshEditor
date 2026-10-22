@@ -620,6 +620,35 @@ LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
     return lips;
 }
 
+// The eyes of the built body (the eyelid-layer landmarks), for the eyebrows; same coordinates as lipFrameOf.
+BrowFrame browFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    BrowFrame brows;
+    const std::array<const std::vector<int32_t>*, 2> lists = {&a.landmarkEyeL, &a.landmarkEyeR};
+    const float turn = facePlusZ ? 1.0f : -1.0f;
+    float width = 0.0f;
+    for (size_t side = 0; side < 2; ++side) {
+        const std::vector<int32_t>& list = *lists[side];
+        if (list.empty()) return BrowFrame();
+        std::array<double, 3> sum{};
+        float minX = 1e9f;
+        float maxX = -1e9f;
+        for (int32_t v : list) {
+            if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return BrowFrame();
+            for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+            minX = std::min(minX, body.positions[size_t(v) * 3]);
+            maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+        }
+        const double n = double(list.size());
+        brows.eye[side] = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+        width += 0.5f * (maxX - minX);
+    }
+    brows.halfWidth = width * 0.5f;
+    brows.forward = turn;
+    brows.valid = brows.halfWidth > 1e-4f;
+    return brows;
+}
+
 // MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
 // skeleton lean 13-25 degrees front/back and the clavicles point 30 degrees off the shoulder line. Retargeting aims every bone
 // at the source's direction, so a vertical source straightens those leans bone by bone: Spine2 turned by 30-40 degrees and
@@ -1449,6 +1478,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     if (rig.meshes.size() < 2) rep.warnings << QStringLiteral("The head produced no geometry.");
 
     rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    rep.brows = browFrameOf(a, rig.meshes.front(), p.facePlusZ);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }

@@ -189,6 +189,53 @@ float lipMask(const std::array<float, 3>& p, const SkinLips& lips)
     return smooth(std::clamp(std::min(inside, side) / feather, 0.0f, 1.0f));
 }
 
+Rgb browColourFor(const Rgb& skin)
+{
+    const float fair = std::clamp((luminance(skin) - 0.20f) / 0.50f, 0.0f, 1.0f);
+    return mix(Rgb{0.06f, 0.045f, 0.04f}, Rgb{0.32f, 0.21f, 0.13f}, fair * fair);
+}
+
+namespace {
+float smoothRange(float a, float b, float t) { return smooth(std::clamp((t - a) / (b - a), 0.0f, 1.0f)); }
+
+// Eyebrow coordinates of a point relative to one eye: t along the brow (in eye half widths, negative = towards the nose) and the
+// signed height above the brow's centre line (metres). False when the point is not on the front of the face near that eye.
+bool browCoordinates(const std::array<float, 3>& p, const std::array<float, 3>& eye, const SkinBrows& brows, float& t, float& dy,
+                     float& thickness)
+{
+    const float hw = brows.halfWidth;
+    const float dz = (p[2] - eye[2]) * brows.forward;
+    if (dz < -0.010f || dz > 0.030f) return false;
+    const float side = eye[0] >= 0.0f ? 1.0f : -1.0f;
+    t = side * (p[0] - eye[0]) / hw;
+    if (t < -1.3f || t > 1.9f) return false;
+    const float arch = 1.0f - ((t - 0.55f) / 1.3f) * ((t - 0.55f) / 1.3f);
+    const float tail = std::max(0.0f, t - 1.0f);
+    const float centre = eye[1] + hw * (1.12f + 0.22f * arch - 0.30f * tail * tail);
+    dy = p[1] - centre;
+    thickness = hw * (0.85f - 0.28f * smoothRange(-1.15f, 0.8f, t)) * (1.0f - 0.85f * smoothRange(0.9f, 1.7f, t));
+    return true;
+}
+}  // namespace
+
+float browMask(const std::array<float, 3>& p, const SkinBrows& brows)
+{
+    if (!brows.valid) return 0.0f;
+    float best = 0.0f;
+    for (const auto& eye : brows.eye) {
+        float t = 0.0f;
+        float dy = 0.0f;
+        float thickness = 0.0f;
+        if (!browCoordinates(p, eye, brows, t, dy, thickness)) continue;
+        const float hw = brows.halfWidth;
+        const float inside = 0.5f * thickness - std::fabs(dy);
+        const float ends = std::min(t + 1.15f, 1.7f - t) * hw * 0.7f;
+        const float feather = 0.0009f * hw / 0.0138f;
+        best = std::max(best, smooth(std::clamp(std::min(inside, ends) / feather, 0.0f, 1.0f)));
+    }
+    return best;
+}
+
 Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextureOptions& o)
 {
     // large-scale tone: patches a few centimetres across, brighter / darker
@@ -216,6 +263,18 @@ Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextu
         const float seam = 1.0f - std::clamp(std::fabs(p[1] - o.lips.centre[1] + 0.0028f * (o.lips.halfWidth / 0.026f) * (p[0] - o.lips.centre[0]) * (p[0] - o.lips.centre[0]) / (o.lips.halfWidth * o.lips.halfWidth)) / 0.0006f, 0.0f, 1.0f);
         lc = scaled(lc, 1.0f - 0.28f * seam, 1.0f - 0.28f * seam, 1.0f - 0.28f * seam);
         c = mix(c, lc, 0.85f * lip);
+    }
+
+    // eyebrows: hair strokes lying along the brow (slightly leaning up and out), dense in the middle of the band
+    const float brow = browMask(p, o.brows);
+    if (brow > 0.0f) {
+        const float u = p[0] * (p[0] >= 0.0f ? 1.0f : -1.0f);   // across the brow, outwards
+        const float lean = u - 0.9f * p[1];   // the hairs lean up and out
+        const float stroke = valueNoise({lean * 260.0f, p[1] * 1300.0f, p[2] * 140.0f}, o.seed + 131u);
+        const float fine = valueNoise({lean * 560.0f, p[1] * 2400.0f, p[2] * 260.0f}, o.seed + 149u);
+        const float density = std::clamp(0.72f + 0.55f * stroke + 0.3f * fine, 0.0f, 1.0f);
+        const Rgb hair = scaled(browColourFor(skin), 1.0f + 0.25f * fine, 1.0f + 0.25f * fine, 1.0f + 0.25f * fine);
+        c = mix(c, hair, 0.92f * brow * density);
     }
 
     // pores and fine grain

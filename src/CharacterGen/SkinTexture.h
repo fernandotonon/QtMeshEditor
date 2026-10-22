@@ -15,6 +15,7 @@ namespace CharacterGen {
 
 /// Where to paint the lips (a copy of the built body's lip frame).
 using SkinLips = LipFrame;
+using SkinBrows = BrowFrame;
 
 struct SkinTextureOptions {
     int size = 1024;                ///< width = height, pixels
@@ -22,6 +23,7 @@ struct SkinTextureOptions {
     float freckles = -1.0f;         ///< 0..1 density; negative = by skin tone (fairer skin freckles more)
     float poreStrength = 1.0f;      ///< 0 = smooth skin
     SkinLips lips;                  ///< valid = paint the lips
+    SkinBrows brows;                ///< valid = paint the eyebrows
 };
 
 /// Bake the albedo of `body` (positions in metres, UVs + layouts + faces as the rig stores them: the V flip is applied here).
@@ -33,6 +35,12 @@ Rgb lipColourFor(const Rgb& skin);
 
 /// 0..1 coverage of the lips at a surface point (metres): the band around the lip seam, soft at its edges.
 float lipMask(const std::array<float, 3>& position, const SkinLips& lips);
+
+/// Eyebrow hair colour for a skin colour (fair skin: light brown, dark skin: near black).
+Rgb browColourFor(const Rgb& skin);
+
+/// 0..1 coverage of the eyebrows at a surface point (metres): an arched band above each eye, thick at the inner end and tapering to the tail.
+float browMask(const std::array<float, 3>& position, const SkinBrows& brows);
 
 /// The skin colour at a surface point (metres), before the texture's coverage logic. Exposed for tests.
 Rgb skinColourAt(const std::array<float, 3>& position, const Rgb& skin, const SkinTextureOptions& options);

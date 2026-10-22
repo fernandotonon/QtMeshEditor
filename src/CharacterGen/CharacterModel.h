@@ -143,6 +143,15 @@ struct LipFrame {
     float forward = 1.0f;
 };
 
+/// Where the eyebrows go (final coordinates, metres): the centre of each eye's lid layer, the half width of an eye and which way the
+/// face looks. Valid only for the native head with open eyes (it comes from the eyelid-layer landmarks).
+struct BrowFrame {
+    bool valid = false;
+    std::array<std::array<float, 3>, 2> eye{};
+    float halfWidth = 0.0f;
+    float forward = 1.0f;
+};
+
 struct BuildReport {
     int bodyVertices = 0, bodyTriangles = 0;
     int headVertices = 0, headTriangles = 0;
@@ -152,6 +161,7 @@ struct BuildReport {
     float neckCutY = 0.0f;           ///< world y (m) of the neck cut
     float headScale = 1.0f;
     LipFrame lips;
+    BrowFrame brows;
     QStringList meshNames;
     QStringList warnings;
 };

@@ -115,3 +115,29 @@ TEST(SkinTexture, LipColourIsRedderThanTheSkinOnEveryTone)
         EXPECT_GT(lip[0] / (lip[1] + 1e-3f), skin[0] / (skin[1] + 1e-3f)) << "red-to-green ratio";
     }
 }
+
+TEST(SkinTexture, EyebrowsSitAboveEachEyeAndNowhereElse)
+{
+    SkinBrows brows;
+    brows.valid = true;
+    brows.halfWidth = 0.0138f;
+    brows.forward = -1.0f;
+    brows.eye = {{{-0.0316f, 1.6228f, -0.1177f}, {0.0316f, 1.6228f, -0.1177f}}};
+    const float hw = brows.halfWidth;
+    // above the inner part / middle of the left eye (x < 0 side), on the front of the face
+    const std::array<float, 3> onBrow = {-0.0316f + 0.55f * hw * -1.0f, 1.6228f + hw * 1.34f, -0.1177f - 0.010f};
+    EXPECT_GT(browMask(onBrow, brows), 0.8f);
+    EXPECT_GT(browMask({-onBrow[0], onBrow[1], onBrow[2]}, brows), 0.8f) << "the other eye";
+    EXPECT_EQ(browMask({-0.0316f, 1.6228f, -0.1177f - 0.01f}, brows), 0.0f) << "the eye itself";
+    EXPECT_EQ(browMask({-0.0316f, 1.6228f + 0.05f, -0.1177f - 0.01f}, brows), 0.0f) << "the forehead";
+    EXPECT_EQ(browMask({0.0f, 1.6228f + hw * 1.6f, -0.1177f - 0.01f}, brows), 0.0f) << "between the brows";
+    EXPECT_EQ(browMask({onBrow[0], onBrow[1], onBrow[2] + 0.08f}, brows), 0.0f) << "the back of the head";
+    SkinBrows none;
+    EXPECT_EQ(browMask(onBrow, none), 0.0f);
+}
+
+TEST(SkinTexture, EyebrowColourIsDarkerThanTheSkin)
+{
+    for (const Rgb skin : {Rgb{0.90f, 0.72f, 0.62f}, Rgb{0.50f, 0.34f, 0.26f}, Rgb{0.30f, 0.20f, 0.15f}})
+        EXPECT_LT(browColourFor(skin)[0], skin[0]);
+}
