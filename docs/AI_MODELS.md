@@ -33,7 +33,7 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 | **U²-Net** | Salient-object segmentation (ONNX). | Removes the background from input photos before 3D reconstruction (`--remove-bg`). | Apache-2.0 |
 | **SmolVLM-500M** (+ mmproj) | Small vision-language model (GGUF, via llama.cpp `mtmd`). | Captions reference images in the image-to-3D panel. | *(see upstream; not yet recorded in THIRD_PARTY_AI_MODELS.md)* |
 | **FLUX.2-klein-4B** (Black Forest Labs) | 4B distilled text-to-image model (GGUF) with a Qwen3-4B text encoder. | **Default** prompt → source image for prompt-to-3D (`generate3d --prompt`), plus reference-image editing. | Apache-2.0 |
-| **FLUX.3 Image Klein** | 5.6B distilled text-to-image model with a Qwen3-VL-4B text encoder. | **Optional** alternative to FLUX.2-klein (`--image-model FLUX.3-Image-Klein`). Runs through the bundled `qtmesh_sdcli` helper process (own ggml), not the in-process sd.cpp. | **FLUX Kommunity License v1.0 — not permissive** (free commercial output use only under US$5M revenue; see THIRD_PARTY_AI_MODELS.md) |
+| **FLUX.3 Image Klein** | 5.6B distilled text-to-image model with a Qwen3-VL-4B text encoder. | **Not downloadable from the app.** If you place a licensed component set in `ai_models/flux3_klein/` yourself, it runs as an alternative to FLUX.2-klein (`--image-model FLUX.3-Image-Klein`) through the bundled `qtmesh_sdcli` helper process. | **FLUX Kommunity License v1.0 — not permissive** (free commercial output use only under US$5M revenue; see THIRD_PARTY_AI_MODELS.md) |
 
 ## 2. Textures and materials
 

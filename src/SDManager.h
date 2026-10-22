@@ -117,8 +117,12 @@ public:
     /// is listed under in the model dropdown when present.
     static QString flux2KleinDirectory();
     static QString flux2KleinModelName();
-    /// FLUX.3 Image Klein (opt-in; FLUX Kommunity License, not Apache-2.0 —
-    /// see THIRD_PARTY_AI_MODELS.md). Same directory-shaped component set.
+    /// FLUX.3 Image Klein — runs through the qtmesh_sdcli helper and is listed
+    /// ONLY when the user has placed a complete component set here themselves.
+    /// There is deliberately NO download entry in the AI Model Settings catalog:
+    /// it is under the FLUX Kommunity License (not permissive) and our download
+    /// path would skip the licence click-through Black Forest Labs' own repo
+    /// enforces. See THIRD_PARTY_AI_MODELS.md.
     static QString flux3KleinDirectory();
     static QString flux3KleinModelName();
     /// Either FLUX component-set model (both do reference-image editing,
