@@ -439,6 +439,8 @@ QStringList colourNames(ColourKind kind)
     return n;
 }
 
+constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
+
 QString characterEyeDir()
 {
     const QString env = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_DIR"));
@@ -1303,7 +1305,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     // The mouth interior (ICT gums, tongue, teeth) follows the lips of this face: its centre sits at a fixed offset from the centroid
     // of the lip sheet's vertices (fitted by hand on one character).
-    float mouthShift[3] = {0.0f, 0.008065f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
+    float mouthShift[3] = {0.0f, 0.008065f + 0.004f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
     if (p.nativeHead && !a.landmarkLip.empty()) {
         double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
         for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
@@ -1312,7 +1314,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             if (const IctPart* q = a.part(QString::fromLatin1(pn)))
                 for (int v = q->v0; v <= q->v1; ++v) { for (int k = 0; k < 3; ++k) C[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn; }
         if (cn > 0) {
-            const double om[3] = {0.0, -0.008544, -0.031834};   // offset from the lip landmark: 8.5 mm below, 31.8 mm behind
+            const double om[3] = {0.0, -0.008544 + 0.004, -0.031834};   // offset from the lip landmark: 0.5 mm below (a tooth length, 8 mm, higher than the first fit: with the jaw open the upper teeth showed and the lower ones did not), 31.8 mm behind
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
@@ -1411,8 +1413,14 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             m.skin[i] = std::move(inf);
         }
 
-        // expression shapes -> sparse morph targets (ICT cm -> world m, scaled with the head)
+        // expression shapes -> sparse morph targets (ICT cm -> world m, scaled with the head). The mouth interior follows the jaw
+        // shapes of the MHR head, whose jaw drops ~1.4x as far as ICT's (measured on jawOpen: lower lip 2.94 cm, lower teeth 2.11 cm):
+        // unscaled, the lower teeth stayed behind the lower lip and only the upper teeth showed.
+        const bool mouthInterior = p.nativeHead && (std::strcmp(g.mesh, "head_teeth") == 0 || std::strcmp(g.mesh, "head_mouth") == 0);
         for (int e = 0; e < a.ictExpressions; ++e) {
+            const QString& shapeName = e < a.expressionNames.size() ? a.expressionNames[e] : QString();
+            const bool jawShape = shapeName.startsWith(QLatin1String("jaw"));
+            const float follow = (mouthInterior && jawShape) ? kMouthJawFollow : 1.0f;
             Dna::BlendShapeTarget bt;
             bt.channel = e;
             const float* d = a.ictExpression.data() + size_t(e) * a.ictNeutral.size();
@@ -1420,7 +1428,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 const float* dv = d + size_t(globalOf[i]) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 1e-3f) continue;   // < 10 micrometres
                 bt.vertexIndices.push_back(uint32_t(i));
-                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM);
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM * follow);
             }
             if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
         }
