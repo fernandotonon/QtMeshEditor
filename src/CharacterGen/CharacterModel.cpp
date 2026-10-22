@@ -1242,7 +1242,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     // The mouth interior (ICT gums, tongue, teeth) follows the lips of this face: its centre sits at a fixed offset from the centroid
     // of the lip sheet's vertices (fitted by hand on one character).
-    float mouthShift[3] = {0.0f, 0.008065f + 0.008f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
+    float mouthShift[3] = {0.0f, 0.008065f + 0.004f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
     if (p.nativeHead && !a.landmarkLip.empty()) {
         double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
         for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
