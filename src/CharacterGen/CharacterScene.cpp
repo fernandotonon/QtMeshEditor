@@ -103,7 +103,7 @@ void bindEyeTextures(Ogre::Pass* pass, const Rgb& eyeColour)
     QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
     if (dir.isEmpty()) dir = characterEyeDir();
     const QByteArray irisFile = irisTextureFor(eyeColour);
-    if (pass->getNumTextureUnitStates() != 0 || !QFileInfo::exists(QDir(dir).filePath(QString::fromLatin1(irisFile)))) return;
+    if (!QFileInfo::exists(QDir(dir).filePath(QString::fromLatin1(irisFile)))) return;
     loadEyeTexture(dir, irisFile.constData());
     pass->setDiffuse(Ogre::ColourValue::White);
     pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
@@ -119,15 +119,17 @@ void bindSkinTexture(Ogre::Pass* pass, const QString& file)
     const QFileInfo info(file);
     const std::string name = info.fileName().toStdString();
     QFile f(file);
-    if (!f.open(QIODevice::ReadOnly) || pass->getNumTextureUnitStates() != 0) return;
+    if (!f.open(QIODevice::ReadOnly)) return;
     const QByteArray bytes = f.readAll();
     Ogre::Image image;
     auto* stream = new Ogre::MemoryDataStream(size_t(bytes.size()));
     std::memcpy(stream->getPtr(), bytes.constData(), size_t(bytes.size()));
     Ogre::DataStreamPtr ds(stream);
     image.load(ds, "png");
-    if (!Ogre::TextureManager::getSingleton().resourceExists(name))
-        Ogre::TextureManager::getSingleton().loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
+    // a reused name (a character regenerated under the same node name) must show the NEW image, not the cached one
+    auto& textures = Ogre::TextureManager::getSingleton();
+    if (textures.resourceExists(name)) textures.remove(name);
+    textures.loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
     try {
         auto& rgm = Ogre::ResourceGroupManager::getSingleton();
         const std::string dir = info.absolutePath().toStdString();
@@ -157,6 +159,21 @@ uint32_t skinSeedOf(const Params& p)
     return h;
 }
 
+// Every live-preview edit bakes a new texture, so only the newest ones are kept: older files are deleted and their GPU textures
+// released (a material that still uses one keeps its own reference).
+constexpr int kKeptSkinTextures = 32;
+
+void pruneSkinTextures(const QString& dir, int keep)
+{
+    QFileInfoList files = QDir(dir).entryInfoList(QStringList{QStringLiteral("*_skin.png")}, QDir::Files, QDir::Time);   // newest first
+    auto& textures = Ogre::TextureManager::getSingleton();
+    for (int i = keep; i < files.size(); ++i) {
+        const std::string name = files[i].fileName().toStdString();
+        if (textures.resourceExists(name)) textures.remove(name);
+        QFile::remove(files[i].absoluteFilePath());
+    }
+}
+
 // Bake the body's skin texture to <AppData>/generated_textures/<unique>_skin.png. Empty when it is off or cannot be written.
 QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& unique, const BuildReport& build)
 {
@@ -171,7 +188,9 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
     const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
     QDir().mkpath(dir);
     const QString file = QDir(dir).filePath(unique + QStringLiteral("_skin.png"));
-    return image.save(file, "PNG") ? file : QString();
+    if (!image.save(file, "PNG")) return QString();
+    pruneSkinTextures(dir, kKeptSkinTextures);
+    return file;
 }
 }  // namespace
 
@@ -189,6 +208,7 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         Ogre::MaterialPtr mat = matMgr.getByName(matName);
         if (!mat) mat = matMgr.create(matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        pass->removeAllTextureUnitStates();   // the material may be reused (a node name regenerated): start from a clean state
         pass->setLightingEnabled(true);
         pass->setDiffuse(Ogre::ColourValue(c[0], c[1], c[2]));
         pass->setAmbient(Ogre::ColourValue(c[0] * 0.5f, c[1] * 0.5f, c[2] * 0.5f));
