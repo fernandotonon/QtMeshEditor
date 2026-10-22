@@ -810,7 +810,6 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("remove_generator"), &MCPServer::toolRemoveGenerator},
         {QStringLiteral("list_constraints"), &MCPServer::toolListConstraints},
         {QStringLiteral("get_dna_correctives"), &MCPServer::toolGetDnaCorrectives},
-        {QStringLiteral("fit_dna_body"), &MCPServer::toolFitDnaBody},
         {QStringLiteral("set_dna_correctives"), &MCPServer::toolSetDnaCorrectives},
         {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
         {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
@@ -904,7 +903,6 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("join_mesh_parts"),
         QStringLiteral("add_arkit_blendshapes"),
         QStringLiteral("generate_lipsync"),
-        QStringLiteral("fit_dna_body"),
         QStringLiteral("generate_mesh_from_image"),
         QStringLiteral("generate_body_from_photo"),
         QStringLiteral("save_scene"),
@@ -11014,37 +11012,6 @@ QJsonObject MCPServer::toolSetDnaCorrectives(const QJsonObject& args)
                                  .arg(mgr->enabled() ? "ON — corrected deformation" : "OFF — plain skinning", mgr->summary()));
 }
 
-QJsonObject MCPServer::toolFitDnaBody(const QJsonObject& args)
-{
-    SentryReporter::addBreadcrumb("ai.tool_call", "fit_dna_body");
-    const QString dna = args.value("dna_path").toString();
-    const QString target = args.value("target_path").toString();
-    if (dna.isEmpty() || target.isEmpty())
-        return makeErrorResult(QStringLiteral("Error: 'dna_path' (a MetaHuman body .dna) and 'target_path' are required"));
-    if (!QFileInfo::exists(dna)) return makeErrorResult(QStringLiteral("Error: DNA file not found: %1").arg(dna));
-    if (!QFileInfo::exists(target)) return makeErrorResult(QStringLiteral("Error: target not found: %1").arg(target));
-    Dna::DnaCLI::FitOptions o;
-    o.mode = args.value("mode").toString();
-    if (!o.mode.isEmpty() && o.mode != QLatin1String("topology") && o.mode != QLatin1String("joints") && o.mode != QLatin1String("surface") && o.mode != QLatin1String("joints+surface"))
-        return makeErrorResult(QStringLiteral("Error: 'mode' must be topology (default), joints, surface or joints+surface"));
-    if (args.contains("poses")) o.poses = args.value("poses").toBool(true);
-    if (args.contains("lods")) o.lods = args.value("lods").toBool(false);
-    if (args.contains("align_limbs")) o.alignLimbs = args.value("align_limbs").toBool(true);
-    o.outputDna = args.value("output_dna").toString();
-    o.outputCorrectives = args.value("output_correctives").toString();
-    o.outputMesh = args.value("output_mesh").toString();
-    QVariantMap report;
-    QString err;
-    try {
-        if (!Dna::DnaCLI::fitReport(dna, target, o, &report, &err)) return makeErrorResult(QStringLiteral("Error: %1").arg(err));
-    } catch (const Ogre::Exception& e) {
-        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromStdString(e.getDescription())));
-    } catch (const std::exception& e) {
-        return makeErrorResult(QStringLiteral("Error: the fit failed: %1").arg(QString::fromUtf8(e.what())));
-    }
-    return makeSuccessResult(QString::fromUtf8(QJsonDocument(QJsonObject::fromVariantMap(report)).toJson(QJsonDocument::Indented)));
-}
-
 QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "add_constraint");
@@ -13672,7 +13639,7 @@ QJsonArray MCPServer::buildToolsList()
         props["output_path"] = QJsonObject{{"type", "string"},
             {"description", "Where to write the body mesh (.obj, metres, Y up, facing -Z unless facing_z)."}};
         props["pose"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"neutral", "posed"}},
-            {"description", "neutral (default) = predicted shape and proportions with the pose zeroed (the input qtmesh dna fit wants); posed = the photo's pose."}};
+            {"description", "neutral (default) = predicted shape and proportions with the pose zeroed (the body shape of the person); posed = the photo's pose."}};
         props["bbox"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
             {"description", "Optional person box [x1, y1, x2, y2] in photo pixels. Omit to find the person automatically."}};
         props["detect"] = QJsonObject{{"type", "boolean"},
@@ -13683,7 +13650,6 @@ QJsonArray MCPServer::buildToolsList()
             "generate_body_from_photo",
             "Predict a HUMAN BODY mesh from ONE photo (issue #1100) with Meta's SAM 3D Body (body branch, ONNX) and the "
             "MHR (Momentum Human Rig) body model: 18,439 vertices, real shape and proportions. Writes an .obj. "
-            "Feed it to `fit_dna_body` (mode surface/joints+surface) to fit a MetaHuman body rig to the person. "
             "Models (~3.6 GB, SAM License + Apache-2.0 MHR data) download on first use. Pose correctives are not "
             "reproduced (posed vertices within ~2 mm mean of the full model). Not for creatures or objects: use "
             "generate_mesh_from_image.",
@@ -15058,23 +15024,6 @@ QJsonArray MCPServer::buildToolsList()
                    "Status of the live MetaHuman body correctives: enabled, driver bones, corrective bones evaluated, "
                    "RigLogic and bone-write time per frame, RBF solver/pose counts. Needs a body .dna loaded.",
                    props);
-    }
-    {
-        QJsonObject props;
-        props["dna_path"] = QJsonObject{{"type", "string"}, {"description", "MetaHuman BODY .dna (binary or JSON) to fit."}};
-        props["target_path"] = QJsonObject{{"type", "string"}, {"description", "What to fit it to: an edited mesh with the SAME topology/UVs (default mode), another body .dna, or — with mode joints/surface — a character with its own topology."}};
-        props["mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"topology", "joints", "surface", "joints+surface"}}, {"description", "topology (default): same-topology edit, matched by UV. joints: pair the target's skeleton bones with the MetaHuman joints and warp the body onto its proportions (recommended for other characters; faces are matched by name, facing and limb pose are aligned). joints+surface: the skeleton aligns facing/pose/proportions, then the surface wrap refines the shape (best for stylised characters). surface: wrap the body onto an arbitrary surface (smooth coarse-to-fine ICP) then fit; recovers a known edit of a re-meshed body to ~2-4 mm, does not match poses."}};
-        props["poses"] = QJsonObject{{"type", "boolean"}, {"description", "Report reference-pose deformation quality (default true)."}};
-        props["lods"] = QJsonObject{{"type", "boolean"}, {"description", "Report propagation to the lower LODs (default false; not with limb alignment)."}};
-        props["align_limbs"] = QJsonObject{{"type", "boolean"}, {"description", "mode=joints: rotate the limbs onto the target's bone directions first (default true)."}};
-        props["output_dna"] = QJsonObject{{"type", "string"}, {"description", "Write the fitted rig as a new .dna (never the source; read back and RigLogic-checked)."}};
-        props["output_correctives"] = QJsonObject{{"type", "string"}, {"description", "Write generic pose-space correctives for the FITTED body (per-vertex offsets carried through the limb alignment and the fit warp). .qpsd = compact binary, anything else = JSON."}};
-        props["output_mesh"] = QJsonObject{{"type", "string"}, {"description", "Export the fitted character (glb/fbx/...)."}};
-        appendTool("fit_dna_body",
-                   "Fit a MetaHuman body rig to an edited mesh or to another character: moves the skeleton and mesh onto the "
-                   "target and reports vertex/joint shift, reference-pose stretch and warp residual. OpenRigLogic has no "
-                   "calibration code, so this is an RBF-warp fit; corrective data is NOT recalibrated.",
-                   props, QJsonArray{"dna_path", "target_path"});
     }
     {
         QJsonObject props;

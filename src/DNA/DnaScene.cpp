@@ -533,7 +533,7 @@ Ogre::SceneNode* importToScene(const QString& path, const ReadOptions& options, 
     }
     Ogre::SceneNode* node = importRigToScene(rr.rig, QFileInfo(path).completeBaseName(), report, error, evaluator, poseSpace);
     if (node) {
-        // Remember the file so "fit this character to another" (DnaFitController) can reopen the DNA.
+        // Remember the file the character came from.
         const std::string abs = QFileInfo(path).absoluteFilePath().toStdString();
         for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
             Ogre::MovableObject* mo = it.getNext();

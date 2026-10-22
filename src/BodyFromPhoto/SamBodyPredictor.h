@@ -127,7 +127,7 @@ private:
 /// One-shot pipeline (a temporary Runner). Never returns a partially-valid body.
 Result predict(const QImage& photo, const Options& opts = {});
 
-/// Neutral = pose zeroed, shape+scale kept (what `qtmesh dna fit` wants as a target).
+/// Neutral = pose zeroed, shape+scale kept (the body shape of the person).
 std::vector<float> neutralParams(const std::vector<float>& modelParams);
 
 /// OBJ text for a body (metres; `facingMinusZ` rotates 180 deg about Y for the editor's -Z-facing convention).

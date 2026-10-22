@@ -1,6 +1,8 @@
+> **Note:** the Phase 4 fitting described in this document (`qtmesh dna fit`, `fit_dna_body`, the Fit DNA Body panel, `DNA_FITTING.md`) has been removed. DNA import, body correctives and the face bake remain.
+
 # MetaHuman DNA / OpenRigLogic (epic #1095) — import + body correctives
 
-Status: **Phases 1–3 implemented; Phase 4 (fitting) investigated with a working prototype — see `DNA_FITTING.md`.** This document records what was verified
+Status: **Phases 1–3 implemented. Phase 4 (fitting a body to another mesh) was built and then removed: its results were poor next to generating a character from the native MHR rig. The text below about fitting (`DNA_FITTING.md`.** This document records what was verified
 and the gaps that shape them.
 
 ## What shipped

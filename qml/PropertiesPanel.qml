@@ -670,16 +670,6 @@ Rectangle {
                 Component.onCompleted: content = dnaCorrectivesComponent
             }
 
-            // ---- Fit a MetaHuman body to another character (epic #1095, Phase 4) ----
-            CollapsibleSection {
-                title: "Fit DNA Body"
-                sectionVisible: root.modeToolSectionVisible(EditorModeController.ObjectMode, true)
-                                && DnaFitController.hasSelection
-                expanded: false
-
-                Component.onCompleted: content = dnaFitComponent
-            }
-
             // ---- Character generator ----
             CollapsibleSection {
                 title: "Character Generator"
@@ -12203,16 +12193,6 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/DnaCorrectivesPanel.qml"
-        }
-    }
-
-    // ---- Fit a MetaHuman body (epic #1095, Phase 4) ----
-    Component {
-        id: dnaFitComponent
-
-        Loader {
-            width: parent ? parent.width : 300
-            source: "qrc:/AnimationControl/DnaFitPanel.qml"
         }
     }
 

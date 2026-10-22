@@ -28,7 +28,7 @@ void usage()
         "\n"
         "Predicts a human body (the MHR / Momentum Human Rig body, 18439 vertices) from ONE photo with\n"
         "SAM 3D Body. --pose neutral (default) zeroes the pose and keeps the predicted shape and\n"
-        "proportions (the input `qtmesh dna fit --register` wants); --pose posed keeps the photo's pose\n"
+        "proportions; --pose posed keeps the photo's pose\n"
         "(pose correctives are not reproduced: posed vertices are within ~2 mm mean / 25 mm max of the\n"
         "full model). The person is found by background removal unless --bbox is given (pixels).\n"
         "The OBJ is in metres, Y up, facing -Z (the editor's convention); --facing-z keeps the model's own +Z.\n"
