@@ -662,3 +662,9 @@ vertices) whose shape/proportions come from the person.
   library's own writer, and users supply their own DCC-exported
   `head.dna` / `body.dna`. Groom and clothing data are not part of the DCC
   Export package (upstream README) — a separate pipeline input.
+
+## Character generator data — MHR body + ICT-FaceKit head
+
+- **MHR (Momentum Human Rig):** body mesh, 45 identity shape vectors, skeleton and skin weights, Apache-2.0 (facebookresearch/MHR). Repacked into `character/mhr_character.qmcb`.
+- **ICT-FaceKit:** neutral head, 100 identity modes and 51 ARKit expression shapes, MIT (USC-ICT/ICT-FaceKit). Repacked into `character/ict_character.qmcb` (fp16 deltas).
+- Both licence texts are hosted beside the bundles (`LICENSE-MHR.txt`, `LICENSE-ICT-FaceKit.txt`) and downloaded with them. Generated characters carry no SAM weights.
