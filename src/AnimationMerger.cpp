@@ -4593,8 +4593,8 @@ AnimationMerger::ApplyMotionResult AnimationMerger::applyMotionClip(
             // animation is involved.
             std::vector<Ogre::Vector3> srcLocalAxis(
                 static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
-            std::vector<Ogre::Vector3> srcRestDirCt(
-                static_cast<size_t>(Jc), Ogre::Vector3::ZERO);
+            std::vector srcRestDirCt(static_cast<size_t>(Jc),
+                                     Ogre::Vector3(Ogre::Vector3::ZERO));
             for (int c = 0; c < Jc; ++c) {
                 const auto& sd = clipRestDir[static_cast<size_t>(c)];
                 Ogre::Vector3 srcDir(sd[0], sd[1], sd[2]);
