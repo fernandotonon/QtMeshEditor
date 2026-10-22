@@ -1,7 +1,14 @@
 #include <gtest/gtest.h>
 
 #include "CharacterModel.h"
+#include "CharacterScene.h"
+#include "../TestHelpers.h"
 
+#include <OgreEntity.h>
+#include <OgreMesh.h>
+#include <OgreSceneNode.h>
+#include <OgreSubEntity.h>
+#include <OgreSubMesh.h>
 #include <cmath>
 #include <set>
 
@@ -293,4 +300,25 @@ TEST(CharacterParsing, ColoursAcceptNamesAndHex)
     EXPECT_TRUE(CharacterGen::parseColour(QStringLiteral("blue"), CharacterGen::ColourKind::Skin, &c)) << "falls back to the CSS colour name";
     EXPECT_FALSE(CharacterGen::parseColour(QStringLiteral("zzz"), CharacterGen::ColourKind::Eye, &c));
     EXPECT_TRUE(CharacterGen::colourNames(CharacterGen::ColourKind::Eye).contains(QStringLiteral("hazel")));
+}
+
+TEST(CharacterScene, TintMaterialsSurviveAReinitialisedEntity)
+{
+    // Applying an animation (and editing a skeleton or a morph) calls Entity::_initialise(true), which rebuilds the sub-entities from the
+    // MESH's submesh materials: an override set only on the sub-entities came back as the default material.
+    ASSERT_TRUE(tryInitOgre());
+    QString err;
+    SceneBuild rep;
+    Ogre::SceneNode* node = createCharacterInScene(syntheticAssets(), Params(), QStringLiteral("charscene_reinit_test"), &rep, &err);
+    ASSERT_NE(node, nullptr) << err.toStdString();
+    auto* entity = static_cast<Ogre::Entity*>(node->getAttachedObject(0));
+    ASSERT_NE(entity, nullptr);
+    std::vector<std::string> before;
+    for (unsigned i = 0; i < entity->getNumSubEntities(); ++i) before.push_back(entity->getSubEntity(i)->getMaterialName());
+    ASSERT_FALSE(before.empty());
+    EXPECT_NE(before.front().find("charscene_reinit_test"), std::string::npos);
+    entity->_initialise(true);
+    ASSERT_EQ(entity->getNumSubEntities(), before.size());
+    for (unsigned i = 0; i < entity->getNumSubEntities(); ++i)
+        EXPECT_EQ(entity->getSubEntity(i)->getMaterialName(), before[i]) << "sub-entity " << i;
 }
