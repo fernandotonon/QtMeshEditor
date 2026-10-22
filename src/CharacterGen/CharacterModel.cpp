@@ -542,6 +542,30 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             gq[size_t(j)] = mul(gq[size_t(par)], lq);
         }
     }
+    // MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
+    // skeleton lean 13-25 degrees front/back and the clavicles point 30 degrees off the shoulder line. Retargeting aims every bone
+    // at the source's direction, so a vertical source straightens those leans bone by bone: Spine2 turned by 30-40 degrees and
+    // dragged the shoulders (its children) down, and the clavicles swung the arms. The pivots of the spine chain are lined up on
+    // one vertical (depth only) and each clavicle root is brought to the depth of its arm joint, like a Mixamo rig's. The mesh
+    // does not change (skinning at rest only depends on the joint positions it is bound to).
+    if (p.standardSkeleton) {
+        std::unordered_map<std::string, int> byName;
+        for (int j = 0; j < J; ++j) byName.emplace(SamBody::mhrAlias(a.jointNames[j].toStdString()), j);
+        auto at = [&](const char* n) { const auto it = byName.find(n); return it == byName.end() ? -1 : it->second; };
+        const int chain[] = {at("Hips"), at("Spine"), at("Spine1"), at("Spine2"), at("Neck"), at("Head")};
+        bool all = true;
+        for (int c : chain) all = all && c >= 0;
+        if (all) {
+            float z = 0;
+            for (int i = 1; i <= 4; ++i) z += gt[size_t(chain[i])][2];
+            z /= 4.0f;
+            for (int c : chain) gt[size_t(c)][2] = z;
+        }
+        for (const char* side : {"Left", "Right"}) {
+            const int sh = at((std::string(side) + "Shoulder").c_str()), arm = at((std::string(side) + "Arm").c_str());
+            if (sh >= 0 && arm >= 0) gt[size_t(sh)][2] = gt[size_t(arm)][2];
+        }
+    }
     // Which joints are kept. MHR carries ~127 joints: the standard body (spine, limbs, fingers: the ones with a standard name),
     // plus procedural helpers (twist joints driven by its runtime), sub-joints (wrist twist, ankle sub-joints, metacarpals) and the
     // face joints. Animation tools drive plain rotations of a Mixamo-style skeleton and know nothing about the extras: left in, they
