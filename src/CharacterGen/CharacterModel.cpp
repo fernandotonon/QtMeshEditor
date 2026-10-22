@@ -117,6 +117,7 @@ struct PolarRing {
     float at(float th) const
     {
         const size_t n = pts.size();
+        if (n == 0) return 0.0f;
         size_t hi = 0;
         while (hi < n && pts[hi].first < th) ++hi;
         const size_t lo = (hi + n - 1) % n;
@@ -225,6 +226,7 @@ std::vector<StripTri> zipLoops(const std::vector<std::array<float, 3>>& A, const
     };
     const int nA = int(A.size()), nB = int(B.size());
     // start B at the vertex nearest A[0]
+    if (nA == 0 || nB == 0) return {};
     int b0 = 0;
     float best = 1e30f;
     for (int i = 0; i < nB; ++i) { const float d = d2(A[0], B[size_t(i)]); if (d < best) { best = d; b0 = i; } }
