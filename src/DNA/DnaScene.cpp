@@ -53,17 +53,27 @@ void separatePositionBuffer(Ogre::VertexData* vd)
     Ogre::VertexDeclaration* decl = vd->vertexDeclaration;
     const Ogre::VertexElement* pos = decl->findElementBySemantic(Ogre::VES_POSITION);
     if (!pos) return;
-    bool alone = pos->getOffset() == 0;
-    for (const Ogre::VertexElement& e : decl->getElements())
-        if (e.getSource() == pos->getSource() && e.getSemantic() != Ogre::VES_POSITION) alone = false;
-    if (alone) return;
+    // Ogre's software skinning/pose paths replace the position and normal buffers with scratch copies that are NOT
+    // filled with the original data, so anything else sharing one of those buffers (the texture coordinates, which
+    // were packed with the normal) comes out as garbage: position and normal each get a buffer of their own.
+    const Ogre::VertexElement* nrm = decl->findElementBySemantic(Ogre::VES_NORMAL);
+    auto alone = [&](const Ogre::VertexElement* el) {
+        if (!el) return true;
+        if (el->getOffset() != 0) return false;
+        for (const Ogre::VertexElement& e : decl->getElements())
+            if (e.getSource() == el->getSource() && &e != el && !(e.getSemantic() == el->getSemantic() && e.getIndex() == el->getIndex())) return false;
+        return true;
+    };
+    if (alone(pos) && alone(nrm) && (!nrm || nrm->getSource() != pos->getSource())) return;
 
     Ogre::VertexDeclaration* nd = Ogre::HardwareBufferManager::getSingleton().createVertexDeclaration();
     nd->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    unsigned short nextSource = 1;
+    if (nrm) nd->addElement(nextSource++, 0, nrm->getType(), Ogre::VES_NORMAL, nrm->getIndex());
     size_t offset = 0;
     for (const Ogre::VertexElement& e : decl->getElements()) {
-        if (e.getSemantic() == Ogre::VES_POSITION) continue;
-        nd->addElement(1, offset, e.getType(), e.getSemantic(), e.getIndex());
+        if (e.getSemantic() == Ogre::VES_POSITION || e.getSemantic() == Ogre::VES_NORMAL) continue;
+        nd->addElement(nextSource, offset, e.getType(), e.getSemantic(), e.getIndex());
         offset += Ogre::VertexElement::getTypeSize(e.getType());
     }
     vd->reorganiseBuffers(nd);   // takes ownership of `nd`

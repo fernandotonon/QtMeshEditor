@@ -13560,7 +13560,7 @@ QJsonArray MCPServer::buildToolsList()
         props["body"] = QJsonObject{{"type", "string"}, {"description", "Body shape coefficients, e.g. \"0=1.2,3=-0.5\" (45 modes)."}};
         props["face"] = QJsonObject{{"type", "string"}, {"description", "Face identity coefficients, e.g. \"0=1,4=-0.8\" (100 modes)."}};
         props["skin"] = QJsonObject{{"type", "string"}, {"description", "Skin colour: #rrggbb or pale/light/tan/brown/dark."}};
-        props["eye"] = QJsonObject{{"type", "string"}, {"description", "Eye colour: #rrggbb or blue/green/brown/hazel/grey."}};
+        props["eye"] = QJsonObject{{"type", "string"}, {"description", "Eye colour: #rrggbb or blue/green/brown/hazel/grey/dark."}};
         props["bust"] = QJsonObject{{"type", "boolean"}, {"description", "Head and shoulders only (previews)."}};
         props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Remove the thin layer between the MHR lids so the eyeballs (eye colour, gaze) show (default true); false keeps the lids as sculpted, eyes shut."}};
         props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};

@@ -13,6 +13,10 @@ eyelid shapes are transferred directly in a mask around each eye. The mouth inte
 with **Open eyes** on (the default; `--closed-eyes` / MCP `open_eyes:false` / the panel checkbox turn it off) the thin layer between the lids is removed
 (the triangle list was picked by hand, `scripts/mhr_eye_layer_faces.json`) and the eyeballs show; eye colour only has an effect then.
 The eyeballs and the mouth interior are seated relative to landmarks on the face (the eyelid layer and the lip line), so they follow every body/head shape.
+**Textured eyes (opt-in, local).** Set `QTMESH_CHARACTER_EYE_OBJ` to an eyeball OBJ (a UV sphere whose iris pole is on -Y; it is rotated to face
+forward, scaled to the seated ICT eyeball and used instead of the ICT sclera/iris) and `QTMESH_CHARACTER_EYE_TEX` to a directory holding
+`iris_blue|brown|grey|green|hazel|dark.png` (`scripts/build-eye-iris-textures.py` builds them from an eye base-colour texture and a grid of iris
+colours). The eye colour then picks the closest of the six textures. No eye asset ships with the editor; check the licence of the one you use.
 `--ict-head` / MCP `head: "ict"` selects the older ICT head stitched on at the neck (native ARKit shapes, eyes, visible seam).
 
 ## Output
