@@ -121,7 +121,7 @@ std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int
 bool parseCoefficients(const QString& text, std::vector<float>& out, int limit, QString* error = nullptr);
 
 enum class ColourKind { Skin, Eye };
-/// A colour name (skin: pale light tan brown dark; eye: blue green brown hazel grey) or any QColor spelling (#rrggbb ...).
+/// A colour name (skin: pale light tan brown dark; eye: blue green brown hazel grey dark) or any QColor spelling (#rrggbb ...).
 bool parseColour(const QString& text, ColourKind kind, Rgb* out);
 /// The named colours of a kind, for pickers.
 QStringList colourNames(ColourKind kind);
@@ -143,7 +143,7 @@ struct BuildReport {
 Dna::Rig buildRig(const Assets& assets, const Params& params, BuildReport* report = nullptr, QString* error = nullptr);
 
 /// Which material a built mesh takes (by its name) — the scene layer maps this to a tint.
-enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes };
+enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes, Eye };
 bool surfaceForMesh(const QString& meshName, Surface* out);
 
 }  // namespace CharacterGen

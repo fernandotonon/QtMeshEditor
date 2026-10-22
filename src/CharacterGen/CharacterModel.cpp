@@ -14,6 +14,7 @@
 #include <cstring>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <random>
 #include <unordered_map>
 
@@ -414,7 +415,7 @@ namespace {
 const QHash<QString, QString>& colourTable(ColourKind kind)
 {
     static const QHash<QString, QString> skin = {{"pale", "#f1cdb3"}, {"light", "#e0ac8c"}, {"tan", "#c68c63"}, {"brown", "#8d5a3b"}, {"dark", "#4f3224"}};
-    static const QHash<QString, QString> eye = {{"blue", "#3f6fa8"}, {"green", "#4c8a5a"}, {"brown", "#5a3a22"}, {"hazel", "#8a6a2e"}, {"grey", "#7d8a94"}};
+    static const QHash<QString, QString> eye = {{"blue", "#3f6fa8"}, {"green", "#4c8a5a"}, {"brown", "#5a3a22"}, {"hazel", "#8a6a2e"}, {"grey", "#7d8a94"}, {"dark", "#2b1a12"}};
     return kind == ColourKind::Skin ? skin : eye;
 }
 }  // namespace
@@ -435,11 +436,72 @@ QStringList colourNames(ColourKind kind)
     return n;
 }
 
+namespace {
+// Optional textured eyeball: an OBJ named by QTMESH_CHARACTER_EYE_OBJ (its iris pole on -Y), normalised to unit radius around its
+// centroid. Not shipped: the asset's licence has to be cleared before it can be bundled, so this is an opt-in for local use.
+struct EyeMesh {
+    std::vector<float> positions, uvs;
+    std::vector<std::pair<uint32_t, uint32_t>> corners;   // (position, uv) per layout
+    std::vector<std::vector<uint32_t>> faces;             // layout indices
+};
+const EyeMesh* eyeMeshFromEnv()
+{
+    static const EyeMesh* cached = []() -> const EyeMesh* {
+        const QByteArray path = qgetenv("QTMESH_CHARACTER_EYE_OBJ");
+        if (path.isEmpty()) return nullptr;
+        QFile f(QString::fromLocal8Bit(path));
+        if (!f.open(QIODevice::ReadOnly)) return nullptr;
+        static EyeMesh m;
+        std::map<std::pair<uint32_t, uint32_t>, uint32_t> seen;
+        while (!f.atEnd()) {
+            const QList<QByteArray> t = f.readLine().simplified().split(' ');
+            if (t.isEmpty()) continue;
+            if (t[0] == "v" && t.size() >= 4) for (int k = 1; k <= 3; ++k) m.positions.push_back(t[k].toFloat());
+            else if (t[0] == "vt" && t.size() >= 3) { m.uvs.push_back(t[1].toFloat()); m.uvs.push_back(t[2].toFloat()); }
+            else if (t[0] == "f" && t.size() >= 4) {
+                bool bad = false;
+                std::vector<uint32_t> face;
+                for (int k = 1; k < t.size(); ++k) {
+                    const QList<QByteArray> c = t[k].split('/');
+                    // 1-based, or negative = relative to the elements read so far; anything out of range rejects the file
+                    const int nv = int(m.positions.size() / 3), nt = int(m.uvs.size() / 2);
+                    int pv = c[0].toInt(), tv = c.size() > 1 && !c[1].isEmpty() ? c[1].toInt() : 1;
+                    if (pv < 0) pv += nv + 1;
+                    if (tv < 0) tv += nt + 1;
+                    if (pv < 1 || pv > nv || tv < 1 || tv > std::max(nt, 1)) { bad = true; break; }
+                    const uint32_t pi = uint32_t(pv - 1), ti = uint32_t(tv - 1);
+                    auto it = seen.find({pi, ti});
+                    if (it == seen.end()) { it = seen.emplace(std::make_pair(pi, ti), uint32_t(m.corners.size())).first; m.corners.push_back({pi, ti}); }
+                    face.push_back(it->second);
+                }
+                if (bad) return nullptr;
+                m.faces.push_back(std::move(face));
+            }
+        }
+        const size_t n = m.positions.size() / 3;
+        if (n == 0 || m.faces.empty() || m.uvs.empty()) return nullptr;
+        double c[3] = {0, 0, 0};
+        for (size_t i = 0; i < n; ++i) for (int k = 0; k < 3; ++k) c[k] += m.positions[i * 3 + size_t(k)];
+        for (int k = 0; k < 3; ++k) c[k] /= double(n);
+        double r = 0;
+        for (size_t i = 0; i < n; ++i) {
+            double d2 = 0;
+            for (int k = 0; k < 3; ++k) { const double d = m.positions[i * 3 + size_t(k)] - c[k]; d2 += d * d; }
+            r += std::sqrt(d2);
+        }
+        r /= double(n);
+        for (size_t i = 0; i < n; ++i) for (int k = 0; k < 3; ++k) m.positions[i * 3 + size_t(k)] = float((m.positions[i * 3 + size_t(k)] - c[k]) / r);
+        return &m;
+    }();
+    return cached;
+}
+}  // namespace
+
 bool surfaceForMesh(const QString& meshName, Surface* out)
 {
     static const std::pair<const char*, Surface> table[] = {
         {"body", Surface::Skin}, {"head_skin", Surface::Skin}, {"head_mouth", Surface::Mouth}, {"head_teeth", Surface::Teeth},
-        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}};
+        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}};
     for (const auto& t : table)
         if (meshName == QLatin1String(t.first)) {
             if (out) *out = t.second;
@@ -993,6 +1055,9 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         if (y < neckCutY + 0.03f && y > neckCutY - 0.08f) seamBody.push_back(v);
     }
 
+    float eyeCentre[2][3] = {{0, 0, 0}, {0, 0, 0}};
+    float eyeRadius[2] = {0, 0};
+    bool eyeSeated[2] = {false, false};
     if (p.nativeHead) {
         // Seat each ICT eyeball in the MHR face: the identity shapes move the lids forwards or back by up to a centimetre, so
         // the eyeball is pushed along z until its front sits just ahead of the (opened) lid margin of THIS face.
@@ -1024,6 +1089,23 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         h[1] = ty + (h[1] - cy) * shrink;
                         h[2] = tz + (h[2] - cz0) * shrink;
                     }
+                {   // remember where the eyeball ended up (centre + radius), for an alternative eyeball mesh
+                    const int si = cx > 0 ? 0 : 1;
+                    double c3[3] = {0, 0, 0};
+                    int cn2 = 0;
+                    for (int v = scl->v0; v <= scl->v1; ++v) { for (int k = 0; k < 3; ++k) c3[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn2; }
+                    if (cn2 > 0) {
+                        double rr = 0;
+                        for (int k = 0; k < 3; ++k) eyeCentre[si][k] = float(c3[k] / cn2);
+                        for (int v = scl->v0; v <= scl->v1; ++v) {
+                            double d2 = 0;
+                            for (int k = 0; k < 3; ++k) { const double d = headPos[size_t(v) * 3 + size_t(k)] - eyeCentre[si][k]; d2 += d * d; }
+                            rr += std::sqrt(d2);
+                        }
+                        eyeRadius[si] = float(rr / cn2);
+                        eyeSeated[si] = true;
+                    }
+                }
                 continue;
             }
             const float dyLift = 0.0072f + 0.00505f;   // + the hand-fitted offset (up 5.05 mm)   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
@@ -1070,10 +1152,12 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
+    const EyeMesh* eyeObj = (p.nativeHead && p.openEyes && (eyeSeated[0] || eyeSeated[1])) ? eyeMeshFromEnv() : nullptr;
     for (const Group& g : groups) {
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
         if (p.nativeHead && (g.neck || std::strcmp(g.mesh, "head_lashes") == 0)) continue;
+        if (eyeObj && (std::strcmp(g.mesh, "head_sclera") == 0 || std::strcmp(g.mesh, "head_iris") == 0)) continue;
         if (p.nativeHead && !p.openEyes && (std::strcmp(g.mesh, "head_sclera") == 0 || std::strcmp(g.mesh, "head_iris") == 0)) continue;   // hidden behind shut lids
         Dna::Mesh m;
         m.name = QString::fromLatin1(g.mesh);
@@ -1177,6 +1261,36 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
         }
         rep.headVertices += int(pc);
+        rep.headTriangles += int(m.faces.size());
+        rep.meshNames << m.name;
+        rig.meshes.push_back(std::move(m));
+    }
+    if (eyeObj) {
+        Dna::Mesh m;
+        m.name = QStringLiteral("head_eye");
+        const uint32_t headJoint = uint32_t(newIndex[size_t(cHead)]);
+        for (int side = 0; side < 2; ++side) {
+            if (!eyeSeated[side]) continue;
+            const uint32_t p0 = uint32_t(m.positions.size() / 3), t0 = uint32_t(m.uvs.size() / 2);
+            for (size_t i = 0; i + 2 < eyeObj->positions.size(); i += 3) {
+                const float x = eyeObj->positions[i], y = eyeObj->positions[i + 1], z = eyeObj->positions[i + 2];
+                // the file's iris looks down -Y: turn it to +Z (the way the face looks), scale to the seated eyeball
+                m.positions.push_back(eyeCentre[side][0] + x * eyeRadius[side]);
+                m.positions.push_back(eyeCentre[side][1] + z * eyeRadius[side]);
+                m.positions.push_back(eyeCentre[side][2] - y * eyeRadius[side]);
+                m.skin.push_back({{uint16_t(headJoint), 1.0f}});
+            }
+            for (size_t i = 0; i + 1 < eyeObj->uvs.size(); i += 2) { m.uvs.push_back(eyeObj->uvs[i]); m.uvs.push_back(eyeObj->uvs[i + 1]); }
+            const uint32_t l0 = uint32_t(m.layouts.size());
+            for (const auto& c : eyeObj->corners) m.layouts.push_back({p0 + c.first, t0 + c.second, p0 + c.first});
+            for (const auto& f : eyeObj->faces) {
+                std::vector<uint32_t> face;
+                for (uint32_t li : f) face.push_back(l0 + li);
+                m.faces.push_back(std::move(face));
+            }
+        }
+        m.normals = positionNormals(m.positions, m.faces, m.layouts);
+        rep.headVertices += int(m.positions.size() / 3);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));

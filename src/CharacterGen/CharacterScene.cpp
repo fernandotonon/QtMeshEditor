@@ -1,9 +1,17 @@
 #include "CharacterScene.h"
 
 #include "../Manager.h"
+#include "../RTShaderHelper.h"
 #include "../SentryReporter.h"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <OgreEntity.h>
+#include <OgreImage.h>
+#include <OgreTextureManager.h>
+#include <OgreResourceGroupManager.h>
+#include <OgreTextureUnitState.h>
 #include <OgreMaterialManager.h>
 #include <OgreMesh.h>
 #include <OgrePass.h>
@@ -24,6 +32,7 @@ Rgb colourFor(Surface s, const Params& p)
         case Surface::Sclera: return {0.93f, 0.92f, 0.90f};
         case Surface::Iris: return p.eye;
         case Surface::Lashes: return p.lash;
+        case Surface::Eye: return {1.0f, 1.0f, 1.0f};
     }
     return p.skin;
 }
@@ -36,8 +45,44 @@ const char* surfaceName(Surface s)
         case Surface::Sclera: return "sclera";
         case Surface::Iris: return "iris";
         case Surface::Lashes: return "lashes";
+        case Surface::Eye: return "eye";
     }
     return "skin";
+}
+// The iris texture whose colour is closest to the requested eye colour (blue / brown / grey / green / hazel / dark).
+QByteArray irisTextureFor(const Rgb& c)
+{
+    static const struct { const char* file; Rgb ref; } tiles[] = {
+        {"iris_blue.png", {0.35f, 0.50f, 0.65f}},  {"iris_brown.png", {0.45f, 0.25f, 0.10f}}, {"iris_grey.png", {0.55f, 0.58f, 0.60f}},
+        {"iris_green.png", {0.30f, 0.50f, 0.20f}}, {"iris_hazel.png", {0.50f, 0.40f, 0.15f}}, {"iris_dark.png", {0.20f, 0.10f, 0.07f}}};
+    float best = 1e9f;
+    const char* pick = tiles[0].file;
+    for (const auto& t : tiles) {
+        const float d = (c[0] - t.ref[0]) * (c[0] - t.ref[0]) + (c[1] - t.ref[1]) * (c[1] - t.ref[1]) + (c[2] - t.ref[2]) * (c[2] - t.ref[2]);
+        if (d < best) { best = d; pick = t.file; }
+    }
+    return QByteArray(pick);
+}
+
+// Ogre's texture manager is global by name, so the resource is named after the directory it came from: another asset that
+// already loaded an "iris_blue.png" must not be mistaken for ours.
+std::string eyeTextureName(const QString& dir, const char* file)
+{
+    const QByteArray key = QFileInfo(dir).absoluteFilePath().toUtf8();
+    return std::string("qmc_eye_") + QByteArray::number(qHash(key), 16).toStdString() + "_" + file;
+}
+
+void loadEyeTexture(const QString& dir, const char* file)
+{
+    const std::string name = eyeTextureName(dir, file);
+    if (Ogre::TextureManager::getSingleton().resourceExists(name)) return;
+    QFile f(QDir(dir).filePath(QString::fromLatin1(file)));
+    if (!f.open(QIODevice::ReadOnly)) return;
+    const QByteArray bytes = f.readAll();
+    Ogre::Image image;
+    Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(const_cast<char*>(bytes.constData()), size_t(bytes.size()), false, true));
+    image.load(ds, "png");
+    Ogre::TextureManager::getSingleton().loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
 }
 }  // namespace
 
@@ -61,6 +106,25 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         const bool glossy = surface == Surface::Sclera || surface == Surface::Iris || surface == Surface::Teeth;
         pass->setSpecular(glossy ? Ogre::ColourValue(0.4f, 0.4f, 0.4f) : Ogre::ColourValue(0.06f, 0.06f, 0.06f));
         pass->setShininess(glossy ? 60.0f : 12.0f);
+        if (surface == Surface::Eye) {   // wet cornea
+            pass->setSpecular(Ogre::ColourValue(0.7f, 0.7f, 0.7f));
+            pass->setShininess(96.0f);
+        }
+        if (surface == Surface::Eye) {
+            // prototype: textures from QTMESH_CHARACTER_EYE_TEX (basecolor / normal / roughness PNGs)
+            const QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
+            if (!dir.isEmpty() && pass->getNumTextureUnitStates() == 0) {
+                const QByteArray irisFile = irisTextureFor(params.eye);
+                loadEyeTexture(dir, irisFile.constData());
+                pass->setDiffuse(Ogre::ColourValue::White);
+                pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
+                Ogre::TextureUnitState* t = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
+                t->setName("diffuse_map");
+                Ogre::TextureUnitState* t2 = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
+                t2->setName("albedo");
+            }
+            RTShaderHelper::syncMaterialForViewport(mat);
+        }
         mat->compile();
         entity->getSubEntity(kv.second)->setMaterialName(matName);
     }

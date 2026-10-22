@@ -29,7 +29,7 @@ void usage()
 {
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
-        "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey>]\n"
+        "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
         "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"

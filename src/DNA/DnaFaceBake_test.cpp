@@ -440,6 +440,14 @@ TEST_F(DnaSceneMorphTest, MorphedMeshKeepsPositionInItsOwnTightlyPackedBuffer)
         for (const Ogre::VertexElement& e : vd->vertexDeclaration->getElements())
             if (e.getSemantic() != Ogre::VES_POSITION)
                 EXPECT_NE(e.getSource(), pos->getSource()) << "element shares the position buffer";
+        // Software skinning replaces the position and normal buffers with scratch copies, so the texture coordinates must
+        // not share the normal's buffer either (they came out as garbage: a textured part rendered as one flat colour).
+        const Ogre::VertexElement* nrm = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+        const Ogre::VertexElement* uv = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+        ASSERT_NE(nrm, nullptr);
+        ASSERT_NE(uv, nullptr);
+        EXPECT_NE(nrm->getSource(), pos->getSource());
+        EXPECT_NE(uv->getSource(), nrm->getSource()) << "UVs share the normal buffer";
         // Normals / UVs must have survived the split.
         EXPECT_NE(vd->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL), nullptr);
         EXPECT_NE(vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES), nullptr);
