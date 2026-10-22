@@ -1028,6 +1028,27 @@ Dialog {
                                     }
                                 }
 
+                                // FLUX.3 Image Klein runs in the helper process
+                                // and, like FLUX.2, ignores the Steps/CFG above.
+                                Text {
+                                    text: "FLUX.3 Steps:"; color: textColor
+                                }
+                                RowLayout {
+                                    SpinBox {
+                                        from: 8; to: 30
+                                        value: SDManager.flux3Steps
+                                        onValueModified: SDManager.flux3Steps = value
+                                        editable: true
+                                    }
+                                    Text {
+                                        text: "distilled model; 16 is the documented default"
+                                        color: textColor; opacity: 0.6
+                                        font.pixelSize: 10
+                                        wrapMode: Text.Wrap
+                                        Layout.fillWidth: true
+                                    }
+                                }
+
                                 Text { text: "CFG Scale:"; color: textColor }
                                 RowLayout {
                                     Slider {

@@ -72,9 +72,11 @@ AIModelCatalog::AIModelCatalog(QObject* parent)
     // here never showed up until the user hit Refresh. Rescan whenever the
     // catalog's contents change; deferred so a burst of per-file signals
     // collapses into cheap directory listings after the event is handled.
+    // existingInstance(): never CREATE the manager from here — its constructor
+    // schedules an auto-load of the last (multi-GB) model.
     connect(this, &AIModelCatalog::modelsChanged, this, []() {
         QTimer::singleShot(0, []() {
-            if (SDManager* sd = SDManager::instance())
+            if (SDManager* sd = SDManager::existingInstance())
                 sd->scanForModels();
         });
     });

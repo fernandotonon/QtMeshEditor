@@ -101,11 +101,17 @@ Result run(const Request& req,
             if (c == '\r' || c == '\n') {
                 if (!pending.isEmpty()) {
                     int s = 0, t = 0;
-                    if (progress && parseProgress(pending, &s, &t) && t == req.steps)
-                        progress(s, t);
-                    tail += pending + '\n';
-                    if (tail.size() > 4000)
-                        tail.remove(0, tail.size() - 4000);
+                    if (parseProgress(pending, &s, &t)) {
+                        // A bar fragment, whether or not anyone listens: it is
+                        // never part of the error text, and only the sampling
+                        // bar (not the tensor-loading one) is forwarded.
+                        if (progress && t == req.steps)
+                            progress(s, t);
+                    } else {
+                        tail += pending + '\n';
+                        if (tail.size() > 4000)
+                            tail.remove(0, tail.size() - 4000);
+                    }
                     pending.clear();
                 }
             } else {
@@ -132,7 +138,7 @@ Result run(const Request& req,
         QStringList lines;
         for (const QByteArray& l : tail.split('\n')) {
             const QString s = QString::fromUtf8(l).trimmed();
-            if (!s.isEmpty() && !s.contains(QLatin1String("|====")) && !s.contains(QLatin1String("|###")))
+            if (!s.isEmpty())
                 lines << s;
         }
         while (lines.size() > 4)

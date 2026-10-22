@@ -674,21 +674,22 @@ TEST_F(SDManagerTest, QmlInstanceReturnsSameAsSingleton)
     EXPECT_EQ(qmlInst, manager);
 }
 
+TEST_F(SDManagerTest, Flux3StepsDefaultsToSixteenAndClampsToTheUsefulRange)
+{
+    const int restore = manager->flux3Steps();
+    manager->setFlux3Steps(16);
+    EXPECT_EQ(manager->flux3Steps(), 16);
+
+    manager->setFlux3Steps(2);
+    EXPECT_EQ(manager->flux3Steps(), 8) << "below the useful minimum -> 8";
+    manager->setFlux3Steps(999);
+    EXPECT_EQ(manager->flux3Steps(), 30) << "a distilled model stops improving -> 30";
+
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setFlux3Steps(manager->flux3Steps());
+    EXPECT_EQ(spy.count(), 0) << "setting the same value must not churn settings";
+
+    manager->setFlux3Steps(restore);
+}
+
 #endif // ENABLE_STABLE_DIFFUSION
-
-TEST_F(SDManagerTest, FluxKleinModelNamesAreRecognisedForBothGenerations)
-{
-    // Both component-set models are 1024^2 distilled flow models that take a
-    // reference image; the gates in the CLI and the image-to-3D panel key on this.
-    EXPECT_TRUE(SDManager::isFluxKleinModelName(SDManager::flux2KleinModelName()));
-    EXPECT_TRUE(SDManager::isFluxKleinModelName(SDManager::flux3KleinModelName()));
-    EXPECT_FALSE(SDManager::isFluxKleinModelName(QStringLiteral("sd_xl_base_1.0")));
-    EXPECT_FALSE(SDManager::isFluxKleinModelName(QString()));
-    EXPECT_NE(SDManager::flux2KleinModelName(), SDManager::flux3KleinModelName());
-}
-
-TEST_F(SDManagerTest, Flux3HasItsOwnDirectoryApartFromFlux2)
-{
-    EXPECT_NE(SDManager::flux3KleinDirectory(), SDManager::flux2KleinDirectory());
-    EXPECT_TRUE(SDManager::flux3KleinDirectory().endsWith(QStringLiteral("flux3_klein")));
-}

@@ -150,6 +150,26 @@ TEST(SdCliHelperTest, RunSurfacesTheHelpersOwnErrorOnFailure)
     EXPECT_TRUE(res.error.contains("GGML_ASSERT something broke"));
 }
 
+TEST(SdCliHelperTest, ProgressBarsNeverLeakIntoTheErrorText)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    // An EARLY bar (no |==== / |### marker would have filtered it before) and
+    // then a crash: the user-facing error must carry only the helper's words.
+    const QString helper = writeFakeHelper(dir,
+        "printf '  |==>| 1/16 - 1.0s/it\\r'\n"
+        "echo 'GGML_ASSERT boom' >&2\n"
+        "exit 3\n");
+    SdCliHelper::Request r = baseRequest();
+    r.outputPath = dir.filePath("out.png");
+    std::atomic<bool> stop{false};
+    // No progress callback at all: parsing must not depend on one being set.
+    const SdCliHelper::Result res = SdCliHelper::run(r, helper, nullptr, stop);
+    EXPECT_FALSE(res.ok);
+    EXPECT_TRUE(res.error.contains("GGML_ASSERT boom"));
+    EXPECT_FALSE(res.error.contains("1/16")) << res.error.toStdString();
+}
+
 TEST(SdCliHelperTest, ExitZeroWithoutAnImageIsAnError)
 {
     QTemporaryDir dir;

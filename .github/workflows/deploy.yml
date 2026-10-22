@@ -985,6 +985,30 @@ jobs:
             echo "$out"
             echo "$out" | grep -q "QF_ERROR usage"
 
+    - name: Verify bundled FLUX.3 helper (qtmesh_sdcli)
+      run: |
+            # FLUX.3 runs out of process; the .deb (and the snap/Docker images
+            # built from it) ship the helper next to the editor binary.
+            set -e
+            if [ ! -x ./bin/qtmesh_sdcli ]; then
+              echo "ERROR: ./bin/qtmesh_sdcli is missing"
+              ls -la ./bin | head -40
+              exit 1
+            fi
+            if [ ! -s ./bin/qtmesh_sdcli.THIRD_PARTY_LICENSES.txt ]; then
+              echo "ERROR: qtmesh_sdcli licence notices missing or empty"
+              exit 1
+            fi
+            ls -la ./bin/qtmesh_sdcli
+            ldd ./bin/qtmesh_sdcli
+            if ldd ./bin/qtmesh_sdcli | grep -q "not found"; then
+              echo "ERROR: qtmesh_sdcli has unresolved shared libraries"
+              exit 1
+            fi
+            # --help prints the usage block; mentioning --diffusion-model proves
+            # the binary runs and is the FLUX-capable sd-cli.
+            ./bin/qtmesh_sdcli --help 2>&1 | grep -q -- "--diffusion-model"
+
     - name: Verify bundled trellis-cli is loadable
       run: |
             # Regression guard for 3.37.3/3.37.4: shipping trellis-cli without
@@ -1140,6 +1164,21 @@ jobs:
             chmod 755 ./pack-deb/usr/share/qtmesheditor/qtmesh_quadriflow
             cp ./bin/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt \
                ./pack-deb/usr/share/doc/qtmesheditor/qtmesh_quadriflow.THIRD_PARTY_LICENSES.txt
+
+            # FLUX.3 helper (sd.cpp's sd-cli, out-of-process with its own ggml,
+            # see cmake/SdCliHelper.cmake) — SdCliHelper probes next to the
+            # editor binary. Without it FLUX.3 is silently unavailable in the
+            # shipped package (SDWorker::flux3Available() is false), so a
+            # missing helper is a hard error, like QuadriFlow above. MIT
+            # notices (sd.cpp + ggml) travel with it.
+            if [ ! -f ./bin/qtmesh_sdcli ]; then
+              echo "ERROR: ./bin/qtmesh_sdcli is missing (FLUX.3 would be unavailable in the package)"
+              exit 1
+            fi
+            cp ./bin/qtmesh_sdcli ./pack-deb/usr/share/qtmesheditor/qtmesh_sdcli
+            chmod 755 ./pack-deb/usr/share/qtmesheditor/qtmesh_sdcli
+            cp ./bin/qtmesh_sdcli.THIRD_PARTY_LICENSES.txt \
+               ./pack-deb/usr/share/doc/qtmesheditor/qtmesh_sdcli.THIRD_PARTY_LICENSES.txt
 
             # Create proper launcher script
             printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:/usr/share/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QT_PLUGIN_PATH="/usr/lib/qtmesheditor/plugins:/usr/share/qtmesheditor:${QT_PLUGIN_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
