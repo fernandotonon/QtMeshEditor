@@ -99,15 +99,24 @@ struct UvVertex {
     std::array<float, 3> position{};
 };
 
+// Rasterise one triangle: texels whose centre is inside it take the interpolated surface position; texels up to a pixel OUTSIDE it
+// take the extrapolated position (the colour is a function of the 3D point, so it continues smoothly past the island border and
+// filtering across a seam does not pull in a different colour). An inside texel is never overwritten by an extrapolated one.
 void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size, std::vector<std::array<float, 3>>& surface,
                std::vector<char>& covered)
 {
     const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if (std::fabs(area) < 1e-9f) return;
-    const int x0 = std::max(0, int(std::floor(std::min({a.x, b.x, c.x}))));
-    const int x1 = std::min(size - 1, int(std::ceil(std::max({a.x, b.x, c.x}))));
-    const int y0 = std::max(0, int(std::floor(std::min({a.y, b.y, c.y}))));
-    const int y1 = std::min(size - 1, int(std::ceil(std::max({a.y, b.y, c.y}))));
+    const float margin = 1.0f;   // pixels
+    const float lenA = std::hypot(c.x - b.x, c.y - b.y);   // the edge opposite a, b, c
+    const float lenB = std::hypot(a.x - c.x, a.y - c.y);
+    const float lenC = std::hypot(b.x - a.x, b.y - a.y);
+    if (lenA < 1e-9f || lenB < 1e-9f || lenC < 1e-9f) return;
+    const float scale = std::fabs(area);
+    const int x0 = std::max(0, int(std::floor(std::min({a.x, b.x, c.x}) - margin)));
+    const int x1 = std::min(size - 1, int(std::ceil(std::max({a.x, b.x, c.x}) + margin)));
+    const int y0 = std::max(0, int(std::floor(std::min({a.y, b.y, c.y}) - margin)));
+    const int y1 = std::min(size - 1, int(std::ceil(std::max({a.y, b.y, c.y}) + margin)));
     for (int y = y0; y <= y1; ++y)
         for (int x = x0; x <= x1; ++x) {
             const float px = float(x) + 0.5f;
@@ -115,13 +124,15 @@ void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size
             const float w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) / area;
             const float w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) / area;
             const float w2 = 1.0f - w0 - w1;
-            const float eps = -0.02f;
-            if (w0 < eps || w1 < eps || w2 < eps) continue;
+            // distance (pixels) to each edge, negative outside
+            const bool inside = w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f;
+            if (!inside && (w0 * scale / lenA < -margin || w1 * scale / lenB < -margin || w2 * scale / lenC < -margin)) continue;
+            const size_t i = size_t(y) * size_t(size) + size_t(x);
+            if (!inside && covered[i] == 2) continue;
             std::array<float, 3> p{};
             for (size_t k = 0; k < 3; ++k) p[k] = a.position[k] * w0 + b.position[k] * w1 + c.position[k] * w2;
-            const size_t i = size_t(y) * size_t(size) + size_t(x);
             surface[i] = p;
-            covered[i] = 1;
+            covered[i] = inside ? 2 : 1;
         }
 }
 
@@ -236,6 +247,30 @@ float browMask(const std::array<float, 3>& p, const SkinBrows& brows)
     return best;
 }
 
+Rgb areolaColourFor(const Rgb& skin)
+{
+    const float fair = std::clamp((luminance(skin) - 0.25f) / 0.5f, 0.0f, 1.0f);
+    return mix(scaled(skin, 0.74f, 0.58f, 0.56f), scaled(skin, 0.92f, 0.60f, 0.58f), fair);
+}
+
+Rgb nippleColourFor(const Rgb& skin) { return mix(areolaColourFor(skin), scaled(areolaColourFor(skin), 0.80f, 0.74f, 0.74f), 0.8f); }
+
+NippleMask nippleMask(const std::array<float, 3>& p, const SkinNipples& nipples)
+{
+    NippleMask mask;
+    if (!nipples.valid) return mask;
+    const float scale = nipples.scale;
+    for (const auto& c : nipples.centre) {
+        const float dz = (p[2] - c[2]) * nipples.forward;
+        if (dz < -0.020f * scale || dz > 0.020f * scale) continue;
+        const float d = std::hypot(p[0] - c[0], p[1] - c[1]);
+        const float feather = 0.0030f * scale;
+        mask.areola = std::max(mask.areola, 1.0f - smoothRange(0.0160f * scale - feather, 0.0160f * scale + feather, d));
+        mask.core = std::max(mask.core, 1.0f - smoothRange(0.0050f * scale - 0.0015f * scale, 0.0050f * scale + 0.0015f * scale, d));
+    }
+    return mask;
+}
+
 Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextureOptions& o)
 {
     // large-scale tone: patches a few centimetres across, brighter / darker
@@ -275,6 +310,15 @@ Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextu
         const float density = std::clamp(0.72f + 0.55f * stroke + 0.3f * fine, 0.0f, 1.0f);
         const Rgb hair = scaled(browColourFor(skin), 1.0f + 0.25f * fine, 1.0f + 0.25f * fine, 1.0f + 0.25f * fine);
         c = mix(c, hair, 0.92f * brow * density);
+    }
+
+    // areolae and nipples: soft discs with a fine bumpy grain
+    const NippleMask nip = nippleMask(p, o.nipples);
+    if (nip.areola > 0.0f) {
+        const float bumps = valueNoise({p[0] * 700.0f, p[1] * 700.0f, p[2] * 700.0f}, o.seed + 211u);
+        const float g = 1.0f + 0.07f * bumps;
+        c = mix(c, scaled(areolaColourFor(skin), g, g, g), 0.88f * nip.areola);
+        c = mix(c, scaled(nippleColourFor(skin), g, g, g), 0.92f * nip.core);
     }
 
     // pores and fine grain

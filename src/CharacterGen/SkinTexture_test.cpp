@@ -6,6 +6,8 @@ using namespace CharacterGen;
 
 namespace {
 
+float luminanceOf(const Rgb& c) { return 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2]; }
+
 /// A unit quad (two triangles) in the xy plane, 1 m wide, covering the whole UV square.
 Dna::Mesh quad()
 {
@@ -140,4 +142,33 @@ TEST(SkinTexture, EyebrowColourIsDarkerThanTheSkin)
 {
     for (const Rgb skin : {Rgb{0.90f, 0.72f, 0.62f}, Rgb{0.50f, 0.34f, 0.26f}, Rgb{0.30f, 0.20f, 0.15f}})
         EXPECT_LT(browColourFor(skin)[0], skin[0]);
+}
+
+TEST(SkinTexture, NipplesAreSoftDiscsOnTheFrontOfTheChest)
+{
+    SkinNipples n;
+    n.valid = true;
+    n.forward = -1.0f;
+    n.scale = 1.0f;
+    n.centre = {{{-0.10f, 1.24f, -0.15f}, {0.10f, 1.24f, -0.15f}}};
+    const NippleMask on = nippleMask({0.10f, 1.24f, -0.152f}, n);
+    EXPECT_GT(on.core, 0.9f);
+    EXPECT_GT(on.areola, 0.9f);
+    const NippleMask ring = nippleMask({0.10f + 0.011f, 1.24f, -0.15f}, n);
+    EXPECT_EQ(ring.core, 0.0f);
+    EXPECT_GT(ring.areola, 0.9f) << "inside the areola, outside the nipple";
+    EXPECT_EQ(nippleMask({0.10f + 0.04f, 1.24f, -0.15f}, n).areola, 0.0f) << "well outside";
+    EXPECT_EQ(nippleMask({0.0f, 1.24f, -0.15f}, n).areola, 0.0f) << "the sternum";
+    EXPECT_EQ(nippleMask({0.10f, 1.24f, -0.15f + 0.10f}, n).areola, 0.0f) << "the back";
+    EXPECT_FLOAT_EQ(nippleMask({0.108f, 1.245f, -0.15f}, n).areola, nippleMask({-0.108f, 1.245f, -0.15f}, n).areola);
+    SkinNipples none;
+    EXPECT_EQ(nippleMask({0.10f, 1.24f, -0.15f}, none).areola, 0.0f);
+}
+
+TEST(SkinTexture, AreolaIsDarkerThanTheSkinAndTheNippleDarkerStill)
+{
+    for (const Rgb skin : {Rgb{0.90f, 0.72f, 0.62f}, Rgb{0.50f, 0.34f, 0.26f}}) {
+        EXPECT_LT(luminanceOf(areolaColourFor(skin)), luminanceOf(skin));
+        EXPECT_LE(luminanceOf(nippleColourFor(skin)), luminanceOf(areolaColourFor(skin)) + 1e-4f);
+    }
 }

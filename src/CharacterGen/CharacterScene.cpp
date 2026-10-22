@@ -6,6 +6,7 @@
 #include "../SentryReporter.h"
 #include "SkinTexture.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QImage>
 #include <algorithm>
@@ -182,12 +183,16 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
     options.size = params.skinTextureSize;
     options.seed = skinSeedOf(params);
     options.lips = build.lips;
+    options.nipples = build.nipples;
     if (params.openEyes) options.brows = build.brows;   // the closed lids have no layer to frame the brows on
     const QImage image = bakeSkinAlbedo(rig.meshes.front(), params.skin, options);
     if (image.isNull()) return QString();
     const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
     QDir().mkpath(dir);
-    const QString file = QDir(dir).filePath(unique + QStringLiteral("_skin.png"));
+    // a fresh file name per bake: Ogre and the shader generator cache textures by name, so reusing one (a character regenerated
+    // under the same node name) kept showing the previous character's image
+    static int counter = 0;
+    const QString file = QDir(dir).filePath(unique + QStringLiteral("_%1_%2_skin.png").arg(++counter).arg(QDateTime::currentMSecsSinceEpoch()));
     if (!image.save(file, "PNG")) return QString();
     pruneSkinTextures(dir, kKeptSkinTextures);
     return file;

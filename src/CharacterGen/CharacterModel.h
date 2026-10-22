@@ -152,6 +152,16 @@ struct BrowFrame {
     float forward = 1.0f;
 };
 
+/// Where the nipples go (final coordinates, metres): the centre of each (left, right = the character's sides), the spacing scale
+/// (the distance between them relative to the mean body's) and which way the chest faces. Found from the mean body's vertex
+/// neighbourhoods at an anatomical position, so it follows every body shape.
+struct NippleFrame {
+    bool valid = false;
+    std::array<std::array<float, 3>, 2> centre{};
+    float scale = 1.0f;
+    float forward = 1.0f;
+};
+
 struct BuildReport {
     int bodyVertices = 0, bodyTriangles = 0;
     int headVertices = 0, headTriangles = 0;
@@ -162,6 +172,7 @@ struct BuildReport {
     float headScale = 1.0f;
     LipFrame lips;
     BrowFrame brows;
+    NippleFrame nipples;
     QStringList meshNames;
     QStringList warnings;
 };

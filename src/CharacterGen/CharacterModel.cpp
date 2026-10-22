@@ -622,6 +622,45 @@ LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
     return lips;
 }
 
+// The nipples: on the mean body a nipple sits ~10 cm either side of the midline at ~72 % of the body height, on the front of the
+// chest. The few mean-body vertices nearest to that point are the landmark: their positions on the SHAPED body (same vertex ids)
+// give the centre, so it follows the body shape. Same coordinates as lipFrameOf.
+NippleFrame nippleFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    NippleFrame nipples;
+    const size_t count = a.mhrBase.size() / 3;
+    if (count == 0 || body.positions.size() < count * 3) return nipples;
+    constexpr float kHalfSpacing = 11.6f;   // cm, on the mean body
+    constexpr float kHeightRatio = 0.742f;
+    float top = 0.0f;
+    for (size_t v = 0; v < count; ++v) top = std::max(top, a.mhrBase[v * 3 + 1]);
+    const float turn = facePlusZ ? 1.0f : -1.0f;
+    std::array<float, 2> meanX{};
+    for (size_t side = 0; side < 2; ++side) {
+        const float sx = side == 0 ? 1.0f : -1.0f;   // +x is the character's left on the unturned body
+        std::vector<std::pair<float, size_t>> near;
+        for (size_t v = 0; v < count; ++v) {
+            if (a.mhrBase[v * 3 + 2] < 8.0f) continue;   // the front of the chest only
+            const float dx = a.mhrBase[v * 3] - sx * kHalfSpacing;
+            const float dy = a.mhrBase[v * 3 + 1] - kHeightRatio * top;
+            near.push_back({dx * dx + dy * dy, v});
+        }
+        if (near.size() < 6) return NippleFrame();
+        std::partial_sort(near.begin(), near.begin() + 6, near.end());
+        std::array<double, 3> sum{};
+        for (size_t i = 0; i < 6; ++i)
+            for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[near[i].second * 3 + k];
+        // final coordinates: the 180 degree turn negates x and z; the list order stays "character's left first"
+        nipples.centre[side] = {float(sum[0] / 6.0) * turn, float(sum[1] / 6.0), float(sum[2] / 6.0) * turn};
+        meanX[side] = float(sum[0] / 6.0);
+    }
+    const float spacing = std::fabs(meanX[0] - meanX[1]);
+    nipples.scale = spacing / (2.0f * kHalfSpacing * 0.01f);   // metres of the shaped body vs the mean body's 20 cm
+    nipples.forward = turn;
+    nipples.valid = spacing > 1e-4f;
+    return nipples;
+}
+
 // The eyes of the built body (the eyelid-layer landmarks), for the eyebrows; same coordinates as lipFrameOf.
 BrowFrame browFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
 {
@@ -1487,6 +1526,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
 
     rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
     rep.brows = browFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    rep.nipples = nippleFrameOf(a, rig.meshes.front(), p.facePlusZ);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }
