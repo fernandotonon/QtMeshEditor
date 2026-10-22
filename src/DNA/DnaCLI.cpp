@@ -75,6 +75,19 @@ void usage()
 }
 }
 
+namespace {
+/// Largest vertex displacement (millimetres) between the rig's neutral positions and `truth`, over the given meshes.
+double maxMovedMm(const Rig& rig, const std::vector<size_t>& meshes, const std::vector<std::vector<float>>& truth)
+{
+    double moved = 0;
+    for (size_t mi : meshes) {
+        const std::vector<float>& neutral = rig.meshes[mi].positions;
+        for (size_t i = 0; i < truth[mi].size(); ++i) moved = std::max(moved, double(std::abs(truth[mi][i] - neutral[i])) * 1000.0);
+    }
+    return moved;
+}
+}  // namespace
+
 static int runPose(int argc, char* argv[]);
 static int runFace(int argc, char* argv[]);
 static int runPsd(int argc, char* argv[]);
@@ -354,7 +367,7 @@ static int runPose(int argc, char* argv[])
             std::vector<size_t> imported;   // the meshes the importer keeps: those that expand to triangles
             for (size_t m = 0; m < full.rig.meshes.size(); ++m)
                 if (!expand(full.rig.meshes[m], full.rig.flipV).indices.empty()) imported.push_back(m);
-            { double tm = 0; for (size_t mi : imported) for (size_t i = 0; i < truth[mi].size(); ++i) tm = std::max(tm, double(std::abs(truth[mi][i] - full.rig.meshes[mi].positions[i])) * 1000.0); report.insert("vsRigTruthMovedMm", tm); }
+            report.insert("vsRigTruthMovedMm", maxMovedMm(full.rig, imported, truth));
             std::vector<double> err;
             size_t ev0 = 0;
             double worst = 0; size_t worstMesh = 0, worstPos = 0;
