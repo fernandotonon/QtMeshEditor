@@ -670,6 +670,15 @@ Rectangle {
                 Component.onCompleted: content = dnaCorrectivesComponent
             }
 
+            // ---- Character generator ----
+            CollapsibleSection {
+                title: "Character Generator"
+                sectionVisible: root.modeToolSectionVisible(EditorModeController.ObjectMode, true)
+                expanded: false
+
+                Component.onCompleted: content = characterGeneratorComponent
+            }
+
             // ---- Motion graph (#526) ----
             CollapsibleSection {
                 title: "Motion Graph"
@@ -12184,6 +12193,16 @@ Rectangle {
         Loader {
             width: parent ? parent.width : 300
             source: "qrc:/AnimationControl/DnaCorrectivesPanel.qml"
+        }
+    }
+
+    // ---- Character generator ----
+    Component {
+        id: characterGeneratorComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/CharacterGeneratorPanel.qml"
         }
     }
 

@@ -1,4 +1,7 @@
 #include "MCPServer.h"
+#include "CharacterGen/CharacterAssets.h"
+#include "CharacterGen/CharacterModel.h"
+#include "CharacterGen/CharacterScene.h"
 #include <QSettings>
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
@@ -744,6 +747,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("join_mesh_parts"), &MCPServer::toolJoinMeshParts},
         {QStringLiteral("generate_mesh_from_image"), &MCPServer::toolGenerateMeshFromImage},
         {QStringLiteral("generate_body_from_photo"), &MCPServer::toolGenerateBodyFromPhoto},
+        {QStringLiteral("generate_character"), &MCPServer::toolGenerateCharacter},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -990,6 +994,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("capture_body_from_video"), QStringLiteral("ai_assist")},
             {QStringLiteral("generate_mesh_from_image"), QStringLiteral("image_to_3d")},
             {QStringLiteral("generate_body_from_photo"), QStringLiteral("image_to_3d")},
+            {QStringLiteral("generate_character"), QStringLiteral("image_to_3d")},
             {QStringLiteral("generate_pbr_maps"), QStringLiteral("pbr_synth")},
             {QStringLiteral("upscale_texture"), QStringLiteral("pbr_synth")},
             {QStringLiteral("photo_depth"), QStringLiteral("pbr_synth")},
@@ -1026,7 +1031,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("apply_material"), QStringLiteral("create_material"), QStringLiteral("modify_material"),
         QStringLiteral("export_mesh"), QStringLiteral("auto_uv_unwrap"), QStringLiteral("uv_project"),
         QStringLiteral("uv_set_seams"), QStringLiteral("uv_unwrap_selection"), QStringLiteral("retopologize"),
-        QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_mesh_texture"),
+        QStringLiteral("compute_skin_weights"), QStringLiteral("auto_rig"), QStringLiteral("generate_character"), QStringLiteral("generate_mesh_texture"),
         QStringLiteral("generate_pbr_maps"), QStringLiteral("upscale_texture"), QStringLiteral("photo_depth"), QStringLiteral("inpaint_texture"), QStringLiteral("create_primitive"),
         QStringLiteral("animate"), QStringLiteral("add_keyframe"), QStringLiteral("remove_keyframe"),
         QStringLiteral("merge_animations"), QStringLiteral("resample_animation"), QStringLiteral("simplify_animation"),
@@ -3722,6 +3727,80 @@ QJsonObject MCPServer::toolPhotoDepth(const QJsonObject &args)
     result["rawMax"] = r.rawMax;
     return result;
 #endif
+}
+
+QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
+{
+    using namespace CharacterGen;
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("generate_character"));
+    if (!Ogre::Root::getSingletonPtr() || !Manager::getSingletonPtr())
+        return makeErrorResult("No active scene.");
+    {
+        QString dl;
+        if (!CharacterAssets::ensureBlocking(&dl))   // verifies the pinned digests of the default bundle; a custom directory is used as it is
+            return makeErrorResult(QStringLiteral("Character assets unavailable: %1").arg(dl));
+    }
+    Assets data;
+    QString err;
+    if (!loadAssetsFromDir(CharacterAssets::dir(), data, &err))
+        return makeErrorResult(QStringLiteral("Character assets could not be loaded: %1").arg(err));
+
+    Params p;
+    const QString head = args.value("head").toString(QStringLiteral("mhr"));
+    if (args.contains("head") && (!args.value("head").isString() || (head != QLatin1String("mhr") && head != QLatin1String("ict"))))
+        return makeErrorResult(QStringLiteral("'head' must be \"mhr\" or \"ict\"."));
+    p.nativeHead = head == QLatin1String("mhr") && !data.mhrArkit.empty();
+    p.openEyes = args.value("open_eyes").toBool(true);
+    p.facePlusZ = args.value("facing_z").toBool(false);
+    const double varietyIn = args.value("variety").toDouble(1.0);
+    if (!(varietyIn >= 0.0 && varietyIn <= 5.0)) return makeErrorResult(QStringLiteral("'variety' must be between 0 and 5."));
+    const float variety = float(varietyIn);
+    const bool haveSeed = args.contains("seed");
+    const double seedIn = args.value("seed").toDouble(0);
+    if (haveSeed && (!(seedIn >= 0.0 && seedIn <= 4294967295.0) || seedIn != std::floor(seedIn)))
+        return makeErrorResult(QStringLiteral("'seed' must be an integer between 0 and 4294967295."));
+    const uint32_t seed = uint32_t(seedIn);
+    if (haveSeed) {
+        p.bodyShape = randomCoefficients(seed * 2u + 1u, data.mhrShapes, variety, 16);
+        p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);
+    }
+    if (!parseCoefficients(args.value("body").toString(), p.bodyShape, data.mhrShapes, &err)
+        || !parseCoefficients(args.value("face").toString(), p.faceIdentity, data.ictIdentities, &err))
+        return makeErrorResult(err);
+    const QString skin = args.value("skin").toString(), eye = args.value("eye").toString();
+    if (!skin.isEmpty() && !parseColour(skin, ColourKind::Skin, &p.skin))
+        return makeErrorResult(QStringLiteral("unknown skin colour '%1' (names: %2)").arg(skin, colourNames(ColourKind::Skin).join(' ')));
+    if (!eye.isEmpty() && !parseColour(eye, ColourKind::Eye, &p.eye))
+        return makeErrorResult(QStringLiteral("unknown eye colour '%1' (names: %2)").arg(eye, colourNames(ColourKind::Eye).join(' ')));
+    if (args.value("bust").toBool(false)) p.bustDepth = 0.30f;
+
+    SceneBuild sb;
+    const QString name = args.value("name").toString(QStringLiteral("character"));
+    Ogre::SceneNode* node = createCharacterInScene(data, p, name, &sb, &err);
+    if (!node) return makeErrorResult(err);
+
+    QJsonObject result = makeSuccessResult(QStringLiteral("Created a character (%1 joints, %2 body + %3 head triangles, %4 morph targets).")
+        .arg(sb.build.joints).arg(sb.build.bodyTriangles).arg(sb.build.headTriangles).arg(sb.import.morphTargets));
+    result["node"] = QString::fromStdString(node->getName());
+    result["joints"] = sb.build.joints;
+    result["bodyTriangles"] = sb.build.bodyTriangles;
+    result["headTriangles"] = sb.build.headTriangles;
+    result["morphTargets"] = sb.import.morphTargets;
+    result["meshes"] = QJsonArray::fromStringList(sb.build.meshNames);
+    QStringList warnings = sb.build.warnings + sb.import.warnings;
+    if (!warnings.isEmpty()) result["warnings"] = QJsonArray::fromStringList(warnings);
+
+    const QString outPath = args.value("output_path").toString();
+    if (!outPath.isEmpty()) {
+        if (MeshImporterExporter::exporter(node, QFileInfo(outPath).absoluteFilePath(), CLIPipeline::formatForExtension(outPath)) != 0) {
+            // roll the scene back: a caller that retries a failed request must not end up with one character per attempt
+            SelectionSet::getSingleton()->clearList();
+            Manager::getSingleton()->destroySceneNode(node);
+            return makeErrorResult(QStringLiteral("Export to %1 failed; the character was not added to the scene.").arg(outPath));
+        }
+        result["outputPath"] = outPath;
+    }
+    return result;
 }
 
 QJsonObject MCPServer::toolGenerateBodyFromPhoto(const QJsonObject &args)
@@ -13473,6 +13552,31 @@ QJsonArray MCPServer::buildToolsList()
 #endif // ENABLE_STABLE_DIFFUSION
 
     // generate_pbr_maps (#404) — only advertised when ONNX is compiled in.
+    // generate_character
+    {
+        QJsonObject props;
+        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "Random body + face from this seed (omit for the average character)."}};
+        props["variety"] = QJsonObject{{"type", "number"}, {"description", "Spread of the random shapes (default 1.0)."}};
+        props["body"] = QJsonObject{{"type", "string"}, {"description", "Body shape coefficients, e.g. \"0=1.2,3=-0.5\" (45 modes)."}};
+        props["face"] = QJsonObject{{"type", "string"}, {"description", "Face identity coefficients, e.g. \"0=1,4=-0.8\" (100 modes)."}};
+        props["skin"] = QJsonObject{{"type", "string"}, {"description", "Skin colour: #rrggbb or pale/light/tan/brown/dark."}};
+        props["eye"] = QJsonObject{{"type", "string"}, {"description", "Eye colour: #rrggbb or blue/green/brown/hazel/grey."}};
+        props["bust"] = QJsonObject{{"type", "boolean"}, {"description", "Head and shoulders only (previews)."}};
+        props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Remove the thin layer between the MHR lids so the eyeballs (eye colour, gaze) show (default true); false keeps the lids as sculpted, eyes shut."}};
+        props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};
+        props["facing_z"] = QJsonObject{{"type", "boolean"}, {"description", "Keep +Z facing instead of the editor's -Z."}};
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Scene node base name (default character)."}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Optional: also export the character (glb/fbx/...)."}};
+        appendTool(
+            "generate_character",
+            "Create a RIGGED HUMAN CHARACTER in the scene: an MHR body (standard 52-joint skeleton) with its OWN head (default, no seam; "
+            "set head=\"ict\" for the ICT-FaceKit head stitched on) and the 51 ARKit expression shapes as morph targets, eyeballs, teeth "
+            "and mouth interior as separate parts. Seed/coefficients choose the shape, skin and eye colour tint the parts. Assets (~40 MB) "
+            "download on first use. Not for creatures or objects.",
+            props,
+            QJsonArray{}
+        );
+    }
 #ifdef ENABLE_ONNX
     {
         QJsonObject props;
