@@ -219,7 +219,7 @@ void MeshGenController::clearSelectedImage()
 
 int MeshGenController::imageGenSizeForModel(const QString& model)
 {
-    if (model == SDManager::flux2KleinModelName()) return 1024;
+    if (SDManager::isFluxKleinModelName(model)) return 1024;
     // SDXL checkpoints train at 1024²; SD 1.x at 512² (bigger makes SD 1.5
     // duplicate the subject). Matches SDManager's own auto-detect naming.
     const QString lower = model.toLower();
@@ -406,9 +406,9 @@ void MeshGenController::generateSourceImage(const QString& prompt)
     // generating something unrelated.
     m_imageGenRef.clear();
     if (!m_selectedImage.isEmpty()) {
-        if (model != SDManager::flux2KleinModelName()) {
+        if (!SDManager::isFluxKleinModelName(model)) {
             emit imageGenStatus(
-                tr("Editing the loaded image needs FLUX.2-klein-4B (AI Model "
+                tr("Editing the loaded image needs FLUX.2-klein-4B or FLUX.3 (AI Model "
                    "Settings) — or remove the image (🗑) to generate from "
                    "scratch."), true);
             return;

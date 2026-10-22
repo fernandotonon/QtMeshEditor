@@ -518,7 +518,8 @@ Dialog {
                                                         id: statusText
                                                         anchors.centerIn: parent
                                                         text: modelData.downloaded ? "Downloaded"
-                                                              : modelData.partial ? "Partial" : "Not downloaded"
+                                                              : modelData.partial ? "Partial"
+                                                              : !modelData.available ? "Unavailable in this build" : "Not downloaded"
                                                         color: modelData.downloaded ? "#2e7d32"
                                                              : modelData.partial ? "#e65100" : textColor
                                                         font.pointSize: 8
@@ -538,9 +539,15 @@ Dialog {
                                         }
 
                                         Local.ThemedButton {
-                                            text: "Download"
+                                            text: modelData.available ? "Download" : "Unavailable"
                                             enabled: modelData.available && !modelData.downloaded && !AIModelCatalog.busy
                                             onClicked: AIModelCatalog.downloadModel(modelData.id)
+                                            // A disabled button gives no feedback, so say WHY.
+                                            ToolTip.visible: hovered && !enabled
+                                            ToolTip.delay: 300
+                                            ToolTip.text: !modelData.available ? modelData.buildRequirement
+                                                        : modelData.downloaded ? "Already downloaded"
+                                                        : "Another download is in progress"
                                         }
                                         Local.ThemedButton {
                                             text: "Delete"

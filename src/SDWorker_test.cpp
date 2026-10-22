@@ -172,3 +172,30 @@ TEST(SDWorkerFlux2Test, VaeNameIsNotMistakenForDiffusion)
     EXPECT_TRUE(set.vae.endsWith("flux2-vae.safetensors"));
     EXPECT_TRUE(set.llm.endsWith("mistral-small.gguf"));
 }
+
+TEST(SDWorkerFlux3Test, DetectsCompleteFlux3Set)
+{
+    // The exact filenames the catalog installs for FLUX.3 Image Klein.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    touch(dir.filePath("flux3-image-klein-Q4_0.gguf"));
+    touch(dir.filePath("flux2-vae.safetensors"));
+    touch(dir.filePath("Qwen3VL-4B-Instruct-Q4_K_M.gguf"));
+
+    const auto set = SDWorker::detectFlux2Set(dir.path());
+    EXPECT_TRUE(set.valid());
+    EXPECT_TRUE(set.diffusion.endsWith("flux3-image-klein-Q4_0.gguf"));
+    EXPECT_TRUE(set.vae.endsWith("flux2-vae.safetensors"));
+    EXPECT_TRUE(set.llm.endsWith("Qwen3VL-4B-Instruct-Q4_K_M.gguf"));
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion(set.diffusion));
+}
+
+TEST(SDWorkerFlux3Test, FamilyDetectionDistinguishesFlux2)
+{
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion("/m/flux-3-image-klein.safetensors"));
+    EXPECT_TRUE(SDWorker::isFlux3Diffusion("/m/FLUX3-image-klein-base.gguf"));
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion("/m/flux-2-klein-4b-Q4_0.gguf"));
+    // A directory named flux3 must not make a FLUX.2 file read as FLUX.3.
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion("/ai_models/flux3_klein/flux-2-klein-4b.gguf"));
+    EXPECT_FALSE(SDWorker::isFlux3Diffusion(QString()));
+}

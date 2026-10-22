@@ -428,6 +428,9 @@ void SDManager::scanForModels()
     // DIRECTORY-shaped model — list it when the full set is present.
     if (SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
         m_availableModels.append(flux2KleinModelName());
+    if (SDWorker::flux3Available()
+        && SDWorker::detectFlux2Set(flux3KleinDirectory()).valid())
+        m_availableModels.append(flux3KleinModelName());
 
     // Update recommended models download status
     for (int i = 0; i < m_recommendedModels.size(); ++i) {
@@ -681,6 +684,21 @@ QString SDManager::flux2KleinModelName()
     return QStringLiteral("FLUX.2-klein-4B");
 }
 
+QString SDManager::flux3KleinDirectory()
+{
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("flux3_klein"));
+}
+
+QString SDManager::flux3KleinModelName()
+{
+    return QStringLiteral("FLUX.3-Image-Klein");
+}
+
+bool SDManager::isFluxKleinModelName(const QString &name)
+{
+    return name == flux2KleinModelName() || name == flux3KleinModelName();
+}
+
 QString SDManager::getModelFilePath(const QString &modelName) const
 {
     // The FLUX.2 set is a directory-shaped model (SDWorker loads the
@@ -688,6 +706,9 @@ QString SDManager::getModelFilePath(const QString &modelName) const
     if (modelName == flux2KleinModelName()
         && SDWorker::detectFlux2Set(flux2KleinDirectory()).valid())
         return flux2KleinDirectory();
+    if (SDWorker::flux3Available() && modelName == flux3KleinModelName()
+        && SDWorker::detectFlux2Set(flux3KleinDirectory()).valid())
+        return flux3KleinDirectory();
 
     QDir modelsDir(m_modelsDirectory);
 

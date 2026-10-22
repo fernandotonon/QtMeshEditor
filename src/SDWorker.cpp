@@ -1,10 +1,13 @@
 // LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDWorker.h"
+#include "SdCliHelper.h"
+#include "SentryReporter.h"
 
 #include <algorithm>
 
 #include <QDebug>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QThread>
 #include <QImage>
@@ -42,6 +45,19 @@ SDWorker::Flux2Set SDWorker::detectFlux2Set(const QString &dir)
     }
     return set;
 }
+
+bool SDWorker::flux3Available()
+{
+    return SdCliHelper::helperAvailable();
+}
+
+bool SDWorker::isFlux3Diffusion(const QString &diffusionPath)
+{
+    const QString lower = QFileInfo(diffusionPath).fileName().toLower();
+    return lower.contains(QLatin1String("flux3"))
+           || lower.contains(QLatin1String("flux-3"))
+           || lower.contains(QLatin1String("flux.3"));
+}
 // LCOV_EXCL_START
 
 SDWorker::~SDWorker()
@@ -69,6 +85,12 @@ bool SDWorker::loadModel(const QString &modelPath)
         QMutexLocker locker(&m_mutex);
 
         // Unload previous model
+        if (m_helperMode) {
+            wasModelLoaded = true;
+            m_helperMode = false;
+            m_modelPath.clear();
+            m_isModelLoaded.store(false);
+        }
         if (m_ctx) {
             wasModelLoaded = true;
             free_sd_ctx(m_ctx);
@@ -84,6 +106,8 @@ bool SDWorker::loadModel(const QString &modelPath)
         // Qwen3 text encoder) — sd.cpp loads those through separate params,
         // not model_path.
         m_isFlux2 = false;
+        m_isFlux3 = false;
+        m_helperMode = false;
         m_flux2 = Flux2Set{};
         if (QFileInfo(modelPath).isDir()) {
             m_flux2 = detectFlux2Set(modelPath);
@@ -100,6 +124,30 @@ bool SDWorker::loadModel(const QString &modelPath)
                 return false;
             }
             m_isFlux2 = true;
+            m_isFlux3 = isFlux3Diffusion(m_flux2.diffusion);
+
+            // FLUX.3 never gets an in-process sd.cpp context (see flux3Available):
+            // "loaded" means the component set is valid and the helper exists;
+            // the heavy load happens inside the helper per generation.
+            if (m_isFlux3) {
+                if (!SdCliHelper::helperAvailable()) {
+                    error = QStringLiteral("FLUX.3 needs the qtmesh_sdcli helper, which was not "
+                                           "found next to the editor.");
+                    qWarning() << "SDWorker:" << error;
+                    if (wasModelLoaded)
+                        emit modelUnloaded();
+                    emit modelLoadError(error);
+                    return false;
+                }
+                m_helperMode = true;
+                m_modelPath = modelPath;
+                m_isModelLoaded.store(true);
+                qDebug() << "SDWorker: FLUX.3 set ready (helper mode)";
+                if (wasModelLoaded)
+                    emit modelUnloaded();
+                emit modelLoaded(modelPath);
+                return true;
+            }
         }
 
         try {
@@ -186,7 +234,7 @@ void SDWorker::unloadModel()
 
     {
         QMutexLocker locker(&m_mutex);
-        wasLoaded = (m_ctx != nullptr);
+        wasLoaded = (m_ctx != nullptr) || m_helperMode;
         unloadModelInternal();
     }
 
@@ -205,6 +253,7 @@ void SDWorker::unloadModelInternal()
         qDebug() << "SDWorker: Model unloaded";
     }
 
+    m_helperMode = false;
     m_modelPath.clear();
     m_isModelLoaded.store(false);
 #endif
@@ -306,6 +355,12 @@ void SDWorker::generateTextureControlled(const QString &prompt,
     // Prevent concurrent generation
     if (m_isGenerating.load()) {
         emit generationError("Generation already in progress");
+        return;
+    }
+
+    // FLUX.3 runs in the helper process — no context to (re)create here.
+    if (m_helperMode) {
+        generateWithHelper(prompt, controlImage, outputPath);
         return;
     }
 
@@ -498,6 +553,86 @@ void SDWorker::generateTextureControlled(const QString &prompt,
 
 
 #ifdef ENABLE_STABLE_DIFFUSION
+// LCOV_EXCL_START — drives the real helper binary + a downloaded model
+void SDWorker::generateWithHelper(const QString &prompt, const QImage &controlImage,
+                                  const QString &outputPath)
+{
+    // FLUX.3 has no ControlNet: silently dropping a depth map would hand back
+    // an image unrelated to the mesh, so refuse instead.
+    if (!controlImage.isNull()) {
+        {
+            QMutexLocker l(&m_mutex);
+            m_refImage = QImage();
+        }
+        emit generationError("FLUX.3 cannot use a depth ControlNet (mesh-aware texture). "
+                             "Load an SD 1.5 model for that, or use FLUX.3 for plain "
+                             "text-to-image / image editing.");
+        return;
+    }
+
+    m_stopRequested.store(false);
+    m_isGenerating.store(true);
+
+    // One-shot reference image (edit mode) → a temp PNG the helper reads with -r.
+    QImage ref;
+    {
+        QMutexLocker l(&m_mutex);
+        ref = m_refImage;
+        m_refImage = QImage();
+    }
+    QString refPath;
+    if (!ref.isNull()) {
+        refPath = outputPath + QStringLiteral(".ref.png");
+        if (!ref.save(refPath, "PNG")) {
+            m_isGenerating.store(false);
+            emit generationError("Could not write the reference image for FLUX.3");
+            return;
+        }
+    }
+
+    SdCliHelper::Request req;
+    req.diffusion    = m_flux2.diffusion;
+    req.llm          = m_flux2.llm;
+    req.vae          = m_flux2.vae;
+    req.prompt       = prompt;
+    req.outputPath   = outputPath;
+    req.refImagePath = refPath;
+    req.width        = m_settings.width;
+    req.height       = m_settings.height;
+    req.steps        = std::clamp(m_settings.flux3Steps, 8, 30);
+    req.cfgScale     = 1.0f;                       // distilled: guidance is baked in
+    req.seed         = m_settings.seed;
+    req.threads      = m_settings.threads;
+
+    emit generationStarted();
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.flux3"),
+        QStringLiteral("helper generate size=%1x%2 steps=%3 edit=%4")
+            .arg(req.width).arg(req.height).arg(req.steps).arg(!refPath.isEmpty()));
+    qDebug() << "SDWorker: FLUX.3 via helper —" << req.width << "x" << req.height
+             << "steps" << req.steps << (refPath.isEmpty() ? "" : "(edit)");
+
+    const SdCliHelper::Result res = SdCliHelper::run(
+        req, SdCliHelper::defaultHelperPath(),
+        [this](int step, int total) { emit generationProgress(step, total); },
+        m_stopRequested);
+
+    if (!refPath.isEmpty())
+        QFile::remove(refPath);
+    m_isGenerating.store(false);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.flux3"),
+        res.cancelled ? QStringLiteral("helper cancelled")
+        : res.ok      ? QStringLiteral("helper done")
+                      : QStringLiteral("helper failed"));
+    if (res.cancelled)
+        emit generationStopped();
+    else if (!res.ok)
+        emit generationError(res.error);
+    else
+        emit generationCompleted(outputPath);
+}
+// LCOV_EXCL_STOP
+
 void SDWorker::progressCallback(int step, int steps, float time, void *data)
 {
     Q_UNUSED(time);

@@ -110,6 +110,13 @@ public:
     /// is listed under in the model dropdown when present.
     static QString flux2KleinDirectory();
     static QString flux2KleinModelName();
+    /// FLUX.3 Image Klein (opt-in; FLUX Kommunity License, not Apache-2.0 —
+    /// see THIRD_PARTY_AI_MODELS.md). Same directory-shaped component set.
+    static QString flux3KleinDirectory();
+    static QString flux3KleinModelName();
+    /// Either FLUX component-set model (both do reference-image editing,
+    /// both are 1024² distilled flow models).
+    static bool isFluxKleinModelName(const QString &name);
 
     // Generation state
     bool isGenerating() const;
