@@ -78,6 +78,10 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& out, QString
 /// Open `<dir>/mhr_character.qmcb` + `<dir>/ict_character.qmcb`.
 bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error = nullptr);
 
+/// Where the optional textured eye lives: `eye.obj` + `iris_<colour>.png` (QTMESH_CHARACTER_EYE_DIR, else
+/// `<AppData>/character_eye`). No eye asset ships with the editor; when the folder or the files are missing the ICT eyeballs are used.
+QString characterEyeDir();
+
 using Rgb = std::array<float, 3>;   ///< linear-ish 0..1 colour
 
 struct Params {
@@ -87,6 +91,10 @@ struct Params {
     Rgb eye{0.22f, 0.36f, 0.55f};
     Rgb lip{0.62f, 0.32f, 0.32f};
     Rgb lash{0.05f, 0.04f, 0.04f};
+    /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
+    /// Only for the native head (the ICT head has a different UV layout).
+    bool skinTexture = true;
+    int skinTextureSize = 1024;
     /// > 0: keep only the part of the body this many metres below the neck cut and above (head + shoulders; previews/thumbnails).
     float bustDepth = 0.0f;
     /// Keep the MHR body's own head (no neck cut, no ICT head): the expression shapes are MHR's native ones fitted to the ARKit set.
@@ -126,6 +134,24 @@ bool parseColour(const QString& text, ColourKind kind, Rgb* out);
 /// The named colours of a kind, for pickers.
 QStringList colourNames(ColourKind kind);
 
+/// Where the lips are on the built body (final coordinates, metres): the centre of the lip seam, the half width of the mouth and
+/// which way the face looks (+1 / -1 along z). Valid only for the native head (it comes from the lip landmarks).
+struct LipFrame {
+    bool valid = false;
+    std::array<float, 3> centre{};
+    float halfWidth = 0.0f;
+    float forward = 1.0f;
+};
+
+/// Where the eyebrows go (final coordinates, metres): the centre of each eye's lid layer, the half width of an eye and which way the
+/// face looks. Valid only for the native head with open eyes (it comes from the eyelid-layer landmarks).
+struct BrowFrame {
+    bool valid = false;
+    std::array<std::array<float, 3>, 2> eye{};
+    float halfWidth = 0.0f;
+    float forward = 1.0f;
+};
+
 struct BuildReport {
     int bodyVertices = 0, bodyTriangles = 0;
     int headVertices = 0, headTriangles = 0;
@@ -134,6 +160,8 @@ struct BuildReport {
     int morphTargets = 0;
     float neckCutY = 0.0f;           ///< world y (m) of the neck cut
     float headScale = 1.0f;
+    LipFrame lips;
+    BrowFrame brows;
     QStringList meshNames;
     QStringList warnings;
 };

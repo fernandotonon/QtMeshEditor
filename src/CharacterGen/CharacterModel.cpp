@@ -1,8 +1,11 @@
 #include "CharacterModel.h"
 
+#include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
 
 #include <QColor>
+#include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -438,6 +441,12 @@ QStringList colourNames(ColourKind kind)
 
 constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
 
+QString characterEyeDir()
+{
+    const QString env = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_DIR"));
+    return env.isEmpty() ? QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("character_eye")) : env;
+}
+
 namespace {
 // Optional textured eyeball: an OBJ named by QTMESH_CHARACTER_EYE_OBJ (its iris pole on -Y), normalised to unit radius around its
 // centroid. Not shipped: the asset's licence has to be cleared before it can be bundled, so this is an opt-in for local use.
@@ -521,9 +530,10 @@ bool readEyeObj(const QString& path, EyeMesh& m)
 const EyeMesh* eyeMeshFromEnv()
 {
     static const EyeMesh* cached = []() -> const EyeMesh* {
-        const QByteArray path = qgetenv("QTMESH_CHARACTER_EYE_OBJ");
+        QString path = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_OBJ"));
+        if (path.isEmpty()) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
         static EyeMesh mesh;
-        if (path.isEmpty() || !readEyeObj(QString::fromLocal8Bit(path), mesh)) return nullptr;
+        if (!QFileInfo::exists(path) || !readEyeObj(path, mesh)) return nullptr;
         return &mesh;
     }();
     return cached;
@@ -586,6 +596,59 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
     }
     m.normals = positionNormals(m.positions, m.faces, m.layouts);
     return m;
+}
+
+// The lips of the built body: the lip-seam landmarks give the centre and the width of the mouth (the seam covers the middle ~70 % of
+// it). Expressed in the final coordinates, i.e. after the 180 degree turn about Y that faces the character towards -Z.
+LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    LipFrame lips;
+    if (a.landmarkLip.empty()) return lips;
+    std::array<double, 3> sum{};
+    float minX = 1e9f;
+    float maxX = -1e9f;
+    for (int32_t v : a.landmarkLip) {
+        if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return LipFrame();
+        for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+        minX = std::min(minX, body.positions[size_t(v) * 3]);
+        maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+    }
+    const double n = double(a.landmarkLip.size());
+    const float turn = facePlusZ ? 1.0f : -1.0f;   // x and z change sign under the turn
+    lips.centre = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+    lips.halfWidth = 0.5f * (maxX - minX) * 1.38f;
+    lips.forward = turn;
+    lips.valid = lips.halfWidth > 1e-4f;
+    return lips;
+}
+
+// The eyes of the built body (the eyelid-layer landmarks), for the eyebrows; same coordinates as lipFrameOf.
+BrowFrame browFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    BrowFrame brows;
+    const std::array<const std::vector<int32_t>*, 2> lists = {&a.landmarkEyeL, &a.landmarkEyeR};
+    const float turn = facePlusZ ? 1.0f : -1.0f;
+    float width = 0.0f;
+    for (size_t side = 0; side < 2; ++side) {
+        const std::vector<int32_t>& list = *lists[side];
+        if (list.empty()) return BrowFrame();
+        std::array<double, 3> sum{};
+        float minX = 1e9f;
+        float maxX = -1e9f;
+        for (int32_t v : list) {
+            if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return BrowFrame();
+            for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+            minX = std::min(minX, body.positions[size_t(v) * 3]);
+            maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+        }
+        const double n = double(list.size());
+        brows.eye[side] = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+        width += 0.5f * (maxX - minX);
+    }
+    brows.halfWidth = width * 0.5f;
+    brows.forward = turn;
+    brows.valid = brows.halfWidth > 1e-4f;
+    return brows;
 }
 
 // MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
@@ -1422,6 +1485,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.morphTargets = a.ictExpressions;
     if (rig.meshes.size() < 2) rep.warnings << QStringLiteral("The head produced no geometry.");
 
+    rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    rep.brows = browFrameOf(a, rig.meshes.front(), p.facePlusZ);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }
