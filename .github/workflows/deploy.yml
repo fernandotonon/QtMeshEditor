@@ -1766,12 +1766,13 @@ jobs:
                 # on 2026-10-22 two unrelated GL suites (CLIPipeline_cmdPs1 and
                 # NormalVisualizerIntegrationTest) each sat for the full 20 min
                 # and were killed in ONE run, then both passed in the next run
-                # of the same code. A suite that is killed by the wall-clock cap
-                # or dies from a signal (and is not on the known-crash
-                # allowlist) is therefore run once more. A genuine failure
-                # repeats and is still reported; an assertion failure (plain
-                # non-zero exit) is NEVER retried, so real test failures are
-                # not masked.
+                # of the same code. A suite killed by the wall-clock cap (a
+                # stall) is therefore run once more, allowlisted or not; a
+                # suite that dies from any OTHER signal is run once more unless
+                # it is on the known-GL-crash allowlist (those crashes are
+                # deterministic). A genuine failure repeats and is still
+                # reported; an assertion failure (plain non-zero exit) is NEVER
+                # retried, so real test failures are not masked.
                 MAX_SUITE_ATTEMPTS=2
 
                 for suite in $SUITES; do
@@ -1790,12 +1791,20 @@ jobs:
                         timeout --foreground --signal=KILL "$PER_SUITE_TIMEOUT" \
                             $UNIT_TEST_PATH --gtest_filter="$suite_filter" --gtest_output=xml:${suite_xml} 2>&1
                         exit_code=$?
-                        # 124 = wall-clock cap; >=128 = died from a signal
-                        # (SIGKILL from the cap lands here as 137). Known GL
-                        # crashes are deterministic and tolerated below, so
-                        # retrying them would only burn time.
-                        if { [ $exit_code -eq 124 ] || [ $exit_code -ge 128 ]; } \
-                           && ! is_gl_crash_allowed "$suite" \
+                        # A STALL (wall-clock cap: 124, or the SIGKILL the cap
+                        # sends, which lands here as 137) is the intermittent
+                        # failure, so it is retried even for allowlisted
+                        # suites: a retry that passes turns a tolerated hang
+                        # into real coverage. Any OTHER signal (e.g. SIGSEGV)
+                        # is retried only for suites NOT on the known-GL-crash
+                        # allowlist, because those crashes are deterministic
+                        # and retrying them would only burn time.
+                        is_stall=0
+                        if [ $exit_code -eq 124 ] || [ $exit_code -eq 137 ]; then
+                            is_stall=1
+                        fi
+                        if { [ "$is_stall" -eq 1 ] \
+                             || { [ $exit_code -ge 128 ] && ! is_gl_crash_allowed "$suite"; }; } \
                            && [ "$attempt" -lt "$MAX_SUITE_ATTEMPTS" ]; then
                             echo "WARNING: Suite $suite stalled or crashed (exit $exit_code) on attempt $attempt/$MAX_SUITE_ATTEMPTS - retrying once (intermittent software-GL stall)."
                             attempt=$((attempt + 1))
