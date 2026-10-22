@@ -6,6 +6,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <OgreEntity.h>
 #include <OgreImage.h>
 #include <OgreTextureManager.h>
@@ -63,16 +64,25 @@ QByteArray irisTextureFor(const Rgb& c)
     return QByteArray(pick);
 }
 
+// Ogre's texture manager is global by name, so the resource is named after the directory it came from: another asset that
+// already loaded an "iris_blue.png" must not be mistaken for ours.
+std::string eyeTextureName(const QString& dir, const char* file)
+{
+    const QByteArray key = QFileInfo(dir).absoluteFilePath().toUtf8();
+    return std::string("qmc_eye_") + QByteArray::number(qHash(key), 16).toStdString() + "_" + file;
+}
+
 void loadEyeTexture(const QString& dir, const char* file)
 {
-    if (Ogre::TextureManager::getSingleton().resourceExists(file)) return;
+    const std::string name = eyeTextureName(dir, file);
+    if (Ogre::TextureManager::getSingleton().resourceExists(name)) return;
     QFile f(QDir(dir).filePath(QString::fromLatin1(file)));
     if (!f.open(QIODevice::ReadOnly)) return;
     const QByteArray bytes = f.readAll();
     Ogre::Image image;
     Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(const_cast<char*>(bytes.constData()), size_t(bytes.size()), false, true));
     image.load(ds, "png");
-    Ogre::TextureManager::getSingleton().loadImage(file, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
+    Ogre::TextureManager::getSingleton().loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
 }
 }  // namespace
 
@@ -108,9 +118,9 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
                 loadEyeTexture(dir, irisFile.constData());
                 pass->setDiffuse(Ogre::ColourValue::White);
                 pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));
-                Ogre::TextureUnitState* t = pass->createTextureUnitState(irisFile.toStdString());
+                Ogre::TextureUnitState* t = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
                 t->setName("diffuse_map");
-                Ogre::TextureUnitState* t2 = pass->createTextureUnitState(irisFile.toStdString());
+                Ogre::TextureUnitState* t2 = pass->createTextureUnitState(eyeTextureName(dir, irisFile.constData()));
                 t2->setName("albedo");
             }
             RTShaderHelper::syncMaterialForViewport(mat);

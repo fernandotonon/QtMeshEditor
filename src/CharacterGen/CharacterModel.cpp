@@ -459,19 +459,27 @@ const EyeMesh* eyeMeshFromEnv()
             if (t[0] == "v" && t.size() >= 4) for (int k = 1; k <= 3; ++k) m.positions.push_back(t[k].toFloat());
             else if (t[0] == "vt" && t.size() >= 3) { m.uvs.push_back(t[1].toFloat()); m.uvs.push_back(t[2].toFloat()); }
             else if (t[0] == "f" && t.size() >= 4) {
+                bool bad = false;
                 std::vector<uint32_t> face;
                 for (int k = 1; k < t.size(); ++k) {
                     const QList<QByteArray> c = t[k].split('/');
-                    const uint32_t pi = uint32_t(c[0].toInt() - 1), ti = c.size() > 1 && !c[1].isEmpty() ? uint32_t(c[1].toInt() - 1) : 0u;
+                    // 1-based, or negative = relative to the elements read so far; anything out of range rejects the file
+                    const int nv = int(m.positions.size() / 3), nt = int(m.uvs.size() / 2);
+                    int pv = c[0].toInt(), tv = c.size() > 1 && !c[1].isEmpty() ? c[1].toInt() : 1;
+                    if (pv < 0) pv += nv + 1;
+                    if (tv < 0) tv += nt + 1;
+                    if (pv < 1 || pv > nv || tv < 1 || tv > std::max(nt, 1)) { bad = true; break; }
+                    const uint32_t pi = uint32_t(pv - 1), ti = uint32_t(tv - 1);
                     auto it = seen.find({pi, ti});
                     if (it == seen.end()) { it = seen.emplace(std::make_pair(pi, ti), uint32_t(m.corners.size())).first; m.corners.push_back({pi, ti}); }
                     face.push_back(it->second);
                 }
+                if (bad) return nullptr;
                 m.faces.push_back(std::move(face));
             }
         }
         const size_t n = m.positions.size() / 3;
-        if (n == 0 || m.faces.empty()) return nullptr;
+        if (n == 0 || m.faces.empty() || m.uvs.empty()) return nullptr;
         double c[3] = {0, 0, 0};
         for (size_t i = 0; i < n; ++i) for (int k = 0; k < 3; ++k) c[k] += m.positions[i * 3 + size_t(k)];
         for (int k = 0; k < 3; ++k) c[k] /= double(n);
