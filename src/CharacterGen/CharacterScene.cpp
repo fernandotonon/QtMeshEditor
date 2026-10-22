@@ -97,12 +97,13 @@ void loadEyeTexture(const QString& dir, const char* file)
     image.load(ds, "png");
     Ogre::TextureManager::getSingleton().loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
 }
-// Textures of the opt-in textured eye: the iris matching the eye colour, from the directory QTMESH_CHARACTER_EYE_TEX names.
+// Textures of the optional textured eye: the iris matching the eye colour, from characterEyeDir() (or QTMESH_CHARACTER_EYE_TEX).
 void bindEyeTextures(Ogre::Pass* pass, const Rgb& eyeColour)
 {
-    const QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
-    if (dir.isEmpty() || pass->getNumTextureUnitStates() != 0) return;
+    QString dir = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_TEX"));
+    if (dir.isEmpty()) dir = characterEyeDir();
     const QByteArray irisFile = irisTextureFor(eyeColour);
+    if (pass->getNumTextureUnitStates() != 0 || !QFileInfo::exists(QDir(dir).filePath(QString::fromLatin1(irisFile)))) return;
     loadEyeTexture(dir, irisFile.constData());
     pass->setDiffuse(Ogre::ColourValue::White);
     pass->setAmbient(Ogre::ColourValue(0.6f, 0.6f, 0.6f));

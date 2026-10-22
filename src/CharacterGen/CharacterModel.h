@@ -78,6 +78,10 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& out, QString
 /// Open `<dir>/mhr_character.qmcb` + `<dir>/ict_character.qmcb`.
 bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error = nullptr);
 
+/// Where the optional textured eye lives: `eye.obj` + `iris_<colour>.png` (QTMESH_CHARACTER_EYE_DIR, else
+/// `<AppData>/character_eye`). No eye asset ships with the editor; when the folder or the files are missing the ICT eyeballs are used.
+QString characterEyeDir();
+
 using Rgb = std::array<float, 3>;   ///< linear-ish 0..1 colour
 
 struct Params {

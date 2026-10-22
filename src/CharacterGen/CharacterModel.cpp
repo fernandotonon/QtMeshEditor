@@ -1,8 +1,11 @@
 #include "CharacterModel.h"
 
+#include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
 
 #include <QColor>
+#include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -436,6 +439,12 @@ QStringList colourNames(ColourKind kind)
     return n;
 }
 
+QString characterEyeDir()
+{
+    const QString env = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_DIR"));
+    return env.isEmpty() ? QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("character_eye")) : env;
+}
+
 namespace {
 // Optional textured eyeball: an OBJ named by QTMESH_CHARACTER_EYE_OBJ (its iris pole on -Y), normalised to unit radius around its
 // centroid. Not shipped: the asset's licence has to be cleared before it can be bundled, so this is an opt-in for local use.
@@ -519,9 +528,10 @@ bool readEyeObj(const QString& path, EyeMesh& m)
 const EyeMesh* eyeMeshFromEnv()
 {
     static const EyeMesh* cached = []() -> const EyeMesh* {
-        const QByteArray path = qgetenv("QTMESH_CHARACTER_EYE_OBJ");
+        QString path = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_OBJ"));
+        if (path.isEmpty()) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
         static EyeMesh mesh;
-        if (path.isEmpty() || !readEyeObj(QString::fromLocal8Bit(path), mesh)) return nullptr;
+        if (!QFileInfo::exists(path) || !readEyeObj(path, mesh)) return nullptr;
         return &mesh;
     }();
     return cached;
