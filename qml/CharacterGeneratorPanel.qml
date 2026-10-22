@@ -141,6 +141,7 @@ Column {
         ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); sec.liveUpdate() } }
         ToolBtn { label: "From seed"; onClicked: sec.reseed() }
     }
+    InspectorCheckBox { text: "Skin texture (procedural)"; checked: CharacterController.skinTexture; onToggled: { CharacterController.skinTexture = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Open eyes"; checked: CharacterController.openEyes; onToggled: { CharacterController.openEyes = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Live preview (edits the character in place)"; checked: sec.live; onToggled: sec.live = checked }
     InspectorCheckBox { id: averageBox; text: "Average character (ignore seed)"; onToggled: sec.reseed() }

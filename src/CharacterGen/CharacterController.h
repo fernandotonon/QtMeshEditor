@@ -28,6 +28,7 @@ class CharacterController : public QObject
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
+    Q_PROPERTY(bool skinTexture READ skinTexture WRITE setSkinTexture NOTIFY skinTextureChanged)
 
 public:
     static CharacterController* instance();
@@ -37,6 +38,8 @@ public:
     bool assetsPresent() const;
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    bool skinTexture() const { return m_skinTexture; }
+    void setSkinTexture(bool v) { if (v != m_skinTexture) { m_skinTexture = v; emit skinTextureChanged(); } }
     bool openEyes() const { return m_openEyes; }
     void setOpenEyes(bool v) { if (v != m_openEyes) { m_openEyes = v; emit openEyesChanged(); } }
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
@@ -57,6 +60,7 @@ public:
 signals:
     void statusChanged();
     void openEyesChanged();
+    void skinTextureChanged();
 
 private:
     CharacterController() = default;
@@ -68,6 +72,7 @@ private:
     CharacterGen::Params m_currentParams;
     bool m_haveParams = false;
     bool m_openEyes = true;
+    bool m_skinTexture = true;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };

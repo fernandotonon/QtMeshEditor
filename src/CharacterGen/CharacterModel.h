@@ -87,6 +87,10 @@ struct Params {
     Rgb eye{0.22f, 0.36f, 0.55f};
     Rgb lip{0.62f, 0.32f, 0.32f};
     Rgb lash{0.05f, 0.04f, 0.04f};
+    /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
+    /// Only for the native head (the ICT head has a different UV layout).
+    bool skinTexture = true;
+    int skinTextureSize = 1024;
     /// > 0: keep only the part of the body this many metres below the neck cut and above (head + shoulders; previews/thumbnails).
     float bustDepth = 0.0f;
     /// Keep the MHR body's own head (no neck cut, no ICT head): the expression shapes are MHR's native ones fitted to the ARKit set.
