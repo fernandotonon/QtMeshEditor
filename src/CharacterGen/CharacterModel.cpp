@@ -647,22 +647,34 @@ EyeSeat measureEye(const std::vector<float>& headPos, int v0, int v1)
     return seat;
 }
 
+// How far the eyeball sits behind the seat measured on ICT's eyeball (fraction of its radius): ICT's eyeball is meant to be
+// seen through a translucent shell, while ours is the only surface, so at the measured seat it bulged out of the MHR lids.
+constexpr float kEyeSetBack = 0.20f;
+// Full travel of the eyeLook* shapes (degrees): in, out, up, down (ARKit's eyes move about 30 degrees horizontally).
+constexpr float kEyeLookIn = 30.0f, kEyeLookOut = 30.0f, kEyeLookUp = 25.0f, kEyeLookDown = 30.0f;
+
 // The textured eyeball of both eyes as one mesh: the file's iris looks down -Y, which is turned to +Z (the way the face looks) and
-// scaled to the seated eyeball. Rigidly skinned to the head joint.
-Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint)
+// scaled to the seated eyeball. Rigidly skinned to the head joint. The eyeLook{In,Out,Up,Down}{Left,Right} channels of `channels`
+// (the ARKit names; the character's own sides) turn each eyeball about its centre as morph targets, so the iris looks around.
+Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint, const QStringList& channels)
 {
     Dna::Mesh m;
     m.name = QStringLiteral("head_eye");
-    for (const EyeSeat& seat : seats) {
+    struct Placed { int side; uint32_t first; uint32_t count; std::array<float, 3> centre; };
+    std::vector<Placed> placed;
+    for (int side = 0; side < 2; ++side) {
+        const EyeSeat& seat = seats[size_t(side)];
         if (!seat.seated) continue;
+        const std::array<float, 3> centre{seat.centre[0], seat.centre[1], seat.centre[2] - kEyeSetBack * seat.radius};
         const uint32_t p0 = uint32_t(m.positions.size() / 3);
         const uint32_t t0 = uint32_t(m.uvs.size() / 2);
         for (size_t i = 0; i + 2 < eye.positions.size(); i += 3) {
-            m.positions.push_back(seat.centre[0] + eye.positions[i] * seat.radius);
-            m.positions.push_back(seat.centre[1] + eye.positions[i + 2] * seat.radius);
-            m.positions.push_back(seat.centre[2] - eye.positions[i + 1] * seat.radius);
+            m.positions.push_back(centre[0] + eye.positions[i] * seat.radius);
+            m.positions.push_back(centre[1] + eye.positions[i + 2] * seat.radius);
+            m.positions.push_back(centre[2] - eye.positions[i + 1] * seat.radius);
             m.skin.push_back({{headJoint, 1.0f}});
         }
+        placed.push_back({side, p0, uint32_t(eye.positions.size() / 3), centre});
         m.uvs.insert(m.uvs.end(), eye.uvs.begin(), eye.uvs.end());
         const uint32_t l0 = uint32_t(m.layouts.size());
         for (const auto& c : eye.corners) m.layouts.push_back({p0 + c.first, t0 + c.second, p0 + c.first});
@@ -673,6 +685,38 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
         }
     }
     m.normals = positionNormals(m.positions, m.faces, m.layouts);
+
+    // eye look: the character's left eye is +X (the face looks +Z, up is +Y). Out = towards the cheek, In = towards the nose.
+    struct Look { const char* name; int side; float yaw; float pitch; };   // degrees; yaw about +Y (+ = towards +X), pitch about +X (+ = down)
+    const Look looks[] = {
+        {"eyeLookInLeft", 0, -kEyeLookIn, 0}, {"eyeLookOutLeft", 0, kEyeLookOut, 0}, {"eyeLookUpLeft", 0, 0, -kEyeLookUp}, {"eyeLookDownLeft", 0, 0, kEyeLookDown},
+        {"eyeLookInRight", 1, kEyeLookIn, 0}, {"eyeLookOutRight", 1, -kEyeLookOut, 0}, {"eyeLookUpRight", 1, 0, -kEyeLookUp}, {"eyeLookDownRight", 1, 0, kEyeLookDown}};
+    constexpr double kDeg = 3.14159265358979323846 / 180.0;
+    for (const Look& lk : looks) {
+        const int channel = channels.indexOf(QLatin1String(lk.name));
+        if (channel < 0) continue;
+        const double cy = std::cos(double(lk.yaw) * kDeg), sy = std::sin(double(lk.yaw) * kDeg);
+        const double cp = std::cos(double(lk.pitch) * kDeg), sp = std::sin(double(lk.pitch) * kDeg);
+        Dna::BlendShapeTarget bt;
+        bt.channel = channel;
+        for (const Placed& pl : placed) {
+            if (pl.side != lk.side) continue;
+            for (uint32_t i = 0; i < pl.count; ++i) {
+                const uint32_t v = pl.first + i;
+                const double x = double(m.positions[size_t(v) * 3]) - pl.centre[0];
+                const double y = double(m.positions[size_t(v) * 3 + 1]) - pl.centre[1];
+                const double z = double(m.positions[size_t(v) * 3 + 2]) - pl.centre[2];
+                // pitch about X, then yaw about Y
+                const double y1 = y * cp - z * sp, z1 = y * sp + z * cp;
+                const double x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+                bt.vertexIndices.push_back(v);
+                bt.deltas.push_back(float(x2 - x));
+                bt.deltas.push_back(float(y1 - y));
+                bt.deltas.push_back(float(z2 - z));
+            }
+        }
+        if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+    }
     return m;
 }
 
@@ -1664,7 +1708,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rig.meshes.push_back(std::move(m));
     }
     if (eyeObj) {
-        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]));
+        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]), a.expressionNames);
         rep.headVertices += int(m.positions.size() / 3);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
