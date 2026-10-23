@@ -7,6 +7,7 @@
 #include <QVariantList>
 #include <QStringList>
 
+#include <algorithm>
 #include <memory>
 
 namespace CharacterGen {
@@ -31,6 +32,7 @@ class CharacterController : public QObject
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
     Q_PROPERTY(bool skinTexture READ skinTexture WRITE setSkinTexture NOTIFY skinTextureChanged)
+    Q_PROPERTY(double bodyHair READ bodyHair WRITE setBodyHair NOTIFY bodyHairChanged)
 
 public:
     static CharacterController* instance();
@@ -40,6 +42,8 @@ public:
     bool assetsPresent() const;
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    double bodyHair() const { return m_bodyHair; }
+    void setBodyHair(double v) { v = std::clamp(v, 0.0, 1.0); if (v != m_bodyHair) { m_bodyHair = v; emit bodyHairChanged(); } }
     bool skinTexture() const { return m_skinTexture; }
     void setSkinTexture(bool v) { if (v != m_skinTexture) { m_skinTexture = v; emit skinTextureChanged(); } }
     bool openEyes() const { return m_openEyes; }
@@ -68,6 +72,7 @@ signals:
     void skinTextureChanged();
     void hairNamesChanged();
     void hairStyleChanged();
+    void bodyHairChanged();
 
 private:
     CharacterController() = default;
@@ -81,6 +86,7 @@ private:
     bool m_openEyes = true;
     bool m_skinTexture = true;
     QString m_hairStyle;
+    double m_bodyHair = 0.5;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };

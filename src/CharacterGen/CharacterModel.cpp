@@ -746,6 +746,28 @@ LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
     return lips;
 }
 
+// Per body vertex: the skin-weighted body-hair density of the joints that drive it.
+std::vector<float> bodyHairMapOf(const Dna::Rig& rig)
+{
+    std::vector<float> map;
+    if (rig.meshes.empty()) return map;
+    const Dna::Mesh& body = rig.meshes.front();
+    std::vector<float> perJoint(rig.joints.size(), 0.0f);
+    for (size_t j = 0; j < rig.joints.size(); ++j) perJoint[j] = bodyHairDensityOfJoint(rig.joints[j].name);
+    map.assign(body.positions.size() / 3, 0.0f);
+    for (size_t v = 0; v < map.size() && v < body.skin.size(); ++v) {
+        float density = 0.0f;
+        float total = 0.0f;
+        for (const Dna::SkinInfluence& inf : body.skin[v]) {
+            if (inf.joint >= perJoint.size()) continue;
+            density += inf.weight * perJoint[inf.joint];
+            total += inf.weight;
+        }
+        map[v] = total > 1e-6f ? density / total : 0.0f;
+    }
+    return map;
+}
+
 // The nipples: on the mean body a nipple sits ~10 cm either side of the midline at ~72 % of the body height, on the front of the
 // chest. The few mean-body vertices nearest to that point are the landmark: their positions on the SHAPED body (same vertex ids)
 // give the centre, so it follows the body shape. Same coordinates as lipFrameOf.
@@ -844,6 +866,21 @@ void straightenStandardSkeleton(std::vector<std::array<float, 3>>& gt, const Ass
 }  // namespace
 
 Dna::Mesh hairMeshOnBody(const HairStyle& style, const Dna::Mesh& body) { return buildHairMesh(style, body); }
+float bodyHairDensityOfJoint(const QString& jointName)
+{
+    struct Rule {
+        const char* part;
+        float density;
+    };
+    // most specific first; the first part found in the name wins
+    static const std::array<Rule, 14> rules = {{
+        {"ForeArm", 0.75f}, {"Hand", 0.22f}, {"Shoulder", 0.10f}, {"Arm", 0.38f},
+        {"UpLeg", 0.60f}, {"Toe", 0.10f}, {"Foot", 0.20f}, {"Leg", 0.90f},
+        {"Spine2", 0.55f}, {"Spine1", 0.48f}, {"Spine", 0.42f}, {"Hips", 0.30f}, {"Neck", 0.15f}, {"Head", 0.0f}}};
+    for (const Rule& r : rules)
+        if (jointName.contains(QLatin1String(r.part))) return r.density;
+    return 0.0f;
+}
 
 bool surfaceForMesh(const QString& meshName, Surface* out)
 {
@@ -1668,6 +1705,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
     rep.brows = browFrameOf(a, rig.meshes.front(), p.facePlusZ);
     rep.nipples = nippleFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    if (p.bodyHair > 0.0f) rep.bodyHair = bodyHairMapOf(rig);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }
