@@ -3753,6 +3753,8 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
     p.openEyes = args.value("open_eyes").toBool(true);
     p.skinTexture = args.value("skin_texture").toBool(true);
     p.hairStyle = args.value("hair").toString();
+    if (!p.hairStyle.isEmpty() && !p.nativeHead)
+        return makeErrorResult(QStringLiteral("Hair needs the MHR head: use head \"mhr\" (and a bundle with its expression data)."));
     if (!p.hairStyle.isEmpty() && !data.hairStyle(p.hairStyle))
         return makeErrorResult(QStringLiteral("Unknown hairstyle '%1' (available: %2).").arg(p.hairStyle, data.hairStyleNames().join(QStringLiteral(", "))));
     p.facePlusZ = args.value("facing_z").toBool(false);

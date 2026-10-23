@@ -44,12 +44,12 @@ bool present()
            && QFileInfo::exists(QDir(dir()).filePath(QStringLiteral("ict_character.qmcb")));
 }
 
-QStringList hairStyleNames()
+QStringList hairStyleNames(const QString& folder)
 {
     static QString cachedPath;
     static QDateTime cachedTime;
     static QStringList cachedNames;
-    const QFileInfo info(QDir(dir()).filePath(QStringLiteral("hair_character.qmcb")));
+    const QFileInfo info(QDir(folder.isEmpty() ? dir() : folder).filePath(QStringLiteral("hair_character.qmcb")));
     if (!info.exists()) return QStringList();
     if (info.absoluteFilePath() == cachedPath && info.lastModified() == cachedTime) return cachedNames;
     QStringList names;

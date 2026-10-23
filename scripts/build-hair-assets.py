@@ -331,6 +331,8 @@ def main():
         if name in mhr:
             spheres.append((base[mhr[name]].mean(0) + np.array([0.0, 0.09, -0.58]), 1.15))
     sdf = SignedDistance(base, faces, spheres)
+    if len(spheres) < 2:
+        print(f"WARNING: only {len(spheres)} eye sphere(s) found in the MHR bundle (landmark_eye_l / landmark_eye_r); hair may cross the eyes")
     blobs, styles = {}, []
     want = [s for s in a.styles.split(",") if s]
     for d in sorted(glob.glob(os.path.join(a.assets, "hair", "*"))):

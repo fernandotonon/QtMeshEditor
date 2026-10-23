@@ -1609,6 +1609,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));
     }
+    if (!p.nativeHead && !p.hairStyle.isEmpty())
+        rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
     if (p.nativeHead && !p.hairStyle.isEmpty()) {
         if (const HairStyle* hair = a.hairStyle(p.hairStyle)) {
             Dna::Mesh m = buildHairMesh(*hair, body);

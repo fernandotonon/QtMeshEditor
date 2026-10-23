@@ -127,8 +127,8 @@ int run(int argc, char* argv[])
         if (outPath.isEmpty()) return 0;
     }
     if (listHair) {
-        const QStringList names = CharacterAssets::hairStyleNames();
-        CLIPipeline::writeOutput(names.isEmpty() ? QStringLiteral("No hairstyles (no hair_character.qmcb in %1)\n").arg(CharacterAssets::dir())
+        const QStringList names = CharacterAssets::hairStyleNames(assets);
+        CLIPipeline::writeOutput(names.isEmpty() ? QStringLiteral("No hairstyles (no hair_character.qmcb in %1)\n").arg(assets)
                                                   : names.join(QLatin1Char('\n')) + QLatin1Char('\n'));
         return 0;
     }
@@ -158,14 +158,18 @@ int run(int argc, char* argv[])
     Params p;
     p.openEyes = openEyes;
     p.skinTexture = skinTexture;
+    p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
     if (!hairArg.isEmpty()) {
+        if (!p.nativeHead) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: hair needs the MHR head (not --ict-head, and a bundle with its expression data).\n"));
+            return 2;
+        }
         if (!data.hairStyle(hairArg)) {
             CLIPipeline::writeCliError(QStringLiteral("Error: unknown hairstyle '%1' (available: %2).\n").arg(hairArg, data.hairStyleNames().join(QStringLiteral(", "))));
             return 2;
         }
         p.hairStyle = hairArg;
     }
-    p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
     p.facePlusZ = havePlusZ;
     if (rawRig) { p.standardSkeleton = false; p.identityBones = false; p.standardNames = false; p.foldHelperJoints = false; }
     if (fullSkeleton) p.standardSkeleton = false;

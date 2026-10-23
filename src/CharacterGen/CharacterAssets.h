@@ -22,8 +22,8 @@ QString dir();
 /// Both bundles exist (not verified: see ensureBlocking).
 bool present();
 
-/// Names of the hairstyles in the optional hair bundle of dir() (empty when there is none). Cached per file modification time.
-QStringList hairStyleNames();
+/// Names of the hairstyles in the optional hair bundle of `dir` (default dir()); empty when there is none. Cached per file modification time.
+QStringList hairStyleNames(const QString& dir = QString());
 /// Make sure every file is on disk and matches its pinned digest, fetching what is missing. Blocks (nested event loop) — call it
 /// from the main thread. Empty `error` on success.
 bool ensureBlocking(QString* error = nullptr);
