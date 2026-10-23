@@ -656,7 +656,12 @@ constexpr float kEyeLookIn = 30.0f, kEyeLookOut = 30.0f, kEyeLookUp = 25.0f, kEy
 // The textured eyeball of both eyes as one mesh: the file's iris looks down -Y, which is turned to +Z (the way the face looks) and
 // scaled to the seated eyeball. Rigidly skinned to the head joint. The eyeLook{In,Out,Up,Down}{Left,Right} channels of `channels`
 // (the ARKit names; the character's own sides) turn each eyeball about its centre as morph targets, so the iris looks around.
-Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint, const QStringList& channels)
+// `pupilChannelBase` >= 0 (the procedural eye only): the index of the "pupilDilate" channel; "pupilConstrict" follows it. They move
+// the vertices around the pupil (the iris texture follows, keeping its UVs): the pupil edge goes from its rest angle to kPupilDilated
+// / kPupilConstricted.
+constexpr float kPupilDilated = 0.34f, kPupilConstricted = 0.10f;   // radians from the iris pole (rest: 0.20)
+
+Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint, const QStringList& channels, int pupilChannelBase = -1)
 {
     Dna::Mesh m;
     m.name = QStringLiteral("head_eye");
@@ -685,6 +690,29 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
         }
     }
     m.normals = positionNormals(m.positions, m.faces, m.layouts);
+
+    if (pupilChannelBase >= 0) {
+        const float angles[2] = {kPupilDilated, kPupilConstricted};
+        for (int k = 0; k < 2; ++k) {
+            Dna::BlendShapeTarget bt;
+            bt.channel = pupilChannelBase + k;
+            for (size_t si = 0; si < placed.size(); ++si) {
+                const Placed& pl = placed[si];
+                const float r = seats[size_t(pl.side)].radius;
+                for (uint32_t i = 0; i < pl.count; ++i) {
+                    const std::array<float, 3> e0{eye.positions[size_t(i) * 3], eye.positions[size_t(i) * 3 + 1], eye.positions[size_t(i) * 3 + 2]};
+                    const std::array<float, 3> e1 = dilateEyePoint(e0, angles[k]);
+                    const float d[3] = {e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]};
+                    if (std::fabs(d[0]) + std::fabs(d[1]) + std::fabs(d[2]) < 1e-7f) continue;
+                    bt.vertexIndices.push_back(pl.first + i);
+                    bt.deltas.push_back(d[0] * r);    // the same map as the positions: (x, y, z) -> (x, z, -y) * radius
+                    bt.deltas.push_back(d[2] * r);
+                    bt.deltas.push_back(-d[1] * r);
+                }
+            }
+            if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+        }
+    }
 
     // eye look: the character's left eye is +X (the face looks +Z, up is +Y). Out = towards the cheek, In = towards the nose.
     struct Look { const char* name; int side; float yaw; float pitch; };   // degrees; yaw about +Y (+ = towards +X), pitch about +X (+ = down)
@@ -1585,6 +1613,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
+    bool pupilChannels = false;
     const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
     const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
@@ -1708,7 +1737,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rig.meshes.push_back(std::move(m));
     }
     if (eyeObj) {
-        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]), a.expressionNames);
+        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]), a.expressionNames, custom ? -1 : int(a.expressionNames.size()));
+        if (!custom) pupilChannels = true;
         rep.headVertices += int(m.positions.size() / 3);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
@@ -1749,6 +1779,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.meshNames.prepend(body.name);
     rig.meshes.insert(rig.meshes.begin(), std::move(body));
     rig.blendShapeChannels = a.expressionNames;
+    if (pupilChannels) rig.blendShapeChannels << QStringLiteral("pupilDilate") << QStringLiteral("pupilConstrict");
     // Every part carries every channel. glTF puts all the parts of a node into ONE mesh whose primitives must share the same morph
     // targets in the same order (and takes the target names from the first primitive, which is the body): a part that skipped a
     // channel it does not deform would scramble the targets or lose the names on export. A channel a part does not move gets a

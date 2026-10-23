@@ -60,13 +60,19 @@ float eyeUvRadius(float theta)
     if (theta <= kFrontAngle) return kFrontRadius * theta / kFrontAngle;
     return kFrontRadius + (1.0f - kFrontRadius) * (theta - kFrontAngle) / (kPi - kFrontAngle);
 }
+float eyePupilAngle() { return kPupilAngle; }
+float eyeIrisAngle() { return kIrisAngle; }
 float eyePupilRadius() { return eyeUvRadius(kPupilAngle); }
 float eyeIrisRadius() { return eyeUvRadius(kIrisAngle); }
 
 EyeSphere makeEyeSphere(int rings, int segments)
 {
-    rings = std::max(rings, 3);
+    rings = std::max(rings, 2);
     segments = std::max(segments, 3);
+    // ring angles between the poles: the iris region is dense and its rings sit exactly on the pupil edge and the limbus
+    std::vector<float> angles{kPupilAngle * 0.5f, kPupilAngle, kPupilAngle + (kIrisAngle - kPupilAngle) / 3.0f,
+                              kPupilAngle + 2.0f * (kIrisAngle - kPupilAngle) / 3.0f, kIrisAngle};
+    for (int i = 1; i <= rings; ++i) angles.push_back(kIrisAngle + (kPi - kIrisAngle) * float(i) / float(rings + 1));
     EyeSphere s;
     auto addVertex = [&](float theta, float phi) {
         // theta from the -Y pole
@@ -79,20 +85,33 @@ EyeSphere makeEyeSphere(int rings, int segments)
         s.uvs.push_back(0.5f + 0.5f * ur * std::sin(phi));
     };
     addVertex(0.0f, 0.0f);   // iris pole
-    for (int i = 1; i < rings; ++i)
-        for (int j = 0; j < segments; ++j) addVertex(kPi * float(i) / float(rings), 2.0f * kPi * float(j) / float(segments));
+    for (float theta : angles)
+        for (int j = 0; j < segments; ++j) addVertex(theta, 2.0f * kPi * float(j) / float(segments));
     addVertex(kPi, 0.0f);    // back pole
     const uint32_t back = uint32_t(s.positions.size() / 3 - 1);
+    const int bands = int(angles.size());
     auto ring = [&](int i, int j) { return uint32_t(1 + (i - 1) * segments + (j % segments)); };
     // counter-clockwise seen from outside (pinned by EyeSphere.TrianglesFaceOutward)
     for (int j = 0; j < segments; ++j) { s.indices.push_back(0); s.indices.push_back(ring(1, j)); s.indices.push_back(ring(1, j + 1)); }
-    for (int i = 1; i + 1 < rings; ++i)
+    for (int i = 1; i < bands; ++i)
         for (int j = 0; j < segments; ++j) {
             const uint32_t a = ring(i, j), b = ring(i, j + 1), c = ring(i + 1, j), d = ring(i + 1, j + 1);
             s.indices.insert(s.indices.end(), {a, c, b, b, c, d});
         }
-    for (int j = 0; j < segments; ++j) { s.indices.push_back(back); s.indices.push_back(ring(rings - 1, j + 1)); s.indices.push_back(ring(rings - 1, j)); }
+    for (int j = 0; j < segments; ++j) { s.indices.push_back(back); s.indices.push_back(ring(bands, j + 1)); s.indices.push_back(ring(bands, j)); }
     return s;
+}
+
+std::array<float, 3> dilateEyePoint(const std::array<float, 3>& p, float newPupilAngle)
+{
+    const float len = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
+    if (len < 1e-8f) return p;
+    const float theta = std::acos(std::min(1.0f, std::max(-1.0f, -p[1] / len)));
+    const float phi = std::atan2(p[2], p[0]);
+    float t = theta;
+    if (theta <= kPupilAngle) t = theta * (newPupilAngle / kPupilAngle);
+    else if (theta < kIrisAngle) t = newPupilAngle + (theta - kPupilAngle) * ((kIrisAngle - newPupilAngle) / (kIrisAngle - kPupilAngle));
+    return {len * std::sin(t) * std::cos(phi), -len * std::cos(t), len * std::sin(t) * std::sin(phi)};
 }
 
 QImage bakeEyeTexture(const Rgb& iris, int size, uint32_t seed)

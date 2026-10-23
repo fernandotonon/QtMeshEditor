@@ -107,3 +107,48 @@ TEST(EyeTexture, PngEncodes)
     ASSERT_TRUE(back.loadFromData(png, "PNG"));
     EXPECT_EQ(back.size(), QSize(64, 64));
 }
+
+TEST(EyeSphere, HasRingsExactlyOnThePupilEdgeAndTheLimbus)
+{
+    const EyeSphere s = makeEyeSphere();
+    auto hasRingAt = [&](float angle) {
+        int hits = 0;
+        for (size_t i = 0; i < s.positions.size() / 3; ++i) {
+            const float theta = std::acos(std::min(1.0f, std::max(-1.0f, -s.positions[i * 3 + 1])));
+            if (std::fabs(theta - angle) < 1e-4f) ++hits;
+        }
+        return hits >= 24;   // one vertex per segment
+    };
+    EXPECT_TRUE(hasRingAt(eyePupilAngle()));
+    EXPECT_TRUE(hasRingAt(eyeIrisAngle()));
+}
+
+TEST(EyeDilate, MovesThePupilEdgeAndKeepsTheLimbusAndTheBackFixed)
+{
+    auto on = [](float theta, float phi) { return std::array<float, 3>{std::sin(theta) * std::cos(phi), -std::cos(theta), std::sin(theta) * std::sin(phi)}; };
+    auto angleOf = [](const std::array<float, 3>& p) { return std::acos(std::min(1.0f, std::max(-1.0f, -p[1]))); };
+    const float pupil = eyePupilAngle(), iris = eyeIrisAngle();
+    // the pupil edge lands on the requested angle, keeping its azimuth
+    const auto edge = dilateEyePoint(on(pupil, 1.0f), 0.34f);
+    EXPECT_NEAR(angleOf(edge), 0.34f, 1e-4f);
+    EXPECT_NEAR(std::atan2(edge[2], edge[0]), 1.0f, 1e-4f);
+    // a constriction pulls it towards the pole
+    EXPECT_LT(angleOf(dilateEyePoint(on(pupil, 0.3f), 0.10f)), pupil);
+    // the limbus, and everything behind it, does not move
+    for (float t : {iris, iris + 0.3f, 2.0f, 3.0f}) {
+        const auto p = on(t, 2.0f);
+        const auto q = dilateEyePoint(p, 0.34f);
+        for (int k = 0; k < 3; ++k) EXPECT_NEAR(p[size_t(k)], q[size_t(k)], 1e-5f);
+    }
+    // the iris band is monotonic: points keep their order from the pole to the limbus
+    float prev = -1;
+    for (int i = 0; i <= 20; ++i) {
+        const float a = angleOf(dilateEyePoint(on(iris * float(i) / 20.0f, 0.5f), 0.34f));
+        EXPECT_GE(a, prev - 1e-6f);
+        prev = a;
+    }
+    // the identity request changes nothing
+    const auto same = dilateEyePoint(on(0.1f, 0.2f), pupil);
+    const auto orig = on(0.1f, 0.2f);
+    for (int k = 0; k < 3; ++k) EXPECT_NEAR(same[size_t(k)], orig[size_t(k)], 1e-5f);
+}
