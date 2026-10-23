@@ -238,6 +238,7 @@ CharacterGen/CharacterModel.cpp
 CharacterGen/CharacterScene.cpp
 CharacterGen/SkinTexture.cpp
 CharacterGen/HairTint.cpp
+CharacterGen/EyeTexture.cpp
 CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp

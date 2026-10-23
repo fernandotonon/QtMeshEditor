@@ -175,6 +175,22 @@ QString hairTextureFile(const BuildReport& build)
     return file;
 }
 
+// The procedural eye's texture: <AppData>/generated_textures/eye_<content hash>.png (named by content: Ogre / RTSS cache by name).
+QString eyeTextureFile(const BuildReport& build)
+{
+    if (build.eyeTexturePng.isEmpty()) return QString();
+    const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
+    QDir().mkpath(dir);
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(build.eyeTexturePng, QCryptographicHash::Sha1).toHex().left(10));
+    const QString file = QDir(dir).filePath(QStringLiteral("eye_%1.png").arg(hash));
+    QFileInfo info(file);
+    if (!info.exists() || info.size() != build.eyeTexturePng.size()) {
+        QFile f(file);
+        if (!f.open(QIODevice::WriteOnly) || f.write(build.eyeTexturePng) != build.eyeTexturePng.size()) return QString();
+    }
+    return file;
+}
+
 // Deterministic seed of a character: its shape coefficients and skin colour.
 uint32_t skinSeedOf(const Params& p)
 {
@@ -232,7 +248,7 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
 }
 }  // namespace
 
-void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile, const QString& hairTextureFile)
+void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile, const QString& hairTextureFile, const QString& eyeTextureFile)
 {
     if (!entity) return;
     auto& matMgr = Ogre::MaterialManager::getSingleton();
@@ -265,7 +281,8 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         if (surface == Surface::Eye) {   // wet cornea
             pass->setSpecular(Ogre::ColourValue(0.7f, 0.7f, 0.7f));
             pass->setShininess(96.0f);
-            bindEyeTextures(pass, params.eye);
+            if (!eyeTextureFile.isEmpty()) bindSkinTexture(pass, eyeTextureFile);   // the procedural eye
+            else bindEyeTextures(pass, params.eye);                                 // a user-supplied eye mesh + its irises
             RTShaderHelper::syncMaterialForViewport(mat);
         }
         mat->compile();
@@ -289,10 +306,12 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     if (!node) return nullptr;
     const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()), rep.build);
     const QString hairFile = hairTextureFile(rep.build);
+    const QString eyeFile = eyeTextureFile(rep.build);
+    if (!eyeFile.isEmpty()) pruneGeneratedTextures(QFileInfo(eyeFile).absolutePath(), QStringLiteral("eye_*.png"), kKeptHairTextures);
     if (!hairFile.isEmpty()) pruneGeneratedTextures(QFileInfo(hairFile).absolutePath(), QStringLiteral("hair_*.png"), kKeptHairTextures);
     for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
         Ogre::MovableObject* mo = it.getNext();
-        if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile, hairFile);   // node names are unique: a reused material would keep the old tint
+        if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile, hairFile, eyeFile);   // node names are unique: a reused material would keep the old tint
     }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.character"),
                                   QStringLiteral("create vertices=%1 morphs=%2").arg(rep.import.vertices).arg(rep.import.morphTargets));

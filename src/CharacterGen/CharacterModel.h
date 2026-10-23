@@ -204,6 +204,7 @@ struct BuildReport {
     NippleFrame nipples;
     QString hairStyle;               ///< the hairstyle that was built (empty = none)
     QByteArray hairTexturePng;       ///< its diffuse texture
+    QByteArray eyeTexturePng;        ///< the procedural eye's texture (empty: no procedural eye, or a user-supplied eye mesh is used)
     std::vector<float> bodyHair;     ///< 0..1 body-hair density per body vertex (from the skin weights); empty = none
     QStringList meshNames;
     QStringList warnings;

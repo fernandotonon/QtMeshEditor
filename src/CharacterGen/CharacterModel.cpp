@@ -1,4 +1,5 @@
 #include "CharacterModel.h"
+#include "EyeTexture.h"
 #include "HairTint.h"
 
 #include "../AppStorage.h"
@@ -585,16 +586,35 @@ bool readEyeObj(const QString& path, EyeMesh& m)
     return true;
 }
 
-const EyeMesh* eyeMeshFromEnv()
+// A user-supplied eye (opt-in: QTMESH_CHARACTER_EYE_OBJ or QTMESH_CHARACTER_EYE_DIR must be set; nothing is picked up implicitly,
+// since such an asset's licence is the user's business). Its iris pole is -Y.
+const EyeMesh* customEyeMesh()
 {
     static const EyeMesh* cached = []() -> const EyeMesh* {
         QString path = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_OBJ"));
-        if (path.isEmpty()) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
+        if (path.isEmpty() && !qEnvironmentVariableIsEmpty("QTMESH_CHARACTER_EYE_DIR")) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
+        if (path.isEmpty()) return nullptr;
         static EyeMesh mesh;
         if (!QFileInfo::exists(path) || !readEyeObj(path, mesh)) return nullptr;
         return &mesh;
     }();
     return cached;
+}
+
+// The procedural eye (EyeTexture.h): a unit sphere with a polar UV map, iris pole on -Y like the OBJ convention above.
+const EyeMesh* proceduralEyeMesh()
+{
+    static const EyeMesh mesh = [] {
+        const EyeSphere sphere = makeEyeSphere();
+        EyeMesh m;
+        m.positions = sphere.positions;
+        m.uvs = sphere.uvs;
+        const uint32_t n = uint32_t(sphere.positions.size() / 3);
+        for (uint32_t i = 0; i < n; ++i) m.corners.push_back({i, i});
+        for (size_t i = 0; i + 2 < sphere.indices.size(); i += 3) m.faces.push_back({sphere.indices[i], sphere.indices[i + 1], sphere.indices[i + 2]});
+        return m;
+    }();
+    return &mesh;
 }
 
 // Where an eyeball ended up: its centre and mean radius.
@@ -1521,7 +1541,10 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
-    const EyeMesh* eyeObj = (p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated)) ? eyeMeshFromEnv() : nullptr;
+    const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
+    const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
+    const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
+    if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
     for (const Group& g : groups) {
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
