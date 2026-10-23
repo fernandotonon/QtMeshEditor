@@ -7,6 +7,7 @@
 #include "SkinTexture.h"
 
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QImage>
 #include <algorithm>
@@ -157,13 +158,15 @@ void bindHairTexture(Ogre::Pass* pass, const QString& file)
     pass->setAlphaToCoverageEnabled(true);
 }
 
-// Write a style's texture to <AppData>/generated_textures/hair_<style>.png (once; its content never changes) and return the path.
+// Write a style's (tinted) texture to <AppData>/generated_textures/hair_<style>_<content hash>.png and return the path. The name
+// carries a hash of the bytes: a new colour must not reuse a cached texture of the same name (RTSS / Ogre cache by name).
 QString hairTextureFile(const BuildReport& build)
 {
     if (build.hairStyle.isEmpty() || build.hairTexturePng.isEmpty()) return QString();
     const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
     QDir().mkpath(dir);
-    const QString file = QDir(dir).filePath(QStringLiteral("hair_%1.png").arg(build.hairStyle));
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(build.hairTexturePng, QCryptographicHash::Sha1).toHex().left(10));
+    const QString file = QDir(dir).filePath(QStringLiteral("hair_%1_%2.png").arg(build.hairStyle, hash));
     QFileInfo info(file);
     if (!info.exists() || info.size() != build.hairTexturePng.size()) {
         QFile f(file);
@@ -190,10 +193,11 @@ uint32_t skinSeedOf(const Params& p)
 // Every live-preview edit bakes a new texture, so only the newest ones are kept: older files are deleted and their GPU textures
 // released (a material that still uses one keeps its own reference).
 constexpr int kKeptSkinTextures = 32;
+constexpr int kKeptHairTextures = 32;
 
-void pruneSkinTextures(const QString& dir, int keep)
+void pruneGeneratedTextures(const QString& dir, const QString& pattern, int keep)
 {
-    QFileInfoList files = QDir(dir).entryInfoList(QStringList{QStringLiteral("*_skin.png")}, QDir::Files, QDir::Time);   // newest first
+    QFileInfoList files = QDir(dir).entryInfoList(QStringList{pattern}, QDir::Files, QDir::Time);   // newest first
     auto& textures = Ogre::TextureManager::getSingleton();
     for (int i = keep; i < files.size(); ++i) {
         const std::string name = files[i].fileName().toStdString();
@@ -223,7 +227,7 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
     static int counter = 0;
     const QString file = QDir(dir).filePath(unique + QStringLiteral("_%1_%2_skin.png").arg(++counter).arg(QDateTime::currentMSecsSinceEpoch()));
     if (!image.save(file, "PNG")) return QString();
-    pruneSkinTextures(dir, kKeptSkinTextures);
+    pruneGeneratedTextures(dir, QStringLiteral("*_skin.png"), kKeptSkinTextures);
     return file;
 }
 }  // namespace
@@ -285,6 +289,7 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     if (!node) return nullptr;
     const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()), rep.build);
     const QString hairFile = hairTextureFile(rep.build);
+    if (!hairFile.isEmpty()) pruneGeneratedTextures(QFileInfo(hairFile).absolutePath(), QStringLiteral("hair_*.png"), kKeptHairTextures);
     for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
         Ogre::MovableObject* mo = it.getNext();
         if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile, hairFile);   // node names are unique: a reused material would keep the old tint

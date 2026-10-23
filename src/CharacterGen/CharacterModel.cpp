@@ -1,4 +1,5 @@
 #include "CharacterModel.h"
+#include "HairTint.h"
 
 #include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
@@ -1655,7 +1656,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rep.headTriangles += int(m.faces.size());
             rep.meshNames << m.name;
             rep.hairStyle = hair->name;
-            rep.hairTexturePng = hair->texturePng;
+            rep.hairTexturePng = tintHairTexturePng(hair->texturePng, p.hairColour);
+            if (rep.hairTexturePng.isEmpty()) rep.hairTexturePng = hair->texturePng;
             rig.meshes.push_back(std::move(m));
         } else {
             rep.warnings << QStringLiteral("Unknown hairstyle '%1'").arg(p.hairStyle);

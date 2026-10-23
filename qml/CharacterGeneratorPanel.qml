@@ -123,6 +123,45 @@ Column {
             onActivated: { CharacterController.hairStyle = currentIndex > 0 ? model[currentIndex] : ""; sec.liveUpdate() }
         }
     }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "Hair colour" }
+        Flow {
+            width: sec.width - 60
+            spacing: 4
+            Repeater {
+                model: CharacterController.hairColourPresets
+                delegate: Rectangle {
+                    id: swatch
+                    required property var modelData
+                    width: 20; height: 20; radius: 3
+                    color: modelData.colour
+                    border.width: CharacterController.hairColour === modelData.colour ? 2 : 1
+                    border.color: CharacterController.hairColour === modelData.colour ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.label
+                    HoverHandler { id: swatchHover }
+                    ToolTip.visible: swatchHover.hovered; ToolTip.delay: 400; ToolTip.text: modelData.label
+                    MouseArea { anchors.fill: parent; onClicked: { CharacterController.hairColour = swatch.modelData.colour; sec.liveUpdate() } }
+                }
+            }
+        }
+    }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "" }
+        Rectangle { width: 22; height: 22; radius: 3; color: CharacterController.hairColour; border.color: AnimationControlController.borderColor }
+        Field {
+            id: hairHex
+            width: 80
+            text: CharacterController.hairColour
+            maximumLength: 7
+            onEditingFinished: { CharacterController.hairColour = text; text = Qt.binding(function() { return CharacterController.hairColour }); sec.liveUpdate() }
+        }
+        Label { height: 22; text: "any #rrggbb" ; opacity: 0.6 }
+    }
     component ShapeSlider: Row {
         id: row
         required property int mode

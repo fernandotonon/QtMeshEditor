@@ -2,6 +2,7 @@
 #include "CharacterGen/CharacterAssets.h"
 #include "CharacterGen/CharacterModel.h"
 #include "CharacterGen/CharacterScene.h"
+#include "CharacterGen/HairTint.h"
 #include <QSettings>
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
@@ -3759,6 +3760,11 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
         return makeErrorResult(QStringLiteral("Hair needs the MHR head: use head \"mhr\" (and a bundle with its expression data)."));
     if (!p.hairStyle.isEmpty() && !data.hairStyle(p.hairStyle))
         return makeErrorResult(QStringLiteral("Unknown hairstyle '%1' (available: %2).").arg(p.hairStyle, data.hairStyleNames().join(QStringLiteral(", "))));
+    if (args.contains("hair_colour")) {
+        const QJsonValue colourValue = args.value("hair_colour");
+        if (!colourValue.isString() || !CharacterGen::parseHairColour(colourValue.toString(), &p.hairColour))
+            return makeErrorResult(QStringLiteral("'hair_colour' must be a preset name (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\"."));
+    }
     p.bodyHair = std::clamp(float(args.value("body_hair").toDouble(0.5)), 0.0f, 1.0f);
     p.facePlusZ = args.value("facing_z").toBool(false);
     const double varietyIn = args.value("variety").toDouble(1.0);
@@ -13573,6 +13579,7 @@ QJsonArray MCPServer::buildToolsList()
         props["bust"] = QJsonObject{{"type", "boolean"}, {"description", "Head and shoulders only (previews)."}};
         props["skin_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body instead of a flat colour (default true)."}};
         props["hair"] = QJsonObject{{"type", "string"}, {"description", "Hairstyle name from the hair bundle (e.g. short02, bob01, long01, ponytail01, afro01); omit for bald. Native head only."}};
+        props["hair_colour"] = QJsonObject{{"type", "string"}, {"description", "Hair colour: a preset (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\" (default brown). Needs hair."}};
         props["body_hair"] = QJsonObject{{"type", "number"}, {"description", "Amount of body hair painted into the skin texture, 0..1 (default 0.5; 0 = none). Needs skin_texture."}};
         props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Remove the thin layer between the MHR lids so the eyeballs (eye colour, gaze) show (default true); false keeps the lids as sculpted, eyes shut."}};
         props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};

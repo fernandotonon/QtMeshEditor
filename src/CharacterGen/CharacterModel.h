@@ -114,10 +114,12 @@ struct Params {
     Rgb eye{0.22f, 0.36f, 0.55f};
     Rgb lip{0.62f, 0.32f, 0.32f};
     Rgb lash{0.05f, 0.04f, 0.04f};
-    /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
-    /// Only for the native head (the ICT head has a different UV layout).
     /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
     QString hairStyle;
+    /// Colour of the hair's mid tones (the texture is a shading map tinted with it, see HairTint.h). Default: brown.
+    Rgb hairColour{0.239f, 0.145f, 0.090f};
+    /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
+    /// Only for the native head (the ICT head has a different UV layout).
     bool skinTexture = true;
     int skinTextureSize = 1024;
     /// 0..1 amount of body hair painted into the skin texture (arms, legs, chest, abdomen; sparse on hands and feet). 0 = none.

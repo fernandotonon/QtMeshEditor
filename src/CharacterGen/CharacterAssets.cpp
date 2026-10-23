@@ -21,12 +21,14 @@ namespace {
 constexpr const char* kBaseUrlSettingsKey = "ai/characterModelBaseUrl";
 constexpr const char* kDefaultBaseUrl = "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/character/";
 
-struct FileSpec { const char* name; const char* label; const char* sha256; };
+struct FileSpec { const char* name; const char* label; const char* sha256; bool optional = false; };   // optional: a failed download is not an error
 constexpr FileSpec kFiles[] = {
     {"mhr_character.qmcb", "character body (MHR)", "58f3903e6e93026e18c9dbffdaf2634fa8815b919f93f6cf5e347425bacbec6c"},
     {"ict_character.qmcb", "character head (ICT-FaceKit)", "f1b74cebf2bc8e21276e7f1ce717b0c52122bb1def9cb214052364952ae657f1"},
     {"LICENSE-MHR.txt", "MHR licence", "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
     {"LICENSE-ICT-FaceKit.txt", "ICT-FaceKit licence", "b20a78d8fc51657e14f3e00c8abb538d786ad00aa63210328c22565e583167e1"},
+    {"hair_character.qmcb", "character hairstyles (MakeHuman, CC0)", "69cbb5ec8fe23a13ed70313e6b9983b6df3e0d3abb5d71cb2e3fd7d8c693c716", true},
+    {"LICENSE-MakeHuman-hair.txt", "hairstyles licence", "1397704a53d998016e743c3add6801160c2b615536eed3b0c7cfd0911f3e38eb", true},
 };
 
 }  // namespace
@@ -81,6 +83,7 @@ bool ensureBlocking(QString* error)
     for (const FileSpec& f : kFiles) {
         const QString dest = QDir(dir()).filePath(QString::fromLatin1(f.name));
         const bool licence = QString::fromLatin1(f.name).startsWith(QLatin1String("LICENSE"));
+        if (f.optional && noDownload) continue;
         if (QFileInfo::exists(dest) && (ownDir || !defaultHosting)) continue;
         if (noDownload && !QFileInfo::exists(dest)) {
             if (licence) continue;   // the licence texts are a courtesy copy, not needed to run
@@ -95,6 +98,7 @@ bool ensureBlocking(QString* error)
         req.timeoutMs = 600000;
         if (defaultHosting) req.expectedSha256 = QString::fromLatin1(f.sha256);
         const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        if (!fo.ok && f.optional) continue;   // no hair picker, everything else works
         if (!fo.ok) {
             if (error) *error = fo.error;
             return false;

@@ -5,6 +5,7 @@
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
+#include "HairTint.h"
 #include "../CLIPipeline.h"
 #include "../MeshImporterExporter.h"
 #include "../SentryReporter.h"
@@ -32,7 +33,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--hair STYLE | --list-hair] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--hair STYLE [--hair-colour NAME|#rrggbb] | --list-hair | --list-hair-colours] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -50,6 +51,8 @@ int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
     QString hairArg;
+    QString hairColourArg;
+    bool listHairColours = false;
     bool listHair = false;
     float bodyHair = 0.5f;
     bool skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
@@ -95,6 +98,8 @@ int run(int argc, char* argv[])
         else if (a == "--no-skin-texture") skinTexture = false;
         else if (a == "--hair") hairArg = next();
         else if (a == "--list-hair") listHair = true;
+        else if (a == "--hair-colour" || a == "--hair-color") hairColourArg = next();
+        else if (a == "--list-hair-colours" || a == "--list-hair-colors") listHairColours = true;
         else if (a == "--body-hair" && i + 1 < argc) bodyHair = std::clamp(QString::fromLocal8Bit(argv[++i]).toFloat(), 0.0f, 1.0f);
         else if (a == "--closed-eyes") openEyes = false;
         else if (a == "--open-eyes") openEyes = true;
@@ -129,6 +134,17 @@ int run(int argc, char* argv[])
         }
         CLIPipeline::writeOutput(QStringLiteral("Character assets are in %1\n").arg(CharacterAssets::dir()));
         if (outPath.isEmpty()) return 0;
+    }
+    if (listHairColours) {
+        QStringList lines;
+        QJsonArray arr;
+        for (const HairColourPreset& pr : hairColourPresets()) {
+            lines << QStringLiteral("%1  %2").arg(pr.name, -16).arg(hairColourHex(pr.colour));
+            arr.append(QJsonObject{{"name", pr.name}, {"label", pr.label}, {"colour", hairColourHex(pr.colour)}});
+        }
+        CLIPipeline::writeOutput(json ? QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) + QLatin1Char('\n')
+                                      : lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+        return 0;
     }
     if (listHair) {
         const QStringList names = CharacterAssets::hairStyleNames(assets);
@@ -178,6 +194,10 @@ int run(int argc, char* argv[])
             return 2;
         }
         p.hairStyle = hairArg;
+    }
+    if (!hairColourArg.isEmpty() && !parseHairColour(hairColourArg, &p.hairColour)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown hair colour '%1' (a preset: see --list-hair-colours, or #rrggbb).\n").arg(hairColourArg));
+        return 2;
     }
     p.facePlusZ = havePlusZ;
     if (rawRig) { p.standardSkeleton = false; p.identityBones = false; p.standardNames = false; p.foldHelperJoints = false; }
