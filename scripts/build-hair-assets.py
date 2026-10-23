@@ -164,6 +164,124 @@ def closest_on_triangle(p, a, b, c):
     return a + ab * v + ac * w, np.array([1 - v - w, v, w])
 
 
+def closest_points(P, A, B, C):
+    """Vectorised closest point on triangles (Ericson, Real-Time Collision Detection 5.1.5): P, A, B, C are (M, 3)."""
+    ab, ac, ap = B - A, C - A, P - A
+    d1, d2 = (ab * ap).sum(1), (ac * ap).sum(1)
+    bp = P - B; d3, d4 = (ab * bp).sum(1), (ac * bp).sum(1)
+    cp = P - C; d5, d6 = (ab * cp).sum(1), (ac * cp).sum(1)
+    vc, vb, va = d1 * d4 - d3 * d2, d5 * d2 - d1 * d6, d3 * d6 - d5 * d4
+    m = len(P)
+    bary = np.zeros((m, 3))
+    done = np.zeros(m, bool)
+
+    def put(mask, w0, w1, w2):
+        nonlocal done
+        sel = mask & ~done
+        bary[sel] = np.stack([w0, w1, w2], 1)[sel]
+        done |= sel
+
+    one, zero = np.ones(m), np.zeros(m)
+    put((d1 <= 0) & (d2 <= 0), one, zero, zero)
+    put((d3 >= 0) & (d4 <= d3), zero, one, zero)
+    t = d1 / np.where(d1 - d3 == 0, 1, d1 - d3)
+    put((vc <= 0) & (d1 >= 0) & (d3 <= 0), 1 - t, t, zero)
+    put((d6 >= 0) & (d5 <= d6), zero, zero, one)
+    t = d2 / np.where(d2 - d6 == 0, 1, d2 - d6)
+    put((vb <= 0) & (d2 >= 0) & (d6 <= 0), 1 - t, zero, t)
+    t = (d4 - d3) / np.where((d4 - d3) + (d5 - d6) == 0, 1, (d4 - d3) + (d5 - d6))
+    put((va <= 0) & ((d4 - d3) >= 0) & ((d5 - d6) >= 0), zero, 1 - t, t)
+    den = 1.0 / np.where(va + vb + vc == 0, 1, va + vb + vc)
+    put(np.ones(m, bool), 1 - vb * den - vc * den, vb * den, vc * den)
+    return bary[:, [0]] * A + bary[:, [1]] * B + bary[:, [2]] * C, bary
+
+
+class SignedDistance:
+    """Signed distance to the MHR head (negative inside) plus optional eyeball spheres; sign from interpolated vertex normals."""
+    def __init__(self, base, faces, eye_spheres=(), y_min=140.0):
+        keep = base[faces].mean(1)[:, 1] > y_min
+        self.f = faces[keep]
+        self.base = base
+        a, b, c = base[self.f[:, 0]], base[self.f[:, 1]], base[self.f[:, 2]]
+        fn = np.cross(b - a, c - a)
+        vn = np.zeros_like(base)
+        for k in range(3): np.add.at(vn, self.f[:, k], fn)
+        self.vn = vn / (np.linalg.norm(vn, axis=1, keepdims=True) + 1e-12)
+        self.tree = cKDTree(base[self.f].mean(1))
+        self.spheres = eye_spheres
+
+    def __call__(self, P):
+        P = np.asarray(P, float)
+        K = 8
+        _, idx = self.tree.query(P, K)
+        pi = np.repeat(np.arange(len(P)), K)
+        tri = self.f[idx.reshape(-1)]
+        A, B, C = self.base[tri[:, 0]], self.base[tri[:, 1]], self.base[tri[:, 2]]
+        Q, w = closest_points(P[pi], A, B, C)
+        d = np.linalg.norm(P[pi] - Q, axis=1).reshape(-1, K)
+        best = d.argmin(1)
+        rows = np.arange(len(P)) * K + best
+        n = (w[rows][:, [0]] * self.vn[tri[rows, 0]] + w[rows][:, [1]] * self.vn[tri[rows, 1]] + w[rows][:, [2]] * self.vn[tri[rows, 2]])
+        n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
+        dist = d[np.arange(len(P)), best]
+        sign = np.sign(((P - Q[rows]) * n).sum(1))
+        sign[sign == 0] = 1
+        sd, normal = dist * sign, n
+        for centre, radius in self.spheres:
+            v = P - centre
+            r = np.linalg.norm(v, axis=1)
+            s = r - radius
+            closer = s < sd
+            sd = np.where(closer, s, sd)
+            normal = np.where(closer[:, None], v / (r[:, None] + 1e-12), normal)
+        return sd, normal
+
+
+def resolve_collisions(points, polys, sdf, clearance, rounds=16, spread=2.5):
+    """Push hair out of the head so that no sample of any hair triangle (its corners, edge points and interior points) is closer than
+    `clearance` to it. A violation pushes the triangle's vertices, then the push is SPREAD over the neighbouring hair vertices (all
+    layers within `spread` cm, with a smooth falloff) so a nose lifts the whole local patch like a tent instead of tearing holes in
+    single cards or reordering the layers of stacked cards."""
+    pts = points.copy()
+    tris = np.array([(q[0][0], q[i][0], q[i + 1][0]) for q in polys for i in range(1, len(q) - 1)])
+    bary = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (.5, .5, 0), (0, .5, .5), (.5, 0, .5), (.25, .75, 0), (.75, .25, 0), (0, .25, .75), (0, .75, .25),
+            (.25, 0, .75), (.75, 0, .25), (1 / 3, 1 / 3, 1 / 3), (2 / 3, 1 / 6, 1 / 6), (1 / 6, 2 / 3, 1 / 6), (1 / 6, 1 / 6, 2 / 3)]
+    W = np.array(bary)
+    for r in range(rounds):
+        tp = pts[tris]                                   # (T, 3, 3)
+        samples = np.einsum("kc,tcd->tkd", W, tp)        # (T, k, 3)
+        sd, n = sdf(samples.reshape(-1, 3))
+        sd, n = sd.reshape(len(tris), len(W)), n.reshape(len(tris), len(W), 3)
+        need = np.clip(clearance - sd, 0, None)
+        if need.max() <= 1e-3:
+            break
+        push = np.zeros_like(pts)
+        mag = np.zeros(len(pts))
+        for c in range(3):
+            share = need * np.clip(W[None, :, c] * 1.5, 0, 1)         # corners take the push of the samples near them
+            k = share.argmax(1)
+            val = share[np.arange(len(tris)), k]
+            vec = n[np.arange(len(tris)), k] * val[:, None]
+            for t in np.where(val > 0)[0]:
+                v = tris[t, c]
+                if val[t] > mag[v]: mag[v], push[v] = val[t], vec[t]
+        src = np.where(mag > 0)[0]
+        if len(src) == 0:
+            break
+        tree = cKDTree(pts)
+        field = np.zeros_like(pts)
+        fmag = np.zeros(len(pts))
+        for u in src:
+            for v in tree.query_ball_point(pts[u], spread):
+                d = np.linalg.norm(pts[v] - pts[u]) / spread
+                w = 1.0 - d * d
+                val = mag[u] * w
+                if val > fmag[v]: fmag[v], field[v] = val, push[u] * w
+        pts += field
+    sd, _ = sdf(pts)
+    return pts, int((sd < clearance - 0.03).sum())
+
+
 def frame(a, b, c):
     t1 = b - a; t1 = t1 / (np.linalg.norm(t1) + 1e-12)
     n = np.cross(b - a, c - a); n = n / (np.linalg.norm(n) + 1e-12)
@@ -206,6 +324,13 @@ def main():
     faces = mhr["faces"].astype(np.int64)
     mh_v, _, _ = read_obj(a.base)
     warp = HeadWarp(mh_v[:MH_BODY_VERTS], base)
+    # the eyeballs are separate meshes at runtime (ICT): approximate them as spheres seated like CharacterModel does (landmark centroid
+    # + (0, 0.09, -0.58) cm, radius ~1.15 cm) so a fringe does not cross them
+    spheres = []
+    for name in ("landmark_eye_l", "landmark_eye_r"):
+        if name in mhr:
+            spheres.append((base[mhr[name]].mean(0) + np.array([0.0, 0.09, -0.58]), 1.15))
+    sdf = SignedDistance(base, faces, spheres)
     blobs, styles = {}, []
     want = [s for s in a.styles.split(",") if s]
     for d in sorted(glob.glob(os.path.join(a.assets, "hair", "*"))):
@@ -221,6 +346,11 @@ def main():
         pos = eval_mhclo(clo[0], mh_v)   # the FULL base: some styles bind to its helper-hair vertices (ids >= 13380)
         assert len(pos) == len(v), f"{name}: {len(pos)} bound vertices vs {len(v)} in the OBJ"
         pts = warp(pos)
+        _, edge_left = None, None
+        raw_pts = pts.copy()
+        pts, still_inside = resolve_collisions(pts, polys, sdf, 0.25)
+        moved = np.linalg.norm(pts - raw_pts, axis=1)
+        print(f"  collisions: {int((moved > 1e-4).sum())} vertices pushed out (mean {moved[moved > 1e-4].mean() if (moved > 1e-4).any() else 0:.2f} cm, max {moved.max():.2f} cm), {still_inside} still inside")
         tri, bary, off = bind(pts, base, faces, 0.15)
         img = Image.open(diffuse[0]).convert("RGBA").resize((a.texture_size, a.texture_size), Image.LANCZOS)
         png = io.BytesIO(); img.save(png, "PNG", optimize=True)
