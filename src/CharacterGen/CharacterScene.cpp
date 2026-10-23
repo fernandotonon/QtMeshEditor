@@ -40,6 +40,7 @@ Rgb colourFor(Surface s, const Params& p)
         case Surface::Iris: return p.eye;
         case Surface::Lashes: return p.lash;
         case Surface::Eye: return {1.0f, 1.0f, 1.0f};
+        case Surface::Hair: return {1.0f, 1.0f, 1.0f};
     }
     return p.skin;
 }
@@ -53,6 +54,7 @@ const char* surfaceName(Surface s)
         case Surface::Iris: return "iris";
         case Surface::Lashes: return "lashes";
         case Surface::Eye: return "eye";
+        case Surface::Hair: return "hair";
     }
     return "skin";
 }
@@ -145,6 +147,31 @@ void bindSkinTexture(Ogre::Pass* pass, const QString& file)
     pass->createTextureUnitState(name)->setName("albedo");
 }
 
+// Bind a hairstyle texture (PNG with alpha) to a hair material: alpha-tested cards, visible from both sides.
+void bindHairTexture(Ogre::Pass* pass, const QString& file)
+{
+    bindSkinTexture(pass, file);
+    pass->setCullingMode(Ogre::CULL_NONE);
+    pass->setManualCullingMode(Ogre::MANUAL_CULL_NONE);
+    pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 128);
+    pass->setAlphaToCoverageEnabled(true);
+}
+
+// Write a style's texture to <AppData>/generated_textures/hair_<style>.png (once; its content never changes) and return the path.
+QString hairTextureFile(const BuildReport& build)
+{
+    if (build.hairStyle.isEmpty() || build.hairTexturePng.isEmpty()) return QString();
+    const QString dir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_textures"));
+    QDir().mkpath(dir);
+    const QString file = QDir(dir).filePath(QStringLiteral("hair_%1.png").arg(build.hairStyle));
+    QFileInfo info(file);
+    if (!info.exists() || info.size() != build.hairTexturePng.size()) {
+        QFile f(file);
+        if (!f.open(QIODevice::WriteOnly) || f.write(build.hairTexturePng) != build.hairTexturePng.size()) return QString();
+    }
+    return file;
+}
+
 // Deterministic seed of a character: its shape coefficients and skin colour.
 uint32_t skinSeedOf(const Params& p)
 {
@@ -199,7 +226,7 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
 }
 }  // namespace
 
-void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile)
+void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile, const QString& hairTextureFile)
 {
     if (!entity) return;
     auto& matMgr = Ogre::MaterialManager::getSingleton();
@@ -222,6 +249,11 @@ void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefi
         pass->setShininess(glossy ? 60.0f : 12.0f);
         if (surface == Surface::Skin && kv.first == "body" && !skinTextureFile.isEmpty()) {
             bindSkinTexture(pass, skinTextureFile);
+            RTShaderHelper::syncMaterialForViewport(mat);
+        }
+        if (surface == Surface::Hair && !hairTextureFile.isEmpty()) {
+            bindHairTexture(pass, hairTextureFile);
+            pass->setSpecular(Ogre::ColourValue(0.12f, 0.12f, 0.12f));
             RTShaderHelper::syncMaterialForViewport(mat);
         }
         if (surface == Surface::Eye) {   // wet cornea
@@ -250,9 +282,10 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     Ogre::SceneNode* node = Dna::importRigToScene(rig, baseName, &rep.import, error);
     if (!node) return nullptr;
     const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()), rep.build);
+    const QString hairFile = hairTextureFile(rep.build);
     for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
         Ogre::MovableObject* mo = it.getNext();
-        if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile);   // node names are unique: a reused material would keep the old tint
+        if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile, hairFile);   // node names are unique: a reused material would keep the old tint
     }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.character"),
                                   QStringLiteral("create vertices=%1 morphs=%2").arg(rep.import.vertices).arg(rep.import.morphTargets));

@@ -170,6 +170,7 @@ void CharacterController::kill()
 
 bool CharacterController::assetsPresent() const { return CharacterGen::CharacterAssets::present(); }
 
+QStringList CharacterController::hairNames() const { return CharacterGen::CharacterAssets::hairStyleNames(); }
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
@@ -255,6 +256,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     p.nativeHead = !m_assets->mhrArkit.empty();
     p.openEyes = m_openEyes;
     p.skinTexture = m_skinTexture;
+    p.hairStyle = m_hairStyle;
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);
         p.faceIdentity = randomCoefficients(uint32_t(seed) * 2u + 2u, m_assets->ictIdentities, float(variety), 40);

@@ -2,7 +2,13 @@
 
 #include "../ModelFetch.h"
 
+#include "QmcBundle.h"
+
+#include <QDateTime>
 #include <QDir>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QFileInfo>
 #include <QSettings>
 #include <QStandardPaths>
@@ -36,6 +42,26 @@ bool present()
 {
     return QFileInfo::exists(QDir(dir()).filePath(QStringLiteral("mhr_character.qmcb")))
            && QFileInfo::exists(QDir(dir()).filePath(QStringLiteral("ict_character.qmcb")));
+}
+
+QStringList hairStyleNames()
+{
+    static QString cachedPath;
+    static QDateTime cachedTime;
+    static QStringList cachedNames;
+    const QFileInfo info(QDir(dir()).filePath(QStringLiteral("hair_character.qmcb")));
+    if (!info.exists()) return QStringList();
+    if (info.absoluteFilePath() == cachedPath && info.lastModified() == cachedTime) return cachedNames;
+    QStringList names;
+    QmcBundle bundle;
+    if (bundle.open(info.absoluteFilePath())) {
+        const QJsonArray styles = QJsonDocument::fromJson(bundle.readBytes(QStringLiteral("meta"))).object().value(QStringLiteral("styles")).toArray();
+        for (const QJsonValue& s : styles) names << s.toObject().value(QStringLiteral("name")).toString();
+    }
+    cachedPath = info.absoluteFilePath();
+    cachedTime = info.lastModified();
+    cachedNames = names;
+    return names;
 }
 
 bool ensureBlocking(QString* error)

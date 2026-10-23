@@ -111,6 +111,18 @@ Column {
         Label { width: 52; height: 22; text: "Eyes" }
         ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onCurrentIndexChanged: sec.liveUpdate() }
     }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "Hair" }
+        ThemedComboBox {
+            id: hairBox
+            width: sec.width - 60; height: 22; font.pixelSize: 11
+            model: ["(none)"].concat(CharacterController.hairNames)
+            currentIndex: Math.max(0, model.indexOf(CharacterController.hairStyle))
+            onActivated: { CharacterController.hairStyle = currentIndex > 0 ? model[currentIndex] : ""; sec.liveUpdate() }
+        }
+    }
     component ShapeSlider: Row {
         id: row
         required property int mode

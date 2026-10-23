@@ -13,6 +13,7 @@
 // the base URL, QTMESH_CHARACTER_NO_DOWNLOAD verifies what is on disk without fetching.
 
 #include <QString>
+#include <QStringList>
 
 namespace CharacterGen {
 namespace CharacterAssets {
@@ -20,6 +21,9 @@ namespace CharacterAssets {
 QString dir();
 /// Both bundles exist (not verified: see ensureBlocking).
 bool present();
+
+/// Names of the hairstyles in the optional hair bundle of dir() (empty when there is none). Cached per file modification time.
+QStringList hairStyleNames();
 /// Make sure every file is on disk and matches its pinned digest, fetching what is missing. Blocks (nested event loop) — call it
 /// from the main thread. Empty `error` on success.
 bool ensureBlocking(QString* error = nullptr);

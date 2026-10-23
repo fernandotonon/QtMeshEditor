@@ -26,6 +26,8 @@ class CharacterController : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY statusChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
+    Q_PROPERTY(QStringList hairNames READ hairNames NOTIFY hairNamesChanged)
+    Q_PROPERTY(QString hairStyle READ hairStyle WRITE setHairStyle NOTIFY hairStyleChanged)
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
     Q_PROPERTY(bool skinTexture READ skinTexture WRITE setSkinTexture NOTIFY skinTextureChanged)
@@ -45,6 +47,9 @@ public:
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
     Q_INVOKABLE QVariantList seedBody(int seed, double variety) const;   // all 45 coefficients
     QStringList skinNames() const;
+    QStringList hairNames() const;
+    QString hairStyle() const { return m_hairStyle; }
+    void setHairStyle(const QString& v) { if (v != m_hairStyle) { m_hairStyle = v; emit hairStyleChanged(); } }
     QStringList eyeNames() const;
 
     /// body/face are "index=value,..." lists; seed < 0 = the average character. Returns "" on success, else an error.
@@ -61,6 +66,8 @@ signals:
     void statusChanged();
     void openEyesChanged();
     void skinTextureChanged();
+    void hairNamesChanged();
+    void hairStyleChanged();
 
 private:
     CharacterController() = default;
@@ -73,6 +80,7 @@ private:
     bool m_haveParams = false;
     bool m_openEyes = true;
     bool m_skinTexture = true;
+    QString m_hairStyle;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };

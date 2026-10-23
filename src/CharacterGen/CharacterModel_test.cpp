@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "CharacterModel.h"
+#include "QmcBundle.h"
 #include "CharacterScene.h"
 #include "../TestHelpers.h"
 
@@ -10,6 +11,7 @@
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <cmath>
+#include <cstring>
 #include <set>
 
 using namespace CharacterGen;
@@ -321,4 +323,93 @@ TEST(CharacterScene, TintMaterialsSurviveAReinitialisedEntity)
     ASSERT_EQ(entity->getNumSubEntities(), before.size());
     for (unsigned i = 0; i < entity->getNumSubEntities(); ++i)
         EXPECT_EQ(entity->getSubEntity(i)->getMaterialName(), before[i]) << "sub-entity " << i;
+}
+
+namespace {
+
+void appendBlob(QByteArray& out, const char* name, uint8_t dtype, std::vector<uint64_t> shape, const QByteArray& raw)
+{
+    const uint32_t nl = uint32_t(std::strlen(name)), nd = uint32_t(shape.size());
+    out.append(reinterpret_cast<const char*>(&nl), 4);
+    out.append(name, int(nl));
+    out.append(char(dtype));
+    out.append(reinterpret_cast<const char*>(&nd), 4);
+    for (uint64_t d : shape) out.append(reinterpret_cast<const char*>(&d), 8);
+    const uint64_t bl = uint64_t(raw.size());
+    out.append(reinterpret_cast<const char*>(&bl), 8);
+    out.append(raw);
+}
+template <typename T>
+QByteArray raw(const std::vector<T>& v) { return QByteArray(reinterpret_cast<const char*>(v.data()), int(v.size() * sizeof(T))); }
+
+/// A one-triangle style bound to the first triangle of the synthetic body (vertices 0, 1, 2).
+QByteArray hairBundleBytes(int32_t badVertex = -1)
+{
+    QByteArray b("QMCB1\0\0\0", 8);
+    const uint32_t count = 9;
+    b.append(reinterpret_cast<const char*>(&count), 4);
+    appendBlob(b, "hair.cap.tri", 2, {3, 3}, raw(std::vector<int32_t>{0, 1, 2, 0, 1, 2, badVertex >= 0 ? badVertex : 0, 1, 2}));
+    appendBlob(b, "hair.cap.bary", 0, {3, 3}, raw(std::vector<float>{1, 0, 0,  0, 1, 0,  0.5f, 0.25f, 0.25f}));
+    appendBlob(b, "hair.cap.off", 0, {3, 3}, raw(std::vector<float>{0, 0, 0,  0, 0, 0,  0, 0, 2}));   // the third vertex floats 2 cm along the normal
+    appendBlob(b, "hair.cap.uv", 0, {3, 2}, raw(std::vector<float>{0, 0,  1, 0,  0, 1}));
+    appendBlob(b, "hair.cap.poly_size", 2, {1}, raw(std::vector<int32_t>{3}));
+    appendBlob(b, "hair.cap.poly_vertex", 2, {3}, raw(std::vector<int32_t>{0, 1, 2}));
+    appendBlob(b, "hair.cap.poly_uv", 2, {3}, raw(std::vector<int32_t>{0, 1, 2}));
+    appendBlob(b, "hair.cap.texture", 3, {4}, QByteArray("\x89PNG", 4));
+    const QByteArray meta = R"({"styles":[{"name":"cap"}]})";
+    appendBlob(b, "meta", 3, {uint64_t(meta.size())}, meta);
+    return b;
+}
+
+}  // namespace
+
+TEST(CharacterHair, BundleLoadsAndEveryBindingIsValidatedAgainstTheBody)
+{
+    Assets a = syntheticAssets();
+    QmcBundle good;
+    ASSERT_TRUE(good.parse(hairBundleBytes()));
+    QString err;
+    ASSERT_TRUE(loadHairBundle(good, a, &err)) << err.toStdString();
+    ASSERT_EQ(a.hairStyleNames(), QStringList{QStringLiteral("cap")});
+    const HairStyle* cap = a.hairStyle(QStringLiteral("cap"));
+    ASSERT_NE(cap, nullptr);
+    EXPECT_EQ(cap->tri.size(), 9u);
+    EXPECT_EQ(a.hairStyle(QStringLiteral("nope")), nullptr);
+
+    QmcBundle bad;
+    ASSERT_TRUE(bad.parse(hairBundleBytes(a.mhrVertices + 5)));   // a vertex that is not on the body
+    EXPECT_FALSE(loadHairBundle(bad, a, &err));
+    EXPECT_NE(err.indexOf(QStringLiteral("inconsistent")), -1);
+}
+
+TEST(CharacterHair, StyleFollowsTheBodyAndTakesItsSkinWeights)
+{
+    Assets a = syntheticAssets();
+    QmcBundle bundle;
+    ASSERT_TRUE(bundle.parse(hairBundleBytes()));
+    ASSERT_TRUE(loadHairBundle(bundle, a));
+    // a body of 3 vertices (metres): a right triangle in the xy plane, vertex 0 skinned to joint 1, vertex 1 to joint 2, vertex 2 half and half
+    Dna::Mesh body;
+    body.positions = {0, 0, 0,  1, 0, 0,  0, 1, 0};
+    body.skin = {{{1, 1.0f}}, {{2, 1.0f}}, {{1, 0.5f}, {2, 0.5f}}};
+    const Dna::Mesh hair = hairMeshOnBody(*a.hairStyle(QStringLiteral("cap")), body);
+    EXPECT_EQ(hair.name, "head_hair");
+    ASSERT_EQ(hair.positions.size(), 9u);
+    EXPECT_NEAR(hair.positions[0], 0.0f, 1e-6f);                       // vertex 0 sits on body vertex 0
+    EXPECT_NEAR(hair.positions[3], 1.0f, 1e-6f);                       // vertex 1 sits on body vertex 1
+    EXPECT_NEAR(hair.positions[6], 0.25f, 1e-6f);                      // 0.5*v0 + 0.25*v1 + 0.25*v2 + 2 cm along the normal (+z)
+    EXPECT_NEAR(hair.positions[7], 0.25f, 1e-6f);
+    EXPECT_NEAR(hair.positions[8], 0.02f, 1e-6f);
+    // moving the body moves the hair with it, and the offset follows the triangle's new frame (rotated: the normal is now +x)
+    Dna::Mesh moved = body;
+    moved.positions = {0, 0, 0,  0, 1, 0,  0, 0, 1};
+    const Dna::Mesh hair2 = hairMeshOnBody(*a.hairStyle(QStringLiteral("cap")), moved);
+    EXPECT_NEAR(hair2.positions[6], 0.02f, 1e-6f);
+    // skin: vertex 2 blends joints 1 (0.5*0.5 + ...) and 2; every row sums to 1 and names real joints
+    for (const auto& row : hair.skin) {
+        float sum = 0;
+        for (const auto& s : row) sum += s.weight;
+        EXPECT_NEAR(sum, 1.0f, 1e-5f);
+    }
+    EXPECT_EQ(hair.faces.size(), 1u);
 }

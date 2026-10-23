@@ -30,7 +30,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--hair STYLE | --list-hair] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -47,6 +47,8 @@ QString assetsDir() { return CharacterAssets::dir(); }
 int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
+    QString hairArg;
+    bool listHair = false;
     bool skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
@@ -88,6 +90,8 @@ int run(int argc, char* argv[])
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
         else if (a == "--no-skin-texture") skinTexture = false;
+        else if (a == "--hair") hairArg = next();
+        else if (a == "--list-hair") listHair = true;
         else if (a == "--closed-eyes") openEyes = false;
         else if (a == "--open-eyes") openEyes = true;
         else if (a == "--skin") skinArg = next();
@@ -122,6 +126,12 @@ int run(int argc, char* argv[])
         CLIPipeline::writeOutput(QStringLiteral("Character assets are in %1\n").arg(CharacterAssets::dir()));
         if (outPath.isEmpty()) return 0;
     }
+    if (listHair) {
+        const QStringList names = CharacterAssets::hairStyleNames();
+        CLIPipeline::writeOutput(names.isEmpty() ? QStringLiteral("No hairstyles (no hair_character.qmcb in %1)\n").arg(CharacterAssets::dir())
+                                                  : names.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+        return 0;
+    }
     if (outPath.isEmpty()) { usage(); return 2; }
     if (!(variety >= 0.0f && variety <= 5.0f)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: --variety must be between 0 and 5.\n"));
@@ -148,6 +158,13 @@ int run(int argc, char* argv[])
     Params p;
     p.openEyes = openEyes;
     p.skinTexture = skinTexture;
+    if (!hairArg.isEmpty()) {
+        if (!data.hairStyle(hairArg)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: unknown hairstyle '%1' (available: %2).\n").arg(hairArg, data.hairStyleNames().join(QStringLiteral(", "))));
+            return 2;
+        }
+        p.hairStyle = hairArg;
+    }
     p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
     p.facePlusZ = havePlusZ;
     if (rawRig) { p.standardSkeleton = false; p.identityBones = false; p.standardNames = false; p.foldHelperJoints = false; }
