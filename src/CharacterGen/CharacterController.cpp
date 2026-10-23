@@ -261,6 +261,9 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             return err;
         }
     }
+    // the optional hair bundle may have arrived with this ensureBlocking (a first run without hair): reload the cached assets so
+    // the style can be built, and tell the panel so its hair controls appear
+    if (m_assets && m_assets->hairStyles.empty() && !CharacterAssets::hairStyleNames().isEmpty()) m_assets.reset();
     if (!m_assets) {
         setStatus(tr("Loading character assets…"), true);
         auto a = std::make_shared<Assets>();
@@ -269,6 +272,10 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             return err;
         }
         m_assets = std::move(a);
+    }
+    if (m_hairNamesSeen != CharacterAssets::hairStyleNames()) {
+        m_hairNamesSeen = CharacterAssets::hairStyleNames();
+        emit hairNamesChanged();
     }
 
     Params p;

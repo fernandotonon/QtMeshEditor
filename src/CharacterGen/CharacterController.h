@@ -94,6 +94,7 @@ private:
     bool m_openEyes = true;
     bool m_skinTexture = true;
     QString m_hairStyle;
+    QStringList m_hairNamesSeen;   ///< the hairstyles the panel was last told about (hairNamesChanged)
     QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;
     std::shared_ptr<CharacterGen::Assets> m_assets;

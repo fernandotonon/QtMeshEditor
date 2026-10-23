@@ -211,11 +211,15 @@ uint32_t skinSeedOf(const Params& p)
 constexpr int kKeptSkinTextures = 32;
 constexpr int kKeptHairTextures = 32;
 
-void pruneGeneratedTextures(const QString& dir, const QString& pattern, int keep)
+// Keep the newest `keep` files of a pattern, and never delete `protectedFile` (the texture about to be bound: a cached file reused
+// by a new colour keeps its old modification time and could otherwise fall outside the newest N).
+void pruneGeneratedTextures(const QString& dir, const QString& pattern, int keep, const QString& protectedFile = QString())
 {
     QFileInfoList files = QDir(dir).entryInfoList(QStringList{pattern}, QDir::Files, QDir::Time);   // newest first
     auto& textures = Ogre::TextureManager::getSingleton();
+    const QString protectedPath = protectedFile.isEmpty() ? QString() : QFileInfo(protectedFile).absoluteFilePath();
     for (int i = keep; i < files.size(); ++i) {
+        if (!protectedPath.isEmpty() && files[i].absoluteFilePath() == protectedPath) continue;
         const std::string name = files[i].fileName().toStdString();
         if (textures.resourceExists(name)) textures.remove(name);
         QFile::remove(files[i].absoluteFilePath());
@@ -307,8 +311,8 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
     const QString skinFile = bakeSkinFile(rig, params, QString::fromStdString(node->getName()), rep.build);
     const QString hairFile = hairTextureFile(rep.build);
     const QString eyeFile = eyeTextureFile(rep.build);
-    if (!eyeFile.isEmpty()) pruneGeneratedTextures(QFileInfo(eyeFile).absolutePath(), QStringLiteral("eye_*.png"), kKeptHairTextures);
-    if (!hairFile.isEmpty()) pruneGeneratedTextures(QFileInfo(hairFile).absolutePath(), QStringLiteral("hair_*.png"), kKeptHairTextures);
+    if (!eyeFile.isEmpty()) pruneGeneratedTextures(QFileInfo(eyeFile).absolutePath(), QStringLiteral("eye_*.png"), kKeptHairTextures, eyeFile);
+    if (!hairFile.isEmpty()) pruneGeneratedTextures(QFileInfo(hairFile).absolutePath(), QStringLiteral("hair_*.png"), kKeptHairTextures, hairFile);
     for (auto it = node->getAttachedObjectIterator(); it.hasMoreElements();) {
         Ogre::MovableObject* mo = it.getNext();
         if (mo->getMovableType() == "Entity") applyTints(static_cast<Ogre::Entity*>(mo), params, QString::fromStdString(node->getName()), skinFile, hairFile, eyeFile);   // node names are unique: a reused material would keep the old tint

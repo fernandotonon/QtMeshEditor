@@ -9,7 +9,7 @@
 By default the character keeps the MHR body's **own head** (no seam, no cut). The 51 ARKit expression shapes are built offline
 (`scripts/build-character-assets.py`) by transferring the ICT-FaceKit shapes onto the MHR head and expressing them with MHR's own
 72 face-expression vectors (bounded ridge least squares); the jaw shapes are the real skinned motion of the `c_jaw` joint, the
-eyelid shapes are transferred directly in a mask around each eye. The mouth interior (gums, tongue, teeth) and the eyeballs (sclera, iris) are ICT's. MHR's eyes are sculpted shut, so
+eyelid shapes are transferred directly in a mask around each eye. The mouth interior (gums, tongue, teeth) is ICT's; with the native head the eyeballs are generated procedurally (see **Eyes** below), and only the ICT head (`--ict-head`) keeps ICT's own eyeballs. MHR's eyes are sculpted shut, so
 with **Open eyes** on (the default; `--closed-eyes` / MCP `open_eyes:false` / the panel checkbox turn it off) the thin layer between the lids is removed
 (the triangle list was picked by hand, `scripts/mhr_eye_layer_faces.json`) and the eyeballs show; eye colour only has an effect then.
 The eyeballs and the mouth interior are seated relative to landmarks on the face (the eyelid layer and the lip line), so they follow every body/head shape.
