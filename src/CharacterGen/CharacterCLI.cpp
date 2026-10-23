@@ -128,6 +128,10 @@ int run(int argc, char* argv[])
     }
     if (listHair) {
         const QStringList names = CharacterAssets::hairStyleNames(assets);
+        if (json) {
+            CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(names)).toJson(QJsonDocument::Compact)) + QLatin1Char('\n'));
+            return 0;
+        }
         CLIPipeline::writeOutput(names.isEmpty() ? QStringLiteral("No hairstyles (no hair_character.qmcb in %1)\n").arg(assets)
                                                   : names.join(QLatin1Char('\n')) + QLatin1Char('\n'));
         return 0;

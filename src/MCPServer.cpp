@@ -3752,7 +3752,9 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
     p.nativeHead = head == QLatin1String("mhr") && !data.mhrArkit.empty();
     p.openEyes = args.value("open_eyes").toBool(true);
     p.skinTexture = args.value("skin_texture").toBool(true);
-    p.hairStyle = args.value("hair").toString();
+    const QJsonValue hairValue = args.value("hair");
+    if (args.contains("hair") && !hairValue.isString()) return makeErrorResult(QStringLiteral("'hair' must be a string."));
+    p.hairStyle = hairValue.toString();
     if (!p.hairStyle.isEmpty() && !p.nativeHead)
         return makeErrorResult(QStringLiteral("Hair needs the MHR head: use head \"mhr\" (and a bundle with its expression data)."));
     if (!p.hairStyle.isEmpty() && !data.hairStyle(p.hairStyle))
