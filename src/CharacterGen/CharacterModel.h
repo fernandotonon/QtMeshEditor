@@ -95,6 +95,8 @@ struct Params {
     /// Only for the native head (the ICT head has a different UV layout).
     bool skinTexture = true;
     int skinTextureSize = 1024;
+    /// 0..1 amount of body hair painted into the skin texture (arms, legs, chest, abdomen; sparse on hands and feet). 0 = none.
+    float bodyHair = 0.5f;
     /// > 0: keep only the part of the body this many metres below the neck cut and above (head + shoulders; previews/thumbnails).
     float bustDepth = 0.0f;
     /// Keep the MHR body's own head (no neck cut, no ICT head): the expression shapes are MHR's native ones fitted to the ARKit set.
@@ -173,9 +175,14 @@ struct BuildReport {
     LipFrame lips;
     BrowFrame brows;
     NippleFrame nipples;
+    std::vector<float> bodyHair;     ///< 0..1 body-hair density per body vertex (from the skin weights); empty = none
     QStringList meshNames;
     QStringList warnings;
 };
+
+/// Body-hair density (0..1) of the region a joint drives: forearms and shins are hairy, upper arms and thighs less so, chest and
+/// abdomen moderately, hands, feet, shoulders, neck and head hardly or not at all. Matched on the (Mixamo-style) joint name.
+float bodyHairDensityOfJoint(const QString& jointName);
 
 /// Build the character. `names` of the produced meshes: "body", "head_skin", "head_mouth", "head_teeth", "head_sclera",
 /// "head_iris", "head_lashes". Returns an empty rig (and sets `error`) when the assets are unusable.

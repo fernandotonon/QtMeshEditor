@@ -10,6 +10,7 @@
 #include <QImage>
 
 #include <cstdint>
+#include <vector>
 
 namespace CharacterGen {
 
@@ -26,6 +27,8 @@ struct SkinTextureOptions {
     SkinLips lips;                  ///< valid = paint the lips
     SkinBrows brows;                ///< valid = paint the eyebrows
     SkinNipples nipples;            ///< valid = paint the areolae and nipples
+    float bodyHair = 0.0f;          ///< 0..1 amount of body hair (needs hairDensity)
+    std::vector<float> hairDensity; ///< 0..1 per POSITION vertex of the baked mesh: where body hair may grow
 };
 
 /// Bake the albedo of `body` (positions in metres, UVs + layouts + faces as the rig stores them: the V flip is applied here).
@@ -56,7 +59,8 @@ struct NippleMask {
 NippleMask nippleMask(const std::array<float, 3>& position, const SkinNipples& nipples);
 
 /// The skin colour at a surface point (metres), before the texture's coverage logic. Exposed for tests.
-Rgb skinColourAt(const std::array<float, 3>& position, const Rgb& skin, const SkinTextureOptions& options);
+/// `hairDensity` (0..1) is the body-hair density at this point (interpolated from the vertices); it scales with options.bodyHair.
+Rgb skinColourAt(const std::array<float, 3>& position, const Rgb& skin, const SkinTextureOptions& options, float hairDensity = 0.0f);
 
 }  // namespace CharacterGen
 

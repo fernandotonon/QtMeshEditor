@@ -172,3 +172,37 @@ TEST(SkinTexture, AreolaIsDarkerThanTheSkinAndTheNippleDarkerStill)
         EXPECT_LE(luminanceOf(nippleColourFor(skin)), luminanceOf(areolaColourFor(skin)) + 1e-4f);
     }
 }
+
+TEST(SkinTexture, BodyHairDarkensTheSkinInProportionToDensityAndAmount)
+{
+    SkinTextureOptions o;
+    o.seed = 9;
+    o.bodyHair = 1.0f;
+    const Rgb skin{0.80f, 0.62f, 0.50f};
+    auto meanLuminance = [&](float density, float amount) {
+        o.bodyHair = amount;
+        double sum = 0;
+        const int n = 4000;
+        for (int i = 0; i < n; ++i) {
+            const Rgb c = skinColourAt({0.0007f * float(i % 63), 0.0009f * float(i / 63), 0.3f}, skin, o, density);
+            sum += luminanceOf(c);
+        }
+        return sum / n;
+    };
+    const double none = meanLuminance(0.0f, 1.0f);
+    const double hairy = meanLuminance(1.0f, 1.0f);
+    const double lightly = meanLuminance(1.0f, 0.3f);
+    EXPECT_LT(hairy, none - 0.01);
+    EXPECT_GT(lightly, hairy) << "a lower amount darkens less";
+    EXPECT_DOUBLE_EQ(meanLuminance(1.0f, 0.0f), none) << "amount 0 = no hair";
+}
+
+TEST(CharacterModel, BodyHairDensityFollowsTheRegion)
+{
+    EXPECT_GT(bodyHairDensityOfJoint(QStringLiteral("LeftLeg")), bodyHairDensityOfJoint(QStringLiteral("LeftUpLeg")));
+    EXPECT_GT(bodyHairDensityOfJoint(QStringLiteral("RightForeArm")), bodyHairDensityOfJoint(QStringLiteral("RightArm")));
+    EXPECT_GT(bodyHairDensityOfJoint(QStringLiteral("LeftUpLeg")), bodyHairDensityOfJoint(QStringLiteral("LeftFoot")));
+    EXPECT_EQ(bodyHairDensityOfJoint(QStringLiteral("Head")), 0.0f);
+    EXPECT_EQ(bodyHairDensityOfJoint(QStringLiteral("SomethingElse")), 0.0f);
+    EXPECT_GT(bodyHairDensityOfJoint(QStringLiteral("Spine2")), 0.0f);
+}
