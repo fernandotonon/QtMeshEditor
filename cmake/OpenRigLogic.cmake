@@ -24,8 +24,13 @@ endif()
 
 include(FetchContent)
 
-# Commit of origin/5.8 verified in the Phase 1 spike (RigLogic 13.2.9).
-set(QTMESH_OPENRIGLOGIC_TAG "55756aca0c4c55adc56ad68a796bcc1c0bf6fa5a"
+# Commit of origin/5.8 verified in the Phase 1 spike (RigLogic 13.2.9-hotfix1).
+# Re-pinned from 55756aca: upstream rewrote the 5.8 branch history (same
+# snapshots, new hashes), so the old commit is no longer reachable from any
+# branch and a fresh `git clone` + checkout of it fails ("unable to read
+# tree"). b69fd511 is the same snapshot with the IDENTICAL tree
+# (86353c56d781f0923749c32678c0b4abaa75dddf) and is reachable from 5.8.
+set(QTMESH_OPENRIGLOGIC_TAG "b69fd51184033dcb8365a4f5515ffc1646f6cf68"
     CACHE STRING "OpenRigLogic git revision (5.8 stable branch)")
 
 # Upstream regenerates Version.h / Defs.h INSIDE its source tree unless told not

@@ -697,7 +697,7 @@ vertices) whose shape/proportions come from the person.
   **MIT** (verified 2026-10-17 via the GitHub API and the repo `LICENSE`).
   Built from source by `cmake/OpenRigLogic.cmake` behind `-DENABLE_OPENRIGLOGIC=ON`
   (default OFF), pinned to the `5.8` stable-branch commit
-  `55756aca0c4c55adc56ad68a796bcc1c0bf6fa5a` (RigLogic 13.2.9). The `main`
+  `b69fd51184033dcb8365a4f5515ffc1646f6cf68` (RigLogic 13.2.9-hotfix1; re-pinned from `55756aca`, which upstream orphaned when it rewrote the branch history — identical tree). The `main`
   branch is documented upstream as experimental and is not used.
 - **Attribution:** MIT requires the copyright notice to accompany copies. The
   static library is linked into the binary; the upstream `LICENSE` text is
