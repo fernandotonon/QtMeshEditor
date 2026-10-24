@@ -28,7 +28,8 @@ struct LashMesh {
     std::vector<float> uvs;                    ///< uv per vertex: u along the strip 0..1, v 1 at the root to 0 at the tip
     std::vector<uint32_t> indices;             ///< triangles
     std::vector<uint32_t> sourceVertex;        ///< per vertex: the body (position) vertex it is rooted on
-    int upperStrips = 0, lowerStrips = 0;      ///< strips built (0..2 each)
+    int upperStrips = 0;                       ///< upper strips built (0..2)
+    int lowerStrips = 0;                       ///< lower strips built (0..2)
 };
 
 /// Build the strips. `positions` = the body's positions (V*3, metres), `faces` = F*3 position indices, `dropped` = one flag per
@@ -40,7 +41,8 @@ LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int3
 
 /// The two lid margins of one eye, each ordered from the inner canthus (nose side) to the outer one: body vertex indices.
 struct LidMargins {
-    std::vector<uint32_t> upper, lower;
+    std::vector<uint32_t> upper;
+    std::vector<uint32_t> lower;
     bool valid() const { return upper.size() >= 2 && lower.size() >= 2; }
 };
 /// Find the margins of both eyes (same inputs as buildLashes). An eye that is not seated, or whose opening is not found, comes back

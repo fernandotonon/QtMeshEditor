@@ -98,55 +98,89 @@ void addStrip(LashMesh& out, const std::vector<float>& positions, const std::vec
 }
 }  // namespace
 
+namespace {
+// The opening of one eye: the loop whose centroid is nearest to the eyeball centre (and big enough to be an eyelid).
+const Loop* eyeLoop(const std::vector<Loop>& loops, const V3& centre)
+{
+    const Loop* best = nullptr;
+    float bestD = 1e30f;
+    for (const Loop& l : loops) {
+        if (l.vertices.size() < 8) continue;
+        const float d = len(sub(l.centroid, centre));
+        if (d >= bestD) continue;
+        bestD = d;
+        best = &l;
+    }
+    return bestD > 0.04f ? nullptr : best;   // 4 cm: not an eyelid opening
+}
+
+struct LidSplit {
+    std::vector<uint32_t> upper, lower;
+    uint32_t minX = 0, maxX = 0;   // the canthi: the extremes along x
+    bool ok = false;
+};
+
+// The chord between the two canthi separates the upper lid from the lower lid.
+LidSplit splitLids(const std::vector<float>& positions, const std::vector<uint32_t>& loop)
+{
+    LidSplit out;
+    auto px = [&](uint32_t v) { return positions[size_t(v) * 3]; };
+    auto py = [&](uint32_t v) { return positions[size_t(v) * 3 + 1]; };
+    const auto byX = [&](uint32_t a, uint32_t b) { return px(a) < px(b); };
+    out.minX = *std::min_element(loop.begin(), loop.end(), byX);
+    out.maxX = *std::max_element(loop.begin(), loop.end(), byX);
+    const float x0 = px(out.minX);
+    const float x1 = px(out.maxX);
+    if (x1 - x0 < 1e-5f) return out;
+    const float y0 = py(out.minX);
+    const float y1 = py(out.maxX);
+    for (uint32_t v : loop) {
+        const float chordY = y0 + (y1 - y0) * ((px(v) - x0) / (x1 - x0));
+        (py(v) >= chordY ? out.upper : out.lower).push_back(v);
+    }
+    out.ok = true;
+    return out;
+}
+
+// Inner canthus (nose side) first: the left eye (+X) has it at the smaller x.
+void orderInnerToOuter(const std::vector<float>& positions, bool leftEye, std::vector<uint32_t>& vertices)
+{
+    std::sort(vertices.begin(), vertices.end(), [&](uint32_t a, uint32_t b) {
+        const float xa = positions[size_t(a) * 3];
+        const float xb = positions[size_t(b) * 3];
+        return leftEye ? xa < xb : xa > xb;
+    });
+}
+
+// The canthus vertices belong to both lids: the strips meet there.
+void shareCanthi(uint32_t inner, uint32_t outer, std::vector<uint32_t>& a, std::vector<uint32_t>& b)
+{
+    for (std::vector<uint32_t>* v : {&a, &b}) {
+        if (std::find(v->begin(), v->end(), inner) == v->end()) v->insert(v->begin(), inner);
+        if (std::find(v->begin(), v->end(), outer) == v->end()) v->push_back(outer);
+    }
+}
+}  // namespace
+
 std::array<LidMargins, 2> findLidMargins(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
                                          const std::array<LashEye, 2>& eyes)
 {
     std::array<LidMargins, 2> out;
     if (positions.empty() || faces.size() < 3) return out;
     const std::vector<Loop> loops = openingLoops(positions, faces, dropped);
-    if (loops.empty()) return out;
-    for (int side = 0; side < 2; ++side) {
-        if (!eyes[size_t(side)].seated) continue;
-        const V3 centre = eyes[size_t(side)].centre;
-        // the opening of THIS eye: the loop whose centroid is nearest to the eyeball centre (and big enough to be an eyelid)
-        const Loop* best = nullptr;
-        float bestD = 1e30f;
-        for (const Loop& l : loops) {
-            if (l.vertices.size() < 8) continue;
-            const float d = len(sub(l.centroid, centre));
-            if (d < bestD) { bestD = d; best = &l; }
-        }
-        if (!best || bestD > 0.04f) continue;   // 4 cm: not an eyelid opening
-        // canthi = the extremes along x; the chord between them separates the upper lid from the lower lid
-        auto px = [&](uint32_t v) { return positions[size_t(v) * 3]; };
-        auto py = [&](uint32_t v) { return positions[size_t(v) * 3 + 1]; };
-        const uint32_t vmin = *std::min_element(best->vertices.begin(), best->vertices.end(), [&](uint32_t a, uint32_t b) { return px(a) < px(b); });
-        const uint32_t vmax = *std::max_element(best->vertices.begin(), best->vertices.end(), [&](uint32_t a, uint32_t b) { return px(a) < px(b); });
-        const float x0 = px(vmin), x1 = px(vmax), y0 = py(vmin), y1 = py(vmax);
-        if (x1 - x0 < 1e-5f) continue;
-        std::vector<uint32_t> upper, lower;
-        for (uint32_t v : best->vertices) {
-            const float t = (px(v) - x0) / (x1 - x0);
-            const float chordY = y0 + (y1 - y0) * t;
-            (py(v) >= chordY ? upper : lower).push_back(v);
-        }
-        // inner canthus (nose side) first: the left eye (+X) has it at the smaller x
+    for (size_t side = 0; side < 2; ++side) {
+        if (!eyes[side].seated || loops.empty()) continue;
+        const Loop* loop = eyeLoop(loops, eyes[side].centre);
+        if (!loop) continue;
+        LidSplit split = splitLids(positions, loop->vertices);
+        if (!split.ok) continue;
         const bool leftEye = side == 0;
-        auto order = [&](std::vector<uint32_t>& v) {
-            std::sort(v.begin(), v.end(), [&](uint32_t a, uint32_t b) { return leftEye ? px(a) < px(b) : px(a) > px(b); });
-        };
-        order(upper);
-        order(lower);
-        // the canthus vertices belong to both lids: the strips meet there
-        if (!upper.empty() && !lower.empty()) {
-            const uint32_t inner = leftEye ? vmin : vmax, outer = leftEye ? vmax : vmin;
-            for (auto* v : {&upper, &lower}) {
-                if (std::find(v->begin(), v->end(), inner) == v->end()) v->insert(v->begin(), inner);
-                if (std::find(v->begin(), v->end(), outer) == v->end()) v->push_back(outer);
-            }
-        }
-        out[size_t(side)].upper = std::move(upper);
-        out[size_t(side)].lower = std::move(lower);
+        orderInnerToOuter(positions, leftEye, split.upper);
+        orderInnerToOuter(positions, leftEye, split.lower);
+        if (!split.upper.empty() && !split.lower.empty())
+            shareCanthi(leftEye ? split.minX : split.maxX, leftEye ? split.maxX : split.minX, split.upper, split.lower);
+        out[side].upper = std::move(split.upper);
+        out[side].lower = std::move(split.lower);
     }
     return out;
 }
