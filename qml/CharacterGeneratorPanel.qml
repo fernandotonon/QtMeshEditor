@@ -101,7 +101,16 @@ Column {
         width: 22; height: 22; radius: 3; color: colour; border.color: AnimationControlController.borderColor
         HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
         ToolTip.visible: chipHover.hovered; ToolTip.delay: 400; ToolTip.text: tip
-        MouseArea { anchors.fill: parent; onClicked: { var v = CharacterController.pickColour(chip.colour); if (v !== "") chip.picked(v) } }
+        function choose() { var v = CharacterController.pickColour(chip.colour); if (v !== "") chip.picked(v) }
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: tip
+        Accessible.onPressAction: choose()
+        Keys.onReturnPressed: choose()
+        Keys.onEnterPressed: choose()
+        Keys.onSpacePressed: choose()
+        border.width: activeFocus ? 2 : 1
+        MouseArea { anchors.fill: parent; onClicked: chip.choose() }
     }
 
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
