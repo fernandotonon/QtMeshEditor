@@ -1099,6 +1099,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     BuildReport& rep = report ? *report : local;
     rep = BuildReport();
     Dna::Rig rig;
+    rig.nameTag.clear();   // a generated character is not a DNA import: no "_dna" in its scene names
     const int J = int(a.jointParents.size());
     const int cNeck = a.joint(QStringLiteral("c_neck")), cHead = a.joint(QStringLiteral("c_head"));
     if (J == 0 || cNeck < 0 || cHead < 0) {

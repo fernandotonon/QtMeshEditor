@@ -10,7 +10,9 @@
 #include "../SentryReporter.h"
 #include "../UndoManager.h"
 
+#include <QApplication>
 #include <QColor>
+#include <QColorDialog>
 #include <QFileInfo>
 #include <QSettings>
 
@@ -241,6 +243,18 @@ void CharacterController::setBottomColour(const QString& v)
 }
 
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
+QString CharacterController::skinColourHex(const QString& name) const
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
+    return QColor::fromRgbF(c[0], c[1], c[2]).name();
+}
+QString CharacterController::pickColour(const QString& initial) const
+{
+    const QColor c = QColorDialog::getColor(QColor(initial), QApplication::activeWindow(), QStringLiteral("Colour"),
+                                            QColorDialog::DontUseNativeDialog);
+    return c.isValid() ? c.name() : QString();
+}
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
 QVariantList CharacterController::seedBody(int seed, double variety) const
