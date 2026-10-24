@@ -247,6 +247,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/SkinTexture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/SkinTexture_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairTint.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairTint_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/EyeTexture.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/EyeTexture_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel_test.cpp
