@@ -373,6 +373,7 @@ JointPositions jointWorldPositions(const Dna::Rig& rig)
 Dna::Mesh clipBodyByField(const Dna::Mesh& body, const std::vector<float>& field, float thickness)
 {
     if (body.positions.empty() || body.layouts.empty() || body.uvs.empty()) return Dna::Mesh();
+    if (field.size() < body.positions.size() / 3) return Dna::Mesh();   // one field value per position, or the cut would read past the end
     return Clipper(body, field, thickness).run();
 }
 

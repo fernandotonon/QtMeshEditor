@@ -93,6 +93,13 @@ TEST(Clothing, ClipCutsExactlyAlongTheZeroContourAndKeepsUvsAndSkin)
     for (const auto& s : g.skin) { ASSERT_FALSE(s.empty()); float w = 0; for (auto& si : s) w += si.weight; EXPECT_NEAR(w, 1.0f, 1e-4f); }
 }
 
+TEST(Clothing, AFieldShorterThanThePositionsIsRefused)
+{
+    const Dna::Mesh body = sheet();
+    EXPECT_TRUE(clipBodyByField(body, std::vector<float>(body.positions.size() / 3 - 1, 1.0f), 0.01f).faces.empty());
+    EXPECT_FALSE(clipBodyByField(body, std::vector<float>(body.positions.size() / 3, 1.0f), 0.01f).faces.empty());
+}
+
 TEST(Clothing, ClipOfNothingIsEmpty)
 {
     const Dna::Mesh body = sheet();

@@ -36,4 +36,4 @@ has no deformation) so glTF export keeps the target names.
 * Assets: `QTMESH_CHARACTER_DIR` or `<AppData>/ai_models/character` (`mhr_character.qmcb`, `ict_character.qmcb`, licence texts), downloaded on first use with pinned SHA-256s. Build them with `scripts/build-character-assets.py`; host with `scripts/upload-character-assets.sh`.
 
 ## Not yet
-Hair, photo-driven creation (SAM body shape + face colour sampling), clothing.
+Photo-driven creation (SAM body shape + face colour sampling); loose clothing (skirts, dresses, coats), fabric textures and accessories (gloves, armour).
