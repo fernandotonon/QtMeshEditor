@@ -98,10 +98,10 @@ void addStrip(LashMesh& out, const std::vector<float>& positions, const std::vec
 }
 }  // namespace
 
-LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
-                     const std::array<LashEye, 2>& eyes, const LashOptions& options)
+std::array<LidMargins, 2> findLidMargins(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
+                                         const std::array<LashEye, 2>& eyes)
 {
-    LashMesh out;
+    std::array<LidMargins, 2> out;
     if (positions.empty() || faces.size() < 3) return out;
     const std::vector<Loop> loops = openingLoops(positions, faces, dropped);
     if (loops.empty()) return out;
@@ -145,11 +145,26 @@ LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int3
                 if (std::find(v->begin(), v->end(), outer) == v->end()) v->push_back(outer);
             }
         }
+        out[size_t(side)].upper = std::move(upper);
+        out[size_t(side)].lower = std::move(lower);
+    }
+    return out;
+}
+
+LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
+                     const std::array<LashEye, 2>& eyes, const LashOptions& options)
+{
+    LashMesh out;
+    const std::array<LidMargins, 2> margins = findLidMargins(positions, faces, dropped, eyes);
+    for (int side = 0; side < 2; ++side) {
+        const LidMargins& m = margins[size_t(side)];
+        if (!eyes[size_t(side)].seated || m.upper.empty() || m.lower.empty()) continue;
+        const V3 centre = eyes[size_t(side)].centre;
         const size_t before = out.indices.size();
-        addStrip(out, positions, upper, centre, true, options.upperLength, options.curl);
+        addStrip(out, positions, m.upper, centre, true, options.upperLength, options.curl);
         if (out.indices.size() > before) ++out.upperStrips;
         const size_t before2 = out.indices.size();
-        addStrip(out, positions, lower, centre, false, options.lowerLength, options.curl);
+        addStrip(out, positions, m.lower, centre, false, options.lowerLength, options.curl);
         if (out.indices.size() > before2) ++out.lowerStrips;
     }
     return out;
