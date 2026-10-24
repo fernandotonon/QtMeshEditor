@@ -809,6 +809,24 @@ TEST(Trellis2BakeTest, GameReadyRemeshOptionYieldsManifold)
     EXPECT_LE(r.outputTriangles, 1600);
 }
 
+TEST(Trellis2BakeTest, StrictBudgetCeilingHoldsThroughRemeshRepairs)
+{
+    // A strict budget is a platform upload limit: the remesh repair passes (hole
+    // fans in particular, one triangle per loop edge) must never push the final
+    // count back over it.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f, 60, 80);
+    appendSphere(pos, idx, 0.995f, 60, 80);   // double wall -> pinches after simplify
+    Trellis2Bake::GameReadyOptions o;
+    o.targetTriangles = 600;
+    o.strictTriangleBudget = true;
+    o.remeshResolution = 80;
+    const auto r = Trellis2Bake::makeGameReady(pos, idx, o);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_LE(r.outputTriangles, 600);
+}
+
 TEST(Trellis2BakeTest, SimplifiedClosedMeshStaysClosedAndConsistent)
 {
     // A closed UV sphere simplified hard must come out with no open rims, no

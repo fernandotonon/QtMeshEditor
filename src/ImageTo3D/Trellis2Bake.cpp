@@ -822,6 +822,8 @@ bool remeshManifold(const std::vector<float>& positions,
         const int envMax = qEnvironmentVariableIntValue("QTMESH_TRELLIS2_REMESH_MAX_CELLS");
         if (envMax > 0)
             kMaxCells = double(envMax) * 1e6;
+        // cell indices are uint32 (flood-fill stack, marching cubes)
+        kMaxCells = std::min(kMaxCells, 4.0e9);
     }
     float cell = 0.0f;
     int dim[3];
@@ -1578,7 +1580,8 @@ static int growHoles(std::vector<uint32_t>& idx)
 }
 
 static int fillSmallHoles(std::vector<float>& pos, std::vector<uint32_t>& idx,
-                   size_t maxLoop, const std::set<TriKey>& forbidden)
+                   size_t maxLoop, const std::set<TriKey>& forbidden,
+                   size_t maxTriangles)
 {
     std::unordered_map<uint64_t, int> directed;   // (u<<32|v) present
     directed.reserve(idx.size());
@@ -1636,6 +1639,8 @@ static int fillSmallHoles(std::vector<float>& pos, std::vector<uint32_t>& idx,
             // it would put the over-shared face straight back)
             if (loop.size() == 3
                 && forbidden.count(triKey(loop[0], loop[1], loop[2])))
+                continue;
+            if (idx.size() / 3 + (loop.size() == 3 ? 1 : loop.size()) > maxTriangles)
                 continue;
             if (loop.size() == 3) {
                 idx.insert(idx.end(), {loop[0], loop[2], loop[1]});
@@ -1890,6 +1895,10 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     const std::vector<float> startPos = r.remeshed ? pos : std::vector<float>();
     const std::vector<uint32_t> startIdx = r.remeshed ? idx : std::vector<uint32_t>();
     int tgt = opts.targetTriangles;
+    std::vector<float> firstPos;
+    std::vector<uint32_t> firstIdx;
+    int firstSplit = 0;
+    bool haveFirst = false;
     for (int attempt = 0; attempt < 2; ++attempt) {
         if (attempt > 0) {
             pos = startPos;
@@ -2008,19 +2017,38 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
 
         // ---- 5d. residual pinches + holes ------------------------------------
         if (r.remeshed) {
+            // A hard ceiling (strict budget) must survive the repairs: a centroid
+            // fan adds a triangle per loop edge, so filling is capped at it.
+            const size_t fillCap = opts.strictTriangleBudget && tgt > 0
+                ? static_cast<size_t>(tgt) : std::numeric_limits<size_t>::max();
+            // No compaction between passes: `droppedTris` is keyed by vertex index
+            // and must keep naming the same triangles until the passes are done.
             std::set<TriKey> droppedTris;
             for (int pass = 0; pass < 8; ++pass) {
                 const int dropped = dropResidualNonManifold(pos, idx, droppedTris);
-                const int filled = fillSmallHoles(pos, idx, 256, droppedTris);
+                const int filled = fillSmallHoles(pos, idx, 256, droppedTris, fillCap);
                 if (dropped == 0 && filled == 0)
                     break;
-                compact(pos, idx);
             }
-            // fins left holes the fan cannot close without re-adding them
+            // fins left holes the fan cannot close without re-adding them: grow
+            // each by the faces touching it and close the larger loop. A grown
+            // hole that still cannot be closed (revisited vertex, too long, no
+            // room under a ceiling) would be strictly worse than the original,
+            // so a round that does not reduce the open edges is undone.
             for (int round = 0; round < 2; ++round) {
+                const int openBefore = topologyStats(pos.size() / 3, idx).boundaryEdges;
+                if (openBefore == 0)
+                    break;
+                const std::vector<float> posSnap = pos;
+                const std::vector<uint32_t> idxSnap = idx;
                 if (growHoles(idx) == 0)
                     break;
-                fillSmallHoles(pos, idx, 256, std::set<TriKey>());
+                fillSmallHoles(pos, idx, 256, std::set<TriKey>(), fillCap);
+                if (topologyStats(pos.size() / 3, idx).boundaryEdges >= openBefore) {
+                    pos = posSnap;
+                    idx = idxSnap;
+                    break;
+                }
             }
             dropSmallOpenComponents(pos, idx, 0.02);
             compact(pos, idx);
@@ -2031,11 +2059,25 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
             && opts.targetTriangles > 0) {
             const int got = static_cast<int>(idx.size() / 3);
             if (got > 0 && got < static_cast<int>(opts.targetTriangles * 0.8)) {
-                tgt = std::min(opts.targetTriangles * 3,
-                               static_cast<int>(double(opts.targetTriangles)
-                                                * opts.targetTriangles / got));
+                // keep this result: the retry is only taken if it lands inside
+                // the usual 2x tolerance
+                firstPos = pos;
+                firstIdx = idx;
+                firstSplit = r.splitVertices;
+                haveFirst = true;
+                // scale in double and cap BEFORE the int conversion (a tiny
+                // `got` would otherwise overflow it)
+                const double want = double(opts.targetTriangles)
+                                  * double(opts.targetTriangles) / double(got);
+                tgt = static_cast<int>(std::min(want, 3.0 * opts.targetTriangles));
                 continue;
             }
+        }
+        if (attempt == 1 && haveFirst && opts.targetTriangles > 0
+            && static_cast<int>(idx.size() / 3) > opts.targetTriangles * 2) {
+            pos = firstPos;
+            idx = firstIdx;
+            r.splitVertices = firstSplit;
         }
         break;
     }
