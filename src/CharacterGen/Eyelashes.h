@@ -28,7 +28,8 @@ struct LashMesh {
     std::vector<float> uvs;                    ///< uv per vertex: u along the strip 0..1, v 1 at the root to 0 at the tip
     std::vector<uint32_t> indices;             ///< triangles
     std::vector<uint32_t> sourceVertex;        ///< per vertex: the body (position) vertex it is rooted on
-    int upperStrips = 0, lowerStrips = 0;      ///< strips built (0..2 each)
+    int upperStrips = 0;                       ///< upper strips built (0..2)
+    int lowerStrips = 0;                       ///< lower strips built (0..2)
 };
 
 /// Build the strips. `positions` = the body's positions (V*3, metres), `faces` = F*3 position indices, `dropped` = one flag per
@@ -37,6 +38,17 @@ struct LashMesh {
 struct LashEye { std::array<float, 3> centre{}; bool seated = false; };
 LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
                      const std::array<LashEye, 2>& eyes, const LashOptions& options = {});
+
+/// The two lid margins of one eye, each ordered from the inner canthus (nose side) to the outer one: body vertex indices.
+struct LidMargins {
+    std::vector<uint32_t> upper;
+    std::vector<uint32_t> lower;
+    bool valid() const { return upper.size() >= 2 && lower.size() >= 2; }
+};
+/// Find the margins of both eyes (same inputs as buildLashes). An eye that is not seated, or whose opening is not found, comes back
+/// invalid.
+std::array<LidMargins, 2> findLidMargins(const std::vector<float>& positions, const std::vector<int32_t>& faces,
+                                         const std::vector<uint8_t>& dropped, const std::array<LashEye, 2>& eyes);
 
 /// The strand texture (RGBA, 1024x128 by default): dark opaque root band, tapering curved strands, soft alpha. `colour` is the lash
 /// colour. Same inputs, same pixels.

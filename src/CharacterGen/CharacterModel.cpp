@@ -1,6 +1,7 @@
 #include "CharacterModel.h"
 #include "EyeTexture.h"
 #include "Eyelashes.h"
+#include "LidClose.h"
 #include "HairTint.h"
 
 #include "../AppStorage.h"
@@ -747,6 +748,87 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
         if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
     }
     return m;
+}
+
+// The relaxed lids moved body vertices after the normals were built: recompute them from the forward faces (the reversed duplicates of
+// the neck seam strip must not count: they would cancel the forward ones) and re-negate the flipped seam layouts' normals.
+void recomputeBodyNormals(Dna::Mesh& body, size_t seamFaceCount, int positionCount)
+{
+    const size_t forward = body.faces.size() >= seamFaceCount ? body.faces.size() - seamFaceCount : body.faces.size();
+    const std::vector<std::vector<uint32_t>> faces(body.faces.begin(), body.faces.begin() + std::ptrdiff_t(forward));
+    const std::vector<float> fresh = positionNormals(body.positions, faces, body.layouts);
+    std::copy(fresh.begin(), fresh.end(), body.normals.begin());
+    for (const Dna::Mesh::Layout& l : body.layouts) {
+        if (l.normal < uint32_t(positionCount)) continue;   // an appended (flipped) normal
+        for (size_t k = 0; k < 3; ++k) body.normals[size_t(l.normal) * 3 + k] = -body.normals[size_t(l.position) * 3 + k];
+    }
+}
+
+std::array<LashEye, 2> lashEyesOf(const std::array<EyeSeat, 2>& seats)
+{
+    std::array<LashEye, 2> eyes;
+    for (size_t i = 0; i < 2; ++i) {
+        eyes[i].seated = seats[i].seated;
+        eyes[i].centre = seats[i].centre;
+    }
+    return eyes;
+}
+
+// The eyelash strips as a rig mesh: skinned like the body vertices they are rooted on.
+Dna::Mesh lashDnaMesh(const LashMesh& lm, const Dna::Mesh& body)
+{
+    Dna::Mesh m;
+    m.name = QStringLiteral("head_lashes");
+    m.positions = lm.positions;
+    m.normals = lm.normals;
+    m.uvs = lm.uvs;
+    const uint32_t nv = uint32_t(lm.positions.size() / 3);
+    for (uint32_t i = 0; i < nv; ++i) {
+        m.layouts.push_back({i, i, i});
+        m.skin.push_back(lm.sourceVertex[i] < body.skin.size() ? body.skin[lm.sourceVertex[i]] : std::vector<Dna::SkinInfluence>{});
+    }
+    for (size_t i = 0; i + 2 < lm.indices.size(); i += 3) m.faces.push_back({lm.indices[i], lm.indices[i + 1], lm.indices[i + 2]});
+    return m;
+}
+
+// A blink TURNS the lid about the eyeball's horizontal axis, so the tip of a lash (the odd vertices) turns with its root by the same
+// angle instead of just translating with it, or it would stick out of the closed lid. `rootDelta` is the root's delta (metres).
+std::array<float, 3> turnedTipDelta(const LashMesh& lm, uint32_t tip, const std::array<float, 3>& rootDelta, const std::array<float, 3>& centre)
+{
+    const size_t r = size_t(tip - 1) * 3;
+    const size_t t = size_t(tip) * 3;
+    const double ry = double(lm.positions[r + 1]) - double(centre[1]);
+    const double rz = double(lm.positions[r + 2]) - double(centre[2]);
+    const double turn = std::atan2(ry + double(rootDelta[1]), rz + double(rootDelta[2])) - std::atan2(ry, rz);
+    const double ty = double(lm.positions[t + 1]) - double(centre[1]);
+    const double tz = double(lm.positions[t + 2]) - double(centre[2]);
+    const double rho = std::sqrt(ty * ty + tz * tz);
+    const double phi = std::atan2(ty, tz) + turn;
+    return {0.0f, float(rho * std::sin(phi) - ty), float(rho * std::cos(phi) - tz)};
+}
+
+// Every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the lashes follow
+// the blink, squint, brow and cheek shapes exactly as the lid does (tips of the blink channels turn, see turnedTipDelta).
+void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& arkit, int expressions, int vertexCount,
+                    const std::array<EyeSeat, 2>& seats, const std::array<int, 2>& blinkChannels)
+{
+    const uint32_t nv = uint32_t(lm.positions.size() / 3);
+    for (int e = 0; e < expressions; ++e) {
+        const float* d = arkit.data() + size_t(e) * size_t(vertexCount) * 3;
+        Dna::BlendShapeTarget bt;
+        bt.channel = e;
+        for (uint32_t i = 0; i < nv; ++i) {
+            const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
+            if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
+            std::array<float, 3> delta{dv[0] * kCmToM, dv[1] * kCmToM, dv[2] * kCmToM};
+            const size_t side = lm.positions[size_t(i) * 3] > 0.0f ? 0 : 1;
+            const bool tipOfBlink = (i & 1u) != 0 && e == blinkChannels[side] && seats[side].seated;
+            if (tipOfBlink) delta = turnedTipDelta(lm, i, delta, seats[side].centre);
+            bt.vertexIndices.push_back(i);
+            bt.deltas.insert(bt.deltas.end(), delta.begin(), delta.end());
+        }
+        if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+    }
 }
 
 // A hairstyle on the SHAPED body: each vertex = the bound triangle's barycentric point + the stored offset in that triangle's current
@@ -1616,6 +1698,24 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     bool pupilChannels = false;
     const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
+    // ---- relaxed lids: a lower rest pose and a blink that really closes (see Params::relaxedLids, LidClose.h) ----
+    // The ARKit channels the body (and the lashes) are built from. A copy only when the lid channels are re-based.
+    std::vector<float> arkitTuned;
+    const std::vector<float>* arkit = &a.mhrArkit;
+    LidChannels lidChannels;   // the blink channels also drive the lash tips (set when the lids are re-based)
+    if (wantEyes && p.relaxedLids && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3 &&
+        a.mhrEyeDrop.size() * 3 == a.mhrFaces.size()) {
+        LidChannels found;
+        found.blink = {int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkRight")))};
+        found.wide = {int(a.expressionNames.indexOf(QStringLiteral("eyeWideLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeWideRight")))};
+        if (found.blink[0] >= 0 && found.blink[1] >= 0) {
+            std::array<bool, 2> rebased{};
+            arkitTuned = relaxLids(body.positions, V, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat), found, a.mhrArkit, &rebased);
+            arkit = &arkitTuned;
+            for (size_t i = 0; i < 2; ++i) lidChannels.blink[i] = rebased[i] ? found.blink[i] : -1;   // the lash tips only turn with a lid that turned
+            if (rebased[0] || rebased[1]) recomputeBodyNormals(body, seamFaces.size(), V);
+        }
+    }
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
     const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
     if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
@@ -1746,40 +1846,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rig.meshes.push_back(std::move(m));
     }
     if (wantEyes && p.eyelashes && a.mhrEyeDrop.size() * 3 == a.mhrFaces.size()) {
-        std::array<LashEye, 2> lashEyes;
-        for (size_t i = 0; i < 2; ++i) { lashEyes[i].seated = eyeSeat[i].seated; lashEyes[i].centre = eyeSeat[i].centre; }
-        const LashMesh lm = buildLashes(body.positions, a.mhrFaces, a.mhrEyeDrop, lashEyes);
+        const LashMesh lm = buildLashes(body.positions, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat));
         if (!lm.indices.empty()) {
-            Dna::Mesh m;
-            m.name = QStringLiteral("head_lashes");
-            m.positions = lm.positions;
-            m.normals = lm.normals;
-            m.uvs = lm.uvs;
-            const uint32_t nv = uint32_t(lm.positions.size() / 3);
-            for (uint32_t i = 0; i < nv; ++i) {
-                m.layouts.push_back({i, i, i});
-                m.skin.push_back(lm.sourceVertex[i] < body.skin.size() ? body.skin[lm.sourceVertex[i]] : std::vector<Dna::SkinInfluence>{});
-            }
-            for (size_t i = 0; i + 2 < lm.indices.size(); i += 3) m.faces.push_back({lm.indices[i], lm.indices[i + 1], lm.indices[i + 2]});
-            // every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the
-            // lashes follow the blink, squint, brow and cheek shapes exactly as the lid does
-            if (!a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
-                for (int e = 0; e < a.ictExpressions; ++e) {
-                    const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
-                    Dna::BlendShapeTarget bt;
-                    bt.channel = e;
-                    for (uint32_t i = 0; i < nv; ++i) {
-                        const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
-                        if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
-                        bt.vertexIndices.push_back(i);
-                        bt.deltas.push_back(dv[0] * kCmToM);
-                        bt.deltas.push_back(dv[1] * kCmToM);
-                        bt.deltas.push_back(dv[2] * kCmToM);
-                    }
-                    if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
-                }
-            }
-            rep.headVertices += int(nv);
+            Dna::Mesh m = lashDnaMesh(lm, body);
+            if (arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) addLashTargets(m, lm, *arkit, a.ictExpressions, V, eyeSeat, lidChannels.blink);
+            rep.headVertices += int(m.positions.size() / 3);
             rep.headTriangles += int(m.faces.size());
             rep.meshNames << m.name;
             rep.lashTexturePng = bakeLashTexturePng(p.lash);
@@ -1806,7 +1877,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         for (int e = 0; e < a.ictExpressions; ++e) {
             Dna::BlendShapeTarget bt;
             bt.channel = e;
-            const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
+            const float* d = arkit->data() + size_t(e) * size_t(V) * 3;
             for (int v = 0; v < V; ++v) {
                 const float* dv = d + size_t(v) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;
