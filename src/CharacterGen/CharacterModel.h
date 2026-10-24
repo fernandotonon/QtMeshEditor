@@ -116,6 +116,8 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
     QString hairStyle;
+    /// Eyelashes: a curved alpha-card strip along each lid margin (native head with open eyes only), in the `lash` colour.
+    bool eyelashes = true;
     /// Colour of the hair's mid tones (the texture is a shading map tinted with it, see HairTint.h). Default: brown.
     Rgb hairColour{0.239f, 0.145f, 0.090f};
     /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
@@ -204,6 +206,7 @@ struct BuildReport {
     NippleFrame nipples;
     QString hairStyle;               ///< the hairstyle that was built (empty = none)
     QByteArray hairTexturePng;       ///< its diffuse texture
+    QByteArray lashTexturePng;       ///< the eyelash strand texture (empty: no lashes were built)
     QByteArray eyeTexturePng;        ///< the procedural eye's texture (empty: no procedural eye, or a user-supplied eye mesh is used)
     std::vector<float> bodyHair;     ///< 0..1 body-hair density per body vertex (from the skin weights); empty = none
     QStringList meshNames;

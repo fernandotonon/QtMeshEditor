@@ -34,6 +34,7 @@ class CharacterController : public QObject
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
     Q_PROPERTY(bool skinTexture READ skinTexture WRITE setSkinTexture NOTIFY skinTextureChanged)
+    Q_PROPERTY(bool eyelashes READ eyelashes WRITE setEyelashes NOTIFY eyelashesChanged)
     Q_PROPERTY(double bodyHair READ bodyHair WRITE setBodyHair NOTIFY bodyHairChanged)
 
 public:
@@ -44,6 +45,8 @@ public:
     bool assetsPresent() const;
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    bool eyelashes() const { return m_eyelashes; }
+    void setEyelashes(bool v) { if (v != m_eyelashes) { m_eyelashes = v; emit eyelashesChanged(); } }
     double bodyHair() const { return m_bodyHair; }
     void setBodyHair(double v) { v = std::clamp(v, 0.0, 1.0); if (v != m_bodyHair) { m_bodyHair = v; emit bodyHairChanged(); } }
     bool skinTexture() const { return m_skinTexture; }
@@ -81,6 +84,7 @@ signals:
     void hairStyleChanged();
     void hairColourChanged();
     void bodyHairChanged();
+    void eyelashesChanged();
 
 private:
     CharacterController() = default;
@@ -97,6 +101,7 @@ private:
     QStringList m_hairNamesSeen;   ///< the hairstyles the panel was last told about (hairNamesChanged)
     QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;
+    bool m_eyelashes = true;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;
 };
