@@ -750,6 +750,20 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
     return m;
 }
 
+// The relaxed lids moved body vertices after the normals were built: recompute them from the forward faces (the reversed duplicates of
+// the neck seam strip must not count: they would cancel the forward ones) and re-negate the flipped seam layouts' normals.
+void recomputeBodyNormals(Dna::Mesh& body, size_t seamFaceCount, int positionCount)
+{
+    const size_t forward = body.faces.size() >= seamFaceCount ? body.faces.size() - seamFaceCount : body.faces.size();
+    const std::vector<std::vector<uint32_t>> faces(body.faces.begin(), body.faces.begin() + std::ptrdiff_t(forward));
+    const std::vector<float> fresh = positionNormals(body.positions, faces, body.layouts);
+    std::copy(fresh.begin(), fresh.end(), body.normals.begin());
+    for (const Dna::Mesh::Layout& l : body.layouts) {
+        if (l.normal < uint32_t(positionCount)) continue;   // an appended (flipped) normal
+        for (size_t k = 0; k < 3; ++k) body.normals[size_t(l.normal) * 3 + k] = -body.normals[size_t(l.position) * 3 + k];
+    }
+}
+
 std::array<LashEye, 2> lashEyesOf(const std::array<EyeSeat, 2>& seats)
 {
     std::array<LashEye, 2> eyes;
@@ -1695,9 +1709,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         found.blink = {int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkRight")))};
         found.wide = {int(a.expressionNames.indexOf(QStringLiteral("eyeWideLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeWideRight")))};
         if (found.blink[0] >= 0 && found.blink[1] >= 0) {
-            arkitTuned = relaxLids(body.positions, V, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat), found, a.mhrArkit);
+            std::array<bool, 2> rebased{};
+            arkitTuned = relaxLids(body.positions, V, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat), found, a.mhrArkit, &rebased);
             arkit = &arkitTuned;
-            lidChannels = found;
+            for (size_t i = 0; i < 2; ++i) lidChannels.blink[i] = rebased[i] ? found.blink[i] : -1;   // the lash tips only turn with a lid that turned
+            if (rebased[0] || rebased[1]) recomputeBodyNormals(body, seamFaces.size(), V);
         }
     }
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;

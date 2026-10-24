@@ -142,11 +142,51 @@ TEST(LidClose, LowerLidAndOtherSideDoNotMove)
     }
 }
 
-TEST(LidClose, AnEyeWithoutMarginsOnlyGetsTheNewRestPose)
+TEST(LidClose, AnEyeWithoutMarginsIsLeftExactlyAsItWas)
 {
     Sheet s = sheet();
     std::fill(s.dropped.begin(), s.dropped.end(), uint8_t(0));   // no opening
+    const std::vector<float> before = s.positions;
     const std::vector<float> table = shapes(s);
     const std::vector<float> tuned = relaxLids(s.positions, s.vertices(), s.faces, s.dropped, leftEyeOnly(), channels(), table);
-    for (size_t i = 0; i < size_t(s.vertices()) * 3; ++i) EXPECT_FLOAT_EQ(tuned[i], 0.0f);
+    EXPECT_EQ(s.positions, before) << "no new rest pose without margins to close";
+    EXPECT_EQ(tuned, table) << "and the original blink / wide shapes stay";
+}
+
+TEST(LidClose, AnEyeThatCannotBeClosedKeepsItsOwnShapesAndItsRestPose)
+{
+    Sheet s = sheet();
+    std::vector<float> table = shapes(s);
+    const size_t stride = size_t(s.vertices()) * 3;
+    table[1 * stride + 30] = 0.07f;   // the right eye's own blink and wide shapes
+    table[3 * stride + 31] = 0.03f;
+    std::array<bool, 2> rebased{};
+    const std::vector<float> tuned = relaxLids(s.positions, s.vertices(), s.faces, s.dropped, leftEyeOnly(), channels(), table, &rebased);
+    EXPECT_TRUE(rebased[0]);
+    EXPECT_FALSE(rebased[1]);
+    for (size_t i = 0; i < stride; ++i) {
+        EXPECT_FLOAT_EQ(tuned[1 * stride + i], table[1 * stride + i]) << "blink right is untouched";
+        EXPECT_FLOAT_EQ(tuned[3 * stride + i], table[3 * stride + i]) << "wide right is untouched";
+    }
+
+    // no eye seated at all: nothing changes, nothing is reported
+    Sheet t = sheet();
+    const std::vector<float> before = t.positions;
+    const std::vector<float> same = relaxLids(t.positions, t.vertices(), t.faces, t.dropped, {LashEye{}, LashEye{}}, channels(), table, &rebased);
+    EXPECT_EQ(t.positions, before);
+    EXPECT_EQ(same, table);
+    EXPECT_FALSE(rebased[0] || rebased[1]);
+}
+
+TEST(LidClose, WithoutABlinkShapeTheEyeIsLeftAlone)
+{
+    Sheet s = sheet();
+    const std::vector<float> before = s.positions;
+    const std::vector<float> table = shapes(s);
+    LidChannels none;   // both blink channels -1
+    std::array<bool, 2> rebased{};
+    const std::vector<float> tuned = relaxLids(s.positions, s.vertices(), s.faces, s.dropped, leftEyeOnly(), none, table, &rebased);
+    EXPECT_EQ(s.positions, before);
+    EXPECT_EQ(tuned, table);
+    EXPECT_FALSE(rebased[0] || rebased[1]);
 }

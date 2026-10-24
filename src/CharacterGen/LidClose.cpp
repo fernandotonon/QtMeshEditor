@@ -206,27 +206,27 @@ void closeEye(const std::vector<float>& positions, int vertexCount, bool leftEye
 
 std::vector<float> relaxLids(std::vector<float>& positions, int vertexCount, const std::vector<int32_t>& faces,
                              const std::vector<uint8_t>& dropped, const std::array<LashEye, 2>& eyes, const LidChannels& channels,
-                             const std::vector<float>& arkit)
+                             const std::vector<float>& arkit, std::array<bool, 2>* rebased)
 {
     std::vector<float> tuned = arkit;
+    if (rebased) rebased->fill(false);
     const size_t stride = size_t(vertexCount) * 3;
-    // 1. the new rest pose: the old open pose with the old blink applied
-    for (size_t side = 0; side < 2; ++side) {
-        const float* d = arkit.data() + size_t(channels.blink[side]) * stride;
-        for (size_t i = 0; i < stride; ++i) positions[i] += d[i] * float(kCmToM);
-    }
     const std::array<LidMargins, 2> margins = findLidMargins(positions, faces, dropped, eyes);
     for (size_t side = 0; side < 2; ++side) {
+        // an eye that cannot be closed (not seated, no margins, no blink shape) is left exactly as it was
+        if (!eyes[side].seated || !margins[side].valid() || channels.blink[side] < 0) continue;
         const float* d = arkit.data() + size_t(channels.blink[side]) * stride;
-        float* blink = tuned.data() + size_t(channels.blink[side]) * stride;
+        // the new rest pose: the old open pose with the old blink applied
+        for (size_t i = 0; i < stride; ++i) positions[i] += d[i] * float(kCmToM);
         if (channels.wide[side] >= 0) {
             float* wide = tuned.data() + size_t(channels.wide[side]) * stride;
             for (size_t i = 0; i < stride; ++i) wide[i] -= d[i];   // wide still reaches the old open pose (+ its own delta)
         }
+        float* blink = tuned.data() + size_t(channels.blink[side]) * stride;
         std::fill(blink, blink + stride, 0.0f);                    // rebuilt below: the rest of the way, from the new rest pose
-        if (!eyes[side].seated || !margins[side].valid()) continue;
         const V3 centre{double(eyes[side].centre[0]), double(eyes[side].centre[1]), double(eyes[side].centre[2])};
         closeEye(positions, vertexCount, side == 0, centre, margins[side], blink);
+        if (rebased) (*rebased)[side] = true;
     }
     return tuned;
 }
