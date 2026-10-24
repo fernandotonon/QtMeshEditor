@@ -285,6 +285,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     p.hairStyle = m_hairStyle;
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
+    p.eyelashes = m_eyelashes;
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);
         p.faceIdentity = randomCoefficients(uint32_t(seed) * 2u + 2u, m_assets->ictIdentities, float(variety), 40);

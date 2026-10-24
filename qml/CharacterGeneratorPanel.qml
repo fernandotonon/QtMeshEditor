@@ -207,6 +207,7 @@ Column {
         }
         Label { width: 32; height: 22; horizontalAlignment: Text.AlignRight; text: hairSlider.value.toFixed(2) }
     }
+    InspectorCheckBox { text: "Eyelashes"; checked: CharacterController.eyelashes; enabled: CharacterController.openEyes; onToggled: { CharacterController.eyelashes = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Open eyes"; checked: CharacterController.openEyes; onToggled: { CharacterController.openEyes = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Live preview (edits the character in place)"; checked: sec.live; onToggled: sec.live = checked }
     InspectorCheckBox { id: averageBox; text: "Average character (ignore seed)"; onToggled: sec.reseed() }

@@ -1,5 +1,6 @@
 #include "CharacterModel.h"
 #include "EyeTexture.h"
+#include "Eyelashes.h"
 #include "HairTint.h"
 
 #include "../AppStorage.h"
@@ -1743,6 +1744,47 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));
+    }
+    if (wantEyes && p.eyelashes && a.mhrEyeDrop.size() * 3 == a.mhrFaces.size()) {
+        std::array<LashEye, 2> lashEyes;
+        for (size_t i = 0; i < 2; ++i) { lashEyes[i].seated = eyeSeat[i].seated; lashEyes[i].centre = eyeSeat[i].centre; }
+        const LashMesh lm = buildLashes(body.positions, a.mhrFaces, a.mhrEyeDrop, lashEyes);
+        if (!lm.indices.empty()) {
+            Dna::Mesh m;
+            m.name = QStringLiteral("head_lashes");
+            m.positions = lm.positions;
+            m.normals = lm.normals;
+            m.uvs = lm.uvs;
+            const uint32_t nv = uint32_t(lm.positions.size() / 3);
+            for (uint32_t i = 0; i < nv; ++i) {
+                m.layouts.push_back({i, i, i});
+                m.skin.push_back(lm.sourceVertex[i] < body.skin.size() ? body.skin[lm.sourceVertex[i]] : std::vector<Dna::SkinInfluence>{});
+            }
+            for (size_t i = 0; i + 2 < lm.indices.size(); i += 3) m.faces.push_back({lm.indices[i], lm.indices[i + 1], lm.indices[i + 2]});
+            // every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the
+            // lashes follow the blink, squint, brow and cheek shapes exactly as the lid does
+            if (!a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
+                for (int e = 0; e < a.ictExpressions; ++e) {
+                    const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
+                    Dna::BlendShapeTarget bt;
+                    bt.channel = e;
+                    for (uint32_t i = 0; i < nv; ++i) {
+                        const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
+                        if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
+                        bt.vertexIndices.push_back(i);
+                        bt.deltas.push_back(dv[0] * kCmToM);
+                        bt.deltas.push_back(dv[1] * kCmToM);
+                        bt.deltas.push_back(dv[2] * kCmToM);
+                    }
+                    if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+                }
+            }
+            rep.headVertices += int(nv);
+            rep.headTriangles += int(m.faces.size());
+            rep.meshNames << m.name;
+            rep.lashTexturePng = bakeLashTexturePng(p.lash);
+            rig.meshes.push_back(std::move(m));
+        }
     }
     if (!p.nativeHead && !p.hairStyle.isEmpty())
         rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);

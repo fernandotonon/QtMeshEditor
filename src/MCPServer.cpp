@@ -3765,6 +3765,7 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
         if (!colourValue.isString() || !CharacterGen::parseHairColour(colourValue.toString(), &p.hairColour))
             return makeErrorResult(QStringLiteral("'hair_colour' must be a preset name (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\"."));
     }
+    p.eyelashes = args.value("eyelashes").toBool(true);
     p.bodyHair = std::clamp(float(args.value("body_hair").toDouble(0.5)), 0.0f, 1.0f);
     p.facePlusZ = args.value("facing_z").toBool(false);
     const double varietyIn = args.value("variety").toDouble(1.0);
@@ -13580,6 +13581,7 @@ QJsonArray MCPServer::buildToolsList()
         props["skin_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body instead of a flat colour (default true)."}};
         props["hair"] = QJsonObject{{"type", "string"}, {"description", "Hairstyle name from the hair bundle (e.g. short02, bob01, long01, ponytail01, afro01); omit for bald. Native head only."}};
         props["hair_colour"] = QJsonObject{{"type", "string"}, {"description", "Hair colour: a preset (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\" (default brown). Needs hair."}};
+        props["eyelashes"] = QJsonObject{{"type", "boolean"}, {"description", "Eyelashes: a curved alpha-card strip along each lid margin that follows the blink and squint shapes (default true; needs the MHR head and open_eyes)."}};
         props["body_hair"] = QJsonObject{{"type", "number"}, {"description", "Amount of body hair painted into the skin texture, 0..1 (default 0.5; 0 = none). Needs skin_texture."}};
         props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Remove the thin layer between the MHR lids so the eyeballs (eye colour, gaze) show (default true); false keeps the lids as sculpted, eyes shut."}};
         props["head"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"mhr", "ict"}}, {"description", "mhr (default): the body's own head, no seam, expressions fitted to the ARKit set. ict: ICT-FaceKit head stitched on (native ARKit shapes, visible seam)."}};
