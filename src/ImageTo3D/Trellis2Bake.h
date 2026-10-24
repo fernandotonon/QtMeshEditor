@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
+#include <limits>
 #include <vector>
 
 // TRELLIS.2 game-ready processing + multi-channel PBR texture baking — the
@@ -108,6 +109,14 @@ struct GameReadyOptions {
     // 0 = off. Falls back to the unmodified mesh when the remesh is empty or
     // not manifold.
     int   remeshResolution = 0;
+    // Also return the dense source for the bake in
+    // GameReadyResult::weldedPositions/Indices: the REMESHED surface when a
+    // remesh ran (no voxel terracing), else the welded, debris-culled,
+    // winding-UNIFIED source (before any simplify). Feed THAT
+    // to bake() as the dense source: the raw dual-grid mesh has large flipped
+    // patches, and both the source normals the detail map is built from and
+    // the orientation-aware closest-triangle search read the winding.
+    bool  exportWeldedSource = false;
 };
 
 struct GameReadyResult {
@@ -118,10 +127,13 @@ struct GameReadyResult {
     int inputTriangles = 0;
     int outputTriangles = 0;
     int weldedVertices = 0;       // vertices merged by the weld
+    std::vector<float>    weldedPositions;   // see exportWeldedSource
+    std::vector<uint32_t> weldedIndices;
     int removedComponents = 0;    // debris islands dropped
     int removedTriangles = 0;     // triangles dropped with them (+degenerates)
     bool remeshed = false;        // voxel remesh replaced the mesh
     int remeshedFromTriangles = 0;
+    int splitVertices = 0;        // vertices duplicated to separate pinched sheets
     float simplifyError = 0.0f;   // meshopt result_error (0 when not simplified)
 };
 
@@ -154,8 +166,37 @@ bool remeshManifold(const std::vector<float>& positions,
 // Quadric edge-collapse simplification that enforces the link condition, so a
 // closed manifold mesh stays manifold. Collapses until `targetTriangles`
 // remain or no legal collapse is left. Returns true (outputs always valid).
+// `maxCost` stops the pass once the CHEAPEST remaining collapse costs more than
+// this quadric error: when the cheap legal collapses run out (thin tubes and
+// sheets lock under the link condition) the queue otherwise keeps taking ever
+// more destructive ones to reach the count — measured on a real generation the
+// cost rises ~1000x over the last 2k triangles and the surface shreds. The
+// result then stays above the target; the caller decides what to do about it.
 bool simplifyManifold(std::vector<float>& positions,
-                      std::vector<uint32_t>& indices, size_t targetTriangles);
+                      std::vector<uint32_t>& indices, size_t targetTriangles,
+                      double maxCost = std::numeric_limits<double>::infinity());
+
+// Make a mesh edge-manifold WITHOUT moving geometry or opening holes: every
+// edge shared by 4+ faces (two sheets pinched together by simplification) is
+// resolved by duplicating the pinched vertices so each sheet owns its own.
+// Faces around an edge are ordered by angle and the two bounding each SOLID
+// wedge are paired, so parts that merely touch end up as separate bodies.
+// Edges that cannot be paired (odd face count, inconsistent winding) are left
+// as they are. Returns the number of vertices added.
+int splitNonManifold(std::vector<float>& positions,
+                     std::vector<uint32_t>& indices);
+
+// Smooth shading normals for the (xatlas-split) output mesh. `xref[v]` names the
+// original target vertex output vertex v came from. Smoothing runs across UV
+// chart seams as usual, but only over original-mesh faces within ~100 degrees of
+// the faces the output vertex itself uses: an original vertex shared by
+// opposite-facing sheets (the rim of a thin slab, two sheets a cell apart)
+// would otherwise average them into a sideways or cancelled normal.
+std::vector<float> creaseAwareVertexNormals(
+    const std::vector<float>& targetPositions,
+    const std::vector<uint32_t>& targetIndices,
+    const std::vector<uint32_t>& xref,
+    const std::vector<uint32_t>& outIndices, int vertexCount);
 
 // Unify triangle winding (exposed for unit tests; makeGameReady runs it).
 // Raw TRELLIS dual-grid output arrives with large patches of flipped
@@ -175,14 +216,23 @@ struct BakeOptions {
     int  supersample  = 1;      // 1 or 2 (2 = 2×2 subsamples per texel)
     bool bakeNormalMap = true;  // bake source detail normals (for simplified targets)
     // Laplacian smoothing iterations applied to the SOURCE normal field
-    // before it feeds the detail-normal bake (0 = off, the default). Raw
-    // dual-grid dumps carried voxel-scale normal noise that baked into a
-    // glittery normal map; the runtime now receives the REMESHED shell, so
-    // by default the field is used as-is — smoothing a clean source would
-    // instead bake curvature disagreement (rounded source vs one-ring
-    // target normals) into the map. Raise this only when baking from a raw
-    // (un-remeshed) dual-grid source.
+    // before it feeds the detail-normal bake (0 = off). Each pass averages one
+    // ring (~1 source cell). The raw dual-grid surface — and a remesh of it —
+    // carries voxel terraces several cells wide that bake into the detail map
+    // as contour-line banding on every flat panel; ~8 passes flatten them while
+    // features of brow/ear size survive.
     int  sourceNormalSmoothIterations = 0;
+    // > 0: ALSO shade with the dense model. Total smoothing passes of a second,
+    // low-frequency copy of the source normals, sampled at each output vertex
+    // (closest source point, orientation-aware) and used as that vertex's
+    // shading normal in place of the coarse target's own area-weighted normal.
+    // A 25k-triangle character otherwise shades as visible planar facets (dark
+    // jaw triangles, split cheeks); the detail map then only has to carry the
+    // band-pass difference (sourceNormalSmoothIterations vs this), which also
+    // makes it insensitive to tangent-frame differences with the runtime.
+    // A vertex keeps its own normal when the sampled one disagrees with it
+    // (> ~70 degrees) or the source is far away (a neighbouring sheet).
+    int  sourceNormalLowIterations = 0;
     // done/total covered texels; return false to cancel.
     std::function<bool(int done, int total)> progress;
 };

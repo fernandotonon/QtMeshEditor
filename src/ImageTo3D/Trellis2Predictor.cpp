@@ -948,8 +948,15 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // double-walled features (ear lace). Volume-preserving, so real shape
     // survives; only sub-voxel noise flattens.
     gr.taubinIterations = 5;
-    // Manifold remesh (see Options::manifoldRemesh). Grid sized from the
-    // budget: ~1.6*sqrt(target) cells along the longest axis (25k tris -> 253).
+    // Manifold remesh (see Options::manifoldRemesh). Run at a FINE grid that
+    // does not depend on the budget: the shape-preserving simplifier brings the
+    // result down afterwards, so the budget never limits how much detail
+    // survives. The grid has to resolve the finest features (finger gaps,
+    // eyelids, ear rims) or they fuse — at ~250 cells fingers joined and
+    // eyes/ears flattened, at 512 a finger gap is still under one cell. The
+    // grid is cropped to the model and capped at ~300M cells (remeshManifold
+    // lowers the resolution for bulky objects): a figure peaks around 3 GB at
+    // 1024 and 5 GB at 1536 (~35 s). QTMESH_TRELLIS2_REMESH_RES overrides.
     // Keyed on the USER's budget (opts.targetTriangles), not gr.targetTriangles:
     // for "Original" density + bake the latter is an implicit 150k/300k cap, and
     // a user who asked to keep the raw density must not get a marching-cubes
@@ -957,10 +964,14 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (opts.manifoldRemesh && opts.targetTriangles > 0
         && src.triangleCount > gr.targetTriangles * 4
         && qEnvironmentVariableIntValue("QTMESH_TRELLIS2_NO_REMESH") == 0) {
-        gr.remeshResolution = std::clamp(
-            static_cast<int>(1.6 * std::sqrt(double(gr.targetTriangles))),
-            128, 320);
+        const int envRes = qEnvironmentVariableIntValue("QTMESH_TRELLIS2_REMESH_RES");
+        // Match the source: a TRELLIS.2 'high' generation carries a 1536 voxel
+        // grid, 'balanced' 1024. A coarser remesh throws that detail away, a
+        // finer one has nothing more to resolve.
+        const int srcRes = std::clamp(src.resolution, 1024, 1536);
+        gr.remeshResolution = envRes > 0 ? std::clamp(envRes, 64, 2048) : srcRes;
     }
+    gr.exportWeldedSource = opts.bakeTexture;   // the bake needs a consistently wound source
     const Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(src.positions, src.indices, gr);
     if (!processed.ok)
@@ -1005,14 +1016,37 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         bo.textureSize = opts.textureSize;
         bo.supersample = opts.supersample;
         bo.bakeNormalMap = opts.bakeNormalMap;
+        // The dense source carries the dual-grid's voxel terracing (the remesh
+        // reproduces it faithfully): unsmoothed it bakes into the detail map as
+        // contour-line banding on every flat panel, forehead and neck. Each pass
+        // averages one ring (~1 cell) and the terraces are several cells wide,
+        // so ~8 passes flatten them (0 leaves them in; 32 starts to blur brow-
+        // scale detail). The LOW field is what the output vertices are shaded
+        // with — the dense model's shape instead of the coarse mesh's own planar
+        // facets. QTMESH_TRELLIS2_NORMAL_SMOOTH / QTMESH_TRELLIS2_NORMAL_LOW
+        // override (0 / 0 = the old behaviour).
+        {
+            const QByteArray e = qgetenv("QTMESH_TRELLIS2_NORMAL_SMOOTH");
+            const QByteArray l = qgetenv("QTMESH_TRELLIS2_NORMAL_LOW");
+            bo.sourceNormalSmoothIterations =
+                e.isEmpty() ? 8 : std::clamp(e.toInt(), 0, 64);
+            bo.sourceNormalLowIterations =
+                l.isEmpty() ? 32 : std::clamp(l.toInt(), 0, 128);
+        }
         if (progress) {
             bo.progress = [&progress](int done, int total) {
                 return progress(Stage::Bake, done, total);
             };
         }
+        // Dense source for the detail normals + closest-triangle search: the
+        // welded, winding-unified copy (the raw dual-grid mesh has large
+        // flipped patches that invert the baked relief). The colour volume is
+        // sampled by position, so it is unaffected.
+        const bool unified = !processed.weldedPositions.empty();
         Trellis2Bake::BakeResult bk = Trellis2Bake::bake(
             processed.positions, processed.indices,
-            src.positions, src.indices, volume, bo);
+            unified ? processed.weldedPositions : src.positions,
+            unified ? processed.weldedIndices : src.indices, volume, bo);
         if (bk.cancelled)
             return failResult(QStringLiteral("cancelled"));
         if (bk.ok) {
