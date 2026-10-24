@@ -16,6 +16,8 @@
 #include <limits>
 #include <thread>
 #include <queue>
+#include <set>
+#include <unordered_map>
 #include <iterator>
 
 namespace Trellis2Bake {
@@ -790,64 +792,6 @@ int unifyWinding(const std::vector<float>& positions,
 }
 
 // ---- remeshManifold ------------------------------------------------------------
-namespace {
-// Akenine-Möller triangle/box overlap. Box centred at c with half-size h.
-bool triBoxOverlap(const float c[3], float h, const float v0[3],
-                   const float v1[3], const float v2[3])
-{
-    float a[3][3];
-    for (int k = 0; k < 3; ++k) {
-        a[0][k] = v0[k] - c[k];
-        a[1][k] = v1[k] - c[k];
-        a[2][k] = v2[k] - c[k];
-    }
-    // box axes
-    for (int k = 0; k < 3; ++k) {
-        const float mn = std::min({a[0][k], a[1][k], a[2][k]});
-        const float mx = std::max({a[0][k], a[1][k], a[2][k]});
-        if (mn > h || mx < -h)
-            return false;
-    }
-    const float e[3][3] = {
-        {a[1][0] - a[0][0], a[1][1] - a[0][1], a[1][2] - a[0][2]},
-        {a[2][0] - a[1][0], a[2][1] - a[1][1], a[2][2] - a[1][2]},
-        {a[0][0] - a[2][0], a[0][1] - a[2][1], a[0][2] - a[2][2]}};
-    // triangle plane
-    float n[3];
-    cross3(e[0], e[1], n);
-    const float d = n[0] * a[0][0] + n[1] * a[0][1] + n[2] * a[0][2];
-    const float r = h * (std::fabs(n[0]) + std::fabs(n[1]) + std::fabs(n[2]));
-    if (std::fabs(d) > r)
-        return false;
-    // 9 edge cross-product axes
-    for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j < 3; ++j) {
-            float axis[3] = {0, 0, 0};
-            float u[3] = {0, 0, 0};
-            u[j] = 1.0f;
-            cross3(u, e[i], axis);
-            const float len2 = axis[0] * axis[0] + axis[1] * axis[1]
-                             + axis[2] * axis[2];
-            if (len2 < 1e-24f)
-                continue;
-            float p0 = 0, p1 = 0, p2 = 0;
-            for (int k = 0; k < 3; ++k) {
-                p0 += axis[k] * a[0][k];
-                p1 += axis[k] * a[1][k];
-                p2 += axis[k] * a[2][k];
-            }
-            const float mn = std::min({p0, p1, p2});
-            const float mx = std::max({p0, p1, p2});
-            const float rad = h * (std::fabs(axis[0]) + std::fabs(axis[1])
-                                   + std::fabs(axis[2]));
-            if (mn > rad || mx < -rad)
-                return false;
-        }
-    }
-    return true;
-}
-} // namespace
-
 bool remeshManifold(const std::vector<float>& positions,
                     const std::vector<uint32_t>& indices, int resolution,
                     std::vector<float>& outPositions,
@@ -856,7 +800,7 @@ bool remeshManifold(const std::vector<float>& positions,
     const size_t nv = positions.size() / 3;
     if (nv == 0 || indices.size() < 3)
         return false;
-    resolution = std::clamp(resolution, 32, 400);
+    resolution = std::clamp(resolution, 32, 2048);
     float mn[3] = {positions[0], positions[1], positions[2]};
     float mx[3] = {mn[0], mn[1], mn[2]};
     for (size_t v = 0; v < nv; ++v)
@@ -867,11 +811,28 @@ bool remeshManifold(const std::vector<float>& positions,
     const float ext = std::max({mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]});
     if (!(ext > 0.0f))
         return false;
-    const float cell = ext / float(resolution);
     constexpr int kPad = 3;   // empty border so the exterior is connected
+    // The grid is cropped to the bounding box, so a tall thin figure at 1536
+    // is ~870M cells but a roughly cubic object (a building) would be ~3.6G.
+    // Cap the cell count (5 bytes each while building, so ~4.5 GB at the
+    // default) by lowering the resolution rather than failing or thrashing.
+    // QTMESH_TRELLIS2_REMESH_MAX_CELLS (millions) overrides the cap.
+    double kMaxCells = 900e6;
+    {
+        const int envMax = qEnvironmentVariableIntValue("QTMESH_TRELLIS2_REMESH_MAX_CELLS");
+        if (envMax > 0)
+            kMaxCells = double(envMax) * 1e6;
+    }
+    float cell = 0.0f;
     int dim[3];
-    for (int k = 0; k < 3; ++k)
-        dim[k] = int(std::ceil((mx[k] - mn[k]) / cell)) + 2 * kPad + 1;
+    for (;;) {
+        cell = ext / float(resolution);
+        for (int k = 0; k < 3; ++k)
+            dim[k] = int(std::ceil((mx[k] - mn[k]) / cell)) + 2 * kPad + 1;
+        if (double(dim[0]) * dim[1] * dim[2] <= kMaxCells || resolution <= 64)
+            break;
+        resolution = std::max(64, int(resolution * 0.9));
+    }
     const size_t total = size_t(dim[0]) * dim[1] * dim[2];
     auto at = [&](int x, int y, int z) {
         return (size_t(z) * dim[1] + y) * dim[0] + x;
@@ -880,44 +841,92 @@ bool remeshManifold(const std::vector<float>& positions,
     const float org[3] = {mn[0] - kPad * cell, mn[1] - kPad * cell,
                           mn[2] - kPad * cell};
 
-    // 1. conservative surface voxelization
-    std::vector<uint8_t> state(total, 0);   // 0 unknown, 1 surface, 2 exterior
-    // conservative: a hair larger than the cell so a triangle lying exactly on
-    // a cell boundary (axis-aligned sheet) is not lost to a float tie
-    const float half = cell * 0.5f * 1.001f;
-    for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-        const float* p0 = &positions[indices[t] * 3];
-        const float* p1 = &positions[indices[t + 1] * 3];
-        const float* p2 = &positions[indices[t + 2] * 3];
-        int lo[3], hi[3];
-        for (int k = 0; k < 3; ++k) {
-            const float a = std::min({p0[k], p1[k], p2[k]});
-            const float b = std::max({p0[k], p1[k], p2[k]});
-            lo[k] = std::max(0, int(std::floor((a - org[k]) / cell)));
-            hi[k] = std::min(dim[k] - 1, int(std::floor((b - org[k]) / cell)));
-        }
-        const bool single = lo[0] == hi[0] && lo[1] == hi[1] && lo[2] == hi[2];
-        for (int z = lo[2]; z <= hi[2]; ++z)
-            for (int y = lo[1]; y <= hi[1]; ++y)
-                for (int x = lo[0]; x <= hi[0]; ++x) {
-                    uint8_t& s = state[at(x, y, z)];
-                    if (s == 1)
-                        continue;
-                    if (!single) {
-                        const float c[3] = {org[0] + (x + 0.5f) * cell,
-                                            org[1] + (y + 0.5f) * cell,
-                                            org[2] + (z + 0.5f) * cell};
-                        if (!triBoxOverlap(c, half, p0, p1, p2))
-                            continue;
-                    }
-                    s = 1;
+    // 1. signed distance to the source surface, exact within one cell of it.
+    //    The old binary "touched voxel" mask + 3x3x3 blur dilated every
+    //    surface by ~1 cell, which fused fingers and rounded off eyes/ears;
+    //    a distance field lets marching cubes place the surface sub-voxel.
+    //    d holds a SIGNED distance (inside positive, sign from the nearest
+    //    triangle's normal); untouched cells keep +kFar and are classified by
+    //    the flood fill below. Worker threads own disjoint z slabs, so no
+    //    atomics are needed.
+    constexpr float kFar = 1.0e9f;
+    constexpr float kBand = 1.0f;   // cells; exact distance wanted this close
+    std::vector<float> d(total, kFar);
+    {
+        const unsigned nThreads = std::max(1u, std::min(16u,
+                                  std::thread::hardware_concurrency()));
+        const int slab = (dim[2] + int(nThreads) - 1) / int(nThreads);
+        auto work = [&](int z0, int z1) {
+            for (size_t t = 0; t + 2 < indices.size(); t += 3) {
+                const float* p0 = &positions[indices[t] * 3];
+                const float* p1 = &positions[indices[t + 1] * 3];
+                const float* p2 = &positions[indices[t + 2] * 3];
+                int lo[3], hi[3];
+                for (int k = 0; k < 3; ++k) {
+                    const float a = std::min({p0[k], p1[k], p2[k]});
+                    const float b = std::max({p0[k], p1[k], p2[k]});
+                    lo[k] = std::max(0, int(std::floor((a - org[k]) / cell - kBand)));
+                    hi[k] = std::min(dim[k] - 1,
+                                     int(std::floor((b - org[k]) / cell + kBand)) + 1);
                 }
+                lo[2] = std::max(lo[2], z0);
+                hi[2] = std::min(hi[2], z1 - 1);
+                if (lo[2] > hi[2])
+                    continue;
+                float e1[3], e2[3], n[3];
+                sub3(p1, p0, e1);
+                sub3(p2, p0, e2);
+                cross3(e1, e2, n);
+                const float nl = std::sqrt(dot3(n, n));
+                if (!(nl > 0.0f))
+                    continue;   // degenerate triangle
+                for (int k = 0; k < 3; ++k)
+                    n[k] /= nl;
+                const float reach = kBand * cell;
+                for (int z = lo[2]; z <= hi[2]; ++z)
+                    for (int y = lo[1]; y <= hi[1]; ++y)
+                        for (int x = lo[0]; x <= hi[0]; ++x) {
+                            const float c[3] = {org[0] + (x + 0.5f) * cell,
+                                                org[1] + (y + 0.5f) * cell,
+                                                org[2] + (z + 0.5f) * cell};
+                            float cp0[3];
+                            sub3(c, p0, cp0);
+                            // plane distance is a lower bound on the true one
+                            if (std::fabs(dot3(cp0, n)) > reach)
+                                continue;
+                            float cp[3], bc[3];
+                            closestPointOnTriangle(p0, p1, p2, c, cp, bc);
+                            float off[3];
+                            sub3(c, cp, off);
+                            const float dist = std::sqrt(dot3(off, off));
+                            float& cur = d[at(x, y, z)];
+                            if (dist >= std::fabs(cur))
+                                continue;
+                            // outside = on the normal's side of the surface
+                            cur = dot3(off, n) > 0.0f ? -dist : dist;
+                        }
+            }
+        };
+        std::vector<std::thread> pool;
+        for (unsigned i = 0; i < nThreads; ++i) {
+            const int z0 = int(i) * slab;
+            const int z1 = std::min(dim[2], z0 + slab);
+            if (z0 < z1)
+                pool.emplace_back(work, z0, z1);
+        }
+        for (auto& th : pool)
+            th.join();
     }
 
-    // 2. flood-fill the exterior from the padded corner (6-connectivity)
+    // 2. flood-fill the exterior from the padded corner (6-connectivity),
+    //    never entering a cell closer than kBlock cells to the surface. A
+    //    surface crossing the face between two 6-neighbours puts one of them
+    //    within 0.5 cell of it, so 0.75 cannot leak.
+    constexpr float kBlock = 0.75f;
+    std::vector<uint8_t> outside(total, 0);
     std::vector<uint32_t> stack;
     stack.push_back(0);
-    state[0] = 2;
+    outside[0] = 1;
     while (!stack.empty()) {
         const uint32_t i = stack.back();
         stack.pop_back();
@@ -930,55 +939,38 @@ bool remeshManifold(const std::vector<float>& positions,
             if (q[0] < 0 || q[1] < 0 || q[2] < 0 || q[0] >= dim[0]
                 || q[1] >= dim[1] || q[2] >= dim[2])
                 continue;
-            uint8_t& s = state[at(q[0], q[1], q[2])];
-            if (s != 0)
+            const size_t qi = at(q[0], q[1], q[2]);
+            if (outside[qi] || std::fabs(d[qi]) * (1.0f / cell) < kBlock)
                 continue;
-            s = 2;
-            stack.push_back(static_cast<uint32_t>(at(q[0], q[1], q[2])));
+            outside[qi] = 1;
+            stack.push_back(static_cast<uint32_t>(qi));
         }
     }
 
-    // 3. solid mask (everything not exterior) -> separable 3-tap box blur ->
-    //    scalar field in [0,1]. Blurring turns the staircase into a smooth
-    //    field so MC places vertices sub-voxel instead of on cell faces.
-    std::vector<uint8_t> a(total), b(total);
-    for (size_t i = 0; i < total; ++i)
-        a[i] = state[i] == 2 ? 0 : 1;
-    auto blurAxis = [&](const std::vector<uint8_t>& src,
-                        std::vector<uint8_t>& dst, int axis) {
-        for (int z = 0; z < dim[2]; ++z)
-            for (int y = 0; y < dim[1]; ++y)
-                for (int x = 0; x < dim[0]; ++x) {
-                    int sum = 0;
-                    for (int d = -1; d <= 1; ++d) {
-                        int q[3] = {x, y, z};
-                        q[axis] += d;
-                        if (q[axis] < 0 || q[axis] >= dim[axis])
-                            continue;
-                        sum += src[at(q[0], q[1], q[2])];
-                    }
-                    dst[at(x, y, z)] = static_cast<uint8_t>(sum);
-                }
-    };
-    // pass 1 yields 0..3, pass 2 0..9, pass 3 0..27 (fits uint8)
-    std::vector<uint8_t> tmp(total);
-    blurAxis(a, b, 0);
-    blurAxis(b, tmp, 1);
-    blurAxis(tmp, b, 2);
-    a.clear(); a.shrink_to_fit();
-    tmp.clear(); tmp.shrink_to_fit();
-    std::vector<float> field(total);
+    // 3. inside-positive field, zero at kInflate cells OUTSIDE the surface.
+    //    The inflation is what keeps a zero-thickness sheet (leaf, cloth, a
+    //    pinched double wall) alive: it becomes a slab 2*kInflate thick, and
+    //    >= 1 cell thick means a sample always lands inside it. Everything
+    //    else is only inflated by that same small amount (it used to be
+    //    ~1 cell plus a blur).
+    constexpr float kInflate = 0.55f;
+    constexpr float kClamp = 1.5f;
+    // In place: d becomes the field (one float per cell, no second array), so
+    // the peak is 5 bytes per cell — it is what lets the grid go to 1024.
+    std::vector<float>& field = d;
     for (size_t i = 0; i < total; ++i) {
-        field[i] = float(b[i]) / 27.0f;
-        // A one-voxel-thick sheet (leaf, cloth, hair card) blurs to ~0.33 and
-        // would fall under the 0.5 iso level and vanish. Every voxel the
-        // surface actually touches stays solid, so thin parts survive as a
-        // one-voxel slab (still closed + manifold).
-        if (state[i] == 1)
-            field[i] = std::max(field[i], 0.52f);
+        const float di = d[i];
+        const float ad = std::min(std::fabs(di) / cell, kClamp);
+        float g;
+        if (outside[i])
+            g = kInflate - ad;                       // definitely outside
+        else if (std::fabs(di) >= kFar * 0.5f)
+            g = kClamp;                              // enclosed, far from any surface
+        else
+            g = kInflate + (di > 0.0f ? ad : -ad);   // near surface: normal's sign
+        field[i] = g;
     }
-    b.clear(); b.shrink_to_fit();
-    state.clear(); state.shrink_to_fit();
+    outside.clear(); outside.shrink_to_fit();
 
     // 4. marching cubes. Sample corner (i,j,k) sits at the CENTRE of cell
     //    (i,j,k): world = org + (i+0.5)*cell.
@@ -988,7 +980,7 @@ bool remeshManifold(const std::vector<float>& positions,
         org[0] + (dim[0] - 0.5f) * cell, org[1] + (dim[1] - 0.5f) * cell,
         org[2] + (dim[2] - 0.5f) * cell};
     MarchingCubes::Mesh m = MarchingCubes::extract(
-        field.data(), dim[0], dim[1], dim[2], 0.5f, gmin, gmax, total);
+        field.data(), dim[0], dim[1], dim[2], 0.0f, gmin, gmax, total);
     if (m.triangleCount <= 0)
         return false;
     // extract() already emits outward-facing winding for an inside-positive
@@ -1020,7 +1012,8 @@ struct Quadric {
 } // namespace
 
 bool simplifyManifold(std::vector<float>& positions,
-                      std::vector<uint32_t>& indices, size_t targetTriangles)
+                      std::vector<uint32_t>& indices, size_t targetTriangles,
+                      double maxCost)
 {
     const size_t nv = positions.size() / 3;
     const size_t nf = indices.size() / 3;
@@ -1109,16 +1102,22 @@ bool simplifyManifold(std::vector<float>& positions,
         out.a = a; out.b = b; out.va = version[a]; out.vb = version[b];
         out.pos[0] = best[0]; out.pos[1] = best[1]; out.pos[2] = best[2];
     };
-    for (size_t f = 0; f < nf; ++f)
-        for (int k = 0; k < 3; ++k) {
-            const uint32_t a = F[f * 3 + k], b = F[f * 3 + (k + 1) % 3];
-            if (a < b) {   // each undirected edge once per incident face pair
-                Cand cd; evalEdge(a, b, cd); heap.push(cd);
-            } else {
-                // push when b<a only if the opposite face does not exist: for
-                // a closed manifold every edge appears as a<b in one face.
+    auto fillHeap = [&]() {
+        heap = decltype(heap)();
+        for (size_t f = 0; f < nf; ++f) {
+            if (!faceAlive[f])
+                continue;
+            for (int k = 0; k < 3; ++k) {
+                const uint32_t a = F[f * 3 + k], b = F[f * 3 + (k + 1) % 3];
+                // each undirected edge of an oriented manifold appears once
+                // as a<b (stale duplicates are skipped by the version check)
+                if (a < b) {
+                    Cand cd; evalEdge(a, b, cd); heap.push(cd);
+                }
             }
         }
+    };
+    fillHeap();
 
     auto neighbours = [&](uint32_t v, std::vector<uint32_t>& out) {
         out.clear();
@@ -1141,26 +1140,40 @@ bool simplifyManifold(std::vector<float>& positions,
     // Never collapse below a tetrahedron: for a closed 4-face component every
     // edge passes the link test, yet the collapse leaves two coincident faces.
     const size_t floorTris = std::max<size_t>(targetTriangles, 4);
+    // A rejected candidate is dropped from the heap for good, but a later
+    // collapse can make it legal; on a dense input (1M+ marching-cubes
+    // triangles) the heap ran dry at ~2.5x the target. So when it empties
+    // short of the target, rebuild it from the surviving edges and go again.
+    // The flip test stays strict: loosening it lets collapses fold the
+    // surface into spikes (a cone grew out of a head).
+    bool capped = false;
+    for (int sweep = 0; sweep < 4 && alive > floorTris && !capped; ++sweep) {
+    if (sweep > 0)
+        fillHeap();
+    const size_t aliveBefore = alive;
+    constexpr double minFlipCos = 0.1;
     while (alive > floorTris && !heap.empty()) {
         Cand cd = heap.top();
         heap.pop();
         const uint32_t a = cd.a, b = cd.b;
         if (!vertAlive[a] || !vertAlive[b] || version[a] != cd.va || version[b] != cd.vb)
             continue;
+        if (cd.cost > maxCost) {   // everything left is at least this costly
+            capped = true;
+            break;
+        }
         // faces containing both a and b
         shared.clear();
         for (uint32_t f : vf[a])
             if (faceAlive[f] && (F[f * 3] == b || F[f * 3 + 1] == b || F[f * 3 + 2] == b))
                 shared.push_back(f);
-        if (shared.size() != 2)
-            continue;   // boundary / non-manifold edge: never collapse
+        if (shared.size() != 2) continue;   // boundary / non-manifold edge: never collapse
         neighbours(a, na);
         neighbours(b, nb);
         common.clear();
         std::set_intersection(na.begin(), na.end(), nb.begin(), nb.end(),
                               std::back_inserter(common));
-        if (common.size() != 2)
-            continue;   // LINK CONDITION violated: collapse would pinch
+        if (common.size() != 2) continue;   // LINK CONDITION violated: collapse would pinch
         // flip / degeneracy check on the surviving faces
         bool ok = true;
         for (int side = 0; side < 2 && ok; ++side) {
@@ -1177,7 +1190,7 @@ bool simplifyManifold(std::vector<float>& positions,
                 const double l0 = std::sqrt(n0[0] * n0[0] + n0[1] * n0[1] + n0[2] * n0[2]);
                 const double l1 = std::sqrt(n1[0] * n1[0] + n1[1] * n1[1] + n1[2] * n1[2]);
                 if (l1 < 1e-24 || l0 < 1e-24
-                    || (n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]) / (l0 * l1) < 0.1) {
+                    || (n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2]) / (l0 * l1) < minFlipCos) {
                     ok = false;
                     break;
                 }
@@ -1213,6 +1226,9 @@ bool simplifyManifold(std::vector<float>& positions,
             heap.push(nc);
         }
     }
+    if (alive == aliveBefore)
+        break;   // a full sweep found nothing legal to collapse
+    }
 
     // write back, compacting
     std::vector<uint32_t> remap(nv, UINT32_MAX);
@@ -1238,6 +1254,407 @@ bool simplifyManifold(std::vector<float>& positions,
 }
 
 // ---- topologyStats -------------------------------------------------------------
+int splitNonManifold(std::vector<float>& positions,
+                     std::vector<uint32_t>& indices)
+{
+    const size_t nf = indices.size() / 3;
+    if (nf == 0)
+        return 0;
+    struct EdgeFace { uint32_t face; uint8_t corner; };   // edge: corner -> corner+1
+    std::unordered_map<uint64_t, std::vector<EdgeFace>> edges;
+    edges.reserve(nf * 2);
+    for (size_t f = 0; f < nf; ++f)
+        for (uint8_t k = 0; k < 3; ++k) {
+            const uint32_t a = indices[f * 3 + k], b = indices[f * 3 + (k + 1) % 3];
+            const uint64_t key = (uint64_t(std::min(a, b)) << 32) | std::max(a, b);
+            edges[key].push_back({static_cast<uint32_t>(f), k});
+        }
+
+    // union-find over face CORNERS; a corner class is one output vertex
+    std::vector<uint32_t> parent(nf * 3);
+    for (size_t i = 0; i < parent.size(); ++i)
+        parent[i] = static_cast<uint32_t>(i);
+    auto find = [&](uint32_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    auto unite = [&](uint32_t x, uint32_t y) {
+        x = find(x); y = find(y);
+        if (x != y) parent[std::max(x, y)] = std::min(x, y);
+    };
+    auto cornerOf = [&](uint32_t face, uint32_t vertex) -> uint32_t {
+        for (uint32_t k = 0; k < 3; ++k)
+            if (indices[face * 3 + k] == vertex)
+                return face * 3 + k;
+        return UINT32_MAX;
+    };
+    auto link = [&](const EdgeFace& x, const EdgeFace& y, uint32_t a, uint32_t b) {
+        for (uint32_t v : {a, b}) {
+            const uint32_t cx = cornerOf(x.face, v), cy = cornerOf(y.face, v);
+            if (cx != UINT32_MAX && cy != UINT32_MAX)
+                unite(cx, cy);
+        }
+    };
+    auto pos3 = [&](uint32_t v) { return &positions[size_t(v) * 3]; };
+
+    for (auto& kv : edges) {
+        const auto& L = kv.second;
+        const uint32_t a = static_cast<uint32_t>(kv.first >> 32);
+        const uint32_t b = static_cast<uint32_t>(kv.first & 0xffffffffu);
+        if (L.size() == 2) {
+            link(L[0], L[1], a, b);
+            continue;
+        }
+        if (L.size() < 4 || (L.size() & 1))
+            continue;   // a lone/odd face cannot be paired: leave it
+        // Order the faces by angle around the edge, then pair the two faces
+        // that bound the same SOLID wedge (a face's outward normal says which
+        // side of it is empty). Pairing across solid keeps touching parts as
+        // separate bodies.
+        float ax[3];
+        sub3(pos3(b), pos3(a), ax);
+        const float al = len3(ax);
+        if (!(al > 0.0f))
+            continue;
+        for (float& c : ax) c /= al;
+        struct Ent { float angle; float side; size_t i; };
+        std::vector<Ent> ents;
+        float u[3] = {0, 0, 0}, w[3] = {0, 0, 0};
+        bool haveBasis = false;
+        for (size_t i = 0; i < L.size(); ++i) {
+            const uint32_t f = L[i].face;
+            const uint32_t c = indices[f * 3 + (L[i].corner + 2) % 3];
+            float d[3];
+            sub3(pos3(c), pos3(a), d);
+            const float along = dot3(d, ax);
+            float perp[3] = {d[0] - ax[0] * along, d[1] - ax[1] * along,
+                             d[2] - ax[2] * along};
+            if (!haveBasis) {
+                const float pl = len3(perp);
+                if (!(pl > 0.0f)) continue;
+                for (int k = 0; k < 3; ++k) u[k] = perp[k] / pl;
+                cross3(ax, u, w);
+                haveBasis = true;
+            }
+            float n[3], e1[3], e2[3];
+            sub3(pos3(indices[f * 3 + 1]), pos3(indices[f * 3]), e1);
+            sub3(pos3(indices[f * 3 + 2]), pos3(indices[f * 3]), e2);
+            cross3(e1, e2, n);
+            ents.push_back({std::atan2(dot3(perp, w), dot3(perp, u)),
+                            dot3(n, w), i});
+        }
+        if (ents.size() != L.size())
+            continue;
+        std::sort(ents.begin(), ents.end(),
+                  [](const Ent& x, const Ent& y) { return x.angle < y.angle; });
+        // Which way does the face's outward normal lean around the edge? The
+        // face's own half-plane is spanned by `perp` (angle), so its normal is
+        // roughly +-(axis x perp): compare it with the tangent direction.
+        const size_t k = ents.size();
+        std::vector<char> used(k, 0);
+        for (size_t i = 0; i < k; ++i) {
+            const size_t j = (i + 1) % k;
+            // normal.w is measured against the FIRST face's perpendicular
+            // frame; use the face's own tangent instead
+            auto tangentSide = [&](const Ent& e) {
+                const float c = std::cos(e.angle), s = std::sin(e.angle);
+                // tangent (increasing angle) = -sin*u + cos*w
+                const float t[3] = {-s * u[0] + c * w[0], -s * u[1] + c * w[1],
+                                    -s * u[2] + c * w[2]};
+                const uint32_t f = L[e.i].face;
+                float n[3], e1[3], e2[3];
+                sub3(pos3(indices[f * 3 + 1]), pos3(indices[f * 3]), e1);
+                sub3(pos3(indices[f * 3 + 2]), pos3(indices[f * 3]), e2);
+                cross3(e1, e2, n);
+                return dot3(n, t);
+            };
+            if (!used[i] && !used[j] && tangentSide(ents[i]) < 0.0f
+                && tangentSide(ents[j]) > 0.0f) {
+                link(L[ents[i].i], L[ents[j].i], a, b);
+                used[i] = used[j] = 1;
+            }
+        }
+        // Nearly coplanar touching sheets leave the wedge test ambiguous. Pair
+        // what is left by edge DIRECTION instead (a consistently wound surface
+        // runs a->b on one face and b->a on its neighbour), nearest in angle
+        // first, so an even group never leaves a hole behind.
+        auto fwd = [&](const Ent& e) {
+            return indices[L[e.i].face * 3 + L[e.i].corner] == a;
+        };
+        for (size_t i = 0; i < k; ++i) {
+            if (used[i])
+                continue;
+            for (size_t step = 1; step < k; ++step) {
+                const size_t j = (i + step) % k;
+                if (!used[j] && fwd(ents[i]) != fwd(ents[j])) {
+                    link(L[ents[i].i], L[ents[j].i], a, b);
+                    used[i] = used[j] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    // one output vertex per (original vertex, corner class)
+    std::unordered_map<uint64_t, uint32_t> remap;
+    remap.reserve(nf * 3);
+    std::vector<uint8_t> seen(positions.size() / 3, 0);
+    int splits = 0;
+    std::vector<uint32_t> newIdx(indices.size());
+    for (size_t c = 0; c < indices.size(); ++c) {
+        const uint32_t v = indices[c];
+        const uint64_t key = (uint64_t(v) << 32) | find(static_cast<uint32_t>(c));
+        auto it = remap.find(key);
+        if (it == remap.end()) {
+            uint32_t nv = v;
+            if (seen[v]) {
+                nv = static_cast<uint32_t>(positions.size() / 3);
+                const float p[3] = {positions[size_t(v) * 3],
+                                    positions[size_t(v) * 3 + 1],
+                                    positions[size_t(v) * 3 + 2]};
+                positions.insert(positions.end(), p, p + 3);
+                ++splits;
+            }
+            seen[v] = 1;
+            it = remap.emplace(key, nv).first;
+        }
+        newIdx[c] = it->second;
+    }
+    indices.swap(newIdx);
+    return splits;
+}
+
+// Last-resort cleanup after splitNonManifold: edges still shared by 3+ faces
+// (two sheets that are ALSO joined elsewhere, so no vertex split can part
+// them) lose their smallest faces until two remain, then the small holes that
+// leaves — and any that already existed — are closed with a centroid fan.
+// Returns the number of faces dropped.
+using TriKey = std::array<uint32_t, 3>;   // sorted vertex triple
+static TriKey triKey(uint32_t a, uint32_t b, uint32_t c)
+{
+    TriKey k{a, b, c};
+    std::sort(k.begin(), k.end());
+    return k;
+}
+
+static int dropResidualNonManifold(const std::vector<float>& pos,
+                            std::vector<uint32_t>& idx,
+                            std::set<TriKey>& droppedOut)
+{
+    const size_t nf = idx.size() / 3;
+    auto area = [&](size_t f) {
+        float e1[3], e2[3], n[3];
+        sub3(&pos[size_t(idx[f * 3 + 1]) * 3], &pos[size_t(idx[f * 3]) * 3], e1);
+        sub3(&pos[size_t(idx[f * 3 + 2]) * 3], &pos[size_t(idx[f * 3]) * 3], e2);
+        cross3(e1, e2, n);
+        return len3(n);
+    };
+    std::unordered_map<uint64_t, std::vector<uint32_t>> edges;
+    edges.reserve(nf * 2);
+    for (size_t f = 0; f < nf; ++f)
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t a = idx[f * 3 + k], b = idx[f * 3 + (k + 1) % 3];
+            edges[(uint64_t(std::min(a, b)) << 32) | std::max(a, b)]
+                .push_back(static_cast<uint32_t>(f));
+        }
+    std::vector<char> dead(nf, 0);
+    for (auto& kv : edges) {
+        std::vector<uint32_t> live;
+        for (uint32_t f : kv.second)
+            if (!dead[f]) live.push_back(f);
+        if (live.size() <= 2)
+            continue;
+        std::sort(live.begin(), live.end(), [&](uint32_t x, uint32_t y) {
+            return area(x) > area(y);
+        });
+        for (size_t i = 2; i < live.size(); ++i)
+            dead[live[i]] = 1;
+    }
+    int dropped = 0;
+    std::vector<uint32_t> out;
+    out.reserve(idx.size());
+    for (size_t f = 0; f < nf; ++f) {
+        if (dead[f]) {
+            ++dropped;
+            droppedOut.insert(triKey(idx[f * 3], idx[f * 3 + 1], idx[f * 3 + 2]));
+            continue;
+        }
+        out.insert(out.end(), idx.begin() + f * 3, idx.begin() + f * 3 + 3);
+    }
+    idx.swap(out);
+    return dropped;
+}
+
+// Close small boundary loops with a centroid fan (loops that revisit a vertex
+// or run longer than maxLoop are left alone). Returns the loops closed.
+// Drop small components that still have open (single-face) edges: a floating
+// scrap with a hole in it cannot be closed sensibly and is not part of the
+// subject. Components under `fraction` of the triangles only; returns the
+// triangles removed.
+static int dropSmallOpenComponents(const std::vector<float>& pos,
+                                   std::vector<uint32_t>& idx, double fraction)
+{
+    const size_t nv = pos.size() / 3, nf = idx.size() / 3;
+    if (nf == 0)
+        return 0;
+    std::vector<uint32_t> parent(nv);
+    for (size_t i = 0; i < nv; ++i) parent[i] = static_cast<uint32_t>(i);
+    auto find = [&](uint32_t x) {
+        while (parent[x] != x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+    };
+    for (size_t f = 0; f < nf; ++f)
+        for (int k = 1; k < 3; ++k) {
+            const uint32_t x = find(idx[f * 3]), y = find(idx[f * 3 + k]);
+            if (x != y) parent[std::max(x, y)] = std::min(x, y);
+        }
+    std::unordered_map<uint64_t, int> directed;
+    for (size_t t = 0; t < nf; ++t)
+        for (int k = 0; k < 3; ++k)
+            directed[(uint64_t(idx[t * 3 + k]) << 32) | idx[t * 3 + (k + 1) % 3]]++;
+    std::unordered_map<uint32_t, int> tris;
+    std::unordered_map<uint32_t, bool> open;
+    for (size_t t = 0; t < nf; ++t) {
+        const uint32_t root = find(idx[t * 3]);
+        ++tris[root];
+        for (int k = 0; k < 3; ++k) {
+            const uint32_t a = idx[t * 3 + k], b = idx[t * 3 + (k + 1) % 3];
+            if (!directed.count((uint64_t(b) << 32) | a))
+                open[root] = true;
+        }
+    }
+    std::vector<uint32_t> out;
+    out.reserve(idx.size());
+    int removed = 0;
+    for (size_t t = 0; t < nf; ++t) {
+        const uint32_t root = find(idx[t * 3]);
+        if (open.count(root) && tris[root] < fraction * double(nf)) {
+            ++removed;
+            continue;
+        }
+        out.insert(out.end(), idx.begin() + t * 3, idx.begin() + t * 3 + 3);
+    }
+    idx.swap(out);
+    return removed;
+}
+
+// A one-triangle hole can only be closed by the very triangle that was dropped
+// (a fin hanging off an over-shared edge), so grow every remaining hole by the
+// faces that touch it; the larger loop is then closed with a fan. Returns the
+// faces removed.
+static int growHoles(std::vector<uint32_t>& idx)
+{
+    std::unordered_map<uint64_t, int> directed;
+    directed.reserve(idx.size());
+    for (size_t t = 0; t + 2 < idx.size(); t += 3)
+        for (int k = 0; k < 3; ++k)
+            directed[(uint64_t(idx[t + k]) << 32) | idx[t + (k + 1) % 3]]++;
+    std::unordered_map<uint32_t, char> onHole;
+    for (auto& kv : directed) {
+        const uint32_t u = static_cast<uint32_t>(kv.first >> 32);
+        const uint32_t v = static_cast<uint32_t>(kv.first & 0xffffffffu);
+        if (!directed.count((uint64_t(v) << 32) | u)) {
+            onHole[u] = 1;
+            onHole[v] = 1;
+        }
+    }
+    if (onHole.empty())
+        return 0;
+    std::vector<uint32_t> out;
+    out.reserve(idx.size());
+    int removed = 0;
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        if (onHole.count(idx[t]) || onHole.count(idx[t + 1]) || onHole.count(idx[t + 2])) {
+            ++removed;
+            continue;
+        }
+        out.insert(out.end(), idx.begin() + t, idx.begin() + t + 3);
+    }
+    idx.swap(out);
+    return removed;
+}
+
+static int fillSmallHoles(std::vector<float>& pos, std::vector<uint32_t>& idx,
+                   size_t maxLoop, const std::set<TriKey>& forbidden)
+{
+    std::unordered_map<uint64_t, int> directed;   // (u<<32|v) present
+    directed.reserve(idx.size());
+    for (size_t t = 0; t + 2 < idx.size(); t += 3)
+        for (int k = 0; k < 3; ++k)
+            directed[(uint64_t(idx[t + k]) << 32) | idx[t + (k + 1) % 3]]++;
+    // boundary half-edges: u->v whose reverse is absent
+    std::unordered_map<uint32_t, std::vector<uint32_t>> out;   // u -> [v]
+    for (auto& kv : directed) {
+        const uint32_t u = static_cast<uint32_t>(kv.first >> 32);
+        const uint32_t v = static_cast<uint32_t>(kv.first & 0xffffffffu);
+        if (!directed.count((uint64_t(v) << 32) | u))
+            out[u].push_back(v);
+    }
+    int closed = 0;
+    std::unordered_map<uint64_t, char> done;
+    for (auto& kv : out) {
+        for (uint32_t v0 : kv.second) {
+            const uint32_t u0 = kv.first;
+            if (done.count((uint64_t(u0) << 32) | v0))
+                continue;
+            std::vector<uint32_t> loop{u0};
+            uint32_t cur = v0;
+            bool ok = true;
+            while (cur != u0) {
+                if (loop.size() > maxLoop) { ok = false; break; }
+                for (uint32_t w : loop)
+                    if (w == cur) { ok = false; break; }
+                if (!ok) break;
+                loop.push_back(cur);
+                auto it = out.find(cur);
+                if (it == out.end()) { ok = false; break; }
+                // clustered holes share vertices: take the way that closes the
+                // loop, else any vertex not yet on it
+                uint32_t next = UINT32_MAX;
+                for (uint32_t cand : it->second)
+                    if (cand == u0) { next = cand; break; }
+                if (next == UINT32_MAX)
+                    for (uint32_t cand : it->second) {
+                        bool seen = false;
+                        for (uint32_t w : loop) if (w == cand) { seen = true; break; }
+                        if (!seen && !done.count((uint64_t(cur) << 32) | cand)) {
+                            next = cand;
+                            break;
+                        }
+                    }
+                if (next == UINT32_MAX) { ok = false; break; }
+                cur = next;
+            }
+            if (!ok || loop.size() < 3)
+                continue;
+            for (size_t i = 0; i < loop.size(); ++i)
+                done[(uint64_t(loop[i]) << 32) | loop[(i + 1) % loop.size()]] = 1;
+            // a hole bounded by a face we just dropped must stay open (filling
+            // it would put the over-shared face straight back)
+            if (loop.size() == 3
+                && forbidden.count(triKey(loop[0], loop[1], loop[2])))
+                continue;
+            if (loop.size() == 3) {
+                idx.insert(idx.end(), {loop[0], loop[2], loop[1]});
+            } else {
+                float c[3] = {0, 0, 0};
+                for (uint32_t v : loop)
+                    for (int k = 0; k < 3; ++k)
+                        c[k] += pos[size_t(v) * 3 + k] / float(loop.size());
+                const uint32_t ci = static_cast<uint32_t>(pos.size() / 3);
+                pos.insert(pos.end(), c, c + 3);
+                for (size_t i = 0; i < loop.size(); ++i)
+                    idx.insert(idx.end(), {loop[(i + 1) % loop.size()], loop[i], ci});
+            }
+            ++closed;
+        }
+    }
+    return closed;
+}
+
 TopologyStats topologyStats(size_t vertexCount,
                             const std::vector<uint32_t>& indices)
 {
@@ -1423,8 +1840,19 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
         positionsIo.swap(outp);
     };
     compact(pos, idx);
+    if (opts.exportWeldedSource) {
+        r.weldedPositions = pos;
+        r.weldedIndices = idx;
+    }
 
-    // ---- 4a. optional voxel remesh -> closed manifold surface ---------------
+    // ---- 4a. optional voxel remesh -> clean, consistently oriented surface ---
+    // Marching cubes on a signed distance field of the welded source: fixes the
+    // flipped patches and pinched double walls of the raw dual-grid output and
+    // keeps detail to ~1 cell. It is deliberately NOT simplified here — the
+    // link-condition simplifier (simplifyManifold) cannot reach a game budget
+    // on a dense mesh without destroying thin features, and every coarser grid
+    // fuses fingers and flattens faces. The shape-preserving simplifier in
+    // step 5 does the reduction, and step 5c repairs the few pinches it leaves.
     if (opts.remeshResolution > 0) {
         std::vector<float> rp;
         std::vector<uint32_t> ri;
@@ -1449,107 +1877,167 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     // soup. A few volume-preserving Taubin passes flatten noise below the
     // voxel scale while leaving real shape (runs on the WELDED mesh, so the
     // Laplacian sees true adjacency, and before simplification so QEM ranks
-    // clean geometry).
-    if (opts.taubinIterations > 0)
+    // clean geometry). Skipped for a remeshed surface: it is already smooth
+    // (marching cubes on a distance field) and the pass rounds off detail.
+    if (opts.taubinIterations > 0 && !r.remeshed)
         MeshRefine::taubinSmooth(pos, idx, opts.taubinIterations);
 
-    // ---- 5a. manifold-preserving simplify (remeshed input only) ---------------
-    if (r.remeshed && opts.targetTriangles > 0
-        && static_cast<int>(idx.size() / 3) > opts.targetTriangles) {
-        simplifyManifold(pos, idx, static_cast<size_t>(opts.targetTriangles));
-        cullDebris(idx, pos.size() / 3);
-        compact(pos, idx);
-        unifyWinding(pos, idx);
-    }
-
-    // ---- 5. simplify toward the target --------------------------------------
-    if (opts.targetTriangles > 0
-        && static_cast<int>(idx.size() / 3) > opts.targetTriangles) {
-        std::vector<uint32_t> simplified(idx.size());
-        float resultError = 0.0f;
-        const size_t targetIndexCount =
-            static_cast<size_t>(opts.targetTriangles) * 3;
-        size_t newCount = meshopt_simplify(
-            simplified.data(), idx.data(), idx.size(), pos.data(),
-            pos.size() / 3, sizeof(float) * 3, targetIndexCount,
-            opts.simplifyTargetError, /*options=*/0, &resultError);
-        // Game-ready budgets treat the COUNT as the contract (the lost
-        // detail comes back via the normal-map bake): on dense organic
-        // sources (a 4.8M-tri TRELLIS decode) the relative error cap stops
-        // collapsing millions of triangles short of the budget — and the
-        // downstream xatlas unwrap of that "simplified" mesh then takes tens
-        // of minutes (its chart compute is superlinear). If the capped pass
-        // landed far off target, redo it uncapped.
-        if (newCount > targetIndexCount * 2) {
-            newCount = meshopt_simplify(
+    // Steps 5-5c run on a COPY-able starting point: splitting pinches discards
+    // the junk meshopt spends triangles on (hidden slivers, flaps hanging off
+    // pinch points — measured: half of a 25k result), so when a remeshed result
+    // lands well under budget the reduction is repeated once with a
+    // proportionally higher target.
+    const std::vector<float> startPos = r.remeshed ? pos : std::vector<float>();
+    const std::vector<uint32_t> startIdx = r.remeshed ? idx : std::vector<uint32_t>();
+    int tgt = opts.targetTriangles;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        if (attempt > 0) {
+            pos = startPos;
+            idx = startIdx;
+            r.splitVertices = 0;
+        }
+        // ---- 5. simplify toward the target --------------------------------------
+        if (tgt > 0
+            && static_cast<int>(idx.size() / 3) > tgt) {
+            std::vector<uint32_t> simplified(idx.size());
+            float resultError = 0.0f;
+            const size_t targetIndexCount =
+                static_cast<size_t>(tgt) * 3;
+            size_t newCount = meshopt_simplify(
                 simplified.data(), idx.data(), idx.size(), pos.data(),
                 pos.size() / 3, sizeof(float) * 3, targetIndexCount,
-                std::numeric_limits<float>::max(), /*options=*/0,
-                &resultError);
-        }
-        // Topology-preserving QEM can still be STUCK far above the budget on
-        // non-manifold sources (raw TRELLIS dual-grid output: ~4.9M tris
-        // refused to go below ~2.7M even uncapped). Game presets promise a
-        // usable budget — fall back to the topology-free sloppy simplifier,
-        // which always reaches it; the detail returns via the normal bake.
-        if (newCount > targetIndexCount * 2) {
-            newCount = meshopt_simplifySloppy(
-                simplified.data(), idx.data(), idx.size(), pos.data(),
-                pos.size() / 3, sizeof(float) * 3, targetIndexCount,
-                std::numeric_limits<float>::max(), &resultError);
-        }
-        // Platform presets (Roblox 4k / 20k) promise a CEILING, not a
-        // budget: a count anywhere above the target is an upload the
-        // platform rejects, so the 2x tolerance above does not apply. The
-        // sloppy simplifier does not lock border edges and reaches any
-        // target; the detail lost comes back through the normal bake.
-        if (opts.strictTriangleBudget && newCount > targetIndexCount) {
-            std::vector<uint32_t> strictIdx(idx.size());
-            float strictError = 0.0f;
-            const size_t strictCount = meshopt_simplifySloppy(
-                strictIdx.data(), idx.data(), idx.size(), pos.data(),
-                pos.size() / 3, sizeof(float) * 3, targetIndexCount,
-                std::numeric_limits<float>::max(), &strictError);
-            // The sloppy simplifier is a vertex-clustering grid whose count
-            // is not monotonic in grid size: on a mesh made of separate
-            // pieces it can jump from "over budget" straight to nothing.
-            // Neither outcome honours the ceiling — an empty mesh is no
-            // asset, and the over-budget QEM mesh is one the platform will
-            // reject — so a strict pass that cannot land under the target
-            // FAILS rather than returning ok with a count the preset
-            // promised not to exceed (review finding on #1075).
-            if (strictCount == 0 || strictCount > targetIndexCount) {
-                r.error = QStringLiteral(
-                    "strict triangle budget of %1 is unreachable: the "
-                    "topology-preserving simplifier stalled at %2 triangles "
-                    "and the clustering fallback collapsed the mesh entirely "
-                    "(disconnected pieces?) — choose a higher budget, or a "
-                    "non-strict tier and decimate the parts separately.")
-                    .arg(opts.targetTriangles).arg(newCount / 3);
-                return r;
+                opts.simplifyTargetError, /*options=*/0, &resultError);
+            // Game-ready budgets treat the COUNT as the contract (the lost
+            // detail comes back via the normal-map bake): on dense organic
+            // sources (a 4.8M-tri TRELLIS decode) the relative error cap stops
+            // collapsing millions of triangles short of the budget — and the
+            // downstream xatlas unwrap of that "simplified" mesh then takes tens
+            // of minutes (its chart compute is superlinear). If the capped pass
+            // landed far off target, redo it uncapped.
+            if (newCount > targetIndexCount * 2) {
+                newCount = meshopt_simplify(
+                    simplified.data(), idx.data(), idx.size(), pos.data(),
+                    pos.size() / 3, sizeof(float) * 3, targetIndexCount,
+                    std::numeric_limits<float>::max(), /*options=*/0,
+                    &resultError);
             }
-            simplified.swap(strictIdx);
-            newCount = strictCount;
-            resultError = strictError;
-        }
-        simplified.resize(newCount);
-        idx.swap(simplified);
-        r.simplifyError = resultError;
-        compact(pos, idx);
+            // Topology-preserving QEM can still be STUCK far above the budget on
+            // non-manifold sources (raw TRELLIS dual-grid output: ~4.9M tris
+            // refused to go below ~2.7M even uncapped). Game presets promise a
+            // usable budget — fall back to the topology-free sloppy simplifier,
+            // which always reaches it; the detail returns via the normal bake.
+            if (newCount > targetIndexCount * 2) {
+                newCount = meshopt_simplifySloppy(
+                    simplified.data(), idx.data(), idx.size(), pos.data(),
+                    pos.size() / 3, sizeof(float) * 3, targetIndexCount,
+                    std::numeric_limits<float>::max(), &resultError);
+            }
+            // Platform presets (Roblox 4k / 20k) promise a CEILING, not a
+            // budget: a count anywhere above the target is an upload the
+            // platform rejects, so the 2x tolerance above does not apply. The
+            // sloppy simplifier does not lock border edges and reaches any
+            // target; the detail lost comes back through the normal bake.
+            if (opts.strictTriangleBudget && newCount > targetIndexCount) {
+                std::vector<uint32_t> strictIdx(idx.size());
+                float strictError = 0.0f;
+                const size_t strictCount = meshopt_simplifySloppy(
+                    strictIdx.data(), idx.data(), idx.size(), pos.data(),
+                    pos.size() / 3, sizeof(float) * 3, targetIndexCount,
+                    std::numeric_limits<float>::max(), &strictError);
+                // The sloppy simplifier is a vertex-clustering grid whose count
+                // is not monotonic in grid size: on a mesh made of separate
+                // pieces it can jump from "over budget" straight to nothing.
+                // Neither outcome honours the ceiling — an empty mesh is no
+                // asset, and the over-budget QEM mesh is one the platform will
+                // reject — so a strict pass that cannot land under the target
+                // FAILS rather than returning ok with a count the preset
+                // promised not to exceed (review finding on #1075).
+                if (strictCount == 0 || strictCount > targetIndexCount) {
+                    r.error = QStringLiteral(
+                        "strict triangle budget of %1 is unreachable: the "
+                        "topology-preserving simplifier stalled at %2 triangles "
+                        "and the clustering fallback collapsed the mesh entirely "
+                        "(disconnected pieces?) — choose a higher budget, or a "
+                        "non-strict tier and decimate the parts separately.")
+                        .arg(tgt).arg(newCount / 3);
+                    return r;
+                }
+                simplified.swap(strictIdx);
+                newCount = strictCount;
+                resultError = strictError;
+            }
+            simplified.resize(newCount);
+            idx.swap(simplified);
+            r.simplifyError = resultError;
+            compact(pos, idx);
 
-        // ---- 5b. repair what simplification broke ----------------------------
-        // Measured on real TRELLIS.2 generations (every raw source and every
-        // pre-simplify mesh is CLOSED — 0 boundary edges — so this is where
-        // the artefacts come from): the topology-free/non-manifold-tolerant
-        // collapses (a) FLIP triangles (hundreds of edges whose two faces
-        // disagree on winding → holes under backface culling, bad smooth
-        // normals) and (b) pinch thin double-walled parts off into small
-        // floating fragments (1 → 13 components, 11 of them < 1% of the
-        // mesh). Steps 3/3b only ran BEFORE simplification, so neither was
-        // ever cleaned afterwards.
-        cullDebris(idx, pos.size() / 3);
-        compact(pos, idx);
-        unifyWinding(pos, idx);
+            // ---- 5b. repair what simplification broke ----------------------------
+            // Measured on real TRELLIS.2 generations (every raw source and every
+            // pre-simplify mesh is CLOSED — 0 boundary edges — so this is where
+            // the artefacts come from): the topology-free/non-manifold-tolerant
+            // collapses (a) FLIP triangles (hundreds of edges whose two faces
+            // disagree on winding → holes under backface culling, bad smooth
+            // normals) and (b) pinch thin double-walled parts off into small
+            // floating fragments (1 → 13 components, 11 of them < 1% of the
+            // mesh). Steps 3/3b only ran BEFORE simplification, so neither was
+            // ever cleaned afterwards.
+            cullDebris(idx, pos.size() / 3);
+            compact(pos, idx);
+            unifyWinding(pos, idx);
+        }
+
+        // ---- 5c. split the pinches simplification leaves --------------------------
+        // The simplifier fuses touching sheets into edges shared by 4+ faces. Each
+        // such edge is split so every sheet gets its own vertices: no geometry
+        // moves and no hole opens, and parts that merely touch (fingers pressed
+        // together) end up separate instead of welded.
+        if (r.remeshed) {
+            // Splitting detaches the flaps that hung on a pinch as pieces of their
+            // own; drop those like any other debris, and go again since removing
+            // them can expose the next pinch.
+            for (int pass = 0; pass < 3; ++pass) {
+                const int added = splitNonManifold(pos, idx);
+                r.splitVertices += added;
+                if (added == 0)
+                    break;
+                unifyWinding(pos, idx);
+                cullDebris(idx, pos.size() / 3);
+                compact(pos, idx);
+            }
+        }
+
+        // ---- 5d. residual pinches + holes ------------------------------------
+        if (r.remeshed) {
+            std::set<TriKey> droppedTris;
+            for (int pass = 0; pass < 8; ++pass) {
+                const int dropped = dropResidualNonManifold(pos, idx, droppedTris);
+                const int filled = fillSmallHoles(pos, idx, 256, droppedTris);
+                if (dropped == 0 && filled == 0)
+                    break;
+                compact(pos, idx);
+            }
+            // fins left holes the fan cannot close without re-adding them
+            for (int round = 0; round < 2; ++round) {
+                if (growHoles(idx) == 0)
+                    break;
+                fillSmallHoles(pos, idx, 256, std::set<TriKey>());
+            }
+            dropSmallOpenComponents(pos, idx, 0.02);
+            compact(pos, idx);
+            unifyWinding(pos, idx);
+        }
+
+        if (attempt == 0 && r.remeshed && !opts.strictTriangleBudget
+            && opts.targetTriangles > 0) {
+            const int got = static_cast<int>(idx.size() / 3);
+            if (got > 0 && got < static_cast<int>(opts.targetTriangles * 0.8)) {
+                tgt = std::min(opts.targetTriangles * 3,
+                               static_cast<int>(double(opts.targetTriangles)
+                                                * opts.targetTriangles / got));
+                continue;
+            }
+        }
+        break;
     }
 
     // ---- 6. cache-friendly ordering ------------------------------------------
@@ -1561,6 +2049,83 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     r.outputTriangles = static_cast<int>(r.indices.size() / 3);
     r.ok = true;
     return r;
+}
+
+std::vector<float> creaseAwareVertexNormals(
+    const std::vector<float>& targetPositions,
+    const std::vector<uint32_t>& targetIndices,
+    const std::vector<uint32_t>& xref,
+    const std::vector<uint32_t>& outIndices, int vertexCount)
+{
+    std::vector<float> tNormals(static_cast<size_t>(vertexCount) * 3);
+    {
+        // Crease-aware: an original vertex shared by faces that point opposite
+        // ways (the rim of a thin slab, two sheets a cell apart after a remesh
+        // + simplify — hair against a neck, a collar against a jaw) would
+        // average them into a sideways or cancelled normal and shade whole
+        // regions wrongly. Each output vertex therefore smooths across charts
+        // as before but only over faces within ~100 degrees of the faces it
+        // actually belongs to (its chart-local fan).
+        const size_t onv = targetPositions.size() / 3;
+        const size_t otc = targetIndices.size() / 3;
+        std::vector<float> faceN(otc * 3);   // area-weighted (unnormalised)
+        for (size_t f = 0; f < otc; ++f) {
+            const float* p0 = &targetPositions[targetIndices[f * 3] * 3];
+            const float* p1 = &targetPositions[targetIndices[f * 3 + 1] * 3];
+            const float* p2 = &targetPositions[targetIndices[f * 3 + 2] * 3];
+            float e1[3], e2[3];
+            sub3(p1, p0, e1);
+            sub3(p2, p0, e2);
+            cross3(e1, e2, &faceN[f * 3]);
+        }
+        std::vector<uint32_t> start(onv + 1, 0);
+        for (uint32_t i : targetIndices) ++start[i + 1];
+        for (size_t v = 0; v < onv; ++v) start[v + 1] += start[v];
+        std::vector<uint32_t> fan(targetIndices.size());
+        std::vector<uint32_t> fill(start.begin(), start.end() - 1);
+        for (size_t f = 0; f < otc; ++f)
+            for (int k = 0; k < 3; ++k)
+                fan[fill[targetIndices[f * 3 + k]]++] = static_cast<uint32_t>(f);
+        // chart-local accumulation on the xatlas mesh
+        std::vector<float> local(static_cast<size_t>(vertexCount) * 3, 0.0f);
+        for (size_t t = 0; t + 2 < outIndices.size(); t += 3) {
+            const float* p0 = &targetPositions[xref[outIndices[t]] * 3];
+            const float* p1 = &targetPositions[xref[outIndices[t + 1]] * 3];
+            const float* p2 = &targetPositions[xref[outIndices[t + 2]] * 3];
+            float e1[3], e2[3], fn[3];
+            sub3(p1, p0, e1);
+            sub3(p2, p0, e2);
+            cross3(e1, e2, fn);
+            for (int k = 0; k < 3; ++k)
+                for (int c = 0; c < 3; ++c)
+                    local[static_cast<size_t>(outIndices[t + k]) * 3 + c] += fn[c];
+        }
+        for (int v = 0; v < vertexCount; ++v) {
+            const float* ref = &local[static_cast<size_t>(v) * 3];
+            const uint32_t o = xref[v];
+            float acc[3] = {0, 0, 0};
+            for (uint32_t i = start[o]; i < start[o + 1]; ++i) {
+                const float* fn = &faceN[fan[i] * 3];
+                // normalised: past ~100 degrees (cos < -0.17) is the other sheet;
+            // right-angle neighbours (box edges) still smooth as before
+            if (dot3(fn, ref) > -0.17f * len3(fn) * len3(ref)) {
+                    acc[0] += fn[0]; acc[1] += fn[1]; acc[2] += fn[2];
+                }
+            }
+            float* out = &tNormals[static_cast<size_t>(v) * 3];
+            float l = len3(acc);
+            if (!(l > 1e-20f)) {       // no agreeing face: use the local fan
+                std::memcpy(acc, ref, sizeof(acc));
+                l = len3(acc);
+            }
+            if (l > 1e-20f) {
+                out[0] = acc[0] / l; out[1] = acc[1] / l; out[2] = acc[2] / l;
+            } else {
+                out[0] = 0.0f; out[1] = 1.0f; out[2] = 0.0f;
+            }
+        }
+    }
+    return tNormals;
 }
 
 // ---- bake ---------------------------------------------------------------------
@@ -1680,15 +2245,8 @@ BakeResult bake(const std::vector<float>& targetPositions,
     // through the xatlas re-index via xref — computing them on the split mesh
     // would flatten every chart seam into a hard edge, and an identity bake
     // (source == target) would stop being the flat (128,128,255) map.
-    std::vector<float> tNormals(static_cast<size_t>(r.vertexCount) * 3);
-    {
-        const std::vector<float> origNormals =
-            smoothNormals(targetPositions, targetIndices);
-        for (int v = 0; v < r.vertexCount; ++v)
-            std::memcpy(&tNormals[static_cast<size_t>(v) * 3],
-                        &origNormals[static_cast<size_t>(xref[v]) * 3],
-                        sizeof(float) * 3);
-    }
+    const std::vector<float> tNormals = creaseAwareVertexNormals(
+        targetPositions, targetIndices, xref, r.indices, r.vertexCount);
     const std::vector<float> sNormals = smoothNormalField(
         smoothNormals(sourcePositions, sourceIndices),
         sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);

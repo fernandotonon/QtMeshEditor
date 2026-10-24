@@ -3714,6 +3714,10 @@ void MainWindow::initToolBar()
     // viewport light icons + helper gizmos (Slice D #486)
     m_lightVisualizer = new LightVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Light_Icons, &QAction::toggled, m_lightVisualizer, &LightVisualizer::setIconsVisible);
+    // Off by default: the sun/spot/area gizmos sit in the middle of the model and
+    // end up in screenshots. `toggled` does not fire for the initial state, so
+    // push it explicitly (the View menu action carries the default).
+    m_lightVisualizer->setIconsVisible(ui->actionShow_Light_Icons->isChecked());
     connect(ui->actionShow_Selected_Light_Gizmo_Only,
             &QAction::toggled,
             m_lightVisualizer,

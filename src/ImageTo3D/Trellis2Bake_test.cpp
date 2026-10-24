@@ -565,6 +565,44 @@ TEST(Trellis2BakeTest, RemeshMakesDoubleWalledShellManifold)
     EXPECT_NEAR(vol, 4.0 / 3.0 * kPi, 0.5);   // + ~half a voxel of outward bias
 }
 
+TEST(Trellis2BakeTest, RemeshKeepsNarrowGapBetweenParts)
+{
+    // Two closed boxes ("fingers") a few cells apart must stay two separate
+    // manifold components: the remesh may not bridge the gap.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    auto addBox = [&](float x0, float x1) {
+        const uint32_t b = uint32_t(pos.size() / 3);
+        const float y0 = 0.f, y1 = 0.6f, z0 = 0.f, z1 = 0.3f;
+        const float v[8][3] = {{x0, y0, z0}, {x1, y0, z0}, {x1, y1, z0}, {x0, y1, z0},
+                               {x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}};
+        for (const auto& p : v)
+            pos.insert(pos.end(), {p[0], p[1], p[2]});
+        const uint32_t f[12][3] = {{0, 3, 2}, {0, 2, 1}, {4, 5, 6}, {4, 6, 7},
+                                   {0, 1, 5}, {0, 5, 4}, {2, 3, 7}, {2, 7, 6},
+                                   {1, 2, 6}, {1, 6, 5}, {0, 4, 7}, {0, 7, 3}};
+        for (const auto& t : f)
+            idx.insert(idx.end(), {b + t[0], b + t[1], b + t[2]});
+    };
+    addBox(0.0f, 0.2f);
+    addBox(0.22f, 0.42f);   // 0.02 gap; the grid cell is ~0.0094 at res 64
+    std::vector<float> rp;
+    std::vector<uint32_t> ri;
+    ASSERT_TRUE(Trellis2Bake::remeshManifold(pos, idx, 64, rp, ri));
+    const auto s = Trellis2Bake::topologyStats(rp.size() / 3, ri);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.components, 2) << "the gap between the parts was bridged";
+    // and the surface stays within ~one cell of the source box faces
+    float minX = 1e9f, maxX = -1e9f;
+    for (size_t v = 0; v < rp.size() / 3; ++v) {
+        minX = std::min(minX, rp[v * 3]);
+        maxX = std::max(maxX, rp[v * 3]);
+    }
+    EXPECT_NEAR(minX, 0.0f, 0.012f);
+    EXPECT_NEAR(maxX, 0.42f, 0.012f);
+}
+
 TEST(Trellis2BakeTest, RemeshKeepsThinSheetAsClosedSlab)
 {
     // A flat 1x1 sheet (no thickness) must survive the remesh as a thin closed
@@ -617,6 +655,140 @@ TEST(Trellis2BakeTest, SimplifyManifoldKeepsClosedManifold)
     EXPECT_EQ(s.components, 1);
     EXPECT_LE(s.triangles, 820);
     EXPECT_GE(s.triangles, 400);
+}
+
+TEST(Trellis2BakeTest, SimplifyManifoldStopsAtCostCap)
+{
+    // With a tiny error cap the pass must stop early (above the target)
+    // instead of forcing destructive collapses to reach the count.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f, 60, 80);
+    std::vector<float> pos2 = pos;
+    std::vector<uint32_t> idx2 = idx;
+    ASSERT_TRUE(Trellis2Bake::simplifyManifold(pos, idx, 100, 1e-12));
+    const auto capped = Trellis2Bake::topologyStats(pos.size() / 3, idx);
+    ASSERT_TRUE(Trellis2Bake::simplifyManifold(pos2, idx2, 100));
+    const auto free = Trellis2Bake::topologyStats(pos2.size() / 3, idx2);
+    EXPECT_GT(capped.triangles, free.triangles * 2);
+    EXPECT_EQ(capped.boundaryEdges, 0);
+    EXPECT_EQ(capped.nonManifoldEdges, 0);
+}
+
+namespace {
+// Closed tetrahedron with outward faces whatever the vertex order.
+void appendTetra(std::vector<float>& pos, std::vector<uint32_t>& idx,
+                 const float p[4][3], const std::vector<uint32_t>& sharedWith = {})
+{
+    const uint32_t base = static_cast<uint32_t>(pos.size() / 3);
+    uint32_t id[4];
+    for (int i = 0; i < 4; ++i) {
+        if (!sharedWith.empty() && sharedWith[i] != UINT32_MAX) {
+            id[i] = sharedWith[i];
+        } else {
+            id[i] = static_cast<uint32_t>(pos.size() / 3);
+            pos.insert(pos.end(), {p[i][0], p[i][1], p[i][2]});
+        }
+    }
+    (void)base;
+    float c[3] = {0, 0, 0};
+    for (int i = 0; i < 4; ++i)
+        for (int k = 0; k < 3; ++k)
+            c[k] += p[i][k] / 4.0f;
+    const int f[4][3] = {{0, 1, 2}, {0, 1, 3}, {0, 2, 3}, {1, 2, 3}};
+    for (const auto& t : f) {
+        const float* a = p[t[0]]; const float* b = p[t[1]]; const float* d = p[t[2]];
+        const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const float e2[3] = {d[0] - a[0], d[1] - a[1], d[2] - a[2]};
+        const float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                            e1[0] * e2[1] - e1[1] * e2[0]};
+        const float out = n[0] * (a[0] - c[0]) + n[1] * (a[1] - c[1]) + n[2] * (a[2] - c[2]);
+        if (out >= 0)
+            idx.insert(idx.end(), {id[t[0]], id[t[1]], id[t[2]]});
+        else
+            idx.insert(idx.end(), {id[t[0]], id[t[2]], id[t[1]]});
+    }
+}
+} // namespace
+
+TEST(Trellis2BakeTest, SplitNonManifoldSeparatesTwoBodiesSharingAnEdge)
+{
+    // Two solids touching along one edge: that edge has 4 faces. Splitting
+    // must leave two clean closed bodies — no holes, no moved vertices.
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    const float a[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    const float b[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, -1, 0}, {0, 0, -1}};
+    appendTetra(pos, idx, a);
+    appendTetra(pos, idx, b, {0, 1, UINT32_MAX, UINT32_MAX});
+    ASSERT_EQ(Trellis2Bake::topologyStats(pos.size() / 3, idx).nonManifoldEdges, 1);
+    const size_t trisBefore = idx.size() / 3;
+    const std::vector<float> posBefore = pos;
+    EXPECT_GT(Trellis2Bake::splitNonManifold(pos, idx), 0);
+    const auto s = Trellis2Bake::topologyStats(pos.size() / 3, idx);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.components, 2);
+    EXPECT_EQ(idx.size() / 3, trisBefore);
+    // original vertices keep their positions (only copies are appended)
+    for (size_t i = 0; i < posBefore.size(); ++i)
+        EXPECT_EQ(pos[i], posBefore[i]);
+}
+
+TEST(Trellis2BakeTest, SplitNonManifoldSeparatesTwoBodiesSharingAVertex)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    const float a[4][3] = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+    const float b[4][3] = {{0, 0, 0}, {-1, 0, 0}, {0, -1, 0}, {0, 0, -1}};
+    appendTetra(pos, idx, a);
+    appendTetra(pos, idx, b, {0, UINT32_MAX, UINT32_MAX, UINT32_MAX});
+    EXPECT_GT(Trellis2Bake::splitNonManifold(pos, idx), 0);
+    const auto s = Trellis2Bake::topologyStats(pos.size() / 3, idx);
+    EXPECT_EQ(s.nonManifoldEdges, 0);
+    EXPECT_EQ(s.boundaryEdges, 0);
+    EXPECT_EQ(s.components, 2);
+}
+
+TEST(Trellis2BakeTest, SplitNonManifoldLeavesAManifoldMeshAlone)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    appendSphere(pos, idx, 1.0f, 20, 30);
+    const auto before = idx;
+    EXPECT_EQ(Trellis2Bake::splitNonManifold(pos, idx), 0);
+    EXPECT_EQ(idx, before);
+}
+
+TEST(Trellis2BakeTest, CreaseAwareNormalsIgnoreTheOppositeSheet)
+{
+    // A double-sided triangle: two faces with opposite winding on the same three
+    // vertices (a thin slab collapsed flat). The original vertices average +Z
+    // and -Z into nothing; each output vertex (one per face, as after an xatlas
+    // chart split) must keep its own face's normal.
+    const std::vector<float> pos = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    const std::vector<uint32_t> targetIdx = {0, 1, 2, 0, 2, 1};
+    const std::vector<uint32_t> xref = {0, 1, 2, 0, 1, 2};   // output -> original
+    const std::vector<uint32_t> outIdx = {0, 1, 2, 3, 5, 4};
+    const auto n = Trellis2Bake::creaseAwareVertexNormals(pos, targetIdx, xref, outIdx, 6);
+    ASSERT_EQ(n.size(), 18u);
+    for (int v = 0; v < 3; ++v) {
+        EXPECT_NEAR(n[v * 3 + 2], 1.0f, 1e-5f) << "top vertex " << v;
+        EXPECT_NEAR(n[(v + 3) * 3 + 2], -1.0f, 1e-5f) << "bottom vertex " << v;
+    }
+}
+
+TEST(Trellis2BakeTest, CreaseAwareNormalsStillSmoothAcrossASeam)
+{
+    // Two coplanar triangles whose shared vertices are split (a chart seam):
+    // the seam must stay smooth, i.e. both copies get the same normal.
+    const std::vector<float> pos = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
+    const std::vector<uint32_t> targetIdx = {0, 1, 2, 1, 3, 2};
+    const std::vector<uint32_t> xref = {0, 1, 2, 1, 3, 2};
+    const std::vector<uint32_t> outIdx = {0, 1, 2, 3, 4, 5};
+    const auto n = Trellis2Bake::creaseAwareVertexNormals(pos, targetIdx, xref, outIdx, 6);
+    for (int v = 0; v < 6; ++v)
+        EXPECT_NEAR(n[v * 3 + 2], 1.0f, 1e-5f);
 }
 
 TEST(Trellis2BakeTest, GameReadyRemeshOptionYieldsManifold)
@@ -675,3 +847,4 @@ TEST(Trellis2BakeTest, SimplifiedClosedMeshStaysClosedAndConsistent)
     EXPECT_EQ(s.flippedEdges, 0);
     EXPECT_EQ(s.components, 1);
 }
+

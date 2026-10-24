@@ -26,6 +26,7 @@
 #define private public
 #define protected public
 #include "mainwindow.h"
+#include "LightVisualizer.h"
 #undef protected
 #undef private
 
@@ -632,6 +633,20 @@ TEST_F(MainWindowTest, BottomToolRevealReturnsDetachedContextDockToBottomArea)
     EXPECT_FALSE(window->m_bottomContextDock->isFloating());
     EXPECT_FALSE(window->m_bottomContextDock->isHidden());
     EXPECT_EQ(window->dockWidgetArea(window->m_bottomContextDock), Qt::BottomDockWidgetArea);
+}
+
+TEST_F(MainWindowTest, LightIconsAreOffByDefaultAndTheActionTogglesThem)
+{
+    // The light gizmos sit in the middle of the model and end up in screenshots,
+    // so they start hidden — in the menu AND in the visualizer (toggled() does
+    // not fire for the initial state, so the two must be synced at start-up).
+    ASSERT_NE(window->m_lightVisualizer, nullptr);
+    EXPECT_FALSE(window->ui->actionShow_Light_Icons->isChecked());
+    EXPECT_FALSE(window->m_lightVisualizer->iconsVisible());
+    window->ui->actionShow_Light_Icons->setChecked(true);
+    EXPECT_TRUE(window->m_lightVisualizer->iconsVisible());
+    window->ui->actionShow_Light_Icons->setChecked(false);
+    EXPECT_FALSE(window->m_lightVisualizer->iconsVisible());
 }
 
 TEST_F(MainWindowTest, ViewportDisplayActionsLiveInViewMenuNotToolbar)

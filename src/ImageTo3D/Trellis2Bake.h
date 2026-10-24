@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
+#include <limits>
 #include <vector>
 
 // TRELLIS.2 game-ready processing + multi-channel PBR texture baking — the
@@ -108,6 +109,12 @@ struct GameReadyOptions {
     // 0 = off. Falls back to the unmodified mesh when the remesh is empty or
     // not manifold.
     int   remeshResolution = 0;
+    // Also return the welded, debris-culled, winding-UNIFIED source (before any
+    // remesh/simplify) in GameReadyResult::weldedPositions/Indices. Feed THAT
+    // to bake() as the dense source: the raw dual-grid mesh has large flipped
+    // patches, and both the source normals the detail map is built from and
+    // the orientation-aware closest-triangle search read the winding.
+    bool  exportWeldedSource = false;
 };
 
 struct GameReadyResult {
@@ -118,10 +125,13 @@ struct GameReadyResult {
     int inputTriangles = 0;
     int outputTriangles = 0;
     int weldedVertices = 0;       // vertices merged by the weld
+    std::vector<float>    weldedPositions;   // see exportWeldedSource
+    std::vector<uint32_t> weldedIndices;
     int removedComponents = 0;    // debris islands dropped
     int removedTriangles = 0;     // triangles dropped with them (+degenerates)
     bool remeshed = false;        // voxel remesh replaced the mesh
     int remeshedFromTriangles = 0;
+    int splitVertices = 0;        // vertices duplicated to separate pinched sheets
     float simplifyError = 0.0f;   // meshopt result_error (0 when not simplified)
 };
 
@@ -154,8 +164,37 @@ bool remeshManifold(const std::vector<float>& positions,
 // Quadric edge-collapse simplification that enforces the link condition, so a
 // closed manifold mesh stays manifold. Collapses until `targetTriangles`
 // remain or no legal collapse is left. Returns true (outputs always valid).
+// `maxCost` stops the pass once the CHEAPEST remaining collapse costs more than
+// this quadric error: when the cheap legal collapses run out (thin tubes and
+// sheets lock under the link condition) the queue otherwise keeps taking ever
+// more destructive ones to reach the count — measured on a real generation the
+// cost rises ~1000x over the last 2k triangles and the surface shreds. The
+// result then stays above the target; the caller decides what to do about it.
 bool simplifyManifold(std::vector<float>& positions,
-                      std::vector<uint32_t>& indices, size_t targetTriangles);
+                      std::vector<uint32_t>& indices, size_t targetTriangles,
+                      double maxCost = std::numeric_limits<double>::infinity());
+
+// Make a mesh edge-manifold WITHOUT moving geometry or opening holes: every
+// edge shared by 4+ faces (two sheets pinched together by simplification) is
+// resolved by duplicating the pinched vertices so each sheet owns its own.
+// Faces around an edge are ordered by angle and the two bounding each SOLID
+// wedge are paired, so parts that merely touch end up as separate bodies.
+// Edges that cannot be paired (odd face count, inconsistent winding) are left
+// as they are. Returns the number of vertices added.
+int splitNonManifold(std::vector<float>& positions,
+                     std::vector<uint32_t>& indices);
+
+// Smooth shading normals for the (xatlas-split) output mesh. `xref[v]` names the
+// original target vertex output vertex v came from. Smoothing runs across UV
+// chart seams as usual, but only over original-mesh faces within ~100 degrees of
+// the faces the output vertex itself uses: an original vertex shared by
+// opposite-facing sheets (the rim of a thin slab, two sheets a cell apart)
+// would otherwise average them into a sideways or cancelled normal.
+std::vector<float> creaseAwareVertexNormals(
+    const std::vector<float>& targetPositions,
+    const std::vector<uint32_t>& targetIndices,
+    const std::vector<uint32_t>& xref,
+    const std::vector<uint32_t>& outIndices, int vertexCount);
 
 // Unify triangle winding (exposed for unit tests; makeGameReady runs it).
 // Raw TRELLIS dual-grid output arrives with large patches of flipped
