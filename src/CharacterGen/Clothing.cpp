@@ -101,8 +101,9 @@ double sleeveField(const JointPositions& joints, bool left, double endAlong, dou
 double armLength1(const JointPositions& joints) { return segmentLength(joints, "LeftArm", "LeftForeArm"); }
 double armLength2(const JointPositions& joints) { return segmentLength(joints, "LeftForeArm", "LeftHand"); }
 
-// Leg field of one side: positive from the waist down to `endAlong` along the leg, within `radius` of the leg's axis.
-double legField(const JointPositions& joints, bool left, double waistY, double endAlong, double radius, const V3& p)
+// Leg field of one side: positive from the waist down to a LEVEL hem (a fraction of the way from the hip to the knee, or from the knee to
+// the foot, measured in height: a cut across the leg's own axis tilts when the legs are not vertical), within `radius` of the leg's axis.
+double legField(const JointPositions& joints, bool left, double waistY, bool pants, double hemFraction, double radius, const V3& p)
 {
     V3 a{};
     V3 b{};
@@ -111,7 +112,8 @@ double legField(const JointPositions& joints, bool left, double waistY, double e
         !jointAt(joints, left ? "LeftFoot" : "RightFoot", &c))
         return -1.0;
     const LimbCoord lc = limbCoord(p, a, b, c);
-    return std::min({waistY - p[1], endAlong - lc.along, radius - lc.dist});
+    const double hemY = pants ? b[1] + (c[1] - b[1]) * hemFraction : a[1] + (b[1] - a[1]) * hemFraction;
+    return std::min({waistY - p[1], p[1] - hemY, radius - lc.dist});
 }
 
 std::vector<float> positionNormals(const Dna::Mesh& m)
@@ -420,11 +422,10 @@ float bottomField(BottomKind style, const JointPositions& joints, const V3& p)
     V3 hips{};
     if (!jointAt(joints, "Hips", &hips)) return -1.0f;
     const double waist = hips[1] + 0.075;
-    const double upper = segmentLength(joints, "LeftUpLeg", "LeftLeg");
-    const double lower = segmentLength(joints, "LeftLeg", "LeftFoot");
-    const double end = style == BottomKind::Pants ? upper + lower * 0.96 : upper * 0.52;
-    const double left = legField(joints, true, waist, end, 0.23, p);
-    const double right = legField(joints, false, waist, end, 0.23, p);
+    const bool pants = style == BottomKind::Pants;
+    const double frac = pants ? 0.96 : 0.52;
+    const double left = legField(joints, true, waist, pants, frac, 0.23, p);
+    const double right = legField(joints, false, waist, pants, frac, 0.23, p);
     return float(std::max(left, right));
 }
 
