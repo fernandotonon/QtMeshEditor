@@ -5,6 +5,7 @@
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
+#include "Clothing.h"
 #include "HairTint.h"
 #include "../CLIPipeline.h"
 #include "../MeshImporterExporter.h"
@@ -33,7 +34,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--no-eyelashes] [--hair STYLE [--hair-colour NAME|#rrggbb] | --list-hair | --list-hair-colours] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE [--hair-colour NAME|#rrggbb] | --list-hair | --list-hair-colours] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -51,6 +52,11 @@ int run(int argc, char* argv[])
 {
     QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
     QString hairArg;
+    QString topArg;
+    QString bottomArg;
+    QString topColourArg;
+    QString bottomColourArg;
+    bool listClothes = false;
     bool eyelashes = true;
     QString hairColourArg;
     bool listHairColours = false;
@@ -100,6 +106,11 @@ int run(int argc, char* argv[])
         else if (a == "--hair") hairArg = next();
         else if (a == "--list-hair") listHair = true;
         else if (a == "--no-eyelashes") eyelashes = false;
+        else if (a == "--top") topArg = next();
+        else if (a == "--bottom") bottomArg = next();
+        else if (a == "--top-colour" || a == "--top-color") topColourArg = next();
+        else if (a == "--bottom-colour" || a == "--bottom-color") bottomColourArg = next();
+        else if (a == "--list-clothes") listClothes = true;
         else if (a == "--hair-colour" || a == "--hair-color") hairColourArg = next();
         else if (a == "--list-hair-colours" || a == "--list-hair-colors") listHairColours = true;
         else if (a == "--body-hair" && i + 1 < argc) bodyHair = std::clamp(QString::fromLocal8Bit(argv[++i]).toFloat(), 0.0f, 1.0f);
@@ -136,6 +147,11 @@ int run(int argc, char* argv[])
         }
         CLIPipeline::writeOutput(QStringLiteral("Character assets are in %1\n").arg(CharacterAssets::dir()));
         if (outPath.isEmpty()) return 0;
+    }
+    if (listClothes) {
+        CLIPipeline::writeOutput(QStringLiteral("tops:    %1\nbottoms: %2\ncolours: %3 (or #rrggbb)\n")
+                                     .arg(topStyleIds().join(QStringLiteral(", ")), bottomStyleIds().join(QStringLiteral(", ")), clothColourNames().join(QStringLiteral(", "))));
+        return 0;
     }
     if (listHairColours) {
         QStringList lines;
@@ -186,6 +202,20 @@ int run(int argc, char* argv[])
     p.skinTexture = skinTexture;
     p.bodyHair = bodyHair;
     p.eyelashes = eyelashes;
+    if (!topArg.isEmpty() && !parseTopStyle(topArg, nullptr)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown top '%1' (%2).\n").arg(topArg, topStyleIds().join(QStringLiteral(", "))));
+        return 2;
+    }
+    if (!bottomArg.isEmpty() && !parseBottomStyle(bottomArg, nullptr)) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown bottom '%1' (%2).\n").arg(bottomArg, bottomStyleIds().join(QStringLiteral(", "))));
+        return 2;
+    }
+    if ((!topColourArg.isEmpty() && !parseClothColour(topColourArg, &p.topColour)) || (!bottomColourArg.isEmpty() && !parseClothColour(bottomColourArg, &p.bottomColour))) {
+        CLIPipeline::writeCliError(QStringLiteral("Error: unknown clothes colour (a name from --list-clothes, or #rrggbb).\n"));
+        return 2;
+    }
+    if (!topArg.isEmpty()) p.topStyle = topArg.toLower();
+    if (!bottomArg.isEmpty()) p.bottomStyle = bottomArg.toLower();
     p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
     if (!hairArg.isEmpty()) {
         if (!p.nativeHead) {

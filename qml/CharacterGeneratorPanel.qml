@@ -162,6 +162,82 @@ Column {
         }
         Label { height: 22; text: "any #rrggbb" ; opacity: 0.6 }
     }
+    // one garment slot: a style picker and a colour row (swatches + a hex field)
+    component ClothesRow: Column {
+        id: slot
+        required property string title
+        required property var styles
+        required property string style
+        required property string colour
+        signal styleChosen(string id)
+        signal colourChosen(string value)
+        width: sec.width
+        spacing: 4
+        Row {
+            spacing: 4
+            Label { width: 52; height: 22; text: slot.title }
+            ThemedComboBox {
+                width: sec.width - 60; height: 22; font.pixelSize: 11
+                model: slot.styles
+                currentIndex: Math.max(0, slot.styles.indexOf(slot.style))
+                onActivated: slot.styleChosen(slot.styles[currentIndex])
+            }
+        }
+        Row {
+            visible: slot.style !== "none"
+            spacing: 4
+            Label { width: 52; height: 22; text: "" }
+            Flow {
+                width: sec.width - 60
+                spacing: 4
+                Repeater {
+                    model: CharacterController.clothColours
+                    delegate: Rectangle {
+                        id: chip
+                        required property var modelData
+                        width: 18; height: 18; radius: 3
+                        color: modelData.colour
+                        border.width: slot.colour === modelData.colour ? 2 : 1
+                        border.color: slot.colour === modelData.colour ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.name
+                        HoverHandler { id: chipHover }
+                        ToolTip.visible: chipHover.hovered; ToolTip.delay: 400; ToolTip.text: modelData.name
+                        MouseArea { anchors.fill: parent; onClicked: slot.colourChosen(chip.modelData.colour) }
+                    }
+                }
+            }
+        }
+        Row {
+            visible: slot.style !== "none"
+            spacing: 4
+            Label { width: 52; height: 22; text: "" }
+            Rectangle { width: 22; height: 22; radius: 3; color: slot.colour; border.color: AnimationControlController.borderColor }
+            Field {
+                width: 80
+                text: slot.colour
+                maximumLength: 7
+                onEditingFinished: { slot.colourChosen(text); text = Qt.binding(function() { return slot.colour }) }
+            }
+            Label { height: 22; text: "any #rrggbb"; opacity: 0.6 }
+        }
+    }
+    ClothesRow {
+        title: "Top"
+        styles: CharacterController.topStyles
+        style: CharacterController.topStyle
+        colour: CharacterController.topColour
+        onStyleChosen: function(id) { CharacterController.topStyle = id; sec.liveUpdate() }
+        onColourChosen: function(value) { CharacterController.topColour = value; sec.liveUpdate() }
+    }
+    ClothesRow {
+        title: "Bottom"
+        styles: CharacterController.bottomStyles
+        style: CharacterController.bottomStyle
+        colour: CharacterController.bottomColour
+        onStyleChosen: function(id) { CharacterController.bottomStyle = id; sec.liveUpdate() }
+        onColourChosen: function(value) { CharacterController.bottomColour = value; sec.liveUpdate() }
+    }
     component ShapeSlider: Row {
         id: row
         required property int mode

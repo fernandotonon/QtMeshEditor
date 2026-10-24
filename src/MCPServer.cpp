@@ -3,6 +3,7 @@
 #include "CharacterGen/CharacterModel.h"
 #include "CharacterGen/CharacterScene.h"
 #include "CharacterGen/HairTint.h"
+#include "CharacterGen/Clothing.h"
 #include <QSettings>
 #include "ImageTo3D/BackgroundRemover.h"
 #include "PhotoDepth.h"
@@ -3766,6 +3767,24 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
             return makeErrorResult(QStringLiteral("'hair_colour' must be a preset name (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\"."));
     }
     p.eyelashes = args.value("eyelashes").toBool(true);
+    {   // procedural clothes: top / bottom style ids and their colours
+        const std::array<std::pair<const char*, QString*>, 2> styles = {{{"top", &p.topStyle}, {"bottom", &p.bottomStyle}}};
+        for (const auto& st : styles) {
+            if (!args.contains(st.first)) continue;
+            const QString id = args.value(st.first).toString();
+            const bool ok = std::strcmp(st.first, "top") == 0 ? CharacterGen::parseTopStyle(id, nullptr) : CharacterGen::parseBottomStyle(id, nullptr);
+            if (!args.value(st.first).isString() || !ok)
+                return makeErrorResult(QStringLiteral("'%1' must be one of: %2.").arg(QLatin1String(st.first),
+                    (std::strcmp(st.first, "top") == 0 ? CharacterGen::topStyleIds() : CharacterGen::bottomStyleIds()).join(QStringLiteral(", "))));
+            *st.second = id.toLower();
+        }
+        const std::array<std::pair<const char*, CharacterGen::Rgb*>, 2> colours = {{{"top_colour", &p.topColour}, {"bottom_colour", &p.bottomColour}}};
+        for (const auto& c : colours) {
+            if (!args.contains(c.first)) continue;
+            if (!args.value(c.first).isString() || !CharacterGen::parseClothColour(args.value(c.first).toString(), c.second))
+                return makeErrorResult(QStringLiteral("'%1' must be a colour name (%2) or \"#rrggbb\".").arg(QLatin1String(c.first), CharacterGen::clothColourNames().join(QStringLiteral(", "))));
+        }
+    }
     p.bodyHair = std::clamp(float(args.value("body_hair").toDouble(0.5)), 0.0f, 1.0f);
     p.facePlusZ = args.value("facing_z").toBool(false);
     const double varietyIn = args.value("variety").toDouble(1.0);
@@ -13581,6 +13600,10 @@ QJsonArray MCPServer::buildToolsList()
         props["skin_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body instead of a flat colour (default true)."}};
         props["hair"] = QJsonObject{{"type", "string"}, {"description", "Hairstyle name from the hair bundle (e.g. short02, bob01, long01, ponytail01, afro01); omit for bald. Native head only."}};
         props["hair_colour"] = QJsonObject{{"type", "string"}, {"description", "Hair colour: a preset (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\" (default brown). Needs hair."}};
+        props["top"] = QJsonObject{{"type", "string"}, {"description", "Procedural top: none (default), tshirt, longsleeve, tank. Cut from the body, so it follows every shape and animation."}};
+        props["bottom"] = QJsonObject{{"type", "string"}, {"description", "Procedural bottom: none (default), shorts, pants."}};
+        props["top_colour"] = QJsonObject{{"type", "string"}, {"description", "Top colour: a name (white, black, gray, red, orange, yellow, green, teal, blue, navy, purple, pink, brown, beige, khaki, denim) or \"#rrggbb\"."}};
+        props["bottom_colour"] = QJsonObject{{"type", "string"}, {"description", "Bottom colour (same names as top_colour)."}};
         props["eyelashes"] = QJsonObject{{"type", "boolean"}, {"description", "Eyelashes: a curved alpha-card strip along each lid margin that follows the blink and squint shapes (default true; needs the MHR head and open_eyes)."}};
         props["body_hair"] = QJsonObject{{"type", "number"}, {"description", "Amount of body hair painted into the skin texture, 0..1 (default 0.5; 0 = none). Needs skin_texture."}};
         props["open_eyes"] = QJsonObject{{"type", "boolean"}, {"description", "Remove the thin layer between the MHR lids so the eyeballs (eye colour, gaze) show (default true); false keeps the lids as sculpted, eyes shut."}};

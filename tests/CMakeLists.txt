@@ -255,6 +255,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Eyelashes_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/LidClose.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/LidClose_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel_test.cpp

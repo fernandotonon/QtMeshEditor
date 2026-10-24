@@ -3,12 +3,14 @@
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
+#include "Clothing.h"
 #include "HairTint.h"
 #include "../Manager.h"
 #include "../SelectionSet.h"
 #include "../SentryReporter.h"
 #include "../UndoManager.h"
 
+#include <QColor>
 #include <QFileInfo>
 #include <QSettings>
 
@@ -190,6 +192,54 @@ QVariantList CharacterController::hairColourPresets() const
     return list;
 }
 
+QStringList CharacterController::topStyles() const { return CharacterGen::topStyleIds(); }
+QStringList CharacterController::bottomStyles() const { return CharacterGen::bottomStyleIds(); }
+
+QVariantList CharacterController::clothColours() const
+{
+    QVariantList list;
+    for (const QString& name : CharacterGen::clothColourNames()) {
+        CharacterGen::Rgb c{};
+        CharacterGen::parseClothColour(name, &c);
+        list.append(QVariantMap{{"name", name}, {"colour", QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name()}});
+    }
+    return list;
+}
+
+void CharacterController::setTopStyle(const QString& v)
+{
+    if (!CharacterGen::parseTopStyle(v, nullptr) || v.toLower() == m_topStyle) return;
+    m_topStyle = v.toLower();
+    emit clothesChanged();
+}
+
+void CharacterController::setBottomStyle(const QString& v)
+{
+    if (!CharacterGen::parseBottomStyle(v, nullptr) || v.toLower() == m_bottomStyle) return;
+    m_bottomStyle = v.toLower();
+    emit clothesChanged();
+}
+
+void CharacterController::setTopColour(const QString& v)
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseClothColour(v, &c)) return;
+    const QString hex = QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name();
+    if (hex == m_topColour) return;
+    m_topColour = hex;
+    emit clothesChanged();
+}
+
+void CharacterController::setBottomColour(const QString& v)
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseClothColour(v, &c)) return;
+    const QString hex = QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name();
+    if (hex == m_bottomColour) return;
+    m_bottomColour = hex;
+    emit clothesChanged();
+}
+
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
@@ -216,7 +266,7 @@ bool CharacterController::hasCharacter() const
 QString CharacterController::shapeLabel(int m) const
 {
     static const char* k[] = {
-        "Weight (belly, chest)", "Torso fullness", "Waist and hips", "Belly depth", "Chest and waist", "Belly forward or flat",
+        "Weight (belly, chest)", "Hips and waist width", "Bust and hips balance", "Belly depth", "Waist width", "Hips depth",
         "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
         "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
         "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Age (face)", "Head shape 6",
@@ -229,7 +279,9 @@ QString CharacterController::shapeLabel(int m) const
 QString CharacterController::shapeHint(int m) const
 {
     if (m == 0) return tr("The biggest body change: overall weight, mostly belly and chest.");
-    if (m >= 1 && m < 8) return tr("Torso proportions: fullness, waist, hips, belly or chest.");
+    if (m == 1) return tr("Hips and waist width: negative = narrow hips and waist (more masculine), positive = wider hips and waist (more feminine).");
+    if (m == 2) return tr("Bust and hips balance: positive = a fuller, more forward bust with slimmer, flatter hips, negative = the opposite.");
+    if (m >= 3 && m < 8) return tr("Torso proportions: waist, hips, belly or chest.");
     if (m < 20) return tr("A smaller refinement of the torso and hips.");
     if (m == 20 || m == 21) return tr("Neck length and the size of the head.");
     if (m < 40) return tr("A subtle change of the head's shape.");
@@ -286,6 +338,10 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
     p.eyelashes = m_eyelashes;
+    p.topStyle = m_topStyle;
+    p.bottomStyle = m_bottomStyle;
+    CharacterGen::parseClothColour(m_topColour, &p.topColour);
+    CharacterGen::parseClothColour(m_bottomColour, &p.bottomColour);
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);
         p.faceIdentity = randomCoefficients(uint32_t(seed) * 2u + 2u, m_assets->ictIdentities, float(variety), 40);
