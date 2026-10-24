@@ -1,4 +1,6 @@
 #include "CharacterModel.h"
+#include "EyeTexture.h"
+#include "HairTint.h"
 
 #include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
@@ -366,13 +368,70 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
     return true;
 }
 
+const HairStyle* Assets::hairStyle(const QString& name) const
+{
+    for (const HairStyle& s : hairStyles)
+        if (s.name == name) return &s;
+    return nullptr;
+}
+
+QStringList Assets::hairStyleNames() const
+{
+    QStringList names;
+    for (const HairStyle& s : hairStyles) names << s.name;
+    return names;
+}
+
+bool loadHairBundle(const QmcBundle& hair, Assets& a, QString* error)
+{
+    a.hairStyles.clear();
+    QString e;
+    const QJsonObject meta = QJsonDocument::fromJson(hair.readBytes(QStringLiteral("meta"))).object();
+    const QJsonArray styles = meta.value(QStringLiteral("styles")).toArray();
+    for (const QJsonValue& sv : styles) {
+        HairStyle s;
+        s.name = sv.toObject().value(QStringLiteral("name")).toString();
+        const QString p = QStringLiteral("hair.") + s.name + QLatin1Char('.');
+        s.tri = hair.readInt(p + QStringLiteral("tri"), &e);
+        s.bary = hair.readFloat(p + QStringLiteral("bary"), &e);
+        s.offset = hair.readFloat(p + QStringLiteral("off"), &e);
+        s.uv = hair.readFloat(p + QStringLiteral("uv"), &e);
+        s.polySize = hair.readInt(p + QStringLiteral("poly_size"), &e);
+        s.polyVertex = hair.readInt(p + QStringLiteral("poly_vertex"), &e);
+        s.polyUv = hair.readInt(p + QStringLiteral("poly_uv"), &e);
+        s.texturePng = hair.readBytes(p + QStringLiteral("texture"), &e);
+        const size_t n = s.tri.size() / 3;
+        bool ok = !s.name.isEmpty() && n > 0 && s.tri.size() == n * 3 && s.bary.size() == n * 3 && s.offset.size() == n * 3
+                  && !s.polySize.empty() && s.polyVertex.size() == s.polyUv.size() && !s.texturePng.isEmpty();
+        for (int32_t t : s.tri) ok = ok && t >= 0 && t < a.mhrVertices;
+        size_t corners = 0;
+        for (int32_t sz : s.polySize) { ok = ok && sz >= 3; corners += size_t(std::max(sz, 0)); }
+        ok = ok && corners == s.polyVertex.size();
+        for (int32_t v : s.polyVertex) ok = ok && v >= 0 && size_t(v) < n;
+        for (int32_t u : s.polyUv) ok = ok && u >= 0 && size_t(u) * 2 < s.uv.size();
+        if (!ok) return fail(error, QStringLiteral("Hair bundle: style '%1' is inconsistent").arg(s.name));
+        a.hairStyles.push_back(std::move(s));
+    }
+    return true;
+}
+
 bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error)
 {
     QmcBundle mhr, ict;
     QString e;
     if (!mhr.open(dir + QStringLiteral("/mhr_character.qmcb"), &e)) return fail(error, e);
     if (!ict.open(dir + QStringLiteral("/ict_character.qmcb"), &e)) return fail(error, e);
-    return loadAssets(mhr, ict, out, error);
+    if (!loadAssets(mhr, ict, out, error)) return false;
+    // the hair bundle is optional (hosted separately); a file that is there but broken is reported, one that is missing is not
+    const QString hairPath = dir + QStringLiteral("/hair_character.qmcb");
+    if (QFileInfo::exists(hairPath)) {
+        QmcBundle hair;
+        if (!hair.open(hairPath, &e) || !loadHairBundle(hair, out, &e)) {
+            out.hairStyles.clear();
+            if (error) *error = e;   // not fatal: the caller may ignore it, the body assets are fine
+        }
+    }
+    return true;
 }
 
 std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int modes)
@@ -527,16 +586,35 @@ bool readEyeObj(const QString& path, EyeMesh& m)
     return true;
 }
 
-const EyeMesh* eyeMeshFromEnv()
+// A user-supplied eye (opt-in: QTMESH_CHARACTER_EYE_OBJ or QTMESH_CHARACTER_EYE_DIR must be set; nothing is picked up implicitly,
+// since such an asset's licence is the user's business). Its iris pole is -Y.
+const EyeMesh* customEyeMesh()
 {
     static const EyeMesh* cached = []() -> const EyeMesh* {
         QString path = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_OBJ"));
-        if (path.isEmpty()) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
+        if (path.isEmpty() && !qEnvironmentVariableIsEmpty("QTMESH_CHARACTER_EYE_DIR")) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
+        if (path.isEmpty()) return nullptr;
         static EyeMesh mesh;
         if (!QFileInfo::exists(path) || !readEyeObj(path, mesh)) return nullptr;
         return &mesh;
     }();
     return cached;
+}
+
+// The procedural eye (EyeTexture.h): a unit sphere with a polar UV map, iris pole on -Y like the OBJ convention above.
+const EyeMesh* proceduralEyeMesh()
+{
+    static const EyeMesh mesh = [] {
+        const EyeSphere sphere = makeEyeSphere();
+        EyeMesh m;
+        m.positions = sphere.positions;
+        m.uvs = sphere.uvs;
+        const uint32_t n = uint32_t(sphere.positions.size() / 3);
+        for (uint32_t i = 0; i < n; ++i) m.corners.push_back({i, i});
+        for (size_t i = 0; i + 2 < sphere.indices.size(); i += 3) m.faces.push_back({sphere.indices[i], sphere.indices[i + 1], sphere.indices[i + 2]});
+        return m;
+    }();
+    return &mesh;
 }
 
 // Where an eyeball ended up: its centre and mean radius.
@@ -569,22 +647,39 @@ EyeSeat measureEye(const std::vector<float>& headPos, int v0, int v1)
     return seat;
 }
 
+// How far the eyeball sits behind the seat measured on ICT's eyeball (fraction of its radius): ICT's eyeball is meant to be
+// seen through a translucent shell, while ours is the only surface, so at the measured seat it bulged out of the MHR lids.
+constexpr float kEyeSetBack = 0.20f;
+// Full travel of the eyeLook* shapes (degrees): in, out, up, down (ARKit's eyes move about 30 degrees horizontally).
+constexpr float kEyeLookIn = 30.0f, kEyeLookOut = 30.0f, kEyeLookUp = 25.0f, kEyeLookDown = 30.0f;
+
 // The textured eyeball of both eyes as one mesh: the file's iris looks down -Y, which is turned to +Z (the way the face looks) and
-// scaled to the seated eyeball. Rigidly skinned to the head joint.
-Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint)
+// scaled to the seated eyeball. Rigidly skinned to the head joint. The eyeLook{In,Out,Up,Down}{Left,Right} channels of `channels`
+// (the ARKit names; the character's own sides) turn each eyeball about its centre as morph targets, so the iris looks around.
+// `pupilChannelBase` >= 0 (the procedural eye only): the index of the "pupilDilate" channel; "pupilConstrict" follows it. They move
+// the vertices around the pupil (the iris texture follows, keeping its UVs): the pupil edge goes from its rest angle to kPupilDilated
+// / kPupilConstricted.
+constexpr float kPupilDilated = 0.34f, kPupilConstricted = 0.10f;   // radians from the iris pole (rest: 0.20)
+
+Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint, const QStringList& channels, int pupilChannelBase = -1)
 {
     Dna::Mesh m;
     m.name = QStringLiteral("head_eye");
-    for (const EyeSeat& seat : seats) {
+    struct Placed { int side; uint32_t first; uint32_t count; std::array<float, 3> centre; };
+    std::vector<Placed> placed;
+    for (int side = 0; side < 2; ++side) {
+        const EyeSeat& seat = seats[size_t(side)];
         if (!seat.seated) continue;
+        const std::array<float, 3> centre{seat.centre[0], seat.centre[1], seat.centre[2] - kEyeSetBack * seat.radius};
         const uint32_t p0 = uint32_t(m.positions.size() / 3);
         const uint32_t t0 = uint32_t(m.uvs.size() / 2);
         for (size_t i = 0; i + 2 < eye.positions.size(); i += 3) {
-            m.positions.push_back(seat.centre[0] + eye.positions[i] * seat.radius);
-            m.positions.push_back(seat.centre[1] + eye.positions[i + 2] * seat.radius);
-            m.positions.push_back(seat.centre[2] - eye.positions[i + 1] * seat.radius);
+            m.positions.push_back(centre[0] + eye.positions[i] * seat.radius);
+            m.positions.push_back(centre[1] + eye.positions[i + 2] * seat.radius);
+            m.positions.push_back(centre[2] - eye.positions[i + 1] * seat.radius);
             m.skin.push_back({{headJoint, 1.0f}});
         }
+        placed.push_back({side, p0, uint32_t(eye.positions.size() / 3), centre});
         m.uvs.insert(m.uvs.end(), eye.uvs.begin(), eye.uvs.end());
         const uint32_t l0 = uint32_t(m.layouts.size());
         for (const auto& c : eye.corners) m.layouts.push_back({p0 + c.first, t0 + c.second, p0 + c.first});
@@ -593,6 +688,128 @@ Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, 
             for (uint32_t li : f) face.push_back(l0 + li);
             m.faces.push_back(std::move(face));
         }
+    }
+    m.normals = positionNormals(m.positions, m.faces, m.layouts);
+
+    if (pupilChannelBase >= 0) {
+        const float angles[2] = {kPupilDilated, kPupilConstricted};
+        for (int k = 0; k < 2; ++k) {
+            Dna::BlendShapeTarget bt;
+            bt.channel = pupilChannelBase + k;
+            for (size_t si = 0; si < placed.size(); ++si) {
+                const Placed& pl = placed[si];
+                const float r = seats[size_t(pl.side)].radius;
+                for (uint32_t i = 0; i < pl.count; ++i) {
+                    const std::array<float, 3> e0{eye.positions[size_t(i) * 3], eye.positions[size_t(i) * 3 + 1], eye.positions[size_t(i) * 3 + 2]};
+                    const std::array<float, 3> e1 = dilateEyePoint(e0, angles[k]);
+                    const float d[3] = {e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]};
+                    if (std::fabs(d[0]) + std::fabs(d[1]) + std::fabs(d[2]) < 1e-7f) continue;
+                    bt.vertexIndices.push_back(pl.first + i);
+                    bt.deltas.push_back(d[0] * r);    // the same map as the positions: (x, y, z) -> (x, z, -y) * radius
+                    bt.deltas.push_back(d[2] * r);
+                    bt.deltas.push_back(-d[1] * r);
+                }
+            }
+            if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+        }
+    }
+
+    // eye look: the character's left eye is +X (the face looks +Z, up is +Y). Out = towards the cheek, In = towards the nose.
+    struct Look { const char* name; int side; float yaw; float pitch; };   // degrees; yaw about +Y (+ = towards +X), pitch about +X (+ = down)
+    const Look looks[] = {
+        {"eyeLookInLeft", 0, -kEyeLookIn, 0}, {"eyeLookOutLeft", 0, kEyeLookOut, 0}, {"eyeLookUpLeft", 0, 0, -kEyeLookUp}, {"eyeLookDownLeft", 0, 0, kEyeLookDown},
+        {"eyeLookInRight", 1, kEyeLookIn, 0}, {"eyeLookOutRight", 1, -kEyeLookOut, 0}, {"eyeLookUpRight", 1, 0, -kEyeLookUp}, {"eyeLookDownRight", 1, 0, kEyeLookDown}};
+    constexpr double kDeg = 3.14159265358979323846 / 180.0;
+    for (const Look& lk : looks) {
+        const int channel = channels.indexOf(QLatin1String(lk.name));
+        if (channel < 0) continue;
+        const double cy = std::cos(double(lk.yaw) * kDeg), sy = std::sin(double(lk.yaw) * kDeg);
+        const double cp = std::cos(double(lk.pitch) * kDeg), sp = std::sin(double(lk.pitch) * kDeg);
+        Dna::BlendShapeTarget bt;
+        bt.channel = channel;
+        for (const Placed& pl : placed) {
+            if (pl.side != lk.side) continue;
+            for (uint32_t i = 0; i < pl.count; ++i) {
+                const uint32_t v = pl.first + i;
+                const double x = double(m.positions[size_t(v) * 3]) - pl.centre[0];
+                const double y = double(m.positions[size_t(v) * 3 + 1]) - pl.centre[1];
+                const double z = double(m.positions[size_t(v) * 3 + 2]) - pl.centre[2];
+                // pitch about X, then yaw about Y
+                const double y1 = y * cp - z * sp, z1 = y * sp + z * cp;
+                const double x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+                bt.vertexIndices.push_back(v);
+                bt.deltas.push_back(float(x2 - x));
+                bt.deltas.push_back(float(y1 - y));
+                bt.deltas.push_back(float(z2 - z));
+            }
+        }
+        if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+    }
+    return m;
+}
+
+// A hairstyle on the SHAPED body: each vertex = the bound triangle's barycentric point + the stored offset in that triangle's current
+// frame (so the style follows the head shape); skin weights are blended from the bound vertices (top 4).
+Dna::Mesh buildHairMesh(const HairStyle& style, const Dna::Mesh& body)
+{
+    Dna::Mesh m;
+    m.name = QStringLiteral("head_hair");
+    const size_t n = style.tri.size() / 3;
+    auto point = [&](int32_t v) { return std::array<float, 3>{body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 1], body.positions[size_t(v) * 3 + 2]}; };
+    auto sub3 = [](const std::array<float, 3>& a, const std::array<float, 3>& b) { return std::array<float, 3>{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+    auto cross3 = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return std::array<float, 3>{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    auto unit3 = [](std::array<float, 3> a) {
+        const float l = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        if (l > 1e-12f) for (float& x : a) x /= l;
+        return a;
+    };
+    m.positions.reserve(n * 3);
+    m.skin.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const std::array<std::array<float, 3>, 3> p = {point(style.tri[i * 3]), point(style.tri[i * 3 + 1]), point(style.tri[i * 3 + 2])};
+        const auto t1 = unit3(sub3(p[1], p[0]));
+        const auto nrm = unit3(cross3(sub3(p[1], p[0]), sub3(p[2], p[0])));
+        const auto t2 = cross3(nrm, t1);
+        for (size_t k = 0; k < 3; ++k) {
+            float v = 0.0f;
+            for (size_t j = 0; j < 3; ++j) v += style.bary[i * 3 + j] * p[j][k];
+            v += kCmToM * (style.offset[i * 3] * t1[k] + style.offset[i * 3 + 1] * t2[k] + style.offset[i * 3 + 2] * nrm[k]);
+            m.positions.push_back(v);
+        }
+        std::vector<Dna::SkinInfluence> inf;
+        for (size_t j = 0; j < 3; ++j) {
+            const size_t bv = size_t(style.tri[i * 3 + j]);
+            if (bv >= body.skin.size()) continue;
+            for (const Dna::SkinInfluence& si : body.skin[bv]) {
+                auto it = std::find_if(inf.begin(), inf.end(), [&](const Dna::SkinInfluence& x) { return x.joint == si.joint; });
+                if (it == inf.end()) inf.push_back({si.joint, style.bary[i * 3 + j] * si.weight});
+                else it->weight += style.bary[i * 3 + j] * si.weight;
+            }
+        }
+        std::sort(inf.begin(), inf.end(), [](const Dna::SkinInfluence& x, const Dna::SkinInfluence& y) { return x.weight > y.weight; });
+        if (inf.size() > 4) inf.resize(4);
+        float total = 0.0f;
+        for (const auto& x : inf) total += x.weight;
+        if (total > 1e-6f) for (auto& x : inf) x.weight /= total;
+        m.skin[i] = std::move(inf);
+    }
+    m.uvs = style.uv;
+    std::map<std::pair<int32_t, int32_t>, uint32_t> layoutOf;
+    size_t corner = 0;
+    for (int32_t size : style.polySize) {
+        std::vector<uint32_t> face;
+        for (int32_t k = 0; k < size; ++k, ++corner) {
+            const std::pair<int32_t, int32_t> key{style.polyVertex[corner], style.polyUv[corner]};
+            auto it = layoutOf.find(key);
+            if (it == layoutOf.end()) {
+                it = layoutOf.emplace(key, uint32_t(m.layouts.size())).first;
+                m.layouts.push_back({uint32_t(key.first), uint32_t(key.second), uint32_t(key.first)});
+            }
+            face.push_back(it->second);
+        }
+        m.faces.push_back(std::move(face));
     }
     m.normals = positionNormals(m.positions, m.faces, m.layouts);
     return m;
@@ -741,6 +958,7 @@ void straightenStandardSkeleton(std::vector<std::array<float, 3>>& gt, const Ass
 }
 }  // namespace
 
+Dna::Mesh hairMeshOnBody(const HairStyle& style, const Dna::Mesh& body) { return buildHairMesh(style, body); }
 float bodyHairDensityOfJoint(const QString& jointName)
 {
     struct Rule {
@@ -761,7 +979,7 @@ bool surfaceForMesh(const QString& meshName, Surface* out)
 {
     static const std::pair<const char*, Surface> table[] = {
         {"body", Surface::Skin}, {"head_skin", Surface::Skin}, {"head_mouth", Surface::Mouth}, {"head_teeth", Surface::Teeth},
-        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}};
+        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}, {"head_hair", Surface::Hair}};
     for (const auto& t : table)
         if (meshName == QLatin1String(t.first)) {
             if (out) *out = t.second;
@@ -1395,7 +1613,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
-    const EyeMesh* eyeObj = (p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated)) ? eyeMeshFromEnv() : nullptr;
+    bool pupilChannels = false;
+    const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
+    const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
+    const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
+    if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
     for (const Group& g : groups) {
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
@@ -1515,11 +1737,28 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rig.meshes.push_back(std::move(m));
     }
     if (eyeObj) {
-        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]));
+        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]), a.expressionNames, custom ? -1 : int(a.expressionNames.size()));
+        if (!custom) pupilChannels = true;
         rep.headVertices += int(m.positions.size() / 3);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));
+    }
+    if (!p.nativeHead && !p.hairStyle.isEmpty())
+        rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
+    if (p.nativeHead && !p.hairStyle.isEmpty()) {
+        if (const HairStyle* hair = a.hairStyle(p.hairStyle)) {
+            Dna::Mesh m = buildHairMesh(*hair, body);
+            rep.headVertices += int(m.positions.size() / 3);
+            rep.headTriangles += int(m.faces.size());
+            rep.meshNames << m.name;
+            rep.hairStyle = hair->name;
+            rep.hairTexturePng = tintHairTexturePng(hair->texturePng, p.hairColour);
+            if (rep.hairTexturePng.isEmpty()) rep.hairTexturePng = hair->texturePng;
+            rig.meshes.push_back(std::move(m));
+        } else {
+            rep.warnings << QStringLiteral("Unknown hairstyle '%1'").arg(p.hairStyle);
+        }
     }
     if (p.nativeHead && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
         for (int e = 0; e < a.ictExpressions; ++e) {
@@ -1540,6 +1779,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.meshNames.prepend(body.name);
     rig.meshes.insert(rig.meshes.begin(), std::move(body));
     rig.blendShapeChannels = a.expressionNames;
+    if (pupilChannels) rig.blendShapeChannels << QStringLiteral("pupilDilate") << QStringLiteral("pupilConstrict");
     // Every part carries every channel. glTF puts all the parts of a node into ONE mesh whose primitives must share the same morph
     // targets in the same order (and takes the target names from the first primitive, which is the body): a part that skipped a
     // channel it does not deform would scramble the targets or lose the names on export. A channel a part does not move gets a

@@ -25,8 +25,10 @@ Ogre::SceneNode* createCharacterInScene(const Assets& assets, const Params& para
 
 /// (Re)assign the tint material of every submesh of `entity` from `params` (skin / mouth / teeth / sclera / iris / lashes).
 /// Materials are named "<prefix>_<surface>" and shared by all parts of that surface (body + head skin stay the same tone).
-/// `skinTextureFile` (optional): a PNG baked for the body's UVs, bound as the body's diffuse texture.
-void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile = QString());
+/// `skinTextureFile` (optional): a PNG baked for the body's UVs, bound as the body's diffuse texture; `hairTextureFile`: the
+/// hairstyle's PNG (alpha-tested cards); `eyeTextureFile`: the procedural eye's PNG.
+void applyTints(Ogre::Entity* entity, const Params& params, const QString& prefix, const QString& skinTextureFile = QString(),
+                const QString& hairTextureFile = QString(), const QString& eyeTextureFile = QString());
 
 }  // namespace CharacterGen
 

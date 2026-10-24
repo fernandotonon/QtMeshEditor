@@ -24,9 +24,13 @@ endif()
 
 include(FetchContent)
 
-# Commit of origin/5.8 verified in the Phase 1 spike (RigLogic 13.2.9).
-set(QTMESH_OPENRIGLOGIC_TAG "55756aca0c4c55adc56ad68a796bcc1c0bf6fa5a"
-    CACHE STRING "OpenRigLogic git revision (5.8 stable branch)")
+# RigLogic 13.2.9 (UE 5.8.3 snapshot, on the 5.8 stable branch): the version the Phase 1 spike was validated against.
+# History note: upstream rewrote the repository's history on 2026-10-22/23 (every commit is now an "Import RigLogic vX snapshot"),
+# which deleted the commit this used to pin (55756aca...) and broke every CI job at the FetchContent clone. The pin is now one of the
+# new snapshot commits, which are published on 5.8 (and main) and are not rewritten per release. If it ever disappears again, pick
+# the 13.2.x snapshot on the 5.8 branch and re-run the DNA tests.
+set(QTMESH_OPENRIGLOGIC_TAG "1b20901ec6fcef119eed71a23a60ae10b3c83a44"
+    CACHE STRING "OpenRigLogic git revision (5.8 stable branch, RigLogic 13.2.9)")
 
 # Upstream regenerates Version.h / Defs.h INSIDE its source tree unless told not
 # to — a FetchContent checkout is shared by every build dir, so keep it

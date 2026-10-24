@@ -3,6 +3,7 @@
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
+#include "HairTint.h"
 #include "../Manager.h"
 #include "../SelectionSet.h"
 #include "../SentryReporter.h"
@@ -170,6 +171,25 @@ void CharacterController::kill()
 
 bool CharacterController::assetsPresent() const { return CharacterGen::CharacterAssets::present(); }
 
+QStringList CharacterController::hairNames() const { return CharacterGen::CharacterAssets::hairStyleNames(); }
+void CharacterController::setHairColour(const QString& v)
+{
+    CharacterGen::Rgb c;
+    if (!CharacterGen::parseHairColour(v, &c)) return;
+    const QString hex = CharacterGen::hairColourHex(c);
+    if (hex == m_hairColour) return;
+    m_hairColour = hex;
+    emit hairColourChanged();
+}
+
+QVariantList CharacterController::hairColourPresets() const
+{
+    QVariantList list;
+    for (const CharacterGen::HairColourPreset& pr : CharacterGen::hairColourPresets())
+        list.append(QVariantMap{{"name", pr.name}, {"label", pr.label}, {"colour", CharacterGen::hairColourHex(pr.colour)}});
+    return list;
+}
+
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
@@ -241,6 +261,9 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             return err;
         }
     }
+    // the optional hair bundle may have arrived with this ensureBlocking (a first run without hair): reload the cached assets so
+    // the style can be built, and tell the panel so its hair controls appear
+    if (m_assets && m_assets->hairStyles.empty() && !CharacterAssets::hairStyleNames().isEmpty()) m_assets.reset();
     if (!m_assets) {
         setStatus(tr("Loading character assets…"), true);
         auto a = std::make_shared<Assets>();
@@ -250,11 +273,17 @@ QString CharacterController::generate(int seed, double variety, const QString& b
         }
         m_assets = std::move(a);
     }
+    if (m_hairNamesSeen != CharacterAssets::hairStyleNames()) {
+        m_hairNamesSeen = CharacterAssets::hairStyleNames();
+        emit hairNamesChanged();
+    }
 
     Params p;
     p.nativeHead = !m_assets->mhrArkit.empty();
     p.openEyes = m_openEyes;
     p.skinTexture = m_skinTexture;
+    p.hairStyle = m_hairStyle;
+    CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);

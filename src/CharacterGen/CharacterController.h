@@ -27,6 +27,10 @@ class CharacterController : public QObject
     Q_PROPERTY(bool busy READ busy NOTIFY statusChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
+    Q_PROPERTY(QStringList hairNames READ hairNames NOTIFY hairNamesChanged)
+    Q_PROPERTY(QString hairStyle READ hairStyle WRITE setHairStyle NOTIFY hairStyleChanged)
+    Q_PROPERTY(QString hairColour READ hairColour WRITE setHairColour NOTIFY hairColourChanged)
+    Q_PROPERTY(QVariantList hairColourPresets READ hairColourPresets CONSTANT)
     Q_PROPERTY(QStringList eyeNames READ eyeNames CONSTANT)
     Q_PROPERTY(bool openEyes READ openEyes WRITE setOpenEyes NOTIFY openEyesChanged)
     Q_PROPERTY(bool skinTexture READ skinTexture WRITE setSkinTexture NOTIFY skinTextureChanged)
@@ -49,6 +53,14 @@ public:
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
     Q_INVOKABLE QVariantList seedBody(int seed, double variety) const;   // all 45 coefficients
     QStringList skinNames() const;
+    QStringList hairNames() const;
+    QString hairStyle() const { return m_hairStyle; }
+    void setHairStyle(const QString& v) { if (v != m_hairStyle) { m_hairStyle = v; emit hairStyleChanged(); } }
+    /// The hair colour as "#rrggbb" (a preset id is accepted too; anything else is ignored).
+    QString hairColour() const { return m_hairColour; }
+    void setHairColour(const QString& v);
+    /// [{name, label, colour}] of the hair colour presets.
+    QVariantList hairColourPresets() const;
     QStringList eyeNames() const;
 
     /// body/face are "index=value,..." lists; seed < 0 = the average character. Returns "" on success, else an error.
@@ -65,6 +77,9 @@ signals:
     void statusChanged();
     void openEyesChanged();
     void skinTextureChanged();
+    void hairNamesChanged();
+    void hairStyleChanged();
+    void hairColourChanged();
     void bodyHairChanged();
 
 private:
@@ -78,6 +93,9 @@ private:
     bool m_haveParams = false;
     bool m_openEyes = true;
     bool m_skinTexture = true;
+    QString m_hairStyle;
+    QStringList m_hairNamesSeen;   ///< the hairstyles the panel was last told about (hairNamesChanged)
+    QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;
     std::shared_ptr<CharacterGen::Assets> m_assets;
     static CharacterController* s_instance;

@@ -31,6 +31,21 @@ struct IctPart {
     int p0 = 0, p1 = -1;   ///< polygon index range (inclusive)
 };
 
+/// One hairstyle of the optional hair bundle (MakeHuman CC0 hair, converted by scripts/build-hair-assets.py): every vertex is bound
+/// to a triangle of the MHR body (barycentric weights + an offset in the triangle's frame: first edge, bitangent, normal; cm), so the
+/// style follows the shaped body, plus the card polygons / UVs and the diffuse texture (PNG with alpha).
+struct HairStyle {
+    QString name;
+    std::vector<int32_t> tri;       ///< N*3 MHR vertex indices
+    std::vector<float> bary;        ///< N*3
+    std::vector<float> offset;      ///< N*3, cm
+    std::vector<float> uv;          ///< M*2
+    std::vector<int32_t> polySize;
+    std::vector<int32_t> polyVertex;   ///< concatenated corner vertex indices
+    std::vector<int32_t> polyUv;       ///< concatenated corner uv indices
+    QByteArray texturePng;
+};
+
 /// Everything read from the two bundles.
 struct Assets {
     // MHR body
@@ -67,15 +82,23 @@ struct Assets {
     std::vector<float> ictExpression;        ///< E*V*3, cm
     QStringList expressionNames;
     std::vector<IctPart> parts;
+    // optional hair bundle
+    std::vector<HairStyle> hairStyles;
 
     int joint(const QString& name) const { return jointNames.indexOf(name); }
     const IctPart* part(const QString& name) const;
+    const HairStyle* hairStyle(const QString& name) const;
+    QStringList hairStyleNames() const;
 };
 
 /// Parse both bundles (already opened). Validates every size against the others; on any inconsistency returns false with
 /// `error` and leaves `out` unspecified.
 bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& out, QString* error = nullptr);
 /// Open `<dir>/mhr_character.qmcb` + `<dir>/ict_character.qmcb`.
+/// Parse the optional hair bundle into `a.hairStyles` (the body assets must be loaded: every binding is checked against the MHR
+/// vertex count). False + `error` when malformed; a missing bundle is not an error (call this only for a file that exists).
+bool loadHairBundle(const QmcBundle& hair, Assets& a, QString* error = nullptr);
+
 bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error = nullptr);
 
 /// Where the optional textured eye lives: `eye.obj` + `iris_<colour>.png` (QTMESH_CHARACTER_EYE_DIR, else
@@ -91,6 +114,10 @@ struct Params {
     Rgb eye{0.22f, 0.36f, 0.55f};
     Rgb lip{0.62f, 0.32f, 0.32f};
     Rgb lash{0.05f, 0.04f, 0.04f};
+    /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
+    QString hairStyle;
+    /// Colour of the hair's mid tones (the texture is a shading map tinted with it, see HairTint.h). Default: brown.
+    Rgb hairColour{0.239f, 0.145f, 0.090f};
     /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
     /// Only for the native head (the ICT head has a different UV layout).
     bool skinTexture = true;
@@ -175,11 +202,16 @@ struct BuildReport {
     LipFrame lips;
     BrowFrame brows;
     NippleFrame nipples;
+    QString hairStyle;               ///< the hairstyle that was built (empty = none)
+    QByteArray hairTexturePng;       ///< its diffuse texture
+    QByteArray eyeTexturePng;        ///< the procedural eye's texture (empty: no procedural eye, or a user-supplied eye mesh is used)
     std::vector<float> bodyHair;     ///< 0..1 body-hair density per body vertex (from the skin weights); empty = none
     QStringList meshNames;
     QStringList warnings;
 };
 
+/// A hairstyle placed on a (shaped) body mesh (positions in metres, skin rows per vertex): the mesh "head_hair". Exposed for tests.
+Dna::Mesh hairMeshOnBody(const HairStyle& style, const Dna::Mesh& body);
 /// Body-hair density (0..1) of the region a joint drives: forearms and shins are hairy, upper arms and thighs less so, chest and
 /// abdomen moderately, hands, feet, shoulders, neck and head hardly or not at all. Matched on the (Mixamo-style) joint name.
 float bodyHairDensityOfJoint(const QString& jointName);
@@ -189,7 +221,7 @@ float bodyHairDensityOfJoint(const QString& jointName);
 Dna::Rig buildRig(const Assets& assets, const Params& params, BuildReport* report = nullptr, QString* error = nullptr);
 
 /// Which material a built mesh takes (by its name) — the scene layer maps this to a tint.
-enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes, Eye };
+enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes, Eye, Hair };
 bool surfaceForMesh(const QString& meshName, Surface* out);
 
 }  // namespace CharacterGen
