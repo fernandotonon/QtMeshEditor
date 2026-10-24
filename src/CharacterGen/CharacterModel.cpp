@@ -1664,20 +1664,48 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         }
                     return lower.back().second;
                 };
-                struct Knot { double x, phi, delta; };
-                std::vector<Knot> knots;   // the upper margin: where it is and how far it has to turn (<= 0: downwards)
-                for (uint32_t v : m.upper) { const auto q = at(v); const double ph = phiOf(q); knots.push_back({q[0], ph, std::min(0.0, (lowerPhi(q[0]) - ph) * 1.08)}); }
+                struct Knot { double x, phi, delta; std::array<double, 3> p, res; };
+                std::vector<Knot> knots;   // the upper margin: where it is, how far it has to turn (<= 0: downwards) and what is left to snap
+                for (uint32_t v : m.upper) { const auto q = at(v); const double ph = phiOf(q); knots.push_back({q[0], ph, std::min(0.0, (lowerPhi(q[0]) - ph) * 1.08), q, {0, 0, 0}}); }
                 std::sort(knots.begin(), knots.end(), [](const Knot& x, const Knot& y) { return x.x < y.x; });
+                // The turn alone cannot close the corners: there the two margins differ mainly in DEPTH. After the turn each upper-margin
+                // vertex is snapped onto the nearest point of the lower margin (3D) and that remainder is spread into the lid skin.
+                std::vector<std::array<double, 3>> lowerLine;
+                for (uint32_t v : m.lower) lowerLine.push_back(at(v));
+                auto nearestOnLower = [&](const std::array<double, 3>& q) {
+                    std::array<double, 3> best = lowerLine.front();
+                    double bestD = 1e30;
+                    for (size_t k = 0; k + 1 < lowerLine.size(); ++k) {
+                        const auto& a0 = lowerLine[k]; const auto& a1 = lowerLine[k + 1];
+                        const double ex = a1[0] - a0[0], ey = a1[1] - a0[1], ez = a1[2] - a0[2];
+                        const double len2 = ex * ex + ey * ey + ez * ez;
+                        const double t = len2 > 1e-18 ? std::min(1.0, std::max(0.0, ((q[0] - a0[0]) * ex + (q[1] - a0[1]) * ey + (q[2] - a0[2]) * ez) / len2)) : 0.0;
+                        const std::array<double, 3> c{a0[0] + ex * t, a0[1] + ey * t, a0[2] + ez * t};
+                        const double d2 = (c[0] - q[0]) * (c[0] - q[0]) + (c[1] - q[1]) * (c[1] - q[1]) + (c[2] - q[2]) * (c[2] - q[2]);
+                        if (d2 < bestD) { bestD = d2; best = c; }
+                    }
+                    return best;
+                };
+                for (Knot& kn : knots) {
+                    const double dy = kn.p[1] - double(C[1]), dz = kn.p[2] - double(C[2]);
+                    const double rho = std::sqrt(dy * dy + dz * dz), phi = std::atan2(dy, dz) + kn.delta;
+                    const std::array<double, 3> turned{kn.p[0], double(C[1]) + rho * std::sin(phi), double(C[2]) + rho * std::cos(phi)};
+                    const auto target = nearestOnLower(turned);
+                    for (int c = 0; c < 3; ++c) kn.res[size_t(c)] = target[size_t(c)] - turned[size_t(c)];
+                }
                 const double xMin = knots.front().x, xMax = knots.back().x;
-                auto knotAt = [&](double x, double* phi, double* delta) {
-                    if (x <= knots.front().x) { *phi = knots.front().phi; *delta = knots.front().delta; return; }
-                    if (x >= knots.back().x) { *phi = knots.back().phi; *delta = knots.back().delta; return; }
+                auto knotAt = [&](double x, double* phi, double* delta, std::array<double, 3>* res) {
+                    auto fill = [&](const Knot& a0, const Knot& a1, double t) {
+                        *phi = a0.phi + (a1.phi - a0.phi) * t;
+                        *delta = a0.delta + (a1.delta - a0.delta) * t;
+                        for (int c = 0; c < 3; ++c) (*res)[size_t(c)] = a0.res[size_t(c)] + (a1.res[size_t(c)] - a0.res[size_t(c)]) * t;
+                    };
+                    if (x <= knots.front().x) { fill(knots.front(), knots.front(), 0.0); return; }
+                    if (x >= knots.back().x) { fill(knots.back(), knots.back(), 0.0); return; }
                     for (size_t k = 0; k + 1 < knots.size(); ++k)
                         if (x <= knots[k + 1].x) {
                             const double span = knots[k + 1].x - knots[k].x;
-                            const double t = span > 1e-12 ? (x - knots[k].x) / span : 0.0;
-                            *phi = knots[k].phi + (knots[k + 1].phi - knots[k].phi) * t;
-                            *delta = knots[k].delta + (knots[k + 1].delta - knots[k].delta) * t;
+                            fill(knots[k], knots[k + 1], span > 1e-12 ? (x - knots[k].x) / span : 0.0);
                             return;
                         }
                 };
@@ -1687,22 +1715,23 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                     const auto q = at(uint32_t(v));
                     if ((side == 0) != (q[0] > 0.0)) continue;                       // this eye's side of the face
                     const double dx = q[0] - double(C[0]), dy = q[1] - double(C[1]), dz = q[2] - double(C[2]);
-                    if (std::sqrt(dx * dx + dy * dy + dz * dz) > 0.027 || dz < -0.004) continue;   // only the skin around this eyeball, in front of it
+                    if (std::sqrt(dx * dx + dy * dy + dz * dz) > 0.027 || dz < -0.020) continue;   // only the skin around this eyeball, in front of it
                     const double outside = q[0] < xMin ? xMin - q[0] : (q[0] > xMax ? q[0] - xMax : 0.0);
-                    const double wx = 1.0 - smooth(outside / 0.006);               // fades beyond the canthi
+                    const double wx = 1.0 - smooth(outside / 0.011);               // fades beyond the canthi (the lid wraps the eyeball: a short fade left the corners open)
                     if (wx <= 0.0) continue;
                     double phiMargin = 0, delta = 0;
-                    knotAt(q[0], &phiMargin, &delta);
+                    std::array<double, 3> res{};
+                    knotAt(q[0], &phiMargin, &delta, &res);
                     const double above = phiOf(q) - phiMargin;                        // angle above the upper margin
                     if (above < -0.04) continue;                                      // the lower lid and the cheek do not move
-                    const double wy = 1.0 - smooth(above / 0.38);                  // full at the margin, decreasing towards the brow (spreads the fold of the skin)          // full weight near the margin, gone before the brow
+                    const double wy = 1.0 - smooth(above / 0.38);                  // full at the margin, decreasing towards the brow (spreads the fold of the skin)
                     const double w = wx * wy;
                     if (w <= 0.0) continue;
                     const double rho = std::sqrt(dy * dy + dz * dz);
                     const double phi = std::atan2(dy, dz) + w * delta;
                     const double ny = rho * std::sin(phi), nz = rho * std::cos(phi);
-                    const double mv[3] = {0.0, ny - dy, nz - dz};
-                    maxMove = std::max(maxMove, std::sqrt(mv[1] * mv[1] + mv[2] * mv[2]));
+                    const double mv[3] = {w * res[0], ny - dy + w * res[1], nz - dz + w * res[2]};   // turn + the snap onto the lower margin
+                    maxMove = std::max(maxMove, std::sqrt(mv[0] * mv[0] + mv[1] * mv[1] + mv[2] * mv[2]));
                     for (int c = 0; c < 3; ++c) blink[size_t(v) * 3 + size_t(c)] = float(mv[c] / double(kCmToM));
                 }
                 if (!qEnvironmentVariableIsEmpty("QTMESH_LID_DEBUG"))
