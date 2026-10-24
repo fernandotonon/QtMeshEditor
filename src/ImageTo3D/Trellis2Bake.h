@@ -109,8 +109,10 @@ struct GameReadyOptions {
     // 0 = off. Falls back to the unmodified mesh when the remesh is empty or
     // not manifold.
     int   remeshResolution = 0;
-    // Also return the welded, debris-culled, winding-UNIFIED source (before any
-    // remesh/simplify) in GameReadyResult::weldedPositions/Indices. Feed THAT
+    // Also return the dense source for the bake in
+    // GameReadyResult::weldedPositions/Indices: the REMESHED surface when a
+    // remesh ran (no voxel terracing), else the welded, debris-culled,
+    // winding-UNIFIED source (before any simplify). Feed THAT
     // to bake() as the dense source: the raw dual-grid mesh has large flipped
     // patches, and both the source normals the detail map is built from and
     // the orientation-aware closest-triangle search read the winding.

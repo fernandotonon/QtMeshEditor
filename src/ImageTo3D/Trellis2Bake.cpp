@@ -1871,6 +1871,15 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
                 r.remeshed = true;
                 cullDebris(idx, pos.size() / 3);
                 compact(pos, idx);
+                // The remeshed surface is the better dense source for the bake:
+                // marching cubes on an accurate distance field has no voxel
+                // terracing (the raw dual-grid surface bakes into the detail
+                // normal map as horizontal banding on every flat panel), it is
+                // consistently wound, and it is a fraction of the size.
+                if (opts.exportWeldedSource) {
+                    r.weldedPositions = pos;
+                    r.weldedIndices = idx;
+                }
             }
         }
     }

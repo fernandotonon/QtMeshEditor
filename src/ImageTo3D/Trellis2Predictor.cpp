@@ -1016,15 +1016,17 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         bo.textureSize = opts.textureSize;
         bo.supersample = opts.supersample;
         bo.bakeNormalMap = opts.bakeNormalMap;
-        // The dense source is a raw dual-grid surface: voxel-scale terracing in
-        // its normals bakes into the detail map as vertical banding on smooth
-        // areas (necks, cheeks). A few 1-ring passes flatten the terracing and
-        // leave features larger than a few voxels alone.
+        // The dense source carries the dual-grid's voxel terracing (the remesh
+        // reproduces it faithfully): in the detail normal map it shows up as fine
+        // horizontal banding on every flat panel — the "lines" on shirts and
+        // trousers. Each pass averages one ring (~1 cell), the terraces are
+        // several cells wide, so it takes ~16 to flatten them while features of
+        // brow/ear size survive (4 left the banding in; 32 starts to soften).
         // QTMESH_TRELLIS2_NORMAL_SMOOTH overrides (0 = off).
         {
             const QByteArray e = qgetenv("QTMESH_TRELLIS2_NORMAL_SMOOTH");
             bo.sourceNormalSmoothIterations =
-                e.isEmpty() ? 4 : std::clamp(e.toInt(), 0, 32);
+                e.isEmpty() ? 16 : std::clamp(e.toInt(), 0, 64);
         }
         if (progress) {
             bo.progress = [&progress](int done, int total) {
