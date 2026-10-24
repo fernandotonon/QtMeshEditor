@@ -398,8 +398,10 @@ float topField(TopKind style, const JointPositions& joints, const V3& p)
     const double collar = (std::sqrt(ex * ex + ez * ez + ey * ey) - 1.0) * 0.05;   // an ellipsoid around the neck, deeper in front
     double lateralLimit = t.shoulderX + 0.045;
     if (tank) {   // full width over the ribs, narrowing to straps over the shoulders
-        const double strap = clamp((p[1] - (t.neckY - 0.13)) / 0.07, 0.0, 1.0);
-        lateralLimit = (t.shoulderX - 0.015) + strap * (t.shoulderX * 0.78 - (t.shoulderX - 0.015));
+        // below the armhole the garment wraps the whole side of the torso (a narrower limit left the sides open); the arm leaves the
+        // body above that, so the limit closes smoothly to the straps
+        const double strap = clamp((p[1] - (t.neckY - 0.21)) / 0.09, 0.0, 1.0);
+        lateralLimit = (t.shoulderX + 0.045) + strap * (t.shoulderX * 0.78 - (t.shoulderX + 0.045));
     }
     const double lateral = lateralLimit - std::fabs(p[0]);
     double field = std::min({p[1] - t.hemY, t.neckY + 0.05 - p[1], collar, lateral});
