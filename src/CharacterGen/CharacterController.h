@@ -74,6 +74,8 @@ public:
     /// The first `count` body-shape coefficients a seed produces (what the sliders start from).
     Q_INVOKABLE QVariantList seedBody(int seed, double variety) const;   // all 45 coefficients
     QStringList skinNames() const;
+    /// "#rrggbb" of a named skin colour (what the picker starts from); empty for an unknown name.
+    Q_INVOKABLE QString skinColourHex(const QString& name) const;
     QStringList hairNames() const;
     QString hairStyle() const { return m_hairStyle; }
     void setHairStyle(const QString& v) { if (v != m_hairStyle) { m_hairStyle = v; emit hairStyleChanged(); } }

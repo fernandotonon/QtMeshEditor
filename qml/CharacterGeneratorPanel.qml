@@ -18,6 +18,7 @@ Column {
     readonly property var headModes: [20, 21, 22, 23, 24, 25, 26, 27]
     property var coeffs: new Array(45).fill(0)
     property bool live: true
+    property string customSkin: ""   // #rrggbb picked by hand; wins over the named skin
     function reseed() { coeffs = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0); liveUpdate() }
     // every coefficient is sent, zeros included: the sliders are authoritative (a zero must not fall back to the seed's random value)
     function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
@@ -25,7 +26,7 @@ Column {
     function generate(replace) {
         seed = parseInt(seedField.text) || 0   // take the seed as typed even if the field has not lost focus yet
         CharacterController.generate(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, bodyString(), "",
-                                     pick(skinBox, CharacterController.skinNames), pick(eyeBox, CharacterController.eyeNames), replace)
+                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), pick(eyeBox, CharacterController.eyeNames), replace)
     }
     // live preview: swap the character this panel made (merged into one undo step) once a slider is released
     function liveUpdate() { if (live && CharacterController.hasCharacter()) generate(true) }
@@ -91,6 +92,68 @@ Column {
         background: Rectangle { color: AnimationControlController.buttonColor; border.color: AnimationControlController.borderColor; radius: 3 }
     }
 
+    // the shared colour picker: hue / saturation / value sliders + a hex field, applied with the button (a live regenerate per drag step is heavy)
+    Popup {
+        id: picker
+        parent: Overlay.overlay
+        x: Math.round((parent.width - width) / 2); y: Math.round((parent.height - height) / 2)
+        width: 240; modal: true; focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        property var apply: null
+        property real hue: 0; property real sat: 0; property real val: 1
+        readonly property color current: Qt.hsva(hue, sat, val, 1)
+        function hex(c) {
+            function h2(x) { var t = Math.round(x * 255).toString(16); return t.length < 2 ? "0" + t : t }
+            return "#" + h2(c.r) + h2(c.g) + h2(c.b)
+        }
+        function openFor(colour, cb) {
+            var c = Qt.color(colour)
+            hue = c.hsvHue < 0 ? 0 : c.hsvHue; sat = c.hsvSaturation; val = c.hsvValue
+            apply = cb; hexInput.text = hex(c); open()
+        }
+        function syncHex() { hexInput.text = hex(current) }
+        background: Rectangle { color: AnimationControlController.panelColor; border.color: AnimationControlController.borderColor; radius: 4 }
+        contentItem: Column {
+            spacing: 8
+            Rectangle { width: parent.width; height: 28; radius: 3; color: picker.current; border.color: AnimationControlController.borderColor }
+            Repeater {
+                model: [{ n: "Hue" }, { n: "Saturation" }, { n: "Brightness" }]
+                Row {
+                    id: srow
+                    required property var modelData
+                    required property int index
+                    spacing: 6
+                    Label { width: 70; height: 20; text: srow.modelData.n; font.pixelSize: 11 }
+                    Slider {
+                        width: picker.width - 70 - 6 - 24; height: 20; from: 0; to: 1
+                        value: srow.index === 0 ? picker.hue : srow.index === 1 ? picker.sat : picker.val
+                        onMoved: { if (srow.index === 0) picker.hue = value; else if (srow.index === 1) picker.sat = value; else picker.val = value; picker.syncHex() }
+                    }
+                }
+            }
+            Row {
+                spacing: 6
+                Field {
+                    id: hexInput; width: 90; maximumLength: 7
+                    onEditingFinished: { var c = Qt.color(text); if (c.valid !== false && /^#[0-9a-fA-F]{6}$/.test(text)) { picker.hue = c.hsvHue < 0 ? 0 : c.hsvHue; picker.sat = c.hsvSaturation; picker.val = c.hsvValue } picker.syncHex() }
+                }
+                ToolBtn { label: "Apply"; accent: true; onClicked: { var cb = picker.apply; picker.close(); if (cb) cb(picker.hex(picker.current)) } }
+                ToolBtn { label: "Cancel"; onClicked: picker.close() }
+            }
+        }
+    }
+    // a colour chip that opens the picker when clicked
+    component ColourSwatch: Rectangle {
+        id: chip
+        property string colour: "#ffffff"
+        property string tip: "Pick a colour"
+        signal picked(string value)
+        width: 22; height: 22; radius: 3; color: colour; border.color: AnimationControlController.borderColor
+        HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+        ToolTip.visible: chipHover.hovered; ToolTip.delay: 400; ToolTip.text: tip
+        MouseArea { anchors.fill: parent; onClicked: picker.openFor(chip.colour, function(v) { chip.picked(v) }) }
+    }
+
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
 
     Row {
@@ -104,7 +167,15 @@ Column {
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Skin" }
-        ThemedComboBox { id: skinBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.skinNames); onCurrentIndexChanged: sec.liveUpdate() }
+        ThemedComboBox {
+            id: skinBox; width: sec.width - 60 - 26; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.skinNames)
+            onActivated: { sec.customSkin = ""; sec.liveUpdate() }
+        }
+        ColourSwatch {
+            colour: sec.customSkin !== "" ? sec.customSkin : (CharacterController.skinColourHex(sec.pick(skinBox, CharacterController.skinNames)) || "#c68863")
+            tip: "Pick a custom skin colour"
+            onPicked: function(value) { sec.customSkin = value; sec.liveUpdate() }
+        }
     }
     Row {
         spacing: 4
@@ -152,7 +223,10 @@ Column {
         visible: CharacterController.hairNames.length > 0
         spacing: 4
         Label { width: 52; height: 22; text: "" }
-        Rectangle { width: 22; height: 22; radius: 3; color: CharacterController.hairColour; border.color: AnimationControlController.borderColor }
+        ColourSwatch {
+            colour: CharacterController.hairColour; tip: "Pick a custom hair colour"
+            onPicked: function(value) { CharacterController.hairColour = value; sec.liveUpdate() }
+        }
         Field {
             id: hairHex
             width: 80
@@ -212,7 +286,7 @@ Column {
             visible: slot.style !== "none"
             spacing: 4
             Label { width: 52; height: 22; text: "" }
-            Rectangle { width: 22; height: 22; radius: 3; color: slot.colour; border.color: AnimationControlController.borderColor }
+            ColourSwatch { colour: slot.colour; tip: "Pick a custom colour"; onPicked: function(value) { slot.colourChosen(value) } }
             Field {
                 width: 80
                 text: slot.colour

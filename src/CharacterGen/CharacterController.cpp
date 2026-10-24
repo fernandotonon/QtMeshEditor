@@ -241,6 +241,12 @@ void CharacterController::setBottomColour(const QString& v)
 }
 
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
+QString CharacterController::skinColourHex(const QString& name) const
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
+    return QColor::fromRgbF(c[0], c[1], c[2]).name();
+}
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
 QVariantList CharacterController::seedBody(int seed, double variety) const
