@@ -116,6 +116,10 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
     QString hairStyle;
+    /// Rest the lids lower than the sculpted "open" shape (the old default looked too wide open) and make the blink shapes close the eye
+    /// completely: the base pose becomes the old open pose plus the old eyeBlink delta, eyeBlink then goes the rest of the way (to the
+    /// lower margin) and eyeWide is re-based so it still reaches the old open pose. Native head with open eyes only.
+    bool relaxedLids = true;
     /// Eyelashes: a curved alpha-card strip along each lid margin (native head with open eyes only), in the `lash` colour.
     bool eyelashes = true;
     /// Colour of the hair's mid tones (the texture is a shading map tinted with it, see HairTint.h). Default: brown.

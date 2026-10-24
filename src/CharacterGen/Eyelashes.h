@@ -38,6 +38,16 @@ struct LashEye { std::array<float, 3> centre{}; bool seated = false; };
 LashMesh buildLashes(const std::vector<float>& positions, const std::vector<int32_t>& faces, const std::vector<uint8_t>& dropped,
                      const std::array<LashEye, 2>& eyes, const LashOptions& options = {});
 
+/// The two lid margins of one eye, each ordered from the inner canthus (nose side) to the outer one: body vertex indices.
+struct LidMargins {
+    std::vector<uint32_t> upper, lower;
+    bool valid() const { return upper.size() >= 2 && lower.size() >= 2; }
+};
+/// Find the margins of both eyes (same inputs as buildLashes). An eye that is not seated, or whose opening is not found, comes back
+/// invalid.
+std::array<LidMargins, 2> findLidMargins(const std::vector<float>& positions, const std::vector<int32_t>& faces,
+                                         const std::vector<uint8_t>& dropped, const std::array<LashEye, 2>& eyes);
+
 /// The strand texture (RGBA, 1024x128 by default): dark opaque root band, tapering curved strands, soft alpha. `colour` is the lash
 /// colour. Same inputs, same pixels.
 QImage bakeLashTexture(const Rgb& colour, int width = 1024, int height = 128, uint32_t seed = 1);

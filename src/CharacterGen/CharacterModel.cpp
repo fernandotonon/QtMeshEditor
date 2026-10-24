@@ -1616,6 +1616,104 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     bool pupilChannels = false;
     const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
+    // ---- relaxed lids: a lower rest pose and a blink that really closes (see Params::relaxedLids) ----
+    // The ARKit channels the body (and the lashes) are built from. A copy only when the lid channels are re-based.
+    std::vector<float> arkitTuned;
+    const std::vector<float>* arkit = &a.mhrArkit;
+    int lashBlinkChannel[2] = {-1, -1};   // the blink channels whose rotation the lash tips must follow (set when the lids are re-based)
+    if (wantEyes && p.relaxedLids && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3 &&
+        a.mhrEyeDrop.size() * 3 == a.mhrFaces.size()) {
+        const int chBlink[2] = {int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeBlinkRight")))};
+        const int chWide[2] = {int(a.expressionNames.indexOf(QStringLiteral("eyeWideLeft"))), int(a.expressionNames.indexOf(QStringLiteral("eyeWideRight")))};
+        if (chBlink[0] >= 0 && chBlink[1] >= 0) {
+            arkitTuned = a.mhrArkit;
+            const size_t stride = size_t(V) * 3;
+            // 1. the new rest pose: the old open pose with the old blink applied
+            for (int side = 0; side < 2; ++side) {
+                const float* d = a.mhrArkit.data() + size_t(chBlink[side]) * stride;
+                for (size_t i = 0; i < stride; ++i) body.positions[i] += d[i] * kCmToM;
+            }
+            std::array<LashEye, 2> lidEyes;
+            for (size_t i = 0; i < 2; ++i) { lidEyes[i].seated = eyeSeat[i].seated; lidEyes[i].centre = eyeSeat[i].centre; }
+            const std::array<LidMargins, 2> margins = findLidMargins(body.positions, a.mhrFaces, a.mhrEyeDrop, lidEyes);
+            for (int side = 0; side < 2; ++side) {
+                const float* d = a.mhrArkit.data() + size_t(chBlink[side]) * stride;
+                float* blink = arkitTuned.data() + size_t(chBlink[side]) * stride;
+                float* wide = chWide[side] >= 0 ? arkitTuned.data() + size_t(chWide[side]) * stride : nullptr;
+                if (wide)
+                    for (size_t i = 0; i < stride; ++i) wide[i] -= d[i];   // wide still reaches the old open pose (+ its own delta)
+                const LidMargins& m = margins[size_t(side)];
+                for (size_t i = 0; i < stride; ++i) blink[i] = 0.0f;       // re-built below: the rest of the way, from the new rest pose
+                if (!m.valid() || !eyeSeat[size_t(side)].seated) continue;
+                // 2. closing = turning the upper lid skin about the eyeball's horizontal axis (x through its centre): the skin keeps
+                // its distance from the eyeball, so it cannot sink into it. The angle at the margin brings it onto the lower margin.
+                const auto& C = eyeSeat[size_t(side)].centre;
+                auto at = [&](uint32_t v) { return std::array<double, 3>{double(body.positions[size_t(v) * 3]), double(body.positions[size_t(v) * 3 + 1]), double(body.positions[size_t(v) * 3 + 2])}; };
+                auto phiOf = [&](const std::array<double, 3>& q) { return std::atan2(q[1] - double(C[1]), q[2] - double(C[2])); };
+                std::vector<std::pair<double, double>> lower;   // (x, phi) of the lower margin, x ascending
+                for (uint32_t v : m.lower) { const auto q = at(v); lower.push_back({q[0], phiOf(q)}); }
+                std::sort(lower.begin(), lower.end());
+                auto lowerPhi = [&](double x) {
+                    if (x <= lower.front().first) return lower.front().second;
+                    if (x >= lower.back().first) return lower.back().second;
+                    for (size_t k = 0; k + 1 < lower.size(); ++k)
+                        if (x <= lower[k + 1].first) {
+                            const double span = lower[k + 1].first - lower[k].first;
+                            const double t = span > 1e-12 ? (x - lower[k].first) / span : 0.0;
+                            return lower[k].second + (lower[k + 1].second - lower[k].second) * t;
+                        }
+                    return lower.back().second;
+                };
+                struct Knot { double x, phi, delta; };
+                std::vector<Knot> knots;   // the upper margin: where it is and how far it has to turn (<= 0: downwards)
+                for (uint32_t v : m.upper) { const auto q = at(v); const double ph = phiOf(q); knots.push_back({q[0], ph, std::min(0.0, (lowerPhi(q[0]) - ph) * 1.08)}); }
+                std::sort(knots.begin(), knots.end(), [](const Knot& x, const Knot& y) { return x.x < y.x; });
+                const double xMin = knots.front().x, xMax = knots.back().x;
+                auto knotAt = [&](double x, double* phi, double* delta) {
+                    if (x <= knots.front().x) { *phi = knots.front().phi; *delta = knots.front().delta; return; }
+                    if (x >= knots.back().x) { *phi = knots.back().phi; *delta = knots.back().delta; return; }
+                    for (size_t k = 0; k + 1 < knots.size(); ++k)
+                        if (x <= knots[k + 1].x) {
+                            const double span = knots[k + 1].x - knots[k].x;
+                            const double t = span > 1e-12 ? (x - knots[k].x) / span : 0.0;
+                            *phi = knots[k].phi + (knots[k + 1].phi - knots[k].phi) * t;
+                            *delta = knots[k].delta + (knots[k + 1].delta - knots[k].delta) * t;
+                            return;
+                        }
+                };
+                auto smooth = [](double t) { t = std::min(1.0, std::max(0.0, t)); return t * t * t * (t * (t * 6.0 - 15.0) + 10.0); };   // smootherstep
+                double maxMove = 0;
+                for (int v = 0; v < V; ++v) {
+                    const auto q = at(uint32_t(v));
+                    if ((side == 0) != (q[0] > 0.0)) continue;                       // this eye's side of the face
+                    const double dx = q[0] - double(C[0]), dy = q[1] - double(C[1]), dz = q[2] - double(C[2]);
+                    if (std::sqrt(dx * dx + dy * dy + dz * dz) > 0.027 || dz < -0.004) continue;   // only the skin around this eyeball, in front of it
+                    const double outside = q[0] < xMin ? xMin - q[0] : (q[0] > xMax ? q[0] - xMax : 0.0);
+                    const double wx = 1.0 - smooth(outside / 0.006);               // fades beyond the canthi
+                    if (wx <= 0.0) continue;
+                    double phiMargin = 0, delta = 0;
+                    knotAt(q[0], &phiMargin, &delta);
+                    const double above = phiOf(q) - phiMargin;                        // angle above the upper margin
+                    if (above < -0.04) continue;                                      // the lower lid and the cheek do not move
+                    const double wy = 1.0 - smooth(above / 0.38);                  // full at the margin, decreasing towards the brow (spreads the fold of the skin)          // full weight near the margin, gone before the brow
+                    const double w = wx * wy;
+                    if (w <= 0.0) continue;
+                    const double rho = std::sqrt(dy * dy + dz * dz);
+                    const double phi = std::atan2(dy, dz) + w * delta;
+                    const double ny = rho * std::sin(phi), nz = rho * std::cos(phi);
+                    const double mv[3] = {0.0, ny - dy, nz - dz};
+                    maxMove = std::max(maxMove, std::sqrt(mv[1] * mv[1] + mv[2] * mv[2]));
+                    for (int c = 0; c < 3; ++c) blink[size_t(v) * 3 + size_t(c)] = float(mv[c] / double(kCmToM));
+                }
+                if (!qEnvironmentVariableIsEmpty("QTMESH_LID_DEBUG"))
+                    std::fprintf(stderr, "lids: side %d upper %zu lower %zu, largest lid move %.2f mm\n", side, m.upper.size(), m.lower.size(), maxMove * 1000.0);
+                (void)d;
+            }
+            arkit = &arkitTuned;
+            lashBlinkChannel[0] = chBlink[0];
+            lashBlinkChannel[1] = chBlink[1];
+        }
+    }
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
     const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
     if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
@@ -1763,18 +1861,31 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (size_t i = 0; i + 2 < lm.indices.size(); i += 3) m.faces.push_back({lm.indices[i], lm.indices[i + 1], lm.indices[i + 2]});
             // every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the
             // lashes follow the blink, squint, brow and cheek shapes exactly as the lid does
-            if (!a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
+            if (!arkit->empty() && arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) {
                 for (int e = 0; e < a.ictExpressions; ++e) {
-                    const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
+                    const float* d = arkit->data() + size_t(e) * size_t(V) * 3;
                     Dna::BlendShapeTarget bt;
                     bt.channel = e;
                     for (uint32_t i = 0; i < nv; ++i) {
                         const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
                         if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
+                        float delta[3] = {dv[0] * kCmToM, dv[1] * kCmToM, dv[2] * kCmToM};
+                        // a blink TURNS the lid about the eyeball's horizontal axis: the tips of the lashes (odd vertices) turn with their
+                        // root instead of just translating with it, or they would stick out of the closed lid
+                        const int side = lm.positions[size_t(i) * 3] > 0.0f ? 0 : 1;
+                        if ((i & 1u) && e == lashBlinkChannel[side] && eyeSeat[size_t(side)].seated) {
+                            const auto& C = eyeSeat[size_t(side)].centre;
+                            const double ry = double(lm.positions[size_t(i - 1) * 3 + 1]) - double(C[1]), rz = double(lm.positions[size_t(i - 1) * 3 + 2]) - double(C[2]);
+                            const double ry2 = ry + double(delta[1]), rz2 = rz + double(delta[2]);
+                            const double turn = std::atan2(ry2, rz2) - std::atan2(ry, rz);
+                            const double ty = double(lm.positions[size_t(i) * 3 + 1]) - double(C[1]), tz = double(lm.positions[size_t(i) * 3 + 2]) - double(C[2]);
+                            const double rho = std::sqrt(ty * ty + tz * tz), phi = std::atan2(ty, tz) + turn;
+                            delta[0] = 0.0f;
+                            delta[1] = float(rho * std::sin(phi) - ty);
+                            delta[2] = float(rho * std::cos(phi) - tz);
+                        }
                         bt.vertexIndices.push_back(i);
-                        bt.deltas.push_back(dv[0] * kCmToM);
-                        bt.deltas.push_back(dv[1] * kCmToM);
-                        bt.deltas.push_back(dv[2] * kCmToM);
+                        for (float c : delta) bt.deltas.push_back(c);
                     }
                     if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
                 }
@@ -1806,7 +1917,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         for (int e = 0; e < a.ictExpressions; ++e) {
             Dna::BlendShapeTarget bt;
             bt.channel = e;
-            const float* d = a.mhrArkit.data() + size_t(e) * size_t(V) * 3;
+            const float* d = arkit->data() + size_t(e) * size_t(V) * 3;
             for (int v = 0; v < V; ++v) {
                 const float* dv = d + size_t(v) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;
