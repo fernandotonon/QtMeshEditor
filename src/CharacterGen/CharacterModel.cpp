@@ -1,8 +1,13 @@
 #include "CharacterModel.h"
+#include "EyeTexture.h"
+#include "HairTint.h"
 
+#include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
 
 #include <QColor>
+#include <QDir>
+#include <QFileInfo>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -363,13 +368,70 @@ bool loadAssets(const QmcBundle& mhr, const QmcBundle& ict, Assets& a, QString* 
     return true;
 }
 
+const HairStyle* Assets::hairStyle(const QString& name) const
+{
+    for (const HairStyle& s : hairStyles)
+        if (s.name == name) return &s;
+    return nullptr;
+}
+
+QStringList Assets::hairStyleNames() const
+{
+    QStringList names;
+    for (const HairStyle& s : hairStyles) names << s.name;
+    return names;
+}
+
+bool loadHairBundle(const QmcBundle& hair, Assets& a, QString* error)
+{
+    a.hairStyles.clear();
+    QString e;
+    const QJsonObject meta = QJsonDocument::fromJson(hair.readBytes(QStringLiteral("meta"))).object();
+    const QJsonArray styles = meta.value(QStringLiteral("styles")).toArray();
+    for (const QJsonValue& sv : styles) {
+        HairStyle s;
+        s.name = sv.toObject().value(QStringLiteral("name")).toString();
+        const QString p = QStringLiteral("hair.") + s.name + QLatin1Char('.');
+        s.tri = hair.readInt(p + QStringLiteral("tri"), &e);
+        s.bary = hair.readFloat(p + QStringLiteral("bary"), &e);
+        s.offset = hair.readFloat(p + QStringLiteral("off"), &e);
+        s.uv = hair.readFloat(p + QStringLiteral("uv"), &e);
+        s.polySize = hair.readInt(p + QStringLiteral("poly_size"), &e);
+        s.polyVertex = hair.readInt(p + QStringLiteral("poly_vertex"), &e);
+        s.polyUv = hair.readInt(p + QStringLiteral("poly_uv"), &e);
+        s.texturePng = hair.readBytes(p + QStringLiteral("texture"), &e);
+        const size_t n = s.tri.size() / 3;
+        bool ok = !s.name.isEmpty() && n > 0 && s.tri.size() == n * 3 && s.bary.size() == n * 3 && s.offset.size() == n * 3
+                  && !s.polySize.empty() && s.polyVertex.size() == s.polyUv.size() && !s.texturePng.isEmpty();
+        for (int32_t t : s.tri) ok = ok && t >= 0 && t < a.mhrVertices;
+        size_t corners = 0;
+        for (int32_t sz : s.polySize) { ok = ok && sz >= 3; corners += size_t(std::max(sz, 0)); }
+        ok = ok && corners == s.polyVertex.size();
+        for (int32_t v : s.polyVertex) ok = ok && v >= 0 && size_t(v) < n;
+        for (int32_t u : s.polyUv) ok = ok && u >= 0 && size_t(u) * 2 < s.uv.size();
+        if (!ok) return fail(error, QStringLiteral("Hair bundle: style '%1' is inconsistent").arg(s.name));
+        a.hairStyles.push_back(std::move(s));
+    }
+    return true;
+}
+
 bool loadAssetsFromDir(const QString& dir, Assets& out, QString* error)
 {
     QmcBundle mhr, ict;
     QString e;
     if (!mhr.open(dir + QStringLiteral("/mhr_character.qmcb"), &e)) return fail(error, e);
     if (!ict.open(dir + QStringLiteral("/ict_character.qmcb"), &e)) return fail(error, e);
-    return loadAssets(mhr, ict, out, error);
+    if (!loadAssets(mhr, ict, out, error)) return false;
+    // the hair bundle is optional (hosted separately); a file that is there but broken is reported, one that is missing is not
+    const QString hairPath = dir + QStringLiteral("/hair_character.qmcb");
+    if (QFileInfo::exists(hairPath)) {
+        QmcBundle hair;
+        if (!hair.open(hairPath, &e) || !loadHairBundle(hair, out, &e)) {
+            out.hairStyles.clear();
+            if (error) *error = e;   // not fatal: the caller may ignore it, the body assets are fine
+        }
+    }
+    return true;
 }
 
 std::vector<float> randomCoefficients(uint32_t seed, int count, float sigma, int modes)
@@ -436,72 +498,488 @@ QStringList colourNames(ColourKind kind)
     return n;
 }
 
+constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
+
+QString characterEyeDir()
+{
+    const QString env = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_DIR"));
+    return env.isEmpty() ? QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("character_eye")) : env;
+}
+
 namespace {
 // Optional textured eyeball: an OBJ named by QTMESH_CHARACTER_EYE_OBJ (its iris pole on -Y), normalised to unit radius around its
 // centroid. Not shipped: the asset's licence has to be cleared before it can be bundled, so this is an opt-in for local use.
 struct EyeMesh {
-    std::vector<float> positions, uvs;
+    std::vector<float> positions;
+    std::vector<float> uvs;
     std::vector<std::pair<uint32_t, uint32_t>> corners;   // (position, uv) per layout
     std::vector<std::vector<uint32_t>> faces;             // layout indices
 };
-const EyeMesh* eyeMeshFromEnv()
+
+using CornerKey = std::pair<uint32_t, uint32_t>;
+
+// One OBJ index: 1-based, or negative = relative to the elements read so far. Returns -1 when it is out of range.
+int resolveObjIndex(int value, int count)
+{
+    const int index = value < 0 ? value + count + 1 : value;
+    return (index < 1 || index > count) ? -1 : index - 1;
+}
+
+// One "f" line. False when any of its indices is out of range (the whole file is then refused).
+bool addObjFace(EyeMesh& m, std::map<CornerKey, uint32_t>& seen, const QList<QByteArray>& tokens)
+{
+    const int nv = int(m.positions.size() / 3);
+    const int nt = int(m.uvs.size() / 2);
+    std::vector<uint32_t> face;
+    for (int k = 1; k < tokens.size(); ++k) {
+        const QList<QByteArray> c = tokens[k].split('/');
+        const bool hasUv = c.size() > 1 && !c[1].isEmpty();
+        const int pi = resolveObjIndex(c[0].toInt(), nv);
+        const int ti = hasUv ? resolveObjIndex(c[1].toInt(), nt) : 0;
+        if (pi < 0 || ti < 0 || nt == 0) return false;
+        const CornerKey key{uint32_t(pi), uint32_t(ti)};
+        const auto inserted = seen.try_emplace(key, uint32_t(m.corners.size()));
+        if (inserted.second) m.corners.push_back(key);
+        face.push_back(inserted.first->second);
+    }
+    m.faces.push_back(std::move(face));
+    return true;
+}
+
+void normaliseToUnitRadius(std::vector<float>& positions)
+{
+    const size_t n = positions.size() / 3;
+    std::array<double, 3> centre{};
+    for (size_t i = 0; i < n; ++i)
+        for (size_t k = 0; k < 3; ++k) centre[k] += positions[i * 3 + k];
+    for (double& c : centre) c /= double(n);
+    double radius = 0;
+    for (size_t i = 0; i < n; ++i) {
+        double d2 = 0;
+        for (size_t k = 0; k < 3; ++k) d2 += (positions[i * 3 + k] - centre[k]) * (positions[i * 3 + k] - centre[k]);
+        radius += std::sqrt(d2);
+    }
+    radius /= double(n);
+    for (size_t i = 0; i < n; ++i)
+        for (size_t k = 0; k < 3; ++k) positions[i * 3 + k] = float((positions[i * 3 + k] - centre[k]) / radius);
+}
+
+bool readEyeObj(const QString& path, EyeMesh& m)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    std::map<CornerKey, uint32_t> seen;
+    while (!f.atEnd()) {
+        const QList<QByteArray> t = f.readLine().simplified().split(' ');
+        if (t.isEmpty()) continue;
+        if (t[0] == "v" && t.size() >= 4) {
+            for (int k = 1; k <= 3; ++k) m.positions.push_back(t[k].toFloat());
+        } else if (t[0] == "vt" && t.size() >= 3) {
+            m.uvs.push_back(t[1].toFloat());
+            m.uvs.push_back(t[2].toFloat());
+        } else if (t[0] == "f" && t.size() >= 4 && !addObjFace(m, seen, t)) {
+            return false;
+        }
+    }
+    if (m.positions.empty() || m.faces.empty() || m.uvs.empty()) return false;
+    normaliseToUnitRadius(m.positions);
+    return true;
+}
+
+// A user-supplied eye (opt-in: QTMESH_CHARACTER_EYE_OBJ or QTMESH_CHARACTER_EYE_DIR must be set; nothing is picked up implicitly,
+// since such an asset's licence is the user's business). Its iris pole is -Y.
+const EyeMesh* customEyeMesh()
 {
     static const EyeMesh* cached = []() -> const EyeMesh* {
-        const QByteArray path = qgetenv("QTMESH_CHARACTER_EYE_OBJ");
+        QString path = QString::fromLocal8Bit(qgetenv("QTMESH_CHARACTER_EYE_OBJ"));
+        if (path.isEmpty() && !qEnvironmentVariableIsEmpty("QTMESH_CHARACTER_EYE_DIR")) path = QDir(characterEyeDir()).filePath(QStringLiteral("eye.obj"));
         if (path.isEmpty()) return nullptr;
-        QFile f(QString::fromLocal8Bit(path));
-        if (!f.open(QIODevice::ReadOnly)) return nullptr;
-        static EyeMesh m;
-        std::map<std::pair<uint32_t, uint32_t>, uint32_t> seen;
-        while (!f.atEnd()) {
-            const QList<QByteArray> t = f.readLine().simplified().split(' ');
-            if (t.isEmpty()) continue;
-            if (t[0] == "v" && t.size() >= 4) for (int k = 1; k <= 3; ++k) m.positions.push_back(t[k].toFloat());
-            else if (t[0] == "vt" && t.size() >= 3) { m.uvs.push_back(t[1].toFloat()); m.uvs.push_back(t[2].toFloat()); }
-            else if (t[0] == "f" && t.size() >= 4) {
-                bool bad = false;
-                std::vector<uint32_t> face;
-                for (int k = 1; k < t.size(); ++k) {
-                    const QList<QByteArray> c = t[k].split('/');
-                    // 1-based, or negative = relative to the elements read so far; anything out of range rejects the file
-                    const int nv = int(m.positions.size() / 3), nt = int(m.uvs.size() / 2);
-                    int pv = c[0].toInt(), tv = c.size() > 1 && !c[1].isEmpty() ? c[1].toInt() : 1;
-                    if (pv < 0) pv += nv + 1;
-                    if (tv < 0) tv += nt + 1;
-                    if (pv < 1 || pv > nv || tv < 1 || tv > std::max(nt, 1)) { bad = true; break; }
-                    const uint32_t pi = uint32_t(pv - 1), ti = uint32_t(tv - 1);
-                    auto it = seen.find({pi, ti});
-                    if (it == seen.end()) { it = seen.emplace(std::make_pair(pi, ti), uint32_t(m.corners.size())).first; m.corners.push_back({pi, ti}); }
-                    face.push_back(it->second);
-                }
-                if (bad) return nullptr;
-                m.faces.push_back(std::move(face));
-            }
-        }
-        const size_t n = m.positions.size() / 3;
-        if (n == 0 || m.faces.empty() || m.uvs.empty()) return nullptr;
-        double c[3] = {0, 0, 0};
-        for (size_t i = 0; i < n; ++i) for (int k = 0; k < 3; ++k) c[k] += m.positions[i * 3 + size_t(k)];
-        for (int k = 0; k < 3; ++k) c[k] /= double(n);
-        double r = 0;
-        for (size_t i = 0; i < n; ++i) {
-            double d2 = 0;
-            for (int k = 0; k < 3; ++k) { const double d = m.positions[i * 3 + size_t(k)] - c[k]; d2 += d * d; }
-            r += std::sqrt(d2);
-        }
-        r /= double(n);
-        for (size_t i = 0; i < n; ++i) for (int k = 0; k < 3; ++k) m.positions[i * 3 + size_t(k)] = float((m.positions[i * 3 + size_t(k)] - c[k]) / r);
-        return &m;
+        static EyeMesh mesh;
+        if (!QFileInfo::exists(path) || !readEyeObj(path, mesh)) return nullptr;
+        return &mesh;
     }();
     return cached;
 }
+
+// The procedural eye (EyeTexture.h): a unit sphere with a polar UV map, iris pole on -Y like the OBJ convention above.
+const EyeMesh* proceduralEyeMesh()
+{
+    static const EyeMesh mesh = [] {
+        const EyeSphere sphere = makeEyeSphere();
+        EyeMesh m;
+        m.positions = sphere.positions;
+        m.uvs = sphere.uvs;
+        const uint32_t n = uint32_t(sphere.positions.size() / 3);
+        for (uint32_t i = 0; i < n; ++i) m.corners.push_back({i, i});
+        for (size_t i = 0; i + 2 < sphere.indices.size(); i += 3) m.faces.push_back({sphere.indices[i], sphere.indices[i + 1], sphere.indices[i + 2]});
+        return m;
+    }();
+    return &mesh;
+}
+
+// Where an eyeball ended up: its centre and mean radius.
+struct EyeSeat {
+    std::array<float, 3> centre{};
+    float radius = 0.0f;
+    bool seated = false;
+};
+
+EyeSeat measureEye(const std::vector<float>& headPos, int v0, int v1)
+{
+    EyeSeat seat;
+    const int count = v1 - v0 + 1;
+    if (count <= 0) return seat;
+    std::array<double, 3> sum{};
+    for (int v = v0; v <= v1; ++v)
+        for (size_t k = 0; k < 3; ++k) sum[k] += headPos[size_t(v) * 3 + k];
+    for (size_t k = 0; k < 3; ++k) seat.centre[k] = float(sum[k] / count);
+    double radius = 0;
+    for (int v = v0; v <= v1; ++v) {
+        double d2 = 0;
+        for (size_t k = 0; k < 3; ++k) {
+            const double d = headPos[size_t(v) * 3 + k] - seat.centre[k];
+            d2 += d * d;
+        }
+        radius += std::sqrt(d2);
+    }
+    seat.radius = float(radius / count);
+    seat.seated = true;
+    return seat;
+}
+
+// How far the eyeball sits behind the seat measured on ICT's eyeball (fraction of its radius): ICT's eyeball is meant to be
+// seen through a translucent shell, while ours is the only surface, so at the measured seat it bulged out of the MHR lids.
+constexpr float kEyeSetBack = 0.20f;
+// Full travel of the eyeLook* shapes (degrees): in, out, up, down (ARKit's eyes move about 30 degrees horizontally).
+constexpr float kEyeLookIn = 30.0f, kEyeLookOut = 30.0f, kEyeLookUp = 25.0f, kEyeLookDown = 30.0f;
+
+// The textured eyeball of both eyes as one mesh: the file's iris looks down -Y, which is turned to +Z (the way the face looks) and
+// scaled to the seated eyeball. Rigidly skinned to the head joint. The eyeLook{In,Out,Up,Down}{Left,Right} channels of `channels`
+// (the ARKit names; the character's own sides) turn each eyeball about its centre as morph targets, so the iris looks around.
+// `pupilChannelBase` >= 0 (the procedural eye only): the index of the "pupilDilate" channel; "pupilConstrict" follows it. They move
+// the vertices around the pupil (the iris texture follows, keeping its UVs): the pupil edge goes from its rest angle to kPupilDilated
+// / kPupilConstricted.
+constexpr float kPupilDilated = 0.34f, kPupilConstricted = 0.10f;   // radians from the iris pole (rest: 0.20)
+
+Dna::Mesh buildEyeMesh(const EyeMesh& eye, const std::array<EyeSeat, 2>& seats, uint16_t headJoint, const QStringList& channels, int pupilChannelBase = -1)
+{
+    Dna::Mesh m;
+    m.name = QStringLiteral("head_eye");
+    struct Placed { int side; uint32_t first; uint32_t count; std::array<float, 3> centre; };
+    std::vector<Placed> placed;
+    for (int side = 0; side < 2; ++side) {
+        const EyeSeat& seat = seats[size_t(side)];
+        if (!seat.seated) continue;
+        const std::array<float, 3> centre{seat.centre[0], seat.centre[1], seat.centre[2] - kEyeSetBack * seat.radius};
+        const uint32_t p0 = uint32_t(m.positions.size() / 3);
+        const uint32_t t0 = uint32_t(m.uvs.size() / 2);
+        for (size_t i = 0; i + 2 < eye.positions.size(); i += 3) {
+            m.positions.push_back(centre[0] + eye.positions[i] * seat.radius);
+            m.positions.push_back(centre[1] + eye.positions[i + 2] * seat.radius);
+            m.positions.push_back(centre[2] - eye.positions[i + 1] * seat.radius);
+            m.skin.push_back({{headJoint, 1.0f}});
+        }
+        placed.push_back({side, p0, uint32_t(eye.positions.size() / 3), centre});
+        m.uvs.insert(m.uvs.end(), eye.uvs.begin(), eye.uvs.end());
+        const uint32_t l0 = uint32_t(m.layouts.size());
+        for (const auto& c : eye.corners) m.layouts.push_back({p0 + c.first, t0 + c.second, p0 + c.first});
+        for (const auto& f : eye.faces) {
+            std::vector<uint32_t> face;
+            for (uint32_t li : f) face.push_back(l0 + li);
+            m.faces.push_back(std::move(face));
+        }
+    }
+    m.normals = positionNormals(m.positions, m.faces, m.layouts);
+
+    if (pupilChannelBase >= 0) {
+        const float angles[2] = {kPupilDilated, kPupilConstricted};
+        for (int k = 0; k < 2; ++k) {
+            Dna::BlendShapeTarget bt;
+            bt.channel = pupilChannelBase + k;
+            for (size_t si = 0; si < placed.size(); ++si) {
+                const Placed& pl = placed[si];
+                const float r = seats[size_t(pl.side)].radius;
+                for (uint32_t i = 0; i < pl.count; ++i) {
+                    const std::array<float, 3> e0{eye.positions[size_t(i) * 3], eye.positions[size_t(i) * 3 + 1], eye.positions[size_t(i) * 3 + 2]};
+                    const std::array<float, 3> e1 = dilateEyePoint(e0, angles[k]);
+                    const float d[3] = {e1[0] - e0[0], e1[1] - e0[1], e1[2] - e0[2]};
+                    if (std::fabs(d[0]) + std::fabs(d[1]) + std::fabs(d[2]) < 1e-7f) continue;
+                    bt.vertexIndices.push_back(pl.first + i);
+                    bt.deltas.push_back(d[0] * r);    // the same map as the positions: (x, y, z) -> (x, z, -y) * radius
+                    bt.deltas.push_back(d[2] * r);
+                    bt.deltas.push_back(-d[1] * r);
+                }
+            }
+            if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+        }
+    }
+
+    // eye look: the character's left eye is +X (the face looks +Z, up is +Y). Out = towards the cheek, In = towards the nose.
+    struct Look { const char* name; int side; float yaw; float pitch; };   // degrees; yaw about +Y (+ = towards +X), pitch about +X (+ = down)
+    const Look looks[] = {
+        {"eyeLookInLeft", 0, -kEyeLookIn, 0}, {"eyeLookOutLeft", 0, kEyeLookOut, 0}, {"eyeLookUpLeft", 0, 0, -kEyeLookUp}, {"eyeLookDownLeft", 0, 0, kEyeLookDown},
+        {"eyeLookInRight", 1, kEyeLookIn, 0}, {"eyeLookOutRight", 1, -kEyeLookOut, 0}, {"eyeLookUpRight", 1, 0, -kEyeLookUp}, {"eyeLookDownRight", 1, 0, kEyeLookDown}};
+    constexpr double kDeg = 3.14159265358979323846 / 180.0;
+    for (const Look& lk : looks) {
+        const int channel = channels.indexOf(QLatin1String(lk.name));
+        if (channel < 0) continue;
+        const double cy = std::cos(double(lk.yaw) * kDeg), sy = std::sin(double(lk.yaw) * kDeg);
+        const double cp = std::cos(double(lk.pitch) * kDeg), sp = std::sin(double(lk.pitch) * kDeg);
+        Dna::BlendShapeTarget bt;
+        bt.channel = channel;
+        for (const Placed& pl : placed) {
+            if (pl.side != lk.side) continue;
+            for (uint32_t i = 0; i < pl.count; ++i) {
+                const uint32_t v = pl.first + i;
+                const double x = double(m.positions[size_t(v) * 3]) - pl.centre[0];
+                const double y = double(m.positions[size_t(v) * 3 + 1]) - pl.centre[1];
+                const double z = double(m.positions[size_t(v) * 3 + 2]) - pl.centre[2];
+                // pitch about X, then yaw about Y
+                const double y1 = y * cp - z * sp, z1 = y * sp + z * cp;
+                const double x2 = x * cy + z1 * sy, z2 = -x * sy + z1 * cy;
+                bt.vertexIndices.push_back(v);
+                bt.deltas.push_back(float(x2 - x));
+                bt.deltas.push_back(float(y1 - y));
+                bt.deltas.push_back(float(z2 - z));
+            }
+        }
+        if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
+    }
+    return m;
+}
+
+// A hairstyle on the SHAPED body: each vertex = the bound triangle's barycentric point + the stored offset in that triangle's current
+// frame (so the style follows the head shape); skin weights are blended from the bound vertices (top 4).
+Dna::Mesh buildHairMesh(const HairStyle& style, const Dna::Mesh& body)
+{
+    Dna::Mesh m;
+    m.name = QStringLiteral("head_hair");
+    const size_t n = style.tri.size() / 3;
+    auto point = [&](int32_t v) { return std::array<float, 3>{body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 1], body.positions[size_t(v) * 3 + 2]}; };
+    auto sub3 = [](const std::array<float, 3>& a, const std::array<float, 3>& b) { return std::array<float, 3>{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+    auto cross3 = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        return std::array<float, 3>{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]};
+    };
+    auto unit3 = [](std::array<float, 3> a) {
+        const float l = std::sqrt(a[0] * a[0] + a[1] * a[1] + a[2] * a[2]);
+        if (l > 1e-12f) for (float& x : a) x /= l;
+        return a;
+    };
+    m.positions.reserve(n * 3);
+    m.skin.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const std::array<std::array<float, 3>, 3> p = {point(style.tri[i * 3]), point(style.tri[i * 3 + 1]), point(style.tri[i * 3 + 2])};
+        const auto t1 = unit3(sub3(p[1], p[0]));
+        const auto nrm = unit3(cross3(sub3(p[1], p[0]), sub3(p[2], p[0])));
+        const auto t2 = cross3(nrm, t1);
+        for (size_t k = 0; k < 3; ++k) {
+            float v = 0.0f;
+            for (size_t j = 0; j < 3; ++j) v += style.bary[i * 3 + j] * p[j][k];
+            v += kCmToM * (style.offset[i * 3] * t1[k] + style.offset[i * 3 + 1] * t2[k] + style.offset[i * 3 + 2] * nrm[k]);
+            m.positions.push_back(v);
+        }
+        std::vector<Dna::SkinInfluence> inf;
+        for (size_t j = 0; j < 3; ++j) {
+            const size_t bv = size_t(style.tri[i * 3 + j]);
+            if (bv >= body.skin.size()) continue;
+            for (const Dna::SkinInfluence& si : body.skin[bv]) {
+                auto it = std::find_if(inf.begin(), inf.end(), [&](const Dna::SkinInfluence& x) { return x.joint == si.joint; });
+                if (it == inf.end()) inf.push_back({si.joint, style.bary[i * 3 + j] * si.weight});
+                else it->weight += style.bary[i * 3 + j] * si.weight;
+            }
+        }
+        std::sort(inf.begin(), inf.end(), [](const Dna::SkinInfluence& x, const Dna::SkinInfluence& y) { return x.weight > y.weight; });
+        if (inf.size() > 4) inf.resize(4);
+        float total = 0.0f;
+        for (const auto& x : inf) total += x.weight;
+        if (total > 1e-6f) for (auto& x : inf) x.weight /= total;
+        m.skin[i] = std::move(inf);
+    }
+    m.uvs = style.uv;
+    std::map<std::pair<int32_t, int32_t>, uint32_t> layoutOf;
+    size_t corner = 0;
+    for (int32_t size : style.polySize) {
+        std::vector<uint32_t> face;
+        for (int32_t k = 0; k < size; ++k, ++corner) {
+            const std::pair<int32_t, int32_t> key{style.polyVertex[corner], style.polyUv[corner]};
+            auto it = layoutOf.find(key);
+            if (it == layoutOf.end()) {
+                it = layoutOf.emplace(key, uint32_t(m.layouts.size())).first;
+                m.layouts.push_back({uint32_t(key.first), uint32_t(key.second), uint32_t(key.first)});
+            }
+            face.push_back(it->second);
+        }
+        m.faces.push_back(std::move(face));
+    }
+    m.normals = positionNormals(m.positions, m.faces, m.layouts);
+    return m;
+}
+
+// The lips of the built body: the lip-seam landmarks give the centre and the width of the mouth (the seam covers the middle ~70 % of
+// it). Expressed in the final coordinates, i.e. after the 180 degree turn about Y that faces the character towards -Z.
+LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    LipFrame lips;
+    if (a.landmarkLip.empty()) return lips;
+    std::array<double, 3> sum{};
+    float minX = 1e9f;
+    float maxX = -1e9f;
+    for (int32_t v : a.landmarkLip) {
+        if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return LipFrame();
+        for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+        minX = std::min(minX, body.positions[size_t(v) * 3]);
+        maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+    }
+    const double n = double(a.landmarkLip.size());
+    const float turn = facePlusZ ? 1.0f : -1.0f;   // x and z change sign under the turn
+    lips.centre = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+    lips.halfWidth = 0.5f * (maxX - minX) * 1.38f;
+    lips.forward = turn;
+    lips.valid = lips.halfWidth > 1e-4f;
+    return lips;
+}
+
+// Per body vertex: the skin-weighted body-hair density of the joints that drive it.
+std::vector<float> bodyHairMapOf(const Dna::Rig& rig)
+{
+    std::vector<float> map;
+    if (rig.meshes.empty()) return map;
+    const Dna::Mesh& body = rig.meshes.front();
+    std::vector<float> perJoint(rig.joints.size(), 0.0f);
+    for (size_t j = 0; j < rig.joints.size(); ++j) perJoint[j] = bodyHairDensityOfJoint(rig.joints[j].name);
+    map.assign(body.positions.size() / 3, 0.0f);
+    for (size_t v = 0; v < map.size() && v < body.skin.size(); ++v) {
+        float density = 0.0f;
+        float total = 0.0f;
+        for (const Dna::SkinInfluence& inf : body.skin[v]) {
+            if (inf.joint >= perJoint.size()) continue;
+            density += inf.weight * perJoint[inf.joint];
+            total += inf.weight;
+        }
+        map[v] = total > 1e-6f ? density / total : 0.0f;
+    }
+    return map;
+}
+
+// The nipples: on the mean body a nipple sits ~10 cm either side of the midline at ~72 % of the body height, on the front of the
+// chest. The few mean-body vertices nearest to that point are the landmark: their positions on the SHAPED body (same vertex ids)
+// give the centre, so it follows the body shape. Same coordinates as lipFrameOf.
+NippleFrame nippleFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    NippleFrame nipples;
+    const size_t count = a.mhrBase.size() / 3;
+    if (count == 0 || body.positions.size() < count * 3) return nipples;
+    constexpr float kHalfSpacing = 11.6f;   // cm, on the mean body
+    constexpr float kHeightRatio = 0.742f;
+    float top = 0.0f;
+    for (size_t v = 0; v < count; ++v) top = std::max(top, a.mhrBase[v * 3 + 1]);
+    const float turn = facePlusZ ? 1.0f : -1.0f;
+    std::array<float, 2> meanX{};
+    for (size_t side = 0; side < 2; ++side) {
+        const float sx = side == 0 ? 1.0f : -1.0f;   // +x is the character's left on the unturned body
+        std::vector<std::pair<float, size_t>> near;
+        for (size_t v = 0; v < count; ++v) {
+            if (a.mhrBase[v * 3 + 2] < 8.0f) continue;   // the front of the chest only
+            const float dx = a.mhrBase[v * 3] - sx * kHalfSpacing;
+            const float dy = a.mhrBase[v * 3 + 1] - kHeightRatio * top;
+            near.push_back({dx * dx + dy * dy, v});
+        }
+        if (near.size() < 6) return NippleFrame();
+        std::partial_sort(near.begin(), near.begin() + 6, near.end());
+        std::array<double, 3> sum{};
+        for (size_t i = 0; i < 6; ++i)
+            for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[near[i].second * 3 + k];
+        // final coordinates: the 180 degree turn negates x and z; the list order stays "character's left first"
+        nipples.centre[side] = {float(sum[0] / 6.0) * turn, float(sum[1] / 6.0), float(sum[2] / 6.0) * turn};
+        meanX[side] = float(sum[0] / 6.0);
+    }
+    const float spacing = std::fabs(meanX[0] - meanX[1]);
+    nipples.scale = spacing / (2.0f * kHalfSpacing * 0.01f);   // metres of the shaped body vs the mean body's 20 cm
+    nipples.forward = turn;
+    nipples.valid = spacing > 1e-4f;
+    return nipples;
+}
+
+// The eyes of the built body (the eyelid-layer landmarks), for the eyebrows; same coordinates as lipFrameOf.
+BrowFrame browFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
+{
+    BrowFrame brows;
+    const std::array<const std::vector<int32_t>*, 2> lists = {&a.landmarkEyeL, &a.landmarkEyeR};
+    const float turn = facePlusZ ? 1.0f : -1.0f;
+    float width = 0.0f;
+    for (size_t side = 0; side < 2; ++side) {
+        const std::vector<int32_t>& list = *lists[side];
+        if (list.empty()) return BrowFrame();
+        std::array<double, 3> sum{};
+        float minX = 1e9f;
+        float maxX = -1e9f;
+        for (int32_t v : list) {
+            if (v < 0 || size_t(v) * 3 + 2 >= body.positions.size()) return BrowFrame();
+            for (size_t k = 0; k < 3; ++k) sum[k] += body.positions[size_t(v) * 3 + k];
+            minX = std::min(minX, body.positions[size_t(v) * 3]);
+            maxX = std::max(maxX, body.positions[size_t(v) * 3]);
+        }
+        const double n = double(list.size());
+        brows.eye[side] = {float(sum[0] / n) * turn, float(sum[1] / n), float(sum[2] / n) * turn};
+        width += 0.5f * (maxX - minX);
+    }
+    brows.halfWidth = width * 0.5f;
+    brows.forward = turn;
+    brows.valid = brows.halfWidth > 1e-4f;
+    return brows;
+}
+
+// MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
+// skeleton lean 13-25 degrees front/back and the clavicles point 30 degrees off the shoulder line. Retargeting aims every bone
+// at the source's direction, so a vertical source straightens those leans bone by bone: Spine2 turned by 30-40 degrees and
+// dragged the shoulders (its children) down, and the clavicles swung the arms. The pivots of the spine chain are lined up on
+// one vertical (depth only) and each clavicle root is brought to the depth of its arm joint, like a Mixamo rig's. The mesh
+// does not change (skinning at rest only depends on the joint positions it is bound to).
+void straightenStandardSkeleton(std::vector<std::array<float, 3>>& gt, const Assets& a)
+{
+    std::unordered_map<std::string, int> byName;
+    for (int j = 0; j < int(gt.size()); ++j) byName.try_emplace(SamBody::mhrAlias(a.jointNames[j].toStdString()), j);
+    auto at = [&](const std::string& n) {
+        const auto it = byName.find(n);
+        return it == byName.end() ? -1 : it->second;
+    };
+    const std::array<int, 6> chain = {at("Hips"), at("Spine"), at("Spine1"), at("Spine2"), at("Neck"), at("Head")};
+    if (std::all_of(chain.begin(), chain.end(), [](int c) { return c >= 0; })) {
+        float z = 0;
+        for (size_t i = 1; i <= 4; ++i) z += gt[size_t(chain[i])][2];
+        z /= 4.0f;
+        for (int c : chain) gt[size_t(c)][2] = z;
+    }
+    for (const std::string side : {"Left", "Right"}) {
+        const int shoulder = at(side + "Shoulder");
+        const int arm = at(side + "Arm");
+        if (shoulder >= 0 && arm >= 0) gt[size_t(shoulder)][2] = gt[size_t(arm)][2];
+    }
+}
 }  // namespace
+
+Dna::Mesh hairMeshOnBody(const HairStyle& style, const Dna::Mesh& body) { return buildHairMesh(style, body); }
+float bodyHairDensityOfJoint(const QString& jointName)
+{
+    struct Rule {
+        const char* part;
+        float density;
+    };
+    // most specific first; the first part found in the name wins
+    static const std::array<Rule, 14> rules = {{
+        {"ForeArm", 0.75f}, {"Hand", 0.22f}, {"Shoulder", 0.10f}, {"Arm", 0.38f},
+        {"UpLeg", 0.60f}, {"Toe", 0.10f}, {"Foot", 0.20f}, {"Leg", 0.90f},
+        {"Spine2", 0.55f}, {"Spine1", 0.48f}, {"Spine", 0.42f}, {"Hips", 0.30f}, {"Neck", 0.15f}, {"Head", 0.0f}}};
+    for (const Rule& r : rules)
+        if (jointName.contains(QLatin1String(r.part))) return r.density;
+    return 0.0f;
+}
 
 bool surfaceForMesh(const QString& meshName, Surface* out)
 {
     static const std::pair<const char*, Surface> table[] = {
         {"body", Surface::Skin}, {"head_skin", Surface::Skin}, {"head_mouth", Surface::Mouth}, {"head_teeth", Surface::Teeth},
-        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}};
+        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}, {"head_hair", Surface::Hair}};
     for (const auto& t : table)
         if (meshName == QLatin1String(t.first)) {
             if (out) *out = t.second;
@@ -542,30 +1020,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             gq[size_t(j)] = mul(gq[size_t(par)], lq);
         }
     }
-    // MHR's spine is an S-curve and its clavicle roots sit behind the arm joints, so the bone-to-child directions of the standard
-    // skeleton lean 13-25 degrees front/back and the clavicles point 30 degrees off the shoulder line. Retargeting aims every bone
-    // at the source's direction, so a vertical source straightens those leans bone by bone: Spine2 turned by 30-40 degrees and
-    // dragged the shoulders (its children) down, and the clavicles swung the arms. The pivots of the spine chain are lined up on
-    // one vertical (depth only) and each clavicle root is brought to the depth of its arm joint, like a Mixamo rig's. The mesh
-    // does not change (skinning at rest only depends on the joint positions it is bound to).
-    if (p.standardSkeleton) {
-        std::unordered_map<std::string, int> byName;
-        for (int j = 0; j < J; ++j) byName.emplace(SamBody::mhrAlias(a.jointNames[j].toStdString()), j);
-        auto at = [&](const char* n) { const auto it = byName.find(n); return it == byName.end() ? -1 : it->second; };
-        const int chain[] = {at("Hips"), at("Spine"), at("Spine1"), at("Spine2"), at("Neck"), at("Head")};
-        bool all = true;
-        for (int c : chain) all = all && c >= 0;
-        if (all) {
-            float z = 0;
-            for (int i = 1; i <= 4; ++i) z += gt[size_t(chain[i])][2];
-            z /= 4.0f;
-            for (int c : chain) gt[size_t(c)][2] = z;
-        }
-        for (const char* side : {"Left", "Right"}) {
-            const int sh = at((std::string(side) + "Shoulder").c_str()), arm = at((std::string(side) + "Arm").c_str());
-            if (sh >= 0 && arm >= 0) gt[size_t(sh)][2] = gt[size_t(arm)][2];
-        }
-    }
+    if (p.standardSkeleton) straightenStandardSkeleton(gt, a);
     // Which joints are kept. MHR carries ~127 joints: the standard body (spine, limbs, fingers: the ones with a standard name),
     // plus procedural helpers (twist joints driven by its runtime), sub-joints (wrist twist, ankle sub-joints, metacarpals) and the
     // face joints. Animation tools drive plain rotations of a Mixamo-style skeleton and know nothing about the extras: left in, they
@@ -1079,9 +1534,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         if (y < neckCutY + 0.03f && y > neckCutY - 0.08f) seamBody.push_back(v);
     }
 
-    float eyeCentre[2][3] = {{0, 0, 0}, {0, 0, 0}};
-    float eyeRadius[2] = {0, 0};
-    bool eyeSeated[2] = {false, false};
+    std::array<EyeSeat, 2> eyeSeat;   // left, right
     if (p.nativeHead) {
         // Seat each ICT eyeball in the MHR face: the identity shapes move the lids forwards or back by up to a centimetre, so
         // the eyeball is pushed along z until its front sits just ahead of the (opened) lid margin of THIS face.
@@ -1113,23 +1566,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         h[1] = ty + (h[1] - cy) * shrink;
                         h[2] = tz + (h[2] - cz0) * shrink;
                     }
-                {   // remember where the eyeball ended up (centre + radius), for an alternative eyeball mesh
-                    const int si = cx > 0 ? 0 : 1;
-                    double c3[3] = {0, 0, 0};
-                    int cn2 = 0;
-                    for (int v = scl->v0; v <= scl->v1; ++v) { for (int k = 0; k < 3; ++k) c3[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn2; }
-                    if (cn2 > 0) {
-                        double rr = 0;
-                        for (int k = 0; k < 3; ++k) eyeCentre[si][k] = float(c3[k] / cn2);
-                        for (int v = scl->v0; v <= scl->v1; ++v) {
-                            double d2 = 0;
-                            for (int k = 0; k < 3; ++k) { const double d = headPos[size_t(v) * 3 + size_t(k)] - eyeCentre[si][k]; d2 += d * d; }
-                            rr += std::sqrt(d2);
-                        }
-                        eyeRadius[si] = float(rr / cn2);
-                        eyeSeated[si] = true;
-                    }
-                }
+                eyeSeat[cx > 0 ? 0 : 1] = measureEye(headPos, scl->v0, scl->v1);   // for an alternative eyeball mesh
                 continue;
             }
             const float dyLift = 0.0072f + 0.00505f;   // + the hand-fitted offset (up 5.05 mm)   // the MHR lid groove sits about 6.5 mm above the ICT eyeball centre (the lids are opened there)
@@ -1163,7 +1600,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     }
     // The mouth interior (ICT gums, tongue, teeth) follows the lips of this face: its centre sits at a fixed offset from the centroid
     // of the lip sheet's vertices (fitted by hand on one character).
-    float mouthShift[3] = {0.0f, 0.008065f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
+    float mouthShift[3] = {0.0f, 0.008065f + 0.004f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
     if (p.nativeHead && !a.landmarkLip.empty()) {
         double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
         for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
@@ -1172,11 +1609,15 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             if (const IctPart* q = a.part(QString::fromLatin1(pn)))
                 for (int v = q->v0; v <= q->v1; ++v) { for (int k = 0; k < 3; ++k) C[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn; }
         if (cn > 0) {
-            const double om[3] = {0.0, -0.008544, -0.031834};   // offset from the lip landmark: 8.5 mm below, 31.8 mm behind
+            const double om[3] = {0.0, -0.008544 + 0.004, -0.031834};   // offset from the lip landmark: 0.5 mm below (a tooth length, 8 mm, higher than the first fit: with the jaw open the upper teeth showed and the lower ones did not), 31.8 mm behind
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
-    const EyeMesh* eyeObj = (p.nativeHead && p.openEyes && (eyeSeated[0] || eyeSeated[1])) ? eyeMeshFromEnv() : nullptr;
+    bool pupilChannels = false;
+    const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
+    const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
+    const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
+    if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
     for (const Group& g : groups) {
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
@@ -1271,8 +1712,14 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             m.skin[i] = std::move(inf);
         }
 
-        // expression shapes -> sparse morph targets (ICT cm -> world m, scaled with the head)
+        // expression shapes -> sparse morph targets (ICT cm -> world m, scaled with the head). The mouth interior follows the jaw
+        // shapes of the MHR head, whose jaw drops ~1.4x as far as ICT's (measured on jawOpen: lower lip 2.94 cm, lower teeth 2.11 cm):
+        // unscaled, the lower teeth stayed behind the lower lip and only the upper teeth showed.
+        const bool mouthInterior = p.nativeHead && (std::strcmp(g.mesh, "head_teeth") == 0 || std::strcmp(g.mesh, "head_mouth") == 0);
         for (int e = 0; e < a.ictExpressions; ++e) {
+            const QString& shapeName = e < a.expressionNames.size() ? a.expressionNames[e] : QString();
+            const bool jawShape = shapeName.startsWith(QLatin1String("jaw"));
+            const float follow = (mouthInterior && jawShape) ? kMouthJawFollow : 1.0f;
             Dna::BlendShapeTarget bt;
             bt.channel = e;
             const float* d = a.ictExpression.data() + size_t(e) * a.ictNeutral.size();
@@ -1280,7 +1727,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 const float* dv = d + size_t(globalOf[i]) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 1e-3f) continue;   // < 10 micrometres
                 bt.vertexIndices.push_back(uint32_t(i));
-                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM);
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM * follow);
             }
             if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
         }
@@ -1290,34 +1737,28 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         rig.meshes.push_back(std::move(m));
     }
     if (eyeObj) {
-        Dna::Mesh m;
-        m.name = QStringLiteral("head_eye");
-        const uint32_t headJoint = uint32_t(newIndex[size_t(cHead)]);
-        for (int side = 0; side < 2; ++side) {
-            if (!eyeSeated[side]) continue;
-            const uint32_t p0 = uint32_t(m.positions.size() / 3), t0 = uint32_t(m.uvs.size() / 2);
-            for (size_t i = 0; i + 2 < eyeObj->positions.size(); i += 3) {
-                const float x = eyeObj->positions[i], y = eyeObj->positions[i + 1], z = eyeObj->positions[i + 2];
-                // the file's iris looks down -Y: turn it to +Z (the way the face looks), scale to the seated eyeball
-                m.positions.push_back(eyeCentre[side][0] + x * eyeRadius[side]);
-                m.positions.push_back(eyeCentre[side][1] + z * eyeRadius[side]);
-                m.positions.push_back(eyeCentre[side][2] - y * eyeRadius[side]);
-                m.skin.push_back({{uint16_t(headJoint), 1.0f}});
-            }
-            for (size_t i = 0; i + 1 < eyeObj->uvs.size(); i += 2) { m.uvs.push_back(eyeObj->uvs[i]); m.uvs.push_back(eyeObj->uvs[i + 1]); }
-            const uint32_t l0 = uint32_t(m.layouts.size());
-            for (const auto& c : eyeObj->corners) m.layouts.push_back({p0 + c.first, t0 + c.second, p0 + c.first});
-            for (const auto& f : eyeObj->faces) {
-                std::vector<uint32_t> face;
-                for (uint32_t li : f) face.push_back(l0 + li);
-                m.faces.push_back(std::move(face));
-            }
-        }
-        m.normals = positionNormals(m.positions, m.faces, m.layouts);
+        Dna::Mesh m = buildEyeMesh(*eyeObj, eyeSeat, uint16_t(newIndex[size_t(cHead)]), a.expressionNames, custom ? -1 : int(a.expressionNames.size()));
+        if (!custom) pupilChannels = true;
         rep.headVertices += int(m.positions.size() / 3);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;
         rig.meshes.push_back(std::move(m));
+    }
+    if (!p.nativeHead && !p.hairStyle.isEmpty())
+        rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
+    if (p.nativeHead && !p.hairStyle.isEmpty()) {
+        if (const HairStyle* hair = a.hairStyle(p.hairStyle)) {
+            Dna::Mesh m = buildHairMesh(*hair, body);
+            rep.headVertices += int(m.positions.size() / 3);
+            rep.headTriangles += int(m.faces.size());
+            rep.meshNames << m.name;
+            rep.hairStyle = hair->name;
+            rep.hairTexturePng = tintHairTexturePng(hair->texturePng, p.hairColour);
+            if (rep.hairTexturePng.isEmpty()) rep.hairTexturePng = hair->texturePng;
+            rig.meshes.push_back(std::move(m));
+        } else {
+            rep.warnings << QStringLiteral("Unknown hairstyle '%1'").arg(p.hairStyle);
+        }
     }
     if (p.nativeHead && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
         for (int e = 0; e < a.ictExpressions; ++e) {
@@ -1338,6 +1779,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.meshNames.prepend(body.name);
     rig.meshes.insert(rig.meshes.begin(), std::move(body));
     rig.blendShapeChannels = a.expressionNames;
+    if (pupilChannels) rig.blendShapeChannels << QStringLiteral("pupilDilate") << QStringLiteral("pupilConstrict");
     // Every part carries every channel. glTF puts all the parts of a node into ONE mesh whose primitives must share the same morph
     // targets in the same order (and takes the target names from the first primitive, which is the body): a part that skipped a
     // channel it does not deform would scramble the targets or lose the names on export. A channel a part does not move gets a
@@ -1360,6 +1802,10 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     rep.morphTargets = a.ictExpressions;
     if (rig.meshes.size() < 2) rep.warnings << QStringLiteral("The head produced no geometry.");
 
+    rep.lips = lipFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    rep.brows = browFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    rep.nipples = nippleFrameOf(a, rig.meshes.front(), p.facePlusZ);
+    if (p.bodyHair > 0.0f) rep.bodyHair = bodyHairMapOf(rig);
     if (!p.facePlusZ) Dna::yawRig(rig, 3.14159265358979323846);
     return rig;
 }

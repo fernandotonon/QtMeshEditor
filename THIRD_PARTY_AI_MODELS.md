@@ -697,7 +697,7 @@ vertices) whose shape/proportions come from the person.
   **MIT** (verified 2026-10-17 via the GitHub API and the repo `LICENSE`).
   Built from source by `cmake/OpenRigLogic.cmake` behind `-DENABLE_OPENRIGLOGIC=ON`
   (default OFF), pinned to the `5.8` stable-branch commit
-  `b69fd51184033dcb8365a4f5515ffc1646f6cf68` (RigLogic 13.2.9-hotfix1; re-pinned from `55756aca`, which upstream orphaned when it rewrote the branch history — identical tree). The `main`
+  `1b20901ec6fcef119eed71a23a60ae10b3c83a44` (RigLogic 13.2.9; re-pinned from `55756aca`, which upstream orphaned when it rewrote the branch history — see `cmake/OpenRigLogic.cmake`). The `main`
   branch is documented upstream as experimental and is not used.
 - **Attribution:** MIT requires the copyright notice to accompany copies. The
   static library is linked into the binary; the upstream `LICENSE` text is
@@ -715,3 +715,4 @@ vertices) whose shape/proportions come from the person.
 - **MHR (Momentum Human Rig):** body mesh, 45 identity shape vectors, skeleton and skin weights, Apache-2.0 (facebookresearch/MHR). Repacked into `character/mhr_character.qmcb`.
 - **ICT-FaceKit:** neutral head, 100 identity modes and 51 ARKit expression shapes, MIT (USC-ICT/ICT-FaceKit). Repacked into `character/ict_character.qmcb` (fp16 deltas).
 - Both licence texts are hosted beside the bundles (`LICENSE-MHR.txt`, `LICENSE-ICT-FaceKit.txt`) and downloaded with them. Generated characters carry no SAM weights.
+- **MakeHuman system-assets hairstyles (optional `character/hair_character.qmcb`):** ten hairstyles (afro01, bob01-02, braid01, long01, ponytail01, short01-04) and their diffuse textures, converted by `scripts/build-hair-assets.py` (re-bound to the MHR body, textures resized to 1024²). **CC0 1.0** — every `.mhclo` / `.obj` / `.mhmat` header reads "explicitly released as CC0 in september 2020" (copyright holders at the release: Data Collection AB, Joel Palmius, Jonas Hauquier; hairstyle authors in the pack's metadata). Source: the `makehuman_system_assets_cc0.zip` asset pack (makehumancommunity.org). The CC-BY packs (Hair 02 / 03 and others) are NOT used.

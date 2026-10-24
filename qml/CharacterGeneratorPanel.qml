@@ -111,6 +111,57 @@ Column {
         Label { width: 52; height: 22; text: "Eyes" }
         ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onCurrentIndexChanged: sec.liveUpdate() }
     }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "Hair" }
+        ThemedComboBox {
+            id: hairBox
+            width: sec.width - 60; height: 22; font.pixelSize: 11
+            model: ["(none)"].concat(CharacterController.hairNames)
+            currentIndex: Math.max(0, model.indexOf(CharacterController.hairStyle))
+            onActivated: { CharacterController.hairStyle = currentIndex > 0 ? model[currentIndex] : ""; sec.liveUpdate() }
+        }
+    }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "Hair colour" }
+        Flow {
+            width: sec.width - 60
+            spacing: 4
+            Repeater {
+                model: CharacterController.hairColourPresets
+                delegate: Rectangle {
+                    id: swatch
+                    required property var modelData
+                    width: 20; height: 20; radius: 3
+                    color: modelData.colour
+                    border.width: CharacterController.hairColour === modelData.colour ? 2 : 1
+                    border.color: CharacterController.hairColour === modelData.colour ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+                    Accessible.role: Accessible.Button
+                    Accessible.name: modelData.label
+                    HoverHandler { id: swatchHover }
+                    ToolTip.visible: swatchHover.hovered; ToolTip.delay: 400; ToolTip.text: modelData.label
+                    MouseArea { anchors.fill: parent; onClicked: { CharacterController.hairColour = swatch.modelData.colour; sec.liveUpdate() } }
+                }
+            }
+        }
+    }
+    Row {
+        visible: CharacterController.hairNames.length > 0
+        spacing: 4
+        Label { width: 52; height: 22; text: "" }
+        Rectangle { width: 22; height: 22; radius: 3; color: CharacterController.hairColour; border.color: AnimationControlController.borderColor }
+        Field {
+            id: hairHex
+            width: 80
+            text: CharacterController.hairColour
+            maximumLength: 7
+            onEditingFinished: { CharacterController.hairColour = text; text = Qt.binding(function() { return CharacterController.hairColour }); sec.liveUpdate() }
+        }
+        Label { height: 22; text: "any #rrggbb" ; opacity: 0.6 }
+    }
     component ShapeSlider: Row {
         id: row
         required property int mode
@@ -140,6 +191,21 @@ Column {
         spacing: 4
         ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); sec.liveUpdate() } }
         ToolBtn { label: "From seed"; onClicked: sec.reseed() }
+    }
+    InspectorCheckBox { text: "Skin texture (procedural)"; checked: CharacterController.skinTexture; onToggled: { CharacterController.skinTexture = checked; sec.liveUpdate() } }
+    Row {
+        spacing: 6
+        Label { width: 118; height: 22; text: "Body hair" }
+        Slider {
+            id: hairSlider
+            width: sec.width - 118 - 36 - 12
+            height: 22
+            from: 0; to: 1; stepSize: 0.05
+            value: CharacterController.bodyHair
+            onMoved: CharacterController.bodyHair = value
+            onPressedChanged: if (!pressed) sec.liveUpdate()
+        }
+        Label { width: 32; height: 22; horizontalAlignment: Text.AlignRight; text: hairSlider.value.toFixed(2) }
     }
     InspectorCheckBox { text: "Open eyes"; checked: CharacterController.openEyes; onToggled: { CharacterController.openEyes = checked; sec.liveUpdate() } }
     InspectorCheckBox { text: "Live preview (edits the character in place)"; checked: sec.live; onToggled: sec.live = checked }
