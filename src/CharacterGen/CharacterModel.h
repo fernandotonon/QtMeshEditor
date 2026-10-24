@@ -116,6 +116,11 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
     QString hairStyle;
+    /// Procedural clothes (see Clothing.h): a style id ("none", "tshirt", "longsleeve", "tank" / "none", "shorts", "pants") and a colour each.
+    QString topStyle = QStringLiteral("none");
+    QString bottomStyle = QStringLiteral("none");
+    Rgb topColour{0.80f, 0.80f, 0.78f};
+    Rgb bottomColour{0.24f, 0.31f, 0.47f};
     /// Rest the lids lower than the sculpted "open" shape (the old default looked too wide open) and make the blink shapes close the eye
     /// completely: the base pose becomes the old open pose plus the old eyeBlink delta, eyeBlink then goes the rest of the way (to the
     /// lower margin) and eyeWide is re-based so it still reaches the old open pose. Native head with open eyes only.
@@ -228,7 +233,7 @@ float bodyHairDensityOfJoint(const QString& jointName);
 Dna::Rig buildRig(const Assets& assets, const Params& params, BuildReport* report = nullptr, QString* error = nullptr);
 
 /// Which material a built mesh takes (by its name) — the scene layer maps this to a tint.
-enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes, Eye, Hair };
+enum class Surface { Skin, Mouth, Teeth, Sclera, Iris, Lashes, Eye, Hair, ClothTop, ClothBottom };
 bool surfaceForMesh(const QString& meshName, Surface* out);
 
 }  // namespace CharacterGen

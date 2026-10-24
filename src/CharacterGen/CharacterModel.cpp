@@ -1,5 +1,6 @@
 #include "CharacterModel.h"
 #include "EyeTexture.h"
+#include "Clothing.h"
 #include "Eyelashes.h"
 #include "LidClose.h"
 #include "HairTint.h"
@@ -831,6 +832,26 @@ void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& 
     }
 }
 
+// The procedural garments (Clothing.h), cut from the finished body and added as their own meshes.
+void addClothes(const Params& p, const Dna::Mesh& body, Dna::Rig& rig, BuildReport& rep)
+{
+    TopKind top = TopKind::None;
+    BottomKind bottom = BottomKind::None;
+    parseTopStyle(p.topStyle, &top);
+    parseBottomStyle(p.bottomStyle, &bottom);
+    if (top == TopKind::None && bottom == BottomKind::None) return;
+    if (!p.standardSkeleton || !p.identityBones) {
+        rep.warnings << QStringLiteral("Clothes need the standard skeleton (identity bone orientations): none were added.");
+        return;
+    }
+    const JointPositions joints = jointWorldPositions(rig);
+    for (Dna::Mesh& m : std::array<Dna::Mesh, 2>{buildTop(top, body, joints), buildBottom(bottom, body, joints)}) {
+        if (m.faces.empty()) continue;
+        rep.meshNames << m.name;
+        rig.meshes.push_back(std::move(m));
+    }
+}
+
 // A hairstyle on the SHAPED body: each vertex = the bound triangle's barycentric point + the stored offset in that triangle's current
 // frame (so the style follows the head shape); skin weights are blended from the bound vertices (top 4).
 Dna::Mesh buildHairMesh(const HairStyle& style, const Dna::Mesh& body)
@@ -1062,7 +1083,8 @@ bool surfaceForMesh(const QString& meshName, Surface* out)
 {
     static const std::pair<const char*, Surface> table[] = {
         {"body", Surface::Skin}, {"head_skin", Surface::Skin}, {"head_mouth", Surface::Mouth}, {"head_teeth", Surface::Teeth},
-        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}, {"head_hair", Surface::Hair}};
+        {"head_sclera", Surface::Sclera}, {"head_iris", Surface::Iris}, {"head_lashes", Surface::Lashes}, {"head_eye", Surface::Eye}, {"head_hair", Surface::Hair},
+        {"cloth_top", Surface::ClothTop}, {"cloth_bottom", Surface::ClothBottom}};
     for (const auto& t : table)
         if (meshName == QLatin1String(t.first)) {
             if (out) *out = t.second;
@@ -1857,6 +1879,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rig.meshes.push_back(std::move(m));
         }
     }
+    addClothes(p, body, rig, rep);
     if (!p.nativeHead && !p.hairStyle.isEmpty())
         rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
     if (p.nativeHead && !p.hairStyle.isEmpty()) {
