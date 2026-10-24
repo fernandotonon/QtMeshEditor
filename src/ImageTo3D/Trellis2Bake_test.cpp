@@ -357,6 +357,102 @@ TEST(Trellis2BakeTest, BakeTransfersVolumeAttributesAndFlatNormal)
     EXPECT_GT(flat, normCovered * 3 / 4);
 }
 
+TEST(Trellis2BakeTest, DetailNormalUsesTheViewportBitangentConvention)
+{
+    // The viewport shader rebuilds the bitangent from Ogre's tangent parity,
+    // which TangentSpaceCalc defines as the REVERSE of the textbook glTF sign
+    // ("the 'V' texture coordinate is actually left handed"). The baked detail
+    // normal has to be expressed in that frame or every chart is lit as if its
+    // relief were flipped along V (dark smears on jaws, shoulders, folds).
+    // Target = a flat quad, source = the same quad tilted about a DIAGONAL axis
+    // (xatlas picks the chart axes arbitrarily, so the tilt must show up in both
+    // the tangent and the bitangent channel): the baked green channel must equal
+    // the tilt projected on Ogre's bitangent.
+    const std::vector<float> tpos = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+    const std::vector<uint32_t> tidx = {0, 1, 2, 0, 2, 3};
+    const float th = 30.0f * 3.14159265f / 180.0f;
+    const float k0 = 0.70710678f, k1 = 0.70710678f;           // axis (1,1,0)/sqrt2
+    // Rodrigues rotation of (x,y,0) about k by th
+    auto rot = [&](float x, float y, float out[3]) {
+        const float c = std::cos(th), sn = std::sin(th);
+        const float kx = k0 * x + k1 * y;                        // k . v
+        // k x v = (k1*0 - 0*y, 0*x - k0*0, k0*y - k1*x)
+        const float cx = 0.0f, cy = 0.0f, cz = k0 * y - k1 * x;
+        out[0] = x * c + cx * sn + k0 * kx * (1 - c);
+        out[1] = y * c + cy * sn + k1 * kx * (1 - c);
+        out[2] = 0.0f * c + cz * sn;
+    };
+    // The source is a finely subdivided plane (a dense scan, not two huge
+    // triangles — the closest-point grid is sized from triangle density).
+    constexpr int kN = 24;
+    std::vector<float> spos;
+    std::vector<uint32_t> sidx;
+    for (int j = 0; j <= kN; ++j)
+        for (int i = 0; i <= kN; ++i) {
+            float q[3];
+            rot(float(i) / kN, float(j) / kN, q);
+            spos.insert(spos.end(), {q[0], q[1], q[2]});
+        }
+    for (int j = 0; j < kN; ++j)
+        for (int i = 0; i < kN; ++i) {
+            const uint32_t a0 = uint32_t(j * (kN + 1) + i), b0 = a0 + 1,
+                           c0 = a0 + kN + 1, d0 = c0 + 1;
+            sidx.insert(sidx.end(), {a0, b0, d0, a0, d0, c0});
+        }
+    // rotated plane normal: z -> z*cos + (k x z)*sin, k x z = (k1, -k0, 0)
+    const float Ns[3] = {k1 * std::sin(th), -k0 * std::sin(th), std::cos(th)};
+
+    const uint8_t row[6] = {255, 204, 51, 230, 64, 255};
+    const float origin[3] = {-0.5f, -0.5f, -0.5f};
+    ConstVolume vol;
+    vol.build(8, row, 0.25f, origin);
+    Trellis2Bake::BakeOptions opts;
+    opts.textureSize = 64;
+    const auto r = Trellis2Bake::bake(tpos, tidx, spos, sidx, vol.sampler, opts);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_FALSE(r.normalMap.isNull());
+
+    // First output triangle: T = dP/du, V = dP/dv, from the baked positions/UVs.
+    const uint32_t i0 = r.indices[0], i1 = r.indices[1], i2 = r.indices[2];
+    auto P = [&](uint32_t i, int k) { return r.positions[i * 3 + k]; };
+    auto U = [&](uint32_t i, int k) { return r.uvs[i * 2 + k]; };
+    float e1[3], e2[3];
+    for (int k = 0; k < 3; ++k) { e1[k] = P(i1, k) - P(i0, k); e2[k] = P(i2, k) - P(i0, k); }
+    const float du1 = U(i1, 0) - U(i0, 0), dv1 = U(i1, 1) - U(i0, 1);
+    const float du2 = U(i2, 0) - U(i0, 0), dv2 = U(i2, 1) - U(i0, 1);
+    const float det = du1 * dv2 - du2 * dv1;
+    ASSERT_GT(std::fabs(det), 1e-12f);
+    float T[3], V[3];
+    for (int k = 0; k < 3; ++k) {
+        T[k] = (e1[k] * dv2 - e2[k] * dv1) / det;     // dP/du
+        V[k] = (e2[k] * du1 - e1[k] * du2) / det;     // dP/dv
+    }
+    auto len = [](const float* x) { return std::sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]); };
+    for (int k = 0; k < 3; ++k) T[k] /= len(T);
+    const float N[3] = {0, 0, 1};
+    const float cNT[3] = {N[1] * T[2] - N[2] * T[1], N[2] * T[0] - N[0] * T[2],
+                          N[0] * T[1] - N[1] * T[0]};
+    const float cTV[3] = {T[1] * V[2] - T[2] * V[1], T[2] * V[0] - T[0] * V[2],
+                          T[0] * V[1] - T[1] * V[0]};
+    // Ogre: parity = (cross(U,V) . N >= 0) ? -1 : +1; viewport B = cross(N,T) * parity
+    const float parity = (cTV[0] * N[0] + cTV[1] * N[1] + cTV[2] * N[2]) >= 0.0f ? -1.0f : 1.0f;
+    float B[3];
+    for (int k = 0; k < 3; ++k) B[k] = cNT[k] * parity;
+    const float expY = Ns[0] * B[0] + Ns[1] * B[1] + Ns[2] * B[2];
+    ASSERT_GT(std::fabs(expY), 0.2f);   // the tilt must be visible in G
+
+    // Texel at the triangle's UV centroid (no V flip in the bake).
+    const float cu = (U(i0, 0) + U(i1, 0) + U(i2, 0)) / 3.0f;
+    const float cv = (U(i0, 1) + U(i1, 1) + U(i2, 1)) / 3.0f;
+    const int px = std::clamp(int(cu * r.normalMap.width()), 0, r.normalMap.width() - 1);
+    const int py = std::clamp(int(cv * r.normalMap.height()), 0, r.normalMap.height() - 1);
+    const uchar* g = r.normalMap.scanLine(py) + size_t(px) * 3;
+    const float gotY = (float(g[1]) / 255.0f) * 2.0f - 1.0f;
+    EXPECT_NEAR(gotY, expY, 0.08f)
+        << "G=" << int(g[1]) << " expected for Ogre's bitangent: " << expY
+        << " (textbook sign would give " << -expY << ")";
+}
+
 TEST(Trellis2BakeTest, BakeHonoursCancellation)
 {
     std::vector<float> pos;

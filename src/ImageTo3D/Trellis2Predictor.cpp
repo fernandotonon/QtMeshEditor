@@ -1017,16 +1017,21 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         bo.supersample = opts.supersample;
         bo.bakeNormalMap = opts.bakeNormalMap;
         // The dense source carries the dual-grid's voxel terracing (the remesh
-        // reproduces it faithfully): in the detail normal map it shows up as fine
-        // horizontal banding on every flat panel — the "lines" on shirts and
-        // trousers. Each pass averages one ring (~1 cell), the terraces are
-        // several cells wide, so it takes ~16 to flatten them while features of
-        // brow/ear size survive (4 left the banding in; 32 starts to soften).
-        // QTMESH_TRELLIS2_NORMAL_SMOOTH overrides (0 = off).
+        // reproduces it faithfully): unsmoothed it bakes into the detail map as
+        // contour-line banding on every flat panel, forehead and neck. Each pass
+        // averages one ring (~1 cell) and the terraces are several cells wide,
+        // so ~8 passes flatten them (0 leaves them in; 32 starts to blur brow-
+        // scale detail). The LOW field is what the output vertices are shaded
+        // with — the dense model's shape instead of the coarse mesh's own planar
+        // facets. QTMESH_TRELLIS2_NORMAL_SMOOTH / QTMESH_TRELLIS2_NORMAL_LOW
+        // override (0 / 0 = the old behaviour).
         {
             const QByteArray e = qgetenv("QTMESH_TRELLIS2_NORMAL_SMOOTH");
+            const QByteArray l = qgetenv("QTMESH_TRELLIS2_NORMAL_LOW");
             bo.sourceNormalSmoothIterations =
-                e.isEmpty() ? 16 : std::clamp(e.toInt(), 0, 64);
+                e.isEmpty() ? 8 : std::clamp(e.toInt(), 0, 64);
+            bo.sourceNormalLowIterations =
+                l.isEmpty() ? 32 : std::clamp(l.toInt(), 0, 128);
         }
         if (progress) {
             bo.progress = [&progress](int done, int total) {

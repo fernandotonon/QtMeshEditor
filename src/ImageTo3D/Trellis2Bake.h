@@ -216,14 +216,23 @@ struct BakeOptions {
     int  supersample  = 1;      // 1 or 2 (2 = 2×2 subsamples per texel)
     bool bakeNormalMap = true;  // bake source detail normals (for simplified targets)
     // Laplacian smoothing iterations applied to the SOURCE normal field
-    // before it feeds the detail-normal bake (0 = off, the default). Raw
-    // dual-grid dumps carried voxel-scale normal noise that baked into a
-    // glittery normal map; the runtime now receives the REMESHED shell, so
-    // by default the field is used as-is — smoothing a clean source would
-    // instead bake curvature disagreement (rounded source vs one-ring
-    // target normals) into the map. Raise this only when baking from a raw
-    // (un-remeshed) dual-grid source.
+    // before it feeds the detail-normal bake (0 = off). Each pass averages one
+    // ring (~1 source cell). The raw dual-grid surface — and a remesh of it —
+    // carries voxel terraces several cells wide that bake into the detail map
+    // as contour-line banding on every flat panel; ~8 passes flatten them while
+    // features of brow/ear size survive.
     int  sourceNormalSmoothIterations = 0;
+    // > 0: ALSO shade with the dense model. Total smoothing passes of a second,
+    // low-frequency copy of the source normals, sampled at each output vertex
+    // (closest source point, orientation-aware) and used as that vertex's
+    // shading normal in place of the coarse target's own area-weighted normal.
+    // A 25k-triangle character otherwise shades as visible planar facets (dark
+    // jaw triangles, split cheeks); the detail map then only has to carry the
+    // band-pass difference (sourceNormalSmoothIterations vs this), which also
+    // makes it insensitive to tangent-frame differences with the runtime.
+    // A vertex keeps its own normal when the sampled one disagrees with it
+    // (> ~70 degrees) or the source is far away (a neighbouring sheet).
+    int  sourceNormalLowIterations = 0;
     // done/total covered texels; return false to cancel.
     std::function<bool(int done, int total)> progress;
 };

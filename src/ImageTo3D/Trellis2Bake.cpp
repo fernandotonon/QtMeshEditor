@@ -53,6 +53,19 @@ inline uint64_t packKey(int64_t x, int64_t y, int64_t z)
          |  (static_cast<uint64_t>(z + bias) & 0x1FFFFF);
 }
 
+// The sign the VIEWPORT applies to the bitangent relative to the textbook
+// glTF/MikkTSpace convention (B = cross(N, T) * w) that this bake's per-vertex
+// `wsign` follows. Ogre's TangentSpaceCalc::calculateParity says it itself:
+// "this parity is the reverse of what you'd expect — because the 'V' texture
+// coordinate is actually left handed", and the RTSS normal-map stage builds the
+// bitangent from that parity. Baking with the textbook sign inverts the green
+// channel against what the shader reconstructs, so every chart is lit as if
+// its relief were flipped along V: invisible on flat areas, but dark smears
+// and planar facets wherever the source tilts away from the coarse target (jaw,
+// cheeks, shoulders, folds). Verified in the real viewport on a generated
+// character: this sign gives coherent folds, the textbook one gives blotches.
+constexpr float kViewportBitangentSign = -1.0f;
+
 // Area-weighted smooth vertex normals.
 std::vector<float> smoothNormals(const std::vector<float>& positions,
                                  const std::vector<uint32_t>& indices)
@@ -2296,11 +2309,53 @@ BakeResult bake(const std::vector<float>& targetPositions,
     // through the xatlas re-index via xref — computing them on the split mesh
     // would flatten every chart seam into a hard edge, and an identity bake
     // (source == target) would stop being the flat (128,128,255) map.
-    const std::vector<float> tNormals = creaseAwareVertexNormals(
+    std::vector<float> tNormals = creaseAwareVertexNormals(
         targetPositions, targetIndices, xref, r.indices, r.vertexCount);
     const std::vector<float> sNormals = smoothNormalField(
         smoothNormals(sourcePositions, sourceIndices),
         sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);
+    // The closest-point accelerator is needed here (shading-normal transfer) as
+    // well as by the texel loop below.
+    TriangleGrid grid;
+    grid.build(sourcePositions, sourceIndices);
+    if (opts.sourceNormalLowIterations > opts.sourceNormalSmoothIterations) {
+        // continue from the mid-frequency field: only the extra passes are new
+        const std::vector<float> sLow = smoothNormalField(
+            sNormals, sourcePositions, sourceIndices,
+            opts.sourceNormalLowIterations - opts.sourceNormalSmoothIterations);
+        float mn3[3] = {targetPositions[0], targetPositions[1], targetPositions[2]};
+        float mx3[3] = {mn3[0], mn3[1], mn3[2]};
+        for (size_t v = 0; v < targetPositions.size() / 3; ++v)
+            for (int k = 0; k < 3; ++k) {
+                mn3[k] = std::min(mn3[k], targetPositions[v * 3 + k]);
+                mx3[k] = std::max(mx3[k], targetPositions[v * 3 + k]);
+            }
+        float diag3[3] = {mx3[0] - mn3[0], mx3[1] - mn3[1], mx3[2] - mn3[2]};
+        // a sampled normal only counts when the source surface is right there
+        const float maxDist = 0.01f * len3(diag3);
+        for (int v = 0; v < r.vertexCount; ++v) {
+            const float* P = &r.positions[static_cast<size_t>(v) * 3];
+            float* Nt = &tNormals[static_cast<size_t>(v) * 3];
+            float S[3], sb[3];
+            const int sTri = grid.closest(P, S, sb, Nt);
+            if (sTri < 0)
+                continue;
+            float d3[3];
+            sub3(S, P, d3);
+            if (len3(d3) > maxDist)
+                continue;
+            const uint32_t* si = &sourceIndices[static_cast<size_t>(sTri) * 3];
+            float Ns[3];
+            for (int k = 0; k < 3; ++k)
+                Ns[k] = sb[0] * sLow[si[0] * 3 + k] + sb[1] * sLow[si[1] * 3 + k]
+                      + sb[2] * sLow[si[2] * 3 + k];
+            if (!(len3(Ns) > 1e-12f))
+                continue;
+            normalize3(Ns);
+            if (dot3(Ns, Nt) > 0.35f)   // roughly the same way as the target
+                std::memcpy(Nt, Ns, sizeof(Ns));
+        }
+    }
     std::vector<float> tTangent;    // xyzw per vertex (w = handedness)
     if (opts.bakeNormalMap) {
         std::vector<float> tan1(r.positions.size(), 0.0f);
@@ -2363,9 +2418,7 @@ BakeResult bake(const std::vector<float>& targetPositions,
         }
     }
 
-    // ---- 3. source closest-point accelerator ---------------------------------
-    TriangleGrid grid;
-    grid.build(sourcePositions, sourceIndices);
+    // ---- 3. source closest-point accelerator (built above) -------------------
 
     // ---- 4. rasterize + sample -------------------------------------------------
     QImage baseColor(W, H, QImage::Format_RGBA8888);
@@ -2558,7 +2611,7 @@ BakeResult bake(const std::vector<float>& targetPositions,
                             float B[3];
                             cross3(Nt, T, B);
                             for (int k = 0; k < 3; ++k)
-                                B[k] *= wsign;
+                                B[k] *= wsign * kViewportBitangentSign;
                             float nts[3] = {dot3(Ns, T), dot3(Ns, B),
                                             dot3(Ns, Nt)};
                             normalize3(nts);
@@ -2952,7 +3005,7 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                 float B[3];
                 cross3(Nt, T, B);
                 for (int k = 0; k < 3; ++k)
-                    B[k] *= wsign;
+                    B[k] *= wsign * kViewportBitangentSign;
 
                 float S[3], sb[3];
                 int sTri = grid.closest(P, S, sb, Nt);
