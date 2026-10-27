@@ -98,6 +98,32 @@ double sleeveField(const JointPositions& joints, bool left, double endAlong, dou
     return std::min({endAlong - lc.along, radius - lc.dist, lc.along + 0.075});
 }
 
+// Clearance of `p` from the arms: distance from the nearer arm's bone polyline (shoulder -> elbow -> wrist -> a hand length past the
+// wrist, so the fingers count as arm; NOT extended past the shoulder) minus the limb radius (9 cm along the arm, widening to 14 cm at
+// the wrist so a splayed thumb is covered). Positive = clear of both arms; a large value when the arms are missing.
+double armClearance(const JointPositions& joints, const V3& p)
+{
+    double best = 1e9;
+    for (const bool left : {true, false}) {
+        V3 j[3]{};
+        if (!jointAt(joints, left ? "LeftArm" : "RightArm", &j[0]) || !jointAt(joints, left ? "LeftForeArm" : "RightForeArm", &j[1]) ||
+            !jointAt(joints, left ? "LeftHand" : "RightHand", &j[2]))
+            continue;
+        for (int s = 0; s < 2; ++s) {
+            const V3 d = sub(j[s + 1], j[s]);
+            const double l2 = dot(d, d);
+            // the forearm segment runs on past the wrist by a hand's length (~22 cm covers the longest fingers)
+            const double tMax = s == 1 && l2 > 1e-18 ? 1.0 + 0.22 / std::sqrt(l2) : 1.0;
+            const double t = l2 > 1e-18 ? clamp(dot(sub(p, j[s]), d) / l2, 0.0, tMax) : 0.0;
+            const V3 q{j[s][0] + d[0] * t, j[s][1] + d[1] * t, j[s][2] + d[2] * t};
+            // the radius widens over the end of the forearm so the hand clearance already holds at the wrist (the thumb leaves from there)
+            const double radius = s == 1 ? 0.09 + 0.05 * clamp((t - 0.85) / 0.15, 0.0, 1.0) : 0.09;
+            best = std::min(best, length(sub(p, q)) - radius);
+        }
+    }
+    return best;
+}
+
 double armLength1(const JointPositions& joints) { return segmentLength(joints, "LeftArm", "LeftForeArm"); }
 double armLength2(const JointPositions& joints) { return segmentLength(joints, "LeftForeArm", "LeftHand"); }
 
@@ -405,7 +431,11 @@ float topField(TopKind style, const JointPositions& joints, const V3& p)
         const double strap = clamp((p[1] - (t.neckY - 0.21)) / 0.09, 0.0, 1.0);
         lateralLimit = (t.shoulderX + 0.045) + strap * (t.shoulderX * 0.78 - (t.shoulderX + 0.045));
     }
-    const double lateral = lateralLimit - std::fabs(p[0]);
+    double lateral = lateralLimit - std::fabs(p[0]);
+    // below the armhole the only thing the lateral limit has to keep out is the arm, so a hip or belly wider than the shoulders stays
+    // inside the garment (the fixed limit cut the sides of the hem on wide bodies); blended in over 6 cm so the side seam stays smooth
+    const double below = clamp(((t.neckY - 0.21) - p[1]) / 0.06, 0.0, 1.0);
+    if (below > 0.0) lateral += below * std::max(0.0, armClearance(joints, p) - lateral);
     double field = std::min({p[1] - t.hemY, t.neckY + 0.05 - p[1], collar, lateral});
     if (!tank) {
         const double upper = armLength1(joints);

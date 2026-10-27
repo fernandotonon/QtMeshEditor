@@ -126,6 +126,18 @@ TEST(Clothing, TopFieldCoversTheTorsoAndSleevesButNotHeadHandsOrLegs)
     EXPECT_LT(topField(TopKind::None, j, {0.0, 1.2, 0.1}), 0.0f);
 }
 
+TEST(Clothing, TopCoversHipsWiderThanTheShouldersButNotTheHands)
+{
+    const JointPositions j = joints();   // shoulders at |x| = 0.19, so the old fixed width limit was 0.235
+    for (const TopKind k : {TopKind::TShirt, TopKind::LongSleeve, TopKind::Tank}) {
+        EXPECT_GT(topField(k, j, {0.30, 0.95, 0.0}), 0.0f) << "side of a wide hip just above the hem";
+        EXPECT_GT(topField(k, j, {-0.30, 0.95, 0.0}), 0.0f) << "other side";
+        EXPECT_LT(topField(k, j, {0.65, 0.77, 0.0}), 0.0f) << "fingertips, past the wrist";
+        EXPECT_LT(topField(k, j, {0.55, 0.90, 0.11}), 0.0f) << "splayed thumb beside the wrist";
+    }
+    EXPECT_LT(topField(TopKind::Tank, j, {0.30, 1.30, 0.0}), 0.0f) << "above the armhole the shoulder limit still applies";
+}
+
 TEST(Clothing, BottomFieldCoversPelvisAndLegsButNotTheTorsoOrArms)
 {
     const JointPositions j = joints();
