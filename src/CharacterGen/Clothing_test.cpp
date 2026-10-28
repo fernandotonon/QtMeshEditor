@@ -126,6 +126,28 @@ TEST(Clothing, TopFieldCoversTheTorsoAndSleevesButNotHeadHandsOrLegs)
     EXPECT_LT(topField(TopKind::None, j, {0.0, 1.2, 0.1}), 0.0f);
 }
 
+TEST(Clothing, TopCoversHipsWiderThanTheShouldersButNotTheHands)
+{
+    const JointPositions j = joints();   // shoulders at |x| = 0.19, so the old fixed width limit was 0.235
+    for (const TopKind k : {TopKind::TShirt, TopKind::LongSleeve, TopKind::Tank}) {
+        EXPECT_GT(topField(k, j, {0.30, 0.95, 0.0}), 0.0f) << "side of a wide hip just above the hem";
+        EXPECT_GT(topField(k, j, {-0.30, 0.95, 0.0}), 0.0f) << "other side";
+        EXPECT_LT(topField(k, j, {0.55, 0.90, 0.11}), 0.0f) << "splayed thumb beside the wrist";
+    }
+    EXPECT_LT(topField(TopKind::Tank, j, {0.30, 1.30, 0.0}), 0.0f) << "above the armhole the shoulder limit still applies";
+
+    // fingertips 18 cm past a horizontal forearm's wrist, above the hem: only the extension past the wrist keeps them bare
+    JointPositions level = joints();
+    level[QStringLiteral("LeftHand")] = {0.60, 1.12, 0.0};
+    EXPECT_LT(topField(TopKind::TShirt, level, {0.78, 1.12, 0.0}), 0.0f) << "fingertips past the wrist";
+
+    // an incomplete arm chain on a side keeps the shoulder-width limit there instead of covering everything beside the body
+    JointPositions noLeftHand = joints();
+    noLeftHand.erase(QStringLiteral("LeftHand"));
+    EXPECT_LT(topField(TopKind::TShirt, noLeftHand, {0.30, 0.95, 0.0}), 0.0f) << "missing left wrist";
+    EXPECT_GT(topField(TopKind::TShirt, noLeftHand, {-0.30, 0.95, 0.0}), 0.0f) << "complete right arm still relaxes its side";
+}
+
 TEST(Clothing, BottomFieldCoversPelvisAndLegsButNotTheTorsoOrArms)
 {
     const JointPositions j = joints();
