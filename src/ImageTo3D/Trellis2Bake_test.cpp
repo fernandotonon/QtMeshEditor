@@ -887,6 +887,49 @@ TEST(Trellis2BakeTest, CreaseAwareNormalsStillSmoothAcrossASeam)
         EXPECT_NEAR(n[v * 3 + 2], 1.0f, 1e-5f);
 }
 
+TEST(Trellis2BakeTest, DetailNormalKeepsModerateRelief)
+{
+    const float nt[3] = {0, 0, 1};
+    const float s = std::sqrt(0.5f);
+    float ns[3] = {s * 0.5f, 0, std::sqrt(1.0f - 0.125f)};   // ~20 degrees
+    const float before[3] = {ns[0], ns[1], ns[2]};
+    Trellis2Bake::resolveDetailNormal(nt, nullptr, ns);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_FLOAT_EQ(ns[k], before[k]);
+}
+
+TEST(Trellis2BakeTest, DetailNormalPointingIntoTheSurfaceBecomesFlat)
+{
+    // The case that used to clamp to tangent z = 0.05 (a grazing normal that
+    // rendered as a dark "inverted" chip).
+    const float nt[3] = {0, 0, 1};
+    float ns[3] = {0.6f, 0, -0.8f};
+    Trellis2Bake::resolveDetailNormal(nt, nullptr, ns);
+    EXPECT_NEAR(ns[0], 0.0f, 1e-6f);
+    EXPECT_NEAR(ns[2], 1.0f, 1e-6f);
+}
+
+TEST(Trellis2BakeTest, DetailNormalPrefersAnAgreeingSourceFace)
+{
+    const float nt[3] = {0, 0, 1};
+    const float face[3] = {0, 0.3f, std::sqrt(1.0f - 0.09f)};
+    float ns[3] = {1, 0, 0};   // smoothed field cancelled across a sheet
+    Trellis2Bake::resolveDetailNormal(nt, face, ns);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_FLOAT_EQ(ns[k], face[k]);
+}
+
+TEST(Trellis2BakeTest, DetailNormalFadesSteepTiltsTowardFlat)
+{
+    const float nt[3] = {0, 0, 1};
+    float ns[3] = {std::sqrt(1.0f - 0.2025f), 0, 0.45f};   // ~63 degrees
+    Trellis2Bake::resolveDetailNormal(nt, nullptr, ns);
+    const float len = std::sqrt(ns[0] * ns[0] + ns[1] * ns[1] + ns[2] * ns[2]);
+    EXPECT_NEAR(len, 1.0f, 1e-5f);
+    EXPECT_GT(ns[2], 0.7f);        // less tilted than the sample...
+    EXPECT_GT(ns[0], 0.05f);       // ...but not flattened outright
+}
+
 TEST(Trellis2BakeTest, GameReadyRemeshOptionYieldsManifold)
 {
     std::vector<float> pos;

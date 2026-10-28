@@ -2115,6 +2115,51 @@ GameReadyResult makeGameReady(const std::vector<float>& positions,
     return r;
 }
 
+namespace {
+// Unit normal of source triangle `tri`; false when it is degenerate.
+bool sourceFaceNormal(const std::vector<float>& positions,
+                      const std::vector<uint32_t>& indices, int tri, float n[3])
+{
+    const uint32_t* idx = &indices[static_cast<size_t>(tri) * 3];
+    float e1[3], e2[3];
+    sub3(&positions[idx[1] * 3], &positions[idx[0] * 3], e1);
+    sub3(&positions[idx[2] * 3], &positions[idx[0] * 3], e2);
+    cross3(e1, e2, n);
+    if (!(len3(n) > 1e-20f))
+        return false;
+    normalize3(n);
+    return true;
+}
+} // namespace
+
+void resolveDetailNormal(const float nt[3], const float* sourceFaceN,
+                         float ns[3])
+{
+    // The target normal is already the dense model's low-frequency field, so
+    // what is left is relief. Measured on real generations: past ~45 degrees
+    // the texels are almost all speckle (micro-pits of the voxel decode, the
+    // opposite wall of a thin part), not modelled detail — flattening every
+    // texel tilted more than that removed the chips and kept seams/abs intact.
+    // Trust fades from 45 to ~78 degrees instead of a hard cut.
+    constexpr float kFull = 0.7f;   // cos 45
+    constexpr float kNone = 0.2f;   // cos ~78
+    const float c = dot3(ns, nt);
+    if (c >= kFull)
+        return;
+    if (sourceFaceN && dot3(sourceFaceN, nt) >= kFull) {
+        std::memcpy(ns, sourceFaceN, 3 * sizeof(float));
+        return;
+    }
+    const float t = std::clamp((c - kNone) / (kFull - kNone), 0.0f, 1.0f);
+    for (int k = 0; k < 3; ++k)
+        ns[k] = nt[k] * (1.0f - t) + ns[k] * t;
+    if (len3(ns) < 1e-12f) {
+        std::memcpy(ns, nt, 3 * sizeof(float));
+        return;
+    }
+    normalize3(ns);
+}
+
 std::vector<float> creaseAwareVertexNormals(
     const std::vector<float>& targetPositions,
     const std::vector<uint32_t>& targetIndices,
@@ -2588,6 +2633,13 @@ BakeResult bake(const std::vector<float>& targetPositions,
                                           + sb[1] * sNormals[sidx[1] * 3 + k]
                                           + sb[2] * sNormals[sidx[2] * 3 + k];
                                 normalize3(Ns);
+                                float fn[3];
+                                resolveDetailNormal(
+                                    Nt,
+                                    sourceFaceNormal(sourcePositions,
+                                                     sourceIndices, sTri, fn)
+                                        ? fn : nullptr,
+                                    Ns);
                             } else {
                                 std::memcpy(Ns, Nt, sizeof(Ns));
                             }
@@ -3019,6 +3071,12 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                               + sb[1] * sNormals[sidx[1] * 3 + k]
                               + sb[2] * sNormals[sidx[2] * 3 + k];
                     normalize3(Ns);
+                    float fn[3];
+                    resolveDetailNormal(
+                        Nt,
+                        sourceFaceNormal(sourcePositions, sourceIndices, sTri, fn)
+                            ? fn : nullptr,
+                        Ns);
                 } else {
                     std::memcpy(Ns, Nt, sizeof(Ns));
                 }
