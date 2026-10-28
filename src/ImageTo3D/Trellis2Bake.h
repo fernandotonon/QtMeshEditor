@@ -198,6 +198,19 @@ std::vector<float> creaseAwareVertexNormals(
     const std::vector<uint32_t>& xref,
     const std::vector<uint32_t>& outIndices, int vertexCount);
 
+// Pick the source normal a detail-normal texel encodes (exposed for unit
+// tests). `ns` is the smoothed dense-source normal sampled at the closest
+// point; `sourceFaceN` (may be null) the unsmoothed normal of the source
+// triangle it lies on; `nt` the target's shading normal. All unit length.
+// When `ns` turns more than ~45 degrees from `nt` the sample is mostly
+// speckle (voxel micro-pits, the opposite wall of a thin part, a field
+// smoothed across a sheet); past 90 degrees the old clamp to tangent z = 0.05
+// made it a grazing normal that rendered as a dark "inverted" chip. The source
+// face normal is used instead when it agrees, otherwise the sample fades to
+// flat (no detail) between 45 and ~78 degrees.
+void resolveDetailNormal(const float nt[3], const float* sourceFaceN,
+                         float ns[3]);
+
 // Unify triangle winding (exposed for unit tests; makeGameReady runs it).
 // Raw TRELLIS dual-grid output arrives with large patches of flipped
 // triangles (~17% conflicting directed edges measured on a real generation)
