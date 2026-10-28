@@ -8,6 +8,13 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT_DIR="${1:-$ROOT/build/debug/PS1Cores}"
 mkdir -p "$OUT_DIR"
 
+# CI invokes this after cmake already fetched the core once; a second network
+# hit against buildbot.libretro.com often resets mid-transfer and fails the job.
+if [[ -z "${QTMESH_PS1_LIBRETRO_FORCE:-}" && -f "$OUT_DIR/mednafen_psx_libretro.so" ]]; then
+  echo "Already installed: $OUT_DIR/mednafen_psx_libretro.so (set QTMESH_PS1_LIBRETRO_FORCE=1 to re-fetch)"
+  exit 0
+fi
+
 install_file() {
   local src="$1"
   if [[ -f "$src" ]]; then
@@ -22,7 +29,7 @@ fetch_buildbot_beetle() {
   local zip="/tmp/mednafen_psx_libretro.so.zip"
   local url="https://buildbot.libretro.com/nightly/linux/x86_64/latest/mednafen_psx_libretro.so.zip"
   echo "Downloading mednafen_psx_libretro from libretro buildbot ($url)..."
-  if ! curl -fsSL -o "$zip" "$url"; then
+  if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$zip" "$url"; then
     return 1
   fi
   rm -rf /tmp/beetle-buildbot
@@ -35,7 +42,7 @@ fetch_arch_beetle() {
   local pkg="/tmp/libretro-beetle-psx.pkg.tar.zst"
   local url="https://archlinux.org/packages/extra/x86_64/libretro-beetle-psx/download/"
   echo "Downloading libretro-beetle-psx from Arch Linux ($url)..."
-  if ! curl -fsSL -o "$pkg" "$url"; then
+  if ! curl -fsSL --retry 5 --retry-all-errors --retry-delay 2 -o "$pkg" "$url"; then
     return 1
   fi
   rm -rf /tmp/beetle-extract
