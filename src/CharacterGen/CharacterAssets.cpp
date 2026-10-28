@@ -19,7 +19,12 @@ namespace CharacterAssets {
 namespace {
 
 constexpr const char* kBaseUrlSettingsKey = "ai/characterModelBaseUrl";
-constexpr const char* kDefaultBaseUrl = "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/character/";
+// Hosted on the character-assets-v1 GitHub release (pinned digests below). The
+// HF models repo under character/ is the long-term mirror; until a write token
+// re-uploads the body/head bundles there, GitHub is the default that first-use
+// download can actually reach (HF currently only has the optional hair files).
+constexpr const char* kDefaultBaseUrl =
+    "https://github.com/fernandotonon/QtMeshEditor/releases/download/character-assets-v1/";
 
 struct FileSpec { const char* name; const char* label; const char* sha256; bool optional = false; };   // optional: a failed download is not an error
 constexpr FileSpec kFiles[] = {

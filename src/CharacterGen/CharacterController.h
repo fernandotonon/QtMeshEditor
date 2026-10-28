@@ -26,6 +26,11 @@ class CharacterController : public QObject
     Q_PROPERTY(bool assetsPresent READ assetsPresent NOTIFY statusChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY statusChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
+    /// 0..1 while the first-use asset download is running; -1 when idle / unknown size.
+    Q_PROPERTY(double downloadProgress READ downloadProgress NOTIFY downloadProgressChanged)
+    Q_PROPERTY(QString downloadLabel READ downloadLabel NOTIFY downloadProgressChanged)
+    Q_PROPERTY(qint64 downloadBytesReceived READ downloadBytesReceived NOTIFY downloadProgressChanged)
+    Q_PROPERTY(qint64 downloadBytesTotal READ downloadBytesTotal NOTIFY downloadProgressChanged)
     Q_PROPERTY(QStringList skinNames READ skinNames CONSTANT)
     Q_PROPERTY(QStringList hairNames READ hairNames NOTIFY hairNamesChanged)
     Q_PROPERTY(QString hairStyle READ hairStyle WRITE setHairStyle NOTIFY hairStyleChanged)
@@ -52,6 +57,10 @@ public:
     bool assetsPresent() const;
     bool busy() const { return m_busy; }
     QString status() const { return m_status; }
+    double downloadProgress() const { return m_downloadProgress; }
+    QString downloadLabel() const { return m_downloadLabel; }
+    qint64 downloadBytesReceived() const { return m_downloadBytesReceived; }
+    qint64 downloadBytesTotal() const { return m_downloadBytesTotal; }
     QStringList topStyles() const;
     QStringList bottomStyles() const;
     QVariantList clothColours() const;   ///< [{name, colour}]
@@ -98,8 +107,22 @@ public:
     Q_INVOKABLE QString shapeLabel(int mode) const;
     Q_INVOKABLE QString shapeHint(int mode) const;
 
+#ifdef QTMESH_UNIT_TESTS
+    /// Test hook: drive the ModelDownloader progress path without a live fetch.
+    void unitTestWatchDownloads(bool on)
+    {
+        m_watchingDownload = on;
+        if (!on) clearDownloadProgress();
+    }
+    void unitTestOnDownloadProgress(const QString& name, qint64 received, qint64 total)
+    {
+        onModelDownloadProgress(name, received, total);
+    }
+#endif
+
 signals:
     void statusChanged();
+    void downloadProgressChanged();
     void openEyesChanged();
     void skinTextureChanged();
     void hairNamesChanged();
@@ -112,9 +135,16 @@ signals:
 private:
     CharacterController() = default;
     void setStatus(const QString& s, bool busy);
+    void clearDownloadProgress();
+    void onModelDownloadProgress(const QString& name, qint64 received, qint64 total);
 
     bool m_busy = false;
     QString m_status;
+    double m_downloadProgress = -1.0;
+    QString m_downloadLabel;
+    qint64 m_downloadBytesReceived = 0;
+    qint64 m_downloadBytesTotal = 0;
+    bool m_watchingDownload = false;
     QString m_currentNode;
     CharacterGen::Params m_currentParams;
     bool m_haveParams = false;

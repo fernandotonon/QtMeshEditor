@@ -17,15 +17,12 @@ ReleaseAsset parseAssetObject(const QJsonObject& obj)
     return asset;
 }
 
-bool releaseMatchesChannel(const ParsedRelease& release, Channel channel)
+/// Asset-only tags (e.g. character-assets-v1) live in the same repo as app
+/// releases. Skip anything UpdateVersion cannot parse so the updater never
+/// treats them as the "latest" application build.
+bool isApplicationVersionTag(const QString& tagName)
 {
-    switch (channel) {
-    case Channel::Stable:
-        return release.valid && !release.prerelease;
-    case Channel::Beta:
-        return release.valid && release.prerelease;
-    }
-    return false;
+    return !UpdateVersion::normalize(tagName).isEmpty();
 }
 
 } // namespace
@@ -73,7 +70,7 @@ CheckResult pickLatestForChannel(const QByteArray& releasesJson,
             continue;
         }
         const ParsedRelease parsed = parseReleaseObject(value.toObject());
-        if (!parsed.valid) {
+        if (!parsed.valid || !isApplicationVersionTag(parsed.tagName)) {
             continue;
         }
 
