@@ -2147,7 +2147,15 @@ void resolveDetailNormal(const float nt[3], const float* sourceFaceN,
     if (c >= kFull)
         return;
     if (sourceFaceN && dot3(sourceFaceN, nt) >= kFull) {
-        std::memcpy(ns, sourceFaceN, 3 * sizeof(float));
+        // Blend toward the face normal over the same range, so the texel does
+        // not jump inside a triangle where the sample crosses 45 degrees.
+        const float w = std::clamp((kFull - c) / (kFull - kNone), 0.0f, 1.0f);
+        for (int k = 0; k < 3; ++k)
+            ns[k] = ns[k] * (1.0f - w) + sourceFaceN[k] * w;
+        if (len3(ns) < 1e-12f)
+            std::memcpy(ns, sourceFaceN, 3 * sizeof(float));
+        else
+            normalize3(ns);
         return;
     }
     const float t = std::clamp((c - kNone) / (kFull - kNone), 0.0f, 1.0f);
@@ -2633,12 +2641,12 @@ BakeResult bake(const std::vector<float>& targetPositions,
                                           + sb[1] * sNormals[sidx[1] * 3 + k]
                                           + sb[2] * sNormals[sidx[2] * 3 + k];
                                 normalize3(Ns);
-                                float fn[3];
+                                std::array<float, 3> fn{};
                                 resolveDetailNormal(
                                     Nt,
                                     sourceFaceNormal(sourcePositions,
-                                                     sourceIndices, sTri, fn)
-                                        ? fn : nullptr,
+                                                     sourceIndices, sTri, fn.data())
+                                        ? fn.data() : nullptr,
                                     Ns);
                             } else {
                                 std::memcpy(Ns, Nt, sizeof(Ns));
@@ -3071,11 +3079,11 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                               + sb[1] * sNormals[sidx[1] * 3 + k]
                               + sb[2] * sNormals[sidx[2] * 3 + k];
                     normalize3(Ns);
-                    float fn[3];
+                    std::array<float, 3> fn{};
                     resolveDetailNormal(
                         Nt,
-                        sourceFaceNormal(sourcePositions, sourceIndices, sTri, fn)
-                            ? fn : nullptr,
+                        sourceFaceNormal(sourcePositions, sourceIndices, sTri, fn.data())
+                            ? fn.data() : nullptr,
                         Ns);
                 } else {
                     std::memcpy(Ns, Nt, sizeof(Ns));

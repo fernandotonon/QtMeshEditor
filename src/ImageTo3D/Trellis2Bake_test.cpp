@@ -916,7 +916,21 @@ TEST(Trellis2BakeTest, DetailNormalPrefersAnAgreeingSourceFace)
     float ns[3] = {1, 0, 0};   // smoothed field cancelled across a sheet
     Trellis2Bake::resolveDetailNormal(nt, face, ns);
     for (int k = 0; k < 3; ++k)
-        EXPECT_FLOAT_EQ(ns[k], face[k]);
+        EXPECT_NEAR(ns[k], face[k], 1e-5f);
+}
+
+TEST(Trellis2BakeTest, DetailNormalBlendsIntoTheSourceFaceContinuously)
+{
+    // Just past 45 degrees the result must stay next to the sample, not jump
+    // to the face normal (that would draw a hard line inside the triangle).
+    const float nt[3] = {0, 0, 1};
+    const float face[3] = {0, 0.3f, std::sqrt(1.0f - 0.09f)};
+    const float c = 0.69f;
+    float ns[3] = {std::sqrt(1.0f - c * c), 0, c};
+    const float before[3] = {ns[0], ns[1], ns[2]};
+    Trellis2Bake::resolveDetailNormal(nt, face, ns);
+    const float d = ns[0] * before[0] + ns[1] * before[1] + ns[2] * before[2];
+    EXPECT_GT(d, 0.999f);
 }
 
 TEST(Trellis2BakeTest, DetailNormalFadesSteepTiltsTowardFlat)
