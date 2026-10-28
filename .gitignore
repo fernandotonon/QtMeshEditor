@@ -165,6 +165,7 @@ __pycache__/
 !docs/img/twist_bar_90_dqs_vp.png
 !docs/MOCAP_SPIKE.md
 .mocap_work/
+.character_work/
 .venv-mocap/
 !docs/TRELLIS2.md
 !docs/trellis2-dependencies.md

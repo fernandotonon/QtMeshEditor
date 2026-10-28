@@ -327,13 +327,43 @@ Column {
         enabled: !CharacterController.busy
         onClicked: sec.generate(false)
     }
+    // First-use asset download (~40 MB across body/head/licences/hair). Bound to
+    // CharacterController so the nested ModelFetch event loop can paint it.
+    Column {
+        width: sec.width
+        spacing: 2
+        visible: CharacterController.downloadProgress >= 0
+        Note {
+            text: {
+                var label = CharacterController.downloadLabel || "character assets"
+                var r = CharacterController.downloadBytesReceived
+                var t = CharacterController.downloadBytesTotal
+                if (t > 0)
+                    return "Downloading " + label + " — " + Math.round(r / 1048576) + " / " + Math.round(t / 1048576) + " MB"
+                return "Downloading " + label + "…"
+            }
+            opacity: 1.0
+        }
+        Rectangle {
+            width: sec.width; height: 8; radius: 3
+            color: AnimationControlController.inputColor
+            border.color: AnimationControlController.borderColor; border.width: 1
+            Rectangle {
+                anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.margins: 1
+                width: Math.max(0, (parent.width - 2) * Math.min(1, Math.max(0, CharacterController.downloadProgress)))
+                radius: 2
+                color: AnimationControlController.highlightColor
+            }
+        }
+    }
     Note {
-        visible: CharacterController.status !== ""
+        visible: CharacterController.status !== "" && CharacterController.downloadProgress < 0
         text: CharacterController.status
         opacity: 1.0
     }
     Note {
-        visible: !CharacterController.assetsPresent
+        visible: !CharacterController.assetsPresent && CharacterController.downloadProgress < 0
         text: "The character data (~40 MB) downloads on first use."
     }
 }

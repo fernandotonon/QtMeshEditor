@@ -47,5 +47,10 @@ TEST(CharacterController, ShapeLabelsAndSeedCoefficients)
     for (const QVariant& v : a) sum += std::fabs(v.toDouble());
     EXPECT_GT(sum, 0.1);
     EXPECT_FALSE(c->hasCharacter());   // nothing generated in this process
+    // First-use download progress stays idle until generate() starts fetching.
+    EXPECT_LT(c->downloadProgress(), 0.0);
+    EXPECT_TRUE(c->downloadLabel().isEmpty());
+    EXPECT_EQ(c->downloadBytesReceived(), 0);
+    EXPECT_EQ(c->downloadBytesTotal(), 0);
     CharacterController::kill();
 }

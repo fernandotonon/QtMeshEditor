@@ -33,7 +33,7 @@ has no deformation) so glTF export keeps the target names.
 * The head is scaled/anchored to the body by chin + head-top; a triangle strip stitches the neck (the body loses its head-dominated and neck-column vertices above the cut).
 * The sclera front cap is removed so the iris colour shows.
 * Undriven MHR twist/helper joints fold into the nearest kept ancestor; bones are world-aligned (identity orientations) — without that, limbs collapse under animation.
-* Assets: `QTMESH_CHARACTER_DIR` or `<AppData>/ai_models/character` (`mhr_character.qmcb`, `ict_character.qmcb`, licence texts), downloaded on first use with pinned SHA-256s. Build them with `scripts/build-character-assets.py`; host with `scripts/upload-character-assets.sh`.
+* Assets: `QTMESH_CHARACTER_DIR` or `<AppData>/ai_models/character` (`mhr_character.qmcb`, `ict_character.qmcb`, licence texts), downloaded on first use with pinned SHA-256s from the `character-assets-v1` GitHub release. Build them with `scripts/build-character-assets.py`; publish with `scripts/upload-character-assets.sh` (optional `UPLOAD_TO_HF=1` mirrors to the HF models repo).
 
 ## Not yet
 Photo-driven creation (SAM body shape + face colour sampling); loose clothing (skirts, dresses, coats), fabric textures and accessories (gloves, armour).

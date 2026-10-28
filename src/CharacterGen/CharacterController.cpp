@@ -6,6 +6,7 @@
 #include "Clothing.h"
 #include "HairTint.h"
 #include "../Manager.h"
+#include "../ModelDownloader.h"
 #include "../SelectionSet.h"
 #include "../SentryReporter.h"
 #include "../UndoManager.h"
@@ -17,6 +18,7 @@
 #include <QSettings>
 
 #include <QCoreApplication>
+#include <QMetaObject>
 #include <QUndoCommand>
 
 #include <OgreSceneNode.h>
@@ -310,6 +312,36 @@ void CharacterController::setStatus(const QString& s, bool busy)
     QCoreApplication::processEvents();
 }
 
+void CharacterController::clearDownloadProgress()
+{
+    if (m_downloadProgress < 0.0 && m_downloadLabel.isEmpty()
+        && m_downloadBytesReceived == 0 && m_downloadBytesTotal == 0)
+        return;
+    m_downloadProgress = -1.0;
+    m_downloadLabel.clear();
+    m_downloadBytesReceived = 0;
+    m_downloadBytesTotal = 0;
+    emit downloadProgressChanged();
+}
+
+void CharacterController::onModelDownloadProgress(const QString& name, qint64 received, qint64 total)
+{
+    if (!m_watchingDownload) return;
+    // CharacterAssets labels look like "character body (MHR)" / "character head (ICT-FaceKit)".
+    if (!name.contains(QLatin1String("character"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("MHR"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("ICT"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("hairstyle"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("MakeHuman"), Qt::CaseInsensitive))
+        return;
+    m_downloadLabel = name;
+    m_downloadBytesReceived = received;
+    m_downloadBytesTotal = total;
+    m_downloadProgress = (total > 0) ? double(received) / double(total) : 0.0;
+    emit downloadProgressChanged();
+    setStatus(tr("Downloading %1…").arg(name), true);
+}
+
 QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
                                       const QString& eye, bool replace)
 {
@@ -321,8 +353,22 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     QString err;
 
     {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is
-        if (!CharacterAssets::present()) setStatus(tr("Downloading character assets…"), true);
-        if (!CharacterAssets::ensureBlocking(&err)) {
+        const bool needFetch = !CharacterAssets::present();
+        QMetaObject::Connection progressConn;
+        if (needFetch) {
+            setStatus(tr("Downloading character assets…"), true);
+            clearDownloadProgress();
+            m_watchingDownload = true;
+            if (auto* dl = ModelDownloader::instance()) {
+                progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
+                                       &CharacterController::onModelDownloadProgress);
+            }
+        }
+        const bool ok = CharacterAssets::ensureBlocking(&err);
+        m_watchingDownload = false;
+        if (progressConn) disconnect(progressConn);
+        clearDownloadProgress();
+        if (!ok) {
             setStatus(tr("Character assets unavailable: %1").arg(err), false);
             return err;
         }
