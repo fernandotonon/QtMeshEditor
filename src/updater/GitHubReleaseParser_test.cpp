@@ -104,3 +104,18 @@ TEST(GitHubReleaseParser, RejectsNonArrayPayload)
     EXPECT_FALSE(result.parseOk);
     EXPECT_FALSE(result.errorMessage.isEmpty());
 }
+
+TEST(GitHubReleaseParser, SkipsNonSemverAssetOnlyTags)
+{
+    // character-assets-v1 (and similar data releases) share the app repo; the
+    // updater must ignore them even when they are the newest non-prerelease.
+    const QByteArray json = QByteArrayLiteral(R"([
+      {"tag_name":"character-assets-v1","html_url":"https://example/tag/character-assets-v1","prerelease":false,"assets":[]},
+      {"tag_name":"3.5.3","name":"3.5.3","html_url":"https://example/tag/3.5.3","prerelease":false,"body":"ok","assets":[]}
+    ])");
+    const CheckResult result =
+        GitHubReleaseParser::pickLatestForChannel(json, Channel::Stable, QStringLiteral("3.5.2"));
+    ASSERT_TRUE(result.parseOk) << result.errorMessage.toStdString();
+    EXPECT_EQ(result.release.tagName, QStringLiteral("3.5.3"));
+    EXPECT_EQ(result.comparison, Comparison::Older);
+}

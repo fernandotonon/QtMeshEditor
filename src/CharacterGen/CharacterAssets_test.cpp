@@ -54,3 +54,23 @@ TEST(CharacterController, ShapeLabelsAndSeedCoefficients)
     EXPECT_EQ(c->downloadBytesTotal(), 0);
     CharacterController::kill();
 }
+
+TEST(CharacterController, DownloadProgressTracksAndClears)
+{
+    CharacterController* c = CharacterController::instance();
+    c->unitTestWatchDownloads(true);
+    c->unitTestOnDownloadProgress(QStringLiteral("character body (MHR)"), 5 * 1024 * 1024, 20 * 1024 * 1024);
+    EXPECT_NEAR(c->downloadProgress(), 0.25, 1e-6);
+    EXPECT_EQ(c->downloadLabel(), QStringLiteral("character body (MHR)"));
+    EXPECT_EQ(c->downloadBytesReceived(), 5 * 1024 * 1024);
+    EXPECT_EQ(c->downloadBytesTotal(), 20 * 1024 * 1024);
+    // Unrelated ModelDownloader labels must not hijack the character progress UI.
+    c->unitTestOnDownloadProgress(QStringLiteral("PBR Normal"), 1, 2);
+    EXPECT_EQ(c->downloadLabel(), QStringLiteral("character body (MHR)"));
+    c->unitTestWatchDownloads(false);
+    EXPECT_LT(c->downloadProgress(), 0.0);
+    EXPECT_TRUE(c->downloadLabel().isEmpty());
+    EXPECT_EQ(c->downloadBytesReceived(), 0);
+    EXPECT_EQ(c->downloadBytesTotal(), 0);
+    CharacterController::kill();
+}

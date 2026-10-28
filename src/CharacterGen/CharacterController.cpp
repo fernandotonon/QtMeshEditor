@@ -352,17 +352,19 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
     QString err;
 
-    {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is
-        const bool needFetch = !CharacterAssets::present();
+    {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is.
+        // Busy for EVERY ensureBlocking call — present() only checks body+head, but ensureBlocking can still fetch a
+        // missing licence/hair file or re-fetch a digest mismatch, and its nested event loop would otherwise leave
+        // Generate clickable (re-entrant generate()).
         QMetaObject::Connection progressConn;
-        if (needFetch) {
-            setStatus(tr("Downloading character assets…"), true);
-            clearDownloadProgress();
-            m_watchingDownload = true;
-            if (auto* dl = ModelDownloader::instance()) {
-                progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
-                                       &CharacterController::onModelDownloadProgress);
-            }
+        setStatus(CharacterAssets::present() ? tr("Checking character assets…")
+                                             : tr("Downloading character assets…"),
+                  true);
+        clearDownloadProgress();
+        m_watchingDownload = true;
+        if (auto* dl = ModelDownloader::instance()) {
+            progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
+                                   &CharacterController::onModelDownloadProgress);
         }
         const bool ok = CharacterAssets::ensureBlocking(&err);
         m_watchingDownload = false;

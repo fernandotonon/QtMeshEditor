@@ -107,6 +107,19 @@ public:
     Q_INVOKABLE QString shapeLabel(int mode) const;
     Q_INVOKABLE QString shapeHint(int mode) const;
 
+#ifdef QTMESH_UNIT_TESTS
+    /// Test hook: drive the ModelDownloader progress path without a live fetch.
+    void unitTestWatchDownloads(bool on)
+    {
+        m_watchingDownload = on;
+        if (!on) clearDownloadProgress();
+    }
+    void unitTestOnDownloadProgress(const QString& name, qint64 received, qint64 total)
+    {
+        onModelDownloadProgress(name, received, total);
+    }
+#endif
+
 signals:
     void statusChanged();
     void downloadProgressChanged();
