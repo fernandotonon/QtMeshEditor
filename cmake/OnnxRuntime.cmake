@@ -26,7 +26,11 @@ if(TARGET qtmesh_onnx)
     return()
 endif()
 
-set(QTMESH_ONNX_VERSION "1.31.1" CACHE STRING "ONNX Runtime release version")
+# Not a cache variable: the archive digests below belong to exactly this version, and a
+# cached value would survive an upgrade in an existing build directory (old archive +
+# new digest -> FetchContent verification failure). Drop any entry an older configure left.
+unset(QTMESH_ONNX_VERSION CACHE)
+set(QTMESH_ONNX_VERSION "1.31.1")
 set(QTMESH_ONNX_MAC_LEGACY_VERSION "1.23.2")
 set(QTMESH_ONNX_BASE_URL
     "https://github.com/microsoft/onnxruntime/releases/download/v${QTMESH_ONNX_VERSION}")
