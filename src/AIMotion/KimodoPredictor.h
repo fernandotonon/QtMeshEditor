@@ -1,7 +1,11 @@
 #pragma once
 
-// NVIDIA Kimodo text-to-motion backend: drives the out-of-process Python
-// sidecar (ai/kimodo/generate.py) and returns motion interchange files.
+// NVIDIA Kimodo text-to-motion backend. Two runtimes produce the same motion interchange files:
+//   native  KimodoNative: llama.cpp text encoder + ONNX Runtime motion model, no Python (the default once its
+//           models are downloaded; matches Kimodo's PyTorch output on the same noise)
+//   python  the out-of-process sidecar (ai/kimodo/generate.py); also the only runtime for constraints files and
+//           the mock
+// Options::runtime picks one ("" / "auto" = native when ready, else python when installed).
 //
 // Python does inference only. Everything after the NPZ (SOMA -> rig mapping,
 // retarget, keyframes, export) is QtMeshEditor C++ (SomaRetarget). Python is
@@ -52,6 +56,8 @@ public:
         QString outputDir;                     ///< empty = a fresh temp dir under AppData
         int timeoutSec = 3600;
         bool mock = false;
+        /// "" or "auto" (native when its models are downloaded, else the Python sidecar) | "native" | "python".
+        QString runtime;
     };
 
     struct Result {
@@ -71,10 +77,17 @@ public:
     static bool mockRequested(const Options& o);
     /// Accepted Options::textEncoderQuant values (besides empty).
     static QStringList textEncoderQuantModes() { return {QStringLiteral("auto"), QStringLiteral("none"), QStringLiteral("int8"), QStringLiteral("int4")}; }
-    /// Runtime present (python + script).
+    /// Some runtime can generate (native ready, or python + script present).
     static bool runtimeAvailable();
-    /// One line for UIs: where the runtime is, or how to install it.
+    /// One line for UIs: which runtime will run, or how to get one.
     static QString runtimeDescription();
+    /// The Python sidecar alone.
+    static bool pythonRuntimeAvailable();
+    static QString pythonRuntimeDescription();
+    /// Accepted Options::runtime values.
+    static QStringList runtimeModes() { return {QStringLiteral("auto"), QStringLiteral("native"), QStringLiteral("python")}; }
+    /// "native" | "python" for these options, or "" with `why` set when nothing can run them.
+    static QString resolveRuntime(const Options& o, QString* why = nullptr);
 
     /// Command-line arguments for the sidecar (exposed for tests).
     static QStringList buildArguments(const Options& o, const QString& outputDir);

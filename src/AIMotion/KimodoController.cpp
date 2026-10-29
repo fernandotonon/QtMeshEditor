@@ -1,4 +1,5 @@
 #include "KimodoController.h"
+#include "KimodoNative.h"
 
 #include "KimodoPredictor.h"
 #include "MotionSceneApply.h"
@@ -80,6 +81,39 @@ void KimodoController::refreshRuntime()
     m_runtimeAvailable = avail;
     m_runtimeDescription = desc;
     emit runtimeChanged();
+}
+
+bool KimodoController::nativeDownloadable() const
+{
+    return KimodoNative::buildSupported() && !KimodoNative::modelsInstalled();
+}
+
+QString KimodoController::nativeDownloadSize() const
+{
+    return QStringLiteral("%1 GB").arg(double(KimodoNative::missingBytes()) / 1e9, 0, 'f', 1);
+}
+
+void KimodoController::downloadNativeModels()
+{
+    if (m_busy || !nativeDownloadable()) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"), QStringLiteral("download native models"));
+    m_cancel = false;
+    setBusy(true);
+    QString err;
+    const bool ok = KimodoNative::downloadModels(&err, [this](const QString&, int done, int total) {
+        m_stage = QStringLiteral("downloading models (%1/%2 files)").arg(done).arg(total);
+        m_progress = total > 0 ? double(done) / double(total) : -1.0;
+        emit progressChanged();
+        return !m_cancel.load();
+    });
+    setBusy(false);
+    m_stage.clear();
+    m_progress = -1.0;
+    emit progressChanged();
+    refreshRuntime();
+    emit runtimeChanged();   // nativeDownloadable/size change even when availability does not
+    setStatus(ok ? QStringLiteral("Kimodo models downloaded: generation now runs natively, without Python.")
+                 : QStringLiteral("Kimodo model download failed: %1").arg(err), ok);
 }
 
 void KimodoController::setStatus(const QString& s, bool ok)

@@ -201,4 +201,111 @@ Motion resample(const Motion& m, float fps)
     return r;
 }
 
+namespace {
+
+uint32_t crc32Of(const QByteArray& data)
+{
+    static uint32_t table[256];
+    static bool init = false;
+    if (!init) {
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; ++k) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+        init = true;
+    }
+    uint32_t c = 0xFFFFFFFFu;
+    for (char ch : data) c = table[(c ^ uint8_t(ch)) & 0xFFu] ^ (c >> 8);
+    return c ^ 0xFFFFFFFFu;
+}
+
+void put16(QByteArray& b, uint16_t v) { b.append(char(v & 0xFF)).append(char(v >> 8)); }
+void put32(QByteArray& b, uint32_t v) { for (int k = 0; k < 4; ++k) b.append(char((v >> (8 * k)) & 0xFF)); }
+
+// .npy version 1.0: magic, version, little-endian header length, a dict padded with spaces to 64 bytes.
+QByteArray npy(const QByteArray& descr, const std::vector<int64_t>& shape, const QByteArray& payload)
+{
+    QByteArray dims;
+    for (size_t i = 0; i < shape.size(); ++i) dims += QByteArray::number(qlonglong(shape[i])) + (shape.size() == 1 ? "," : (i + 1 < shape.size() ? ", " : ""));
+    QByteArray header = "{'descr': '" + descr + "', 'fortran_order': False, 'shape': (" + dims + "), }";
+    const int total = 10 + int(header.size()) + 1;
+    header += QByteArray((64 - total % 64) % 64, ' ') + '\n';
+    QByteArray out("\x93NUMPY\x01\x00", 8);
+    put16(out, uint16_t(header.size()));
+    return out + header + payload;
+}
+
+QByteArray floats(const std::vector<float>& v)
+{
+    return QByteArray(reinterpret_cast<const char*>(v.data()), int(v.size() * sizeof(float)));
+}
+
+} // namespace
+
+bool saveInterchange(const QString& npzPath, const InterchangeArrays& a, QString* error)
+{
+    const size_t J = a.names.size();
+    if (J == 0 || a.parents.size() != J || a.restJoints.size() != J * 3)
+        return fail(error, QStringLiteral("interchange: skeleton arrays do not match"));
+    if (a.localRotMats.size() % (J * 9) != 0) return fail(error, QStringLiteral("interchange: rotation array size"));
+    const size_t T = a.localRotMats.size() / (J * 9);
+    if (T < 2 || a.rootPositions.size() != T * 3) return fail(error, QStringLiteral("interchange: frame arrays do not match"));
+    const bool hasContacts = a.contactChannels > 0 && a.footContacts.size() == T * size_t(a.contactChannels);
+
+    size_t width = 1;
+    for (const std::string& n : a.names) width = std::max(width, n.size());
+    QByteArray names;
+    for (const std::string& n : a.names) {
+        QByteArray e = QByteArray::fromStdString(n);
+        e.append(QByteArray(int(width - n.size()), '\0'));
+        names += e;
+    }
+    std::vector<float> parents(a.parents.begin(), a.parents.end());
+    const int64_t Ji = int64_t(J), Ti = int64_t(T);
+    std::vector<std::pair<QByteArray, QByteArray>> entries = {
+        {"local_rot_mats", npy("<f4", {Ti, Ji, 3, 3}, floats(a.localRotMats))},
+        {"root_positions", npy("<f4", {Ti, 3}, floats(a.rootPositions))},
+        {"rest_joints", npy("<f4", {Ji, 3}, floats(a.restJoints))},
+        {"joint_parents", npy("<f4", {Ji}, floats(parents))},
+        {"joint_names", npy("|S" + QByteArray::number(qulonglong(width)), {Ji}, names)},
+        {"fps", npy("<f4", {1}, floats({a.fps}))},
+        {"format_version", npy("<f4", {1}, floats({float(kInterchangeVersion)}))},
+    };
+    if (hasContacts)
+        entries.insert(entries.begin() + 2, {"foot_contacts", npy("<f4", {Ti, int64_t(a.contactChannels)}, floats(a.footContacts))});
+
+    QByteArray zip, central;
+    for (const auto& [name, data] : entries) {
+        const QByteArray file = name + ".npy";
+        const uint32_t crc = crc32Of(data);
+        const uint32_t offset = uint32_t(zip.size());
+        put32(zip, 0x04034b50u); put16(zip, 20); put16(zip, 0); put16(zip, 0); put16(zip, 0); put16(zip, 0x21);
+        put32(zip, crc); put32(zip, uint32_t(data.size())); put32(zip, uint32_t(data.size()));
+        put16(zip, uint16_t(file.size())); put16(zip, 0);
+        zip += file;
+        zip += data;
+        put32(central, 0x02014b50u); put16(central, 20); put16(central, 20); put16(central, 0); put16(central, 0);
+        put16(central, 0); put16(central, 0x21); put32(central, crc); put32(central, uint32_t(data.size()));
+        put32(central, uint32_t(data.size())); put16(central, uint16_t(file.size())); put16(central, 0); put16(central, 0);
+        put16(central, 0); put16(central, 0); put32(central, 0); put32(central, offset);
+        central += file;
+    }
+    const uint32_t cdOffset = uint32_t(zip.size());
+    zip += central;
+    put32(zip, 0x06054b50u); put16(zip, 0); put16(zip, 0); put16(zip, uint16_t(entries.size()));
+    put16(zip, uint16_t(entries.size())); put32(zip, uint32_t(central.size())); put32(zip, cdOffset); put16(zip, 0);
+
+    const QString part = npzPath + QStringLiteral(".part");
+    QFile f(part);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(zip) != zip.size()) {
+        QFile::remove(part);
+        return fail(error, QStringLiteral("could not write %1").arg(npzPath));
+    }
+    f.close();
+    QFile::remove(npzPath);
+    if (!QFile::rename(part, npzPath)) return fail(error, QStringLiteral("could not rename %1").arg(part));
+    return true;
+}
+
 } // namespace AIMotion

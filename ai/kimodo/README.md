@@ -1,7 +1,17 @@
 # QtMeshEditor Kimodo sidecar
 
+**Built with Meta Llama 3.**
+
+> QtMeshEditor now runs Kimodo **natively** (no Python): `src/AIMotion/KimodoNative.cpp` runs the text encoder
+> through the bundled llama.cpp and the motion model through ONNX Runtime, matching Kimodo's own PyTorch output on
+> the same noise (max joint rotation error 2e-4, root 0.003 cm, identical foot contacts). Its ~9 GB of models
+> download once on request: `qtmesh anim <rig> --generate "<prompt>" --backend kimodo --download`, MCP
+> `generate_motion {backend:"kimodo", download:true}`, or the Inspector's "Download Kimodo models" button.
+> `--runtime auto|native|python` picks the runtime (auto = native when downloaded, else this sidecar). This
+> sidecar remains for constraints files and as an alternative runtime.
+
 Out-of-process Python runtime for the `kimodo` text-to-motion backend
-(`qtmesh anim <rig> --generate "<prompt>" --backend kimodo`).
+(`qtmesh anim <rig> --generate "<prompt>" --backend kimodo --runtime python`).
 
 `generate.py` runs **NVIDIA Kimodo** inference only and writes QtMeshEditor's motion
 interchange NPZ (SOMA-77 skeleton + parent-relative rotations + root path + foot contacts).

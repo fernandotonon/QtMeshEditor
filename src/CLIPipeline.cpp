@@ -3438,7 +3438,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // flag as the value" (`--seed --no-root-motion` used to seed 0 and leave root motion on).
         if (arg == "--backend" || arg == "--apply-motion" || arg == "--segment" || arg == "--variations"
             || arg == "--seed" || arg == "--diffusion-steps" || arg == "--constraints" || arg == "--text-encoder-url"
-            || arg == "--text-encoder-quant" || arg == "--name") {
+            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime") {
             const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
             if (v.isEmpty() || (v.startsWith(QLatin1Char('-')) && arg != "--segment")) {
                 err() << "Error: " << arg << " needs a value." << Qt::endl;
@@ -3455,6 +3455,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             else if (arg == "--constraints") kimodoReq.constraintsPath = v;
             else if (arg == "--text-encoder-url") kimodoReq.textEncoderUrl = v;
             else if (arg == "--text-encoder-quant") kimodoReq.textEncoderQuant = v.toLower();
+            else if (arg == "--runtime") kimodoReq.runtime = v.toLower();
             else kimodoReq.name = v;
             if (!ok) {
                 err() << "Error: " << arg << " needs an integer, got '" << v << "'." << Qt::endl;
@@ -3464,6 +3465,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
         if (arg == "--no-root-motion") { kimodoReq.rootMotion = false; continue; }
         if (arg == "--no-postprocess") { kimodoReq.postprocess = false; continue; }
+        // Native Kimodo: fetch its ~9 GB of models (an explicit request; generation never downloads on its own).
+        if (arg == "--download") { kimodoReq.download = true; continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);

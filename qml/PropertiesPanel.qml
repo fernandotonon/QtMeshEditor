@@ -12584,6 +12584,22 @@ Rectangle {
                 text: KimodoController.runtimeDescription
                 color: PropertiesPanelController.textColor; opacity: 0.6; font.pixelSize: 9
             }
+            // Native (Python-free) runtime: its models download only when the user asks.
+            InspectorButton {
+                // InspectorButton sizes from parent.width: never put it in a Row without an explicit width
+                // (a Row's width comes from its children: a binding loop that broke this tab's layout).
+                visible: KimodoController.nativeDownloadable && !KimodoController.busy
+                width: parent.width - 16
+                text: "Download Kimodo models (" + KimodoController.nativeDownloadSize + ")"
+                clickEnabled: !KimodoController.busy
+                onClicked: KimodoController.downloadNativeModels()
+            }
+            Text {
+                // Meta Llama 3 Community License 1.b.i(B): the text encoder is a Llama 3 derivative.
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "Built with Meta Llama 3. Kimodo by NVIDIA (Open Model License); text encoder: Meta Llama 3 Community License."
+                color: PropertiesPanelController.textColor; opacity: 0.45; font.pixelSize: 9
+            }
             Rectangle {
                 width: parent.width - 16; height: 52; radius: 3
                 color: PropertiesPanelController.inputColor

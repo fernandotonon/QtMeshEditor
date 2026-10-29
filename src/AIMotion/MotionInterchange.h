@@ -59,6 +59,23 @@ Retarget::RigDesc rigDesc(const Motion& m);
 /// offsets, and the root's world position.
 std::vector<Retarget::LocalPose> localPoses(const Motion& m);
 
+/// Raw arrays of one interchange file, as the producer computed them (rotation MATRICES, not quaternions, so a
+/// native producer writes exactly what the Python sidecar would).
+struct InterchangeArrays {
+    std::vector<std::string> names;
+    std::vector<int> parents;
+    std::vector<float> restJoints;     ///< [J*3]
+    std::vector<float> localRotMats;   ///< [T*J*9], row-major 3x3
+    std::vector<float> rootPositions;  ///< [T*3]
+    std::vector<float> footContacts;   ///< [T*C], may be empty
+    int contactChannels = 0;
+    float fps = 30.0f;
+};
+
+/// Write an interchange NPZ (numpy .npz layout: an uncompressed zip of .npy arrays). Atomic: written to
+/// `<path>.part` then renamed. loadInterchange reads it back.
+bool saveInterchange(const QString& npzPath, const InterchangeArrays& a, QString* error = nullptr);
+
 /// Resample to `fps` keeping the duration (first and last frames are kept
 /// exactly; rotations slerp along the shortest path, root/contacts lerp).
 Motion resample(const Motion& m, float fps);

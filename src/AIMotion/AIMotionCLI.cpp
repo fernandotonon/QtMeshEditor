@@ -1,5 +1,6 @@
 #include "AIMotionCLI.h"
 
+#include "KimodoNative.h"
 #include "MotionInterchange.h"
 #include "MotionSceneApply.h"
 #include "SomaRetarget.h"
@@ -80,6 +81,14 @@ int runCli(const CliRequest& req)
         o.constraintsPath = req.constraintsPath;
         o.textEncoderUrl = req.textEncoderUrl;
         o.textEncoderQuant = req.textEncoderQuant;
+        o.runtime = req.runtime;
+        if (!o.runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o.runtime))
+            return fail(QStringLiteral("--runtime must be one of: %1").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))), 2);
+        if (req.download && !KimodoNative::modelsInstalled()) {
+            note(QStringLiteral("(kimodo: downloading the native models, ~%1 GB)").arg(double(KimodoNative::missingBytes()) / 1e9, 0, 'f', 1));
+            QString e;
+            if (!KimodoNative::downloadModels(&e)) return fail(QStringLiteral("download failed: %1").arg(e));
+        }
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
                                       QStringLiteral("CLI generate segments=%1 variations=%2").arg(o.segments.size()).arg(o.numSamples));
         QString lastStage;

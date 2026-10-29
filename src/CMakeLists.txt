@@ -257,6 +257,9 @@ AIMotion/KimodoPredictor.cpp
 AIMotion/AIMotionCLI.cpp
 AIMotion/MotionSceneApply.cpp
 AIMotion/KimodoController.cpp
+AIMotion/KimodoMath.cpp
+AIMotion/KimodoTextEncoder.cpp
+AIMotion/KimodoNative.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
@@ -1023,6 +1026,9 @@ endif()
 # binary. On Linux/Windows that is already the shared runtime output dir; on
 # macOS it must be copied into the bundle's Contents/MacOS (where the
 # codesign loop signs every executable).
+# Native Kimodo post-processing (vendored NVIDIA MotionCorrection, cmake/KimodoMotionCorrection.cmake).
+target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_kimodo_mc)
+
 if(TARGET qtmesh_quadriflow)
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_quadriflow)
     if(APPLE)
@@ -1171,6 +1177,7 @@ if(BUILD_TESTS)
     endif()
 
     # Link llama.cpp for tests if enabled (mtmd for the captioner where present)
+    target_link_libraries(UnitTests qtmesh_kimodo_mc)
     if(ENABLE_LOCAL_LLM)
         target_link_libraries(UnitTests llama ggml)
         if(QTMESH_HAVE_MTMD)

@@ -1,4 +1,5 @@
 #include "KimodoPredictor.h"
+#include "KimodoNative.h"
 
 #include "../AppStorage.h"
 
@@ -94,12 +95,12 @@ bool KimodoPredictor::mockRequested(const Options& o)
     return o.mock || qEnvironmentVariableIsSet("QTMESH_KIMODO_MOCK");
 }
 
-bool KimodoPredictor::runtimeAvailable()
+bool KimodoPredictor::pythonRuntimeAvailable()
 {
     return !pythonPath().isEmpty() && !generateScriptPath().isEmpty();
 }
 
-QString KimodoPredictor::runtimeDescription()
+QString KimodoPredictor::pythonRuntimeDescription()
 {
     const QString py = pythonPath();
     const QString gen = generateScriptPath();
@@ -109,6 +110,46 @@ QString KimodoPredictor::runtimeDescription()
                           "Python environment with Kimodo and %3 at ai/kimodo/generate.py. Kimodo's text encoder is Meta "
                           "Llama 3 (gated): accept its licence on Hugging Face and log in with `hf auth login`.")
         .arg(QLatin1String(kEnvPythonVar), QLatin1String(kPythonSettingsKey), QLatin1String(kEnvGenerateVar));
+}
+
+bool KimodoPredictor::runtimeAvailable()
+{
+    return (KimodoNative::buildSupported() && KimodoNative::modelsInstalled()) || pythonRuntimeAvailable();
+}
+
+QString KimodoPredictor::runtimeDescription()
+{
+    if (KimodoNative::buildSupported() && KimodoNative::modelsInstalled()) return KimodoNative::description();
+    if (pythonRuntimeAvailable()) return pythonRuntimeDescription();
+    if (KimodoNative::buildSupported())
+        return KimodoNative::description() + QStringLiteral(": download them to generate without Python");
+    return pythonRuntimeDescription();
+}
+
+QString KimodoPredictor::resolveRuntime(const Options& o, QString* why)
+{
+    const QString mode = o.runtime.isEmpty() ? QStringLiteral("auto") : o.runtime;
+    const bool nativeReady = KimodoNative::buildSupported() && KimodoNative::modelsInstalled();
+    // The mock and constraints files live in the Python sidecar only.
+    const bool needsPython = mockRequested(o) || !o.constraintsPath.isEmpty();
+    if (mode == QLatin1String("python") || needsPython) {
+        if (mode == QLatin1String("native")) {
+            if (why) *why = QStringLiteral("constraints files and the mock need the Python runtime");
+            return {};
+        }
+        if (pythonRuntimeAvailable() || mockRequested(o)) return QStringLiteral("python");
+        if (why) *why = pythonRuntimeDescription();
+        return {};
+    }
+    if (mode == QLatin1String("native")) {
+        if (nativeReady) return QStringLiteral("native");
+        if (why) *why = KimodoNative::description();
+        return {};
+    }
+    if (nativeReady) return QStringLiteral("native");
+    if (pythonRuntimeAvailable()) return QStringLiteral("python");
+    if (why) *why = runtimeDescription();
+    return {};
 }
 
 QStringList KimodoPredictor::buildArguments(const Options& o, const QString& outputDir)
@@ -142,15 +183,26 @@ KimodoPredictor::Result KimodoPredictor::predict(const Options& o, const Progres
     if (!o.textEncoderQuant.isEmpty() && !textEncoderQuantModes().contains(o.textEncoderQuant))
         return failed(QStringLiteral("text encoder quantization must be one of: %1").arg(textEncoderQuantModes().join(QStringLiteral(", "))));
 
-    const QString py = pythonPath();
-    const QString gen = generateScriptPath();
-    if (py.isEmpty() || gen.isEmpty()) return failed(runtimeDescription());
+    if (!o.runtime.isEmpty() && !runtimeModes().contains(o.runtime))
+        return failed(QStringLiteral("runtime must be one of: %1").arg(runtimeModes().join(QStringLiteral(", "))));
+    QString why;
+    const QString runtime = resolveRuntime(o, &why);
+    if (runtime.isEmpty()) return failed(why);
 
     QString outDir = o.outputDir;
     if (outDir.isEmpty())
         outDir = QDir(AppStorage::persistentRoot())
                      .filePath(QStringLiteral("generated_motion/kimodo_%1").arg(QDateTime::currentMSecsSinceEpoch()));
     if (!QDir().mkpath(outDir)) return failed(QStringLiteral("cannot create %1").arg(outDir));
+    if (runtime == QLatin1String("native")) {
+        Options native = o;
+        native.outputDir = outDir;
+        return KimodoNative::predict(native, progress);
+    }
+
+    const QString py = pythonPath();
+    const QString gen = generateScriptPath();
+    if (py.isEmpty() || gen.isEmpty()) return failed(pythonRuntimeDescription());
 
     QProcess proc;
     proc.setProgram(py);

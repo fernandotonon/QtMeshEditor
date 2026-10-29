@@ -26,6 +26,7 @@
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
+#include "AIMotion/KimodoNative.h"
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
 #ifdef ENABLE_MOCAP
@@ -5972,8 +5973,22 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
         o.diffusionSteps = args.value(QStringLiteral("diffusion_steps")).toInt(0);
         o.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
         o.postprocess = args.value(QStringLiteral("postprocess")).toBool(true);
+        o.runtime = args.value(QStringLiteral("runtime")).toString().toLower();
+        if (!o.runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o.runtime))
+            return makeErrorResult(QStringLiteral("Error: 'runtime' must be one of: %1.").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))));
+        // The ~9 GB native models download only on an explicit request (download:true), never implicitly.
+        if (args.value(QStringLiteral("download")).toBool(false) && !KimodoNative::modelsInstalled()) {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"), QStringLiteral("MCP generate_motion download native models"));
+            QString derr;
+            if (!KimodoNative::downloadModels(&derr, [this](const QString& stage, int done, int total) {
+                    emit toolProgress(QStringLiteral("generate_motion"), QStringLiteral("kimodo: %1").arg(stage), done, total);
+                    return !m_toolCancelRequested;
+                }))
+                return makeErrorResult(QStringLiteral("Error: Kimodo model download failed: %1").arg(derr));
+        }
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
-            QStringLiteral("MCP generate_motion segments=%1 variations=%2").arg(o.segments.size()).arg(o.numSamples));
+            QStringLiteral("MCP generate_motion segments=%1 variations=%2 runtime=%3").arg(o.segments.size()).arg(o.numSamples)
+                .arg(KimodoPredictor::resolveRuntime(o)));
 
         // Main-thread tool: pump at ~20 Hz so the window paints and Stop reaches m_toolCancelRequested.
         m_toolCancelRequested = false;
@@ -12956,7 +12971,7 @@ QJsonArray MCPServer::buildToolsList()
         props["vertical_descent"] = QJsonObject{{"type", "boolean"}, {"description", "Lower the body to the ground on non-locomotion crouch/pickup/sit/crawl/death clips (#838, descent-only). Default true; set false to keep the root at standing height when the descent over-sinks on a given clip. No effect on locomotion actions."}};
         props["variant_index"] = QJsonObject{{"type", "integer"}, {"description", "Select an EXACT clip from the library by index (parity with CLI --variant / the GUI picker) instead of keyword-matching a prompt. Forces the template path. When given, 'prompt' is optional. Out-of-range indices error."}};
         props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"template", "model", "kimodo"}},
-            {"description", "Motion source. 'template' (default): the curated clip library. 'model': the experimental in-house ONNX model (same as model:true). 'kimodo': NVIDIA Kimodo text-to-motion diffusion (Kimodo-SOMA-RP-v1.2, commercially usable) through its optional Python sidecar (ai/kimodo/install.py; needs the user's own Hugging Face login with Meta Llama 3 access). Kimodo takes 'prompt' + 'duration' or 'segments', and 'variations', 'seed', 'diffusion_steps', 'root_motion', 'postprocess'; every variation becomes its own clip (name, name_v2, ...), all in ONE undo step. Slow (minutes); reports progress and honours Stop."}};
+            {"description", "Motion source. 'template' (default): the curated clip library. 'model': the experimental in-house ONNX model (same as model:true). 'kimodo': NVIDIA Kimodo text-to-motion diffusion (Kimodo-SOMA-RP-v1.2, commercially usable) natively (ONNX Runtime + llama.cpp, no Python; its ~9 GB of models download once on request: pass download:true) or through the optional Python sidecar (ai/kimodo/install.py). Built with Meta Llama 3: the text encoder is a Llama 3 derivative under the Meta Llama 3 Community License. Kimodo takes 'prompt' + 'duration' or 'segments', and 'variations', 'seed', 'diffusion_steps', 'root_motion', 'postprocess'; every variation becomes its own clip (name, name_v2, ...), all in ONE undo step. Slow (minutes); reports progress and honours Stop."}};
         props["segments"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}},
             {"description", "kimodo only: a multi-segment timeline [{\"text\":\"walk forward\",\"duration\":3},{\"text\":\"sit down\",\"duration\":2}] generated as ONE continuous motion with model-made transitions. Overrides prompt/duration."}};
         props["variations"] = QJsonObject{{"type", "integer"}, {"description", "kimodo only: how many variations to generate (1..16, default 1)."}};
@@ -12965,6 +12980,9 @@ QJsonArray MCPServer::buildToolsList()
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: keep the root translation (scaled to the rig's height). Default true; false = in-place motion."}};
         props["postprocess"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: Kimodo's own foot-skate cleanup. Default true."}};
         props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "kimodo / motion_files: base clip name (default generated_kimodo)."}};
+        props["runtime"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "native", "python"}},
+            {"description", "kimodo only: 'auto' (default: native when its models are downloaded, else the Python sidecar), 'native' or 'python' (constraints files need python)."}};
+        props["download"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: download the native Kimodo models (~9 GB, once) before generating. Default false: generation never downloads on its own."}};
         props["motion_files"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}},
             {"description", "Re-apply saved QtMeshEditor motion interchange files (motion_NN.npz written by an earlier Kimodo run, kept under <AppData>/generated_motion/) to the rig with NO inference and no Python. Each file becomes one clip."}};
         props["script"] = QJsonObject{{"type", "object"}, {"description", "Composed motion timeline (#1010), skipping prompt parsing: {\"steps\":[{\"action\":\"walk\",\"duration_s\":2.0},{\"action\":\"sit\"},{\"action\":\"wave\",\"repeat\":2}]}. Each 'action' must resolve to a library action (synonyms allowed); unresolvable entries are reported, never silently played. Two or more steps are stitched into ONE continuous clip at their best-matching pose pair with a short crossfade. A plain multi-step 'prompt' composes the same way without this argument."}};

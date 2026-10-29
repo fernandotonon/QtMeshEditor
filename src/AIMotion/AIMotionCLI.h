@@ -28,6 +28,8 @@ struct CliRequest {
     QString constraintsPath;
     QString textEncoderUrl;
     QString textEncoderQuant;       ///< auto|none|int8|int4 (empty = sidecar default)
+    QString runtime;                ///< auto|native|python (empty = auto)
+    bool download = false;          ///< --download: fetch the native Kimodo models first (explicit request)
     float armSpaceDeg = 0.0f;       ///< #854 arm-space swing applied to every written clip (0 = none)
     bool json = false;
 };

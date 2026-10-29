@@ -504,6 +504,12 @@ message(STATUS "xatlas enabled (auto UV unwrap)")
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuadriFlow.cmake)
 
 ##############################################################
+#  NVIDIA Kimodo MotionCorrection (Apache-2.0, vendored): the
+#  post-processing of the native Kimodo runtime (src/AIMotion).
+##############################################################
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/KimodoMotionCorrection.cmake)
+
+##############################################################
 #  stb — Radiance .hdr decode for HDR environment maps (#467).
 ##############################################################
 FetchContent_Declare(

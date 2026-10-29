@@ -173,7 +173,7 @@ For a one-page overview of every model and what it does in the app, see
   the runtime resolves; every surface reports a clean "runtime not installed"
   message otherwise (no crash).
 
-## NVIDIA Kimodo — text-to-motion diffusion, sidecar backend
+## NVIDIA Kimodo — text-to-motion diffusion (native runtime + Python sidecar)
 
 - **Model:** NVIDIA **Kimodo**, `nvidia/Kimodo-SOMA-RP-v1.2` (~1.1 GB
   safetensors) — text (and multi-segment timeline) to whole-body motion on the
@@ -191,7 +191,24 @@ For a one-page overview of every model and what it does in the app, see
   License, GATED** (~16 GB): the user accepts Meta's licence on Hugging Face
   themselves. ARM builds only: `sse2neon` v1.8.0 (**MIT**, SHA-256 pinned in
   `install.py`) to compile Kimodo's x86-SIMD MotionCorrection extension.
-- **Quantized text encoder (local derivative):** by default the sidecar
+- **Native runtime (no Python, `src/AIMotion/KimodoNative.cpp`) and the files we host** (decision 2026-10-29):
+  - `fernandotonon/QtMeshEditor-models` `kimodo/` (+ mirror `QtMeshEditor-kimodo-onnx`): an ONNX conversion of
+    `Kimodo-SOMA-RP-v1.2` (`scripts/export-kimodo-onnx.py`) — **NVIDIA Open Model License** §3.1 is met by
+    shipping `LICENSE-NVIDIA-OML.txt` and `NOTICE-Kimodo.txt` ("Licensed by NVIDIA Corporation under the NVIDIA
+    Open Model License") with the files, and the app downloads both with the graphs.
+  - `fernandotonon/Llama-3-LLM2Vec-8B-Kimodo-TextEncoder-GGUF`: Meta-Llama-3-8B-Instruct with the LLM2Vec LoRA
+    merged, Q8_0 GGUF (`scripts/export-kimodo-text-encoder-gguf.py`) — a **Meta Llama 3 derivative**, distributed
+    under the Meta Llama 3 Community License: §1.b.i(A) a copy of the licence (`LICENSE-Llama-3.txt`) travels
+    with it, §1.b.i(B) "Built with Meta Llama 3" is displayed on the model card, in the Inspector's Kimodo block,
+    in the MCP tool description and in `ai/kimodo/README.md`, §1.b.i the model name begins with "Llama-3",
+    §1.b.iii the attribution "Meta Llama 3 is licensed under the Meta Llama 3 Community License, Copyright ©
+    Meta Platforms, Inc. All Rights Reserved." is in the `NOTICE` file, §1.b.iv the Acceptable Use Policy
+    (`USE_POLICY-Llama-3.md`) ships alongside. The merged LLM2Vec adapters are MIT (`LICENSE-LLM2Vec-MIT.txt`).
+  - Nothing downloads until the user asks (CLI `--download`, MCP `download:true`, the Inspector's Download
+    button); the app pins the hosted revisions and SHA-256 digests.
+  - Vendored code: NVIDIA MotionCorrection (`src/dependencies/kimodo_motion_correction`, **Apache-2.0**, licence
+    file beside it), sse2neon v1.8.0 (**MIT**), Eigen 3.4.0 (**MPL-2.0**, SparseLU only). No PyTorch.
+- **Quantized text encoder (sidecar, local derivative):** by default the sidecar
   quantizes the Llama 3 encoder to int8 ONCE on the user's machine, from the
   user's own gated download (`ai/kimodo/textenc_quant.py`). That checkpoint is a
   derivative of Meta Llama 3: it stays local and QtMeshEditor never bundles,

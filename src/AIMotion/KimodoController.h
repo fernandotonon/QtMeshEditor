@@ -1,7 +1,7 @@
 #pragma once
 
 // QML_SINGLETON behind the Animation panel's "NVIDIA Kimodo" text-to-motion
-// block. Generation runs the Python sidecar on a WORKER thread (minutes of
+// block. Generation (native runtime or the Python sidecar) runs on a WORKER thread (minutes of
 // diffusion must not freeze the editor); the result is applied on the main
 // thread (Ogre and the undo stack live there) as one clip per variation, one
 // undo step for the batch. A saved motion (motion_NN.npz) can be re-applied
@@ -36,6 +36,9 @@ class KimodoController : public QObject
     Q_PROPERTY(QString runtimeDescription READ runtimeDescription NOTIFY runtimeChanged)
     Q_PROPERTY(QStringList lastClips READ lastClips NOTIFY statusChanged)
     Q_PROPERTY(QString lastMotionDir READ lastMotionDir NOTIFY statusChanged)
+    /// The native (Python-free) runtime is built in but its models are not downloaded yet.
+    Q_PROPERTY(bool nativeDownloadable READ nativeDownloadable NOTIFY runtimeChanged)
+    Q_PROPERTY(QString nativeDownloadSize READ nativeDownloadSize NOTIFY runtimeChanged)
 
 public:
     static KimodoController* instance();
@@ -51,6 +54,8 @@ public:
     QString runtimeDescription() const { return m_runtimeDescription; }
     QStringList lastClips() const { return m_lastClips; }
     QString lastMotionDir() const { return m_lastMotionDir; }
+    bool nativeDownloadable() const;
+    QString nativeDownloadSize() const;
 
     /// Generate on the selected rig. `prompt` is one prompt, or one segment per
     /// line ("walk forward @3" — a trailing @SECONDS sets that line's duration,
@@ -65,6 +70,9 @@ public:
     bool applyMotionFiles(const QStringList& files, bool rootMotion = true, bool footPin = true);
     Q_INVOKABLE void openMotionFolder();
     Q_INVOKABLE void refreshRuntime();
+    /// Download the native Kimodo models (~9 GB, an explicit user request). Runs on the main thread through
+    /// ModelFetch's own event loop (the downloader lives there), so the window keeps painting; Cancel stops it.
+    Q_INVOKABLE void downloadNativeModels();
 
     /// Split the panel's prompt into segments (pure; exposed for tests).
     /// Returns false with `error` set on an empty prompt or a bad duration.
