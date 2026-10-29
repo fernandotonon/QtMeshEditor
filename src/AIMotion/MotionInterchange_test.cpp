@@ -142,6 +142,22 @@ TEST(MotionInterchange, RigDescUsesParentRelativeOffsets)
     EXPECT_TRUE(poses[2].pos[1].positionEquals(rig.bindPos[1])) << "other joints keep the bind offsets";
 }
 
+TEST(MotionInterchange, RigDescStandsAHipsRelativeRestOnTheFloor)
+{
+    // Kimodo's rest joints are hips-relative (hips at the origin, feet below) while root_positions are in floor space.
+    // The rest root must be lifted onto the same floor, else the retarget lifts every frame by the hip height.
+    QTemporaryDir dir;
+    Chain c;
+    c.rest = {0, 0, 0, 0, -0.9f, 0, 0, 0.6f, 0};   // a joint 0.9 m below the hips
+    const QString p = dir.filePath(QStringLiteral("r.npz"));
+    ASSERT_TRUE(c.write(p));
+    Motion m;
+    ASSERT_TRUE(loadInterchange(p, &m));
+    const Retarget::RigDesc rig = rigDesc(m);
+    EXPECT_TRUE(rig.bindPos[0].positionEquals(Ogre::Vector3(0, 0.9f, 0))) << "rest hips stand 0.9 m above the floor";
+    EXPECT_TRUE(rig.bindPos[1].positionEquals(Ogre::Vector3(0, -0.9f, 0))) << "child offsets are unchanged";
+}
+
 TEST(MotionInterchange, RefusesAnUnknownVersionAndBadParents)
 {
     QTemporaryDir dir;

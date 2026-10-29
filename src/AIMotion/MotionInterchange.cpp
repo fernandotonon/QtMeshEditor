@@ -141,9 +141,15 @@ Retarget::RigDesc rigDesc(const Motion& m)
     Retarget::RigDesc rig;
     rig.names = m.names;
     rig.parent = m.parents;
+    // The root path is in FLOOR space (y = 0 under the lowest joint), but Kimodo's rest joints are root-relative (hips at
+    // the origin, feet ~1 m below). Stand the rest on the same floor, or the retarget's (root - rest root) delta lifts
+    // every frame by the hip height.
+    float floorY = 0.0f;
+    for (const Ogre::Vector3& r : m.restJoints) floorY = std::min(floorY, r.y);
     for (int j = 0; j < m.jointCount(); ++j) {
         const int p = m.parents[size_t(j)];
-        rig.bindPos.push_back(p < 0 ? m.restJoints[size_t(j)] : m.restJoints[size_t(j)] - m.restJoints[size_t(p)]);
+        rig.bindPos.push_back(p < 0 ? m.restJoints[size_t(j)] - Ogre::Vector3(0.0f, floorY, 0.0f)
+                                    : m.restJoints[size_t(j)] - m.restJoints[size_t(p)]);
         rig.bindRot.push_back(Ogre::Quaternion::IDENTITY);
     }
     return rig;
