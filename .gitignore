@@ -93,6 +93,7 @@ website/node_modules/
 docs/*
 !docs/AUTO_UPDATER_DESIGN.md
 !docs/AI_MODELS.md
+!docs/KIMODO.md
 !docs/IMAGE_TO_3D_SPIKE_764.md
 !docs/IMAGE_TO_3D_QUALITY.md
 !docs/TRIPOSG_EXPORT_NOTES.md
