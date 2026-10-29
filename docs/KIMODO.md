@@ -58,7 +58,7 @@ takes the new clips back out of the scene.
 
 ## Speed and accuracy
 
-On an Apple M-series Mac, ~46 s per 5 s variation at the default 100 steps (fewer `diffusion_steps` is faster). The
+On an Apple M-series Mac, ~18 s per 5 s variation at the default 100 steps, plus ~4 s to load the models and encode the prompt (fewer `diffusion_steps` is faster). The
 native runtime reproduces Kimodo's own PyTorch output on the same inputs to a 2e-4 maximum joint-rotation
 difference and 0.003 cm root difference, with identical foot contacts (`scripts/export-kimodo-onnx.py --verify`).
 
