@@ -9,7 +9,8 @@ Gates (thresholds are deliberately loose: they catch broken clips, not style):
   finite      every rotation / root value is finite
   slide       feet move < 20 cm/s horizontally while Kimodo marks them in contact
   ground      no foot more than 5 cm below the floor (floor = lowest foot point of the clip's first frame)
-  hips        hips stay 0.15..1.4 m above the floor unless the prompt is about lying / crawling / falling
+  hips        hips stay 0.15..1.4 m above the floor unless the prompt is about lying / sitting / crawling /
+              falling, or leaves the floor plane on purpose (stairs, ladder, jump, vault: no ground gate either)
   jitter      95th-percentile joint acceleration < 120 m/s^2 (a teleporting joint, not a fast motion)
 
     python3 scripts/check-kimodo-t2m-corpus.py ~/t2m_kimodo/v1
@@ -22,7 +23,10 @@ import sys
 import numpy as np
 
 LOW_OK = ("lie", "lies", "lying", "crawl", "roll", "fall", "falls", "push up", "sit up", "ground", "floor", "kneel",
-          "crouch", "squat", "slides", "trips")
+          "crouch", "squat", "slides", "trips", "sit", "sits", "handstand", "swim", "swims")
+# Prompts whose motion leaves the floor plane on purpose: the first-frame floor does not apply to them.
+VERTICAL_OK = ("stairs", "ladder", "climb", "climbs", "jump", "jumps", "vault", "vaults", "over", "slides",
+               "handstand", "swim", "swims")
 
 
 def fk(d):
@@ -82,12 +86,14 @@ def check(path, text):
     acc = np.linalg.norm(np.diff(P, n=2, axis=0), axis=-1) * fps * fps
     m["jitter_p95"] = float(np.percentile(acc, 95))
     m["travel_m"] = float(np.linalg.norm(P[-1, hips, [0, 2]] - P[0, hips, [0, 2]]))
-    low_ok = any(w in text.lower() for w in LOW_OK)
+    words = text.lower().replace(",", " ").split()
+    low_ok = any(w in words or (" " in w and w in text.lower()) for w in LOW_OK)
+    vertical_ok = any(w in words for w in VERTICAL_OK)
     if m["slide_cm_s"] > 20:
         gates.append("slide")
-    if m["ground_cm"] < -5:
+    if m["ground_cm"] < -5 and not vertical_ok:
         gates.append("ground")
-    if not low_ok and (m["hips_min_m"] < 0.15 or m["hips_max_m"] > 1.4):
+    if not (low_ok or vertical_ok) and (m["hips_min_m"] < 0.15 or m["hips_max_m"] > 1.4):
         gates.append("hips")
     if m["jitter_p95"] > 120:
         gates.append("jitter")
