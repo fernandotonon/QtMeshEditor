@@ -14,6 +14,7 @@
 #include <QtQml/qqmlregistration.h>
 
 #include <atomic>
+#include <memory>
 
 class QThread;
 
@@ -88,6 +89,7 @@ signals:
     void applied(const QString& entity, const QStringList& clips);
 
 private:
+    friend struct std::default_delete<KimodoController>;   // the singleton holder releases it in kill()
     explicit KimodoController(QObject* parent = nullptr);
     ~KimodoController() override;
 

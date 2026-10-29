@@ -26,7 +26,12 @@ namespace AIMotion {
 
 namespace {
 
-KimodoController* s_instance = nullptr;
+// Owns the singleton (kill() releases it).
+std::unique_ptr<KimodoController>& holder()
+{
+    static std::unique_ptr<KimodoController> instance;
+    return instance;
+}
 
 QString motionRoot() { return QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_motion")); }
 
@@ -42,8 +47,8 @@ QWidget* dialogParent()
 
 KimodoController* KimodoController::instance()
 {
-    if (!s_instance) s_instance = new KimodoController();
-    return s_instance;
+    if (!holder()) holder().reset(new KimodoController());   // private constructor: no make_unique
+    return holder().get();
 }
 
 KimodoController* KimodoController::qmlInstance(QQmlEngine*, QJSEngine*)
@@ -55,8 +60,7 @@ KimodoController* KimodoController::qmlInstance(QQmlEngine*, QJSEngine*)
 
 void KimodoController::kill()
 {
-    delete s_instance;
-    s_instance = nullptr;
+    holder().reset();
 }
 
 KimodoController::KimodoController(QObject* parent) : QObject(parent)
@@ -68,8 +72,7 @@ KimodoController::~KimodoController()
 {
     if (m_worker) {
         m_cancel = true;   // predict() terminates the sidecar on its next poll
-        m_worker->wait();
-        delete m_worker;
+        m_worker->wait();   // the thread is a child of this object: Qt deletes it with us
     }
 }
 
@@ -241,6 +244,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         if (!target) { setStatus(QStringLiteral("The rig was removed while Kimodo ran; the motion is saved in %1.").arg(result->outputDir), false); return; }
         applyFiles(target, result->files, rootMotion, footPin);
     });
+    m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
     m_worker->start();
     return true;
 }

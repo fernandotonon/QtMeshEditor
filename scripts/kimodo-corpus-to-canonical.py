@@ -53,17 +53,21 @@ def main() -> int:
             if os.path.exists(out):
                 continue
             fbx = os.path.join(tmp, "batch.fbx")
-            cmd = [args.qtmesh, "anim", args.rig, "--name", "k", "-o", fbx]
+            cmd = [args.qtmesh, "anim", args.rig, "--name", "k", "--json", "-o", fbx]
             for r in batch:
                 cmd += ["--apply-motion", os.path.join(root, r["file"])]
-            subprocess.run(cmd, check=True, capture_output=True)
+            res = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            # The clip names the CLI actually wrote, in --apply-motion order: a rig that already has a "k" gets
+            # uniqued names, so never assume k, k_v2, ...
+            applied = [c["name"] for c in json.loads(res.stdout.strip().splitlines()[-1])["clips"]]
+            if len(applied) != len(batch):
+                raise SystemExit(f"the CLI applied {len(applied)} clips for {len(batch)} files")
             dump = os.path.join(tmp, "batch.json")
             subprocess.run([args.qtmesh, "anim", fbx, "--dump-canonical", dump], check=True, capture_output=True)
             data = json.load(open(dump, encoding="utf-8"))
             by_name = {c["animation"]: c for c in data["clips"]}
             clips = []
-            for i, r in enumerate(batch):
-                name = "k" if i == 0 else f"k_v{i + 1}"   # MotionSceneApply's variant naming, in file order
+            for name, r in zip(applied, batch):
                 c = by_name.get(name)
                 if c is None:
                     print(f"  missing {name} for {r['id']}")

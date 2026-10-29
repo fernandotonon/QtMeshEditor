@@ -173,18 +173,130 @@ QStringList KimodoPredictor::buildArguments(const Options& o, const QString& out
     return args;
 }
 
-KimodoPredictor::Result KimodoPredictor::predict(const Options& o, const ProgressFn& progress)
+bool KimodoPredictor::validateOptions(const Options& o, QString* error)
 {
-    if (o.segments.empty()) return failed(QStringLiteral("no prompt"));
+    const auto bad = [error](const QString& msg) {
+        if (error) *error = msg;
+        return false;
+    };
+    if (o.segments.empty()) return bad(QStringLiteral("no prompt"));
     for (const MotionSegment& s : o.segments)
         if (s.text.trimmed().isEmpty() || !(s.duration > 0.0) || s.duration > 600.0)
-            return failed(QStringLiteral("every segment needs text and a duration in (0, 600] seconds"));
-    if (o.numSamples < 1 || o.numSamples > 16) return failed(QStringLiteral("variations must be 1..16"));
+            return bad(QStringLiteral("every segment needs text and a duration in (0, 600] seconds"));
+    if (o.numSamples < 1 || o.numSamples > 16) return bad(QStringLiteral("variations must be 1..16"));
+    // The DDIM schedule subsamples Kimodo's 1000 training steps: more denoising steps than that do not exist.
+    if (o.diffusionSteps < 0 || o.diffusionSteps > kMaxDiffusionSteps)
+        return bad(QStringLiteral("diffusion steps must be 1..%1 (0 = the model's default)").arg(kMaxDiffusionSteps));
     if (!o.textEncoderQuant.isEmpty() && !textEncoderQuantModes().contains(o.textEncoderQuant))
-        return failed(QStringLiteral("text encoder quantization must be one of: %1").arg(textEncoderQuantModes().join(QStringLiteral(", "))));
-
+        return bad(QStringLiteral("text encoder quantization must be one of: %1").arg(textEncoderQuantModes().join(QStringLiteral(", "))));
     if (!o.runtime.isEmpty() && !runtimeModes().contains(o.runtime))
-        return failed(QStringLiteral("runtime must be one of: %1").arg(runtimeModes().join(QStringLiteral(", "))));
+        return bad(QStringLiteral("runtime must be one of: %1").arg(runtimeModes().join(QStringLiteral(", "))));
+    return true;
+}
+
+namespace {
+
+// One run of the Python sidecar: JSON-line events on stdout, stderr passed through.
+struct SidecarRun {
+    QString stage = QStringLiteral("import");
+    int done = 0;
+    int total = 0;
+    QString lastError;
+    QJsonObject doneEvent;
+    QByteArray pending;
+    QByteArray errBuf;
+
+    void handleLine(const QByteArray& line)
+    {
+        const QJsonObject ev = QJsonDocument::fromJson(line).object();
+        const QString kind = ev.value(QStringLiteral("event")).toString();
+        if (kind == QLatin1String("stage")) {
+            stage = ev.value(QStringLiteral("stage")).toString();
+            done = 0;
+            total = 0;
+        } else if (kind == QLatin1String("progress")) {
+            done = ev.value(QStringLiteral("done")).toInt();
+            total = ev.value(QStringLiteral("total")).toInt();
+        } else if (kind == QLatin1String("error")) {
+            lastError = ev.value(QStringLiteral("message")).toString();
+        } else if (kind == QLatin1String("done")) {
+            doneEvent = ev;
+        }
+    }
+
+    void drain(QProcess& proc)
+    {
+        pending += proc.readAllStandardOutput();
+        if (const QByteArray chunk = proc.readAllStandardError(); !chunk.isEmpty()) {
+            errBuf = (errBuf + chunk).right(64 * 1024);
+            fwrite(chunk.constData(), 1, size_t(chunk.size()), stderr);
+            fflush(stderr);
+        }
+        for (int nl = pending.indexOf('\n'); nl >= 0; nl = pending.indexOf('\n')) {
+            handleLine(pending.left(nl));
+            pending.remove(0, nl + 1);
+        }
+    }
+};
+
+void stopProcess(QProcess& proc)
+{
+    proc.terminate();
+    if (!proc.waitForFinished(5000)) proc.kill();
+    proc.waitForFinished(2000);
+}
+
+KimodoPredictor::Result runSidecar(const KimodoPredictor::Options& o, const QString& outDir,
+                                   const KimodoPredictor::ProgressFn& progress)
+{
+    const QString py = KimodoPredictor::pythonPath();
+    const QString gen = KimodoPredictor::generateScriptPath();
+    if (py.isEmpty() || gen.isEmpty()) return failed(KimodoPredictor::pythonRuntimeDescription());
+
+    QProcess proc;
+    proc.setProgram(py);
+    proc.setArguments(QStringList{gen} + KimodoPredictor::buildArguments(o, outDir));
+    proc.setProcessChannelMode(QProcess::SeparateChannels);
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
+    proc.setProcessEnvironment(env);
+    proc.start();
+    if (!proc.waitForStarted(15000)) return failed(QStringLiteral("could not start %1").arg(py));
+
+    SidecarRun run;
+    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + qint64(o.timeoutSec) * 1000;
+    bool timedOut = false;
+    bool cancelled = false;
+    while (proc.state() != QProcess::NotRunning) {
+        proc.waitForReadyRead(300);
+        run.drain(proc);
+        timedOut = QDateTime::currentMSecsSinceEpoch() > deadline;
+        cancelled = timedOut || (progress && !progress(run.stage, run.done, run.total));
+        if (cancelled) {
+            stopProcess(proc);
+            break;
+        }
+    }
+    run.drain(proc);
+    if (cancelled) return failed(timedOut ? QStringLiteral("Kimodo timed out after %1 s").arg(o.timeoutSec) : QStringLiteral("cancelled"));
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0 || run.doneEvent.isEmpty())
+        return failed(failureText(run.lastError, run.errBuf, proc.exitCode()));
+
+    KimodoPredictor::Result r;
+    r.outputDir = outDir;
+    r.manifest = run.doneEvent;
+    for (const QJsonValue& f : run.doneEvent.value(QStringLiteral("files")).toArray())
+        if (QFileInfo::exists(f.toString())) r.files << f.toString();
+    if (r.files.isEmpty()) return failed(QStringLiteral("Kimodo reported success but wrote no motion file"));
+    r.ok = true;
+    return r;
+}
+
+} // namespace
+
+KimodoPredictor::Result KimodoPredictor::predict(const Options& o, const ProgressFn& progress)
+{
+    if (QString err; !validateOptions(o, &err)) return failed(err);
     QString why;
     const QString runtime = resolveRuntime(o, &why);
     if (runtime.isEmpty()) return failed(why);
@@ -199,73 +311,7 @@ KimodoPredictor::Result KimodoPredictor::predict(const Options& o, const Progres
         native.outputDir = outDir;
         return KimodoNative::predict(native, progress);
     }
-
-    const QString py = pythonPath();
-    const QString gen = generateScriptPath();
-    if (py.isEmpty() || gen.isEmpty()) return failed(pythonRuntimeDescription());
-
-    QProcess proc;
-    proc.setProgram(py);
-    proc.setArguments(QStringList{gen} + buildArguments(o, outDir));
-    proc.setProcessChannelMode(QProcess::SeparateChannels);
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("PYTHONUNBUFFERED"), QStringLiteral("1"));
-    proc.setProcessEnvironment(env);
-    proc.start();
-    if (!proc.waitForStarted(15000)) return failed(QStringLiteral("could not start %1").arg(py));
-
-    QString stage = QStringLiteral("import");
-    int done = 0, total = 0;
-    QString lastError;
-    QJsonObject doneEvent;
-    QByteArray pending, errBuf;
-    bool cancelled = false, timedOut = false;
-    const qint64 deadline = QDateTime::currentMSecsSinceEpoch() + qint64(o.timeoutSec) * 1000;
-
-    auto handleLine = [&](const QByteArray& line) {
-        const QJsonObject ev = QJsonDocument::fromJson(line).object();
-        const QString kind = ev.value(QStringLiteral("event")).toString();
-        if (kind == QLatin1String("stage")) { stage = ev.value(QStringLiteral("stage")).toString(); done = 0; total = 0; }
-        else if (kind == QLatin1String("progress")) {
-            done = ev.value(QStringLiteral("done")).toInt();
-            total = ev.value(QStringLiteral("total")).toInt();
-        } else if (kind == QLatin1String("error")) lastError = ev.value(QStringLiteral("message")).toString();
-        else if (kind == QLatin1String("done")) doneEvent = ev;
-    };
-
-    while (proc.state() != QProcess::NotRunning) {
-        proc.waitForReadyRead(300);
-        pending += proc.readAllStandardOutput();
-        const QByteArray chunk = proc.readAllStandardError();
-        if (!chunk.isEmpty()) {
-            errBuf = (errBuf + chunk).right(64 * 1024);
-            fwrite(chunk.constData(), 1, size_t(chunk.size()), stderr);
-            fflush(stderr);
-        }
-        for (int nl; (nl = pending.indexOf('\n')) >= 0; pending.remove(0, nl + 1)) handleLine(pending.left(nl));
-        timedOut = QDateTime::currentMSecsSinceEpoch() > deadline;
-        if ((progress && !progress(stage, done, total)) || timedOut) {
-            cancelled = true;
-            proc.terminate();
-            if (!proc.waitForFinished(5000)) proc.kill();
-            proc.waitForFinished(2000);
-            break;
-        }
-    }
-    pending += proc.readAllStandardOutput();
-    for (int nl; (nl = pending.indexOf('\n')) >= 0; pending.remove(0, nl + 1)) handleLine(pending.left(nl));
-    if (cancelled) return failed(timedOut ? QStringLiteral("Kimodo timed out after %1 s").arg(o.timeoutSec) : QStringLiteral("cancelled"));
-    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0 || doneEvent.isEmpty())
-        return failed(failureText(lastError, errBuf, proc.exitCode()));
-
-    Result r;
-    r.outputDir = outDir;
-    r.manifest = doneEvent;
-    for (const QJsonValue& f : doneEvent.value(QStringLiteral("files")).toArray())
-        if (QFileInfo::exists(f.toString())) r.files << f.toString();
-    if (r.files.isEmpty()) return failed(QStringLiteral("Kimodo reported success but wrote no motion file"));
-    r.ok = true;
-    return r;
+    return runSidecar(o, outDir, progress);
 }
 
 } // namespace AIMotion

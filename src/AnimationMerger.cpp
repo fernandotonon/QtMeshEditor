@@ -180,6 +180,24 @@ static const Ogre::Node* rootOf(const Ogre::Node* n)
     return n;
 }
 
+// Copies one track's keys with the bone-space correction (parent space -> parent space), then the explicit
+// Z-up -> Y-up step when the root binds do not already carry the source's up axis onto the target's.
+static void copyTrackKeys(const Ogre::NodeAnimationTrack* srcTrack, Ogre::NodeAnimationTrack* dstTrack,
+                          const Ogre::Quaternion& boneCorrection, bool convertZupToYup)
+{
+    const bool needsBoneCorrection = !boneCorrection.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f));
+    for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k) {
+        const auto* kf = srcTrack->getNodeKeyFrame(k);
+        auto* dstKf = dstTrack->createNodeKeyFrame(kf->getTime());
+        Ogre::Vector3 t = kf->getTranslate();
+        if (needsBoneCorrection) t = boneCorrection * t;
+        if (convertZupToYup) t = Ogre::Vector3(t.x, t.z, -t.y);
+        dstKf->setTranslate(t);
+        dstKf->setRotation(kf->getRotation());
+        dstKf->setScale(kf->getScale());
+    }
+}
+
 static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton* srcSkel,
                                    int srcUpAxis = 1, int baseUpAxis = 1)
 {
@@ -220,24 +238,10 @@ static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton
                                             * rootOf(srcBone)->getInitialOrientation().Inverse();
             const Ogre::Quaternion boneCorrection = bindWorldOrientation(dstBone->getParent()).Inverse()
                                                   * spaceRot * bindWorldOrientation(srcBone->getParent());
-            const bool needsBoneCorrection = !boneCorrection.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f));
-
-            for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k)
-            {
-                const auto* kf = srcTrack->getNodeKeyFrame(k);
-                auto* dstKf = dstTrack->createNodeKeyFrame(kf->getTime());
-
-                Ogre::Vector3 t = kf->getTranslate();
-                Ogre::Quaternion r = kf->getRotation();
-
-                if (needsBoneCorrection) t = boneCorrection * t;
-                if (needsZupToYup && spaceRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-3f)))
-                    t = Ogre::Vector3(t.x, t.z, -t.y);
-
-                dstKf->setTranslate(t);
-                dstKf->setRotation(r);
-                dstKf->setScale(kf->getScale());
-            }
+            // The root binds may already carry Z-up onto Y-up (same rig re-exported); a pure yaw about Z between
+            // them does NOT, so test the axis itself rather than spaceRot == identity.
+            const bool bindsConvertAxis = (spaceRot * Ogre::Vector3::UNIT_Z).dotProduct(Ogre::Vector3::UNIT_Y) > 0.999f;
+            copyTrackKeys(srcTrack, dstTrack, boneCorrection, needsZupToYup && !bindsConvertAxis);
         }
     }
 }

@@ -12,6 +12,7 @@ Gates (thresholds are deliberately loose: they catch broken clips, not style):
   hips        hips stay 0.15..1.4 m above the floor unless the prompt is about lying / sitting / crawling /
               falling, or leaves the floor plane on purpose (stairs, ladder, jump, vault: no ground gate either)
   jitter      95th-percentile joint acceleration < 120 m/s^2 (a teleporting joint, not a fast motion)
+  short       fewer than 3 frames (no acceleration to measure)
 
     python3 scripts/check-kimodo-t2m-corpus.py ~/t2m_kimodo/v1
 """
@@ -83,6 +84,8 @@ def check(path, text):
         m["slide_cm_s"] = float(v[c].mean() * 100) if c.any() else 0.0
     else:
         m["slide_cm_s"] = 0.0
+    if P.shape[0] < 3:   # no second difference: too short to judge (and to train on)
+        return {"ok": False, "failed": ["short"], **m}
     acc = np.linalg.norm(np.diff(P, n=2, axis=0), axis=-1) * fps * fps
     m["jitter_p95"] = float(np.percentile(acc, 95))
     m["travel_m"] = float(np.linalg.norm(P[-1, hips, [0, 2]] - P[0, hips, [0, 2]]))

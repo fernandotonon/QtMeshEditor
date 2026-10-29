@@ -14,19 +14,40 @@ struct Rig {
     std::vector<int> parents;                         ///< -1 for the root
     std::vector<std::array<float, 3>> translations;   ///< rest local translations (root lifted onto the floor)
     std::vector<std::array<float, 4>> rotationsXyzw;  ///< rest local rotations
-    int leftHand = -1, rightHand = -1, leftFoot = -1, rightFoot = -1;
+    int leftHand = -1;
+    int rightHand = -1;
+    int leftFoot = -1;
+    int rightFoot = -1;
     bool hasDoubleAnkleJoints = false;
 };
 
 struct Masks {   ///< per frame, 0/1 (empty = all zeros)
-    std::vector<float> fullBody, leftHand, rightHand, leftFoot, rightFoot, root;
+    std::vector<float> fullBody;
+    std::vector<float> leftHand;
+    std::vector<float> rightHand;
+    std::vector<float> leftFoot;
+    std::vector<float> rightFoot;
+    std::vector<float> root;
 };
 
-/// In place: rootTranslations [T*3], jointRotationsWxyz [T*J*4]. Targets (constrained frames) the same layout;
-/// contacts [T*4] = Kimodo's (L heel, L toe, R heel, R toe). False + error on a size mismatch.
-bool correctMotion(std::vector<float>& rootTranslations, std::vector<float>& jointRotationsWxyz,
-                   const std::vector<float>& rootTarget, const std::vector<float>& rotationsTargetWxyz,
-                   const Masks& masks, const std::vector<float>& contacts, const Rig& rig,
-                   float contactThreshold, float rootMargin, std::string* error = nullptr);
+/// The motion corrected IN PLACE plus its constraint targets. Root translations [T*3], joint rotations (w,x,y,z)
+/// [T*J*4]; targets use the same layout (identity/zero where unconstrained); contacts [T*4] are Kimodo's
+/// (L heel, L toe, R heel, R toe).
+struct MotionArrays {
+    std::vector<float>* rootTranslations = nullptr;
+    std::vector<float>* jointRotationsWxyz = nullptr;
+    const std::vector<float>* rootTarget = nullptr;
+    const std::vector<float>* rotationsTargetWxyz = nullptr;
+    const std::vector<float>* contacts = nullptr;
+};
+
+struct Params {
+    float contactThreshold = 0.5f;
+    float rootMargin = 0.04f;
+};
+
+/// False + error on a size mismatch or a bad rig.
+bool correctMotion(const MotionArrays& motion, const Masks& masks, const Rig& rig, const Params& params,
+                   std::string* error = nullptr);
 
 } // namespace AIMotion::KimodoCorrection

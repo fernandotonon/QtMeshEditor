@@ -3640,6 +3640,10 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "Error: --backend must be template, model or kimodo." << Qt::endl;
         return 2;
     }
+    if (const QString flag = generateMode ? AIMotion::kimodoOnlyOption(kimodoReq) : QString(); !flag.isEmpty()) {
+        err() << "Error: " << flag << " is a Kimodo option: add --backend kimodo." << Qt::endl;
+        return 2;
+    }
     if (generateBackend == QLatin1String("model")) generateUseModel = true;
     if (generateMode) {
         if (generatePrompt.trimmed().isEmpty()) {
@@ -4030,6 +4034,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
         err() << "       qtmesh anim <file> --in-between --gap-frames N [--start-time S] [--end-time S] [--no-model] [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --dump-canonical <out.json> [--animation <name>]   (#839: 22-joint world-frame clip extraction)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --generate \"<prompt>\" [--duration S] [-o <output>]   (template library; --model = experimental model)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --generate \"<prompt>\" --backend kimodo [--segment \"TEXT@SEC\"]... [--variations N] [--seed N]" << Qt::endl;
+        err() << "                          [--diffusion-steps N] [--no-root-motion] [--no-postprocess] [--runtime auto|native|python]" << Qt::endl;
+        err() << "                          [--download] [--name CLIP] [--json] -o <output>   (NVIDIA Kimodo; --download fetches ~9 GB once)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --apply-motion motion_00.npz [...] -o <output>   (re-apply a saved Kimodo motion)" << Qt::endl;
         return 2;
     }
 

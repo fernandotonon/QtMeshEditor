@@ -85,11 +85,30 @@ SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Mo
             um->stack()->beginMacro(QStringLiteral("Kimodo motion (%1 clip%2)").arg(r.clips.size()).arg(r.clips.size() == 1 ? "" : "s"));
             for (const QString& c : r.clips) um->push(new RetargetAnimationCommand(entity->getName(), c.toStdString(), true));
             um->stack()->endMacro();
+            r.undoIndexAfter = um->stack()->index();
         }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
                                   QStringLiteral("applied %1 clip(s) to %2").arg(r.clips.size()).arg(QString::fromStdString(entity->getName())));
     r.ok = true;
     return r;
+}
+
+void rollbackAppliedMotions(Ogre::Entity* entity, const SceneApplyResult& applied)
+{
+    if (!entity || !entity->hasSkeleton() || applied.clips.isEmpty()) return;
+    auto* um = UndoManager::getSingleton();
+    if (um && applied.undoIndexAfter >= 0 && um->stack()->index() == applied.undoIndexAfter && um->stack()->canUndo()) {
+        um->stack()->undo();   // the batch is still the newest step: undoing it removes every clip
+        return;
+    }
+    Ogre::Skeleton* skel = entity->getSkeleton();
+    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+    for (const QString& c : applied.clips) {
+        const std::string name = c.toStdString();
+        // refreshAvailableAnimationState only ADDS states: drop the clip's own, as RetargetAnimationCommand::undo does.
+        if (states && states->hasAnimationState(name)) states->removeAnimationState(name);
+        if (skel->hasAnimation(name)) skel->removeAnimation(name);
+    }
 }
 
 } // namespace AIMotion

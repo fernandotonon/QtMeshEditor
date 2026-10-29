@@ -33,7 +33,12 @@ struct SceneApplyResult {
     QString error;
     QStringList clips;                 ///< written clip names, one per motion
     std::vector<ApplyOutcome> outcomes;
+    int undoIndexAfter = -1;           ///< the undo stack index right after this batch's macro (-1 = not undoable)
 };
+
+/// Take back a batch applyMotionsToEntity wrote (e.g. when the caller's export then failed): undo its macro when it
+/// is still the newest undo step, else remove the clips directly.
+void rollbackAppliedMotions(Ogre::Entity* entity, const SceneApplyResult& applied);
 
 /// The clip name for variation `index` (0-based) before uniquing: base, base_v2, ...
 QString variantClipName(const QString& base, int index);

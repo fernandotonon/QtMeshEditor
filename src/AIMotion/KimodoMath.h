@@ -38,8 +38,11 @@ DdimSchedule ddimSchedule(const std::vector<float>& base, int steps);
 /// One DDIM (eta = 0) update at step i: x_{t-1} from x_t and the guided clean prediction. Element-wise.
 void ddimStep(const DdimSchedule& s, int i, const float* pred, float* x, size_t n);
 
-/// Kimodo's root path smoother on the x/z plane: input/output [T][2]. `margin` = 0.06 m in Kimodo.
-std::vector<std::array<float, 2>> smoothSignal(const std::vector<std::array<float, 2>>& x, float margin);
+/// A planar path, one (x, z) per frame.
+using Signal = std::vector<std::array<float, 2>>;
+
+/// Kimodo's root path smoother on the x/z plane. `margin` = 0.06 m in Kimodo.
+Signal smoothSignal(const Signal& x, float margin);
 
 /// PyTorch3D matrix_to_quaternion: row-major 3x3 -> (w, x, y, z), not sign-normalised (bit-compatible branch choice).
 std::array<float, 4> quatFromMatrixWxyz(const float m[9]);

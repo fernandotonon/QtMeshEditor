@@ -127,6 +127,14 @@ Outcome ensureBlocking(const Request& req)
     });
     const int effectiveTimeout = req.timeoutMs > 0 ? req.timeoutMs : 300000;
     timeout.start(effectiveTimeout);
+    QTimer cancelPoll;
+    if (req.cancelled) {
+        QObject::connect(&cancelPoll, &QTimer::timeout, &loop, [&]() {
+            if (!req.cancelled()) return;
+            out.cancelled = true; settled = true; loop.quit();
+        });
+        cancelPoll.start(200);
+    }
 
     dl->startDownload(req.url, req.destination, req.label, req.expectedSha256);
     if (!settled)
@@ -135,15 +143,15 @@ Outcome ensureBlocking(const Request& req)
     QObject::disconnect(onDone);
     QObject::disconnect(onErr);
 
-    if (out.timedOut) {
-        // Only OUR timeout cancels: a synchronous rejection means someone
+    if (out.timedOut || out.cancelled) {
+        // Only OUR timeout / cancel stops the transfer: a synchronous rejection means someone
         // else's download owns the downloader.
         dl->cancelDownload();
-        out.error = QStringLiteral("download timed out after %1 s")
-                        .arg(effectiveTimeout / 1000);
+        out.error = out.cancelled ? QStringLiteral("cancelled")
+                                  : QStringLiteral("download timed out after %1 s").arg(effectiveTimeout / 1000);
     }
 
-    out.ok = ok && !out.timedOut && QFileInfo::exists(req.destination);
+    out.ok = ok && !out.timedOut && !out.cancelled && QFileInfo::exists(req.destination);
     if (!out.ok && out.error.isEmpty())
         out.error = QStringLiteral("download did not complete");
     if (out.ok) out.error.clear();

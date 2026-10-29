@@ -37,9 +37,30 @@ if(NOT MSVC)
     # Third-party numerics: quiet, and always optimised (Eigen is ~50x slower unoptimised).
     target_compile_options(qtmesh_kimodo_mc PRIVATE -w -O2)
     # SSE4.1 on x86 (no AVX: the one AVX intrinsic falls back to a portable gather). ARM uses sse2neon.
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86" AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+    if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64")
+        # Universal builds compile every architecture in one invocation: SSE4.1 for the x86_64 slice only.
+        target_compile_options(qtmesh_kimodo_mc PRIVATE -Xarch_x86_64 -msse4.1)
+    elseif(NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|i[3-6]86")
         target_compile_options(qtmesh_kimodo_mc PRIVATE -msse4.1)
     endif()
 endif()
+
+# Licence notices travel with the binary in every package (the library is linked into the editor).
+set(QTMESH_KIMODO_MC_LICENSES
+    "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kimodo_motion_correction.THIRD_PARTY_LICENSES.txt")
+file(READ ${_kmc_root}/LICENSE-Apache-2.0.txt _kmc_lic)
+file(READ ${qtmesh_eigen_SOURCE_DIR}/COPYING.MPL2 _kmc_eigen_lic)
+# sse2neon's MIT notice is the header's first comment block: everything up to the first "*/".
+file(READ ${_kmc_root}/Math/sse2neon.h _kmc_sse2neon_head LIMIT 4096)
+string(FIND "${_kmc_sse2neon_head}" "/*" _kmc_lic_begin)
+string(FIND "${_kmc_sse2neon_head}" "*/" _kmc_lic_end)
+math(EXPR _kmc_lic_len "${_kmc_lic_end} + 2 - ${_kmc_lic_begin}")
+string(SUBSTRING "${_kmc_sse2neon_head}" ${_kmc_lic_begin} ${_kmc_lic_len} _kmc_sse2neon_lic)
+file(WRITE ${QTMESH_KIMODO_MC_LICENSES}
+    "QtMeshEditor links NVIDIA Kimodo's MotionCorrection (native Kimodo post-processing) under the licences below.\n"
+    "\n===== NVIDIA Kimodo MotionCorrection (Apache-2.0; https://github.com/nv-tlabs/kimodo) =====\n${_kmc_lic}"
+    "\n===== sse2neon v1.8.0 (MIT; https://github.com/DLTcollab/sse2neon) =====\n${_kmc_sse2neon_lic}\n"
+    "\n===== Eigen 3.4.0 (MPL-2.0; source: https://gitlab.com/libeigen/eigen) =====\n${_kmc_eigen_lic}")
+install(FILES ${QTMESH_KIMODO_MC_LICENSES} DESTINATION ${CMAKE_INSTALL_PREFIX})
 
 message(STATUS "Kimodo MotionCorrection enabled (native Kimodo post-processing)")

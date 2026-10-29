@@ -27,6 +27,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <stdexcept>
 
 namespace AIMotion {
 
@@ -185,21 +186,90 @@ struct Feats {
 
 #ifdef ENABLE_ONNX
 
-struct Input {
-    std::vector<int64_t> shape;
-    const float* f = nullptr;
-    const int64_t* i64 = nullptr;
-    const uint8_t* b = nullptr;
-    size_t n = 0;
+// Dedicated exceptions: a failed graph run and a user's Cancel are reported differently.
+struct KimodoFailure : std::runtime_error {
+    using std::runtime_error::runtime_error;
 };
+struct KimodoCancelled : std::runtime_error {
+    KimodoCancelled() : std::runtime_error("cancelled") {}
+};
+
+// One graph input. It OWNS its buffer (a copy of at most a few hundred KB, nothing next to a 100+ ms run), so
+// tensors are built from mutable memory without casting constness away.
+struct Input {
+    ONNXTensorElementDataType type = ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT;
+    std::vector<int64_t> shape;
+    std::vector<float> f;
+    std::vector<int64_t> i64;
+    std::vector<uint8_t> b;
+
+    void* data()
+    {
+        if (type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) return static_cast<void*>(i64.data());
+        if (type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) return static_cast<void*>(b.data());
+        return static_cast<void*>(f.data());
+    }
+    size_t bytes() const
+    {
+        if (type == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) return i64.size() * sizeof(int64_t);
+        if (type == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) return b.size();
+        return f.size() * sizeof(float);
+    }
+};
+
+using Inputs = std::map<std::string, Input, std::less<>>;
+using Outputs = std::map<std::string, std::vector<float>, std::less<>>;
+
+Input floatIn(std::vector<float> v, std::vector<int64_t> shape)
+{
+    Input x;
+    x.f = std::move(v);
+    x.shape = std::move(shape);
+    return x;
+}
+
+Input int64In(int64_t v)
+{
+    Input x;
+    x.type = ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64;
+    x.i64 = {v};
+    x.shape = {1};
+    return x;
+}
+
+Input trueMaskIn(int64_t T)
+{
+    Input x;
+    x.type = ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL;
+    x.b.assign(size_t(T), uint8_t(1));
+    x.shape = {1, T};
+    return x;
+}
+
+std::vector<float> floatsOf(Ort::Value& v, const std::string& name)
+{
+    const auto info = v.GetTensorTypeAndShapeInfo();
+    const size_t count = info.GetElementCount();
+    std::vector<float> data(count);
+    if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+        const float* p = v.GetTensorData<float>();
+        std::copy(p, p + count, data.begin());
+    } else if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) {
+        const bool* p = v.GetTensorData<bool>();
+        std::transform(p, p + count, data.begin(), [](bool x) { return x ? 1.0f : 0.0f; });
+    } else {
+        throw KimodoFailure("kimodo graph output '" + name + "' has an unexpected type");
+    }
+    return data;
+}
 
 class Graph {
 public:
-    Graph(Ort::Env& env, const QString& file)
+    Graph(const Ort::Env& env, const QString& file)
     {
         Ort::SessionOptions so;
-        // CPU only: CoreML splits the denoiser into ~77 partitions (slower than CPU: 45 s vs 23 s per 5 s clip) and
-        // its MLProgram path rejects the dynamic-length attention reshape.
+        // CPU only: CoreML splits the denoiser into ~77 partitions (slower than CPU) and its MLProgram path rejects
+        // the dynamic-length attention reshape.
         OnnxRuntimeSettings::SessionConfig cfg;
         cfg.appendGpu = false;
         OnnxRuntimeSettings::configureSessionOptions(so, cfg);
@@ -209,57 +279,34 @@ public:
         m_session = std::make_unique<Ort::Session>(env, file.toStdString().c_str(), so);
 #endif
         Ort::AllocatorWithDefaultOptions alloc;
-        for (size_t i = 0; i < m_session->GetInputCount(); ++i) m_inputs.push_back(m_session->GetInputNameAllocated(i, alloc).get());
-        for (size_t i = 0; i < m_session->GetOutputCount(); ++i) m_outputs.push_back(m_session->GetOutputNameAllocated(i, alloc).get());
+        for (size_t i = 0; i < m_session->GetInputCount(); ++i) m_inputs.emplace_back(m_session->GetInputNameAllocated(i, alloc).get());
     }
 
-    /// Inputs the graph does not declare are skipped (the exporter prunes unused ones). Returns outputs by name.
-    std::map<std::string, std::vector<float>> run(const std::map<std::string, Input>& in, const std::vector<std::string>& want)
+    /// Feeds the inputs the graph declares (the exporter prunes unused ones); returns the requested outputs.
+    Outputs run(Inputs& in, const std::vector<std::string>& want)
     {
-        auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        const auto mem = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
         std::vector<const char*> names;
         std::vector<Ort::Value> values;
         for (const std::string& name : m_inputs) {
             const auto it = in.find(name);
-            if (it == in.end()) throw std::runtime_error("kimodo graph input '" + name + "' has no value");
-            const Input& x = it->second;
+            if (it == in.end()) throw KimodoFailure("kimodo graph input '" + name + "' has no value");
+            Input& x = it->second;
             names.push_back(name.c_str());
-            if (x.f)
-                values.push_back(Ort::Value::CreateTensor<float>(mem, const_cast<float*>(x.f), x.n, x.shape.data(), x.shape.size()));
-            else if (x.i64)
-                values.push_back(Ort::Value::CreateTensor<int64_t>(mem, const_cast<int64_t*>(x.i64), x.n, x.shape.data(), x.shape.size()));
-            else
-                values.push_back(Ort::Value::CreateTensor<bool>(mem, reinterpret_cast<bool*>(const_cast<uint8_t*>(x.b)), x.n,
-                                                                x.shape.data(), x.shape.size()));
+            values.push_back(Ort::Value::CreateTensor(mem, x.data(), x.bytes(), x.shape.data(), x.shape.size(), x.type));
         }
         std::vector<const char*> outNames;
         for (const std::string& w : want) outNames.push_back(w.c_str());
         auto outs = m_session->Run(Ort::RunOptions{nullptr}, names.data(), values.data(), values.size(), outNames.data(), outNames.size());
-        std::map<std::string, std::vector<float>> result;
-        for (size_t k = 0; k < outs.size(); ++k) {
-            auto info = outs[k].GetTensorTypeAndShapeInfo();
-            const size_t count = info.GetElementCount();
-            std::vector<float> data(count);
-            if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
-                const float* p = outs[k].GetTensorData<float>();
-                std::copy(p, p + count, data.begin());
-            } else if (info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_BOOL) {
-                const bool* p = outs[k].GetTensorData<bool>();
-                for (size_t i = 0; i < count; ++i) data[i] = p[i] ? 1.0f : 0.0f;
-            } else {
-                throw std::runtime_error("kimodo graph output '" + want[k] + "' has an unexpected type");
-            }
-            result[want[k]] = std::move(data);
-        }
+        Outputs result;
+        for (size_t k = 0; k < outs.size(); ++k) result[want[k]] = floatsOf(outs[k], want[k]);
         return result;
     }
 
 private:
     std::unique_ptr<Ort::Session> m_session;
-    std::vector<std::string> m_inputs, m_outputs;
+    std::vector<std::string> m_inputs;
 };
-
-Input floatIn(const std::vector<float>& v, std::vector<int64_t> shape) { Input x; x.f = v.data(); x.n = v.size(); x.shape = std::move(shape); return x; }
 
 class Runtime {
 public:
@@ -273,12 +320,15 @@ public:
 
     struct Decoded {
         int T = 0;
-        std::vector<float> local, root, contacts;   // [T*J*9], [T*3], [T*4]
+        std::vector<float> local;      // [T*J*9]
+        std::vector<float> root;       // [T*3]
+        std::vector<float> contacts;   // [T*4]
     };
 
     Decoded decode(const Feats& f)
     {
-        auto o = m_dec->run({{"features", floatIn(f.v, {1, f.T, m_meta.D})}}, {"local_rot_mats", "root_positions", "foot_contacts"});
+        Inputs in{{"features", floatIn(f.v, {1, f.T, m_meta.D})}};
+        auto o = m_dec->run(in, {"local_rot_mats", "root_positions", "foot_contacts"});
         return {f.T, std::move(o["local_rot_mats"]), std::move(o["root_positions"]), std::move(o["foot_contacts"])};
     }
 
@@ -293,55 +343,54 @@ public:
             smooth[size_t(t) * 3 + 1] = root[size_t(t) * 3 + 1];
             smooth[size_t(t) * 3 + 2] = sm[size_t(t)][1];
         }
-        auto o = m_enc->run({{"local_rot_mats", floatIn(local, {1, T, m_meta.J30, 3, 3})},
-                             {"root_positions", floatIn(root, {1, T, 3})},
-                             {"smooth_root_pos", floatIn(smooth, {1, T, 3})}},
-                            {"features"});
+        Inputs in{{"local_rot_mats", floatIn(local, {1, T, m_meta.J30, 3, 3})},
+                  {"root_positions", floatIn(root, {1, T, 3})},
+                  {"smooth_root_pos", floatIn(std::move(smooth), {1, T, 3})}};
+        auto o = m_enc->run(in, {"features"});
         return {T, std::move(o["features"])};
     }
 
     struct Transition {
-        std::vector<float> observed, mask, hipIn, rotIn;   // [NT*D], [NT*D], [NT*3], [NT*J*4]
+        std::vector<float> observed;   // [NT*D]
+        std::vector<float> mask;       // [NT*D]
+        std::vector<float> hipIn;      // [NT*3]
+        std::vector<float> rotIn;      // [NT*J*4]
         float heading = 0.0f;
-        float root2d[2] = {0.0f, 0.0f};
+        std::array<float, 2> root2d = {0.0f, 0.0f};
     };
 
     Transition transition(const Feats& latest)
     {
-        auto o = m_tra->run({{"latest", floatIn(latest.v, {1, latest.T, m_meta.D})}},
-                            {"observed", "mask", "first_heading_angle", "last_root_2d", "hip_input", "rotations_input"});
+        Inputs in{{"latest", floatIn(latest.v, {1, latest.T, m_meta.D})}};
+        auto o = m_tra->run(in, {"observed", "mask", "first_heading_angle", "last_root_2d", "hip_input", "rotations_input"});
         Transition t;
         t.observed = std::move(o["observed"]);
         t.mask = std::move(o["mask"]);
         t.hipIn = std::move(o["hip_input"]);
         t.rotIn = std::move(o["rotations_input"]);
         t.heading = o["first_heading_angle"].at(0);
-        t.root2d[0] = o["last_root_2d"].at(0);
-        t.root2d[1] = o["last_root_2d"].at(1);
+        t.root2d = {o["last_root_2d"].at(0), o["last_root_2d"].at(1)};
         return t;
     }
 
-    std::vector<float> denoise(const std::vector<float>& x, int T, const std::vector<float>& text, int64_t t, float heading,
-                               const std::vector<float>& mask, const std::vector<float>& obs)
+    struct DenoiseArgs {
+        const std::vector<float>* text = nullptr;
+        int64_t timestep = 0;
+        float heading = 0.0f;
+        const std::vector<float>* mask = nullptr;
+        const std::vector<float>* observed = nullptr;
+    };
+
+    std::vector<float> denoise(const std::vector<float>& x, int T, const DenoiseArgs& a)
     {
-        std::vector<uint8_t> pad(size_t(T), 1);
-        Input padIn;
-        padIn.b = pad.data();
-        padIn.n = pad.size();
-        padIn.shape = {1, T};
-        Input tIn;
-        tIn.i64 = &t;
-        tIn.n = 1;
-        tIn.shape = {1};
-        const std::vector<float> h = {heading};
-        auto o = m_den->run({{"x", floatIn(x, {1, T, m_meta.D})},
-                             {"x_pad_mask", padIn},
-                             {"text_feat", floatIn(text, {1, 1, int64_t(text.size())})},
-                             {"timesteps", tIn},
-                             {"first_heading_angle", floatIn(h, {1})},
-                             {"motion_mask", floatIn(mask, {1, T, m_meta.D})},
-                             {"observed_motion", floatIn(obs, {1, T, m_meta.D})}},
-                            {"pred_clean"});
+        Inputs in{{"x", floatIn(x, {1, T, m_meta.D})},
+                  {"x_pad_mask", trueMaskIn(T)},
+                  {"text_feat", floatIn(*a.text, {1, 1, int64_t(a.text->size())})},
+                  {"timesteps", int64In(a.timestep)},
+                  {"first_heading_angle", floatIn({a.heading}, {1})},
+                  {"motion_mask", floatIn(*a.mask, {1, T, m_meta.D})},
+                  {"observed_motion", floatIn(*a.observed, {1, T, m_meta.D})}};
+        auto o = m_den->run(in, {"pred_clean"});
         return std::move(o["pred_clean"]);
     }
 
@@ -350,7 +399,10 @@ public:
 private:
     Meta m_meta;
     Ort::Env m_env{ORT_LOGGING_LEVEL_WARNING, "qtmesh_kimodo"};
-    std::unique_ptr<Graph> m_den, m_dec, m_enc, m_tra;
+    std::unique_ptr<Graph> m_den;
+    std::unique_ptr<Graph> m_dec;
+    std::unique_ptr<Graph> m_enc;
+    std::unique_ptr<Graph> m_tra;
 };
 
 // QTMESH_KIMODO_DEBUG=1: per-stage wall-clock on stderr.
@@ -358,6 +410,8 @@ struct StageTimer {
     const char* name;
     qint64 t0 = QDateTime::currentMSecsSinceEpoch();
     explicit StageTimer(const char* n) : name(n) {}
+    StageTimer(const StageTimer&) = delete;
+    StageTimer& operator=(const StageTimer&) = delete;
     ~StageTimer()
     {
         static const bool on = qEnvironmentVariableIsSet("QTMESH_KIMODO_DEBUG");
@@ -371,26 +425,28 @@ Feats postprocess(Runtime& rt, const Feats& f, const Runtime::Transition* tr)
     StageTimer timer("postprocess");
     const Meta& m = rt.meta();
     const Runtime::Decoded d = rt.decode(f);
-    const int T = d.T, J = m.J30;
+    const int T = d.T;
+    const int J = m.J30;
     std::vector<float> hip = d.root;
     std::vector<float> rot(size_t(T) * J * 4);
     for (int k = 0; k < T * J; ++k) {
         const auto q = KimodoMath::quatFromMatrixWxyz(&d.local[size_t(k) * 9]);
         std::copy(q.begin(), q.end(), rot.begin() + size_t(k) * 4);
     }
-    std::vector<float> hipIn(size_t(T) * 3, 0.0f), rotIn(size_t(T) * J * 4, 0.0f);
+    std::vector<float> hipIn(size_t(T) * 3, 0.0f);
+    std::vector<float> rotIn(size_t(T) * J * 4, 0.0f);
     for (int k = 0; k < T * J; ++k) rotIn[size_t(k) * 4] = 1.0f;
     KimodoCorrection::Masks masks;
     if (tr) {
         const int nt = std::min(m.transitionFrames, T);
         masks.fullBody.assign(size_t(T), 0.0f);
-        for (int t = 0; t < nt; ++t) masks.fullBody[size_t(t)] = 1.0f;
-        std::copy(tr->hipIn.begin(), tr->hipIn.begin() + size_t(nt) * 3, hipIn.begin());
-        std::copy(tr->rotIn.begin(), tr->rotIn.begin() + size_t(nt) * J * 4, rotIn.begin());
+        std::fill_n(masks.fullBody.begin(), nt, 1.0f);
+        std::copy_n(tr->hipIn.begin(), size_t(nt) * 3, hipIn.begin());
+        std::copy_n(tr->rotIn.begin(), size_t(nt) * J * 4, rotIn.begin());
     }
-    std::string err;
-    if (!KimodoCorrection::correctMotion(hip, rot, hipIn, rotIn, masks, d.contacts, m.rig, m.contactThreshold, m.rootMargin, &err))
-        throw std::runtime_error(err);
+    KimodoCorrection::MotionArrays motion{&hip, &rot, &hipIn, &rotIn, &d.contacts};
+    if (std::string err; !KimodoCorrection::correctMotion(motion, masks, m.rig, {m.contactThreshold, m.rootMargin}, &err))
+        throw KimodoFailure(err);
     std::vector<float> local(size_t(T) * J * 9);
     for (int k = 0; k < T * J; ++k)
         KimodoMath::matrixFromQuatWxyz({rot[size_t(k) * 4], rot[size_t(k) * 4 + 1], rot[size_t(k) * 4 + 2], rot[size_t(k) * 4 + 3]},
@@ -403,83 +459,121 @@ struct SampleInputs {
     std::vector<std::vector<float>> noise;   // per segment [(frames (+NT)) * D]
 };
 
+// The conditioning of one segment: the first starts free; later ones start from the previous segment's tail.
+struct SegmentSetup {
+    int length = 0;
+    float heading = 0.0f;
+    std::vector<float> observedNorm;
+    std::vector<float> mask;
+    bool constrained = false;
+    bool first = true;
+    Runtime::Transition tr;
+    Feats latest;
+};
+
+SegmentSetup prepareSegment(Runtime& rt, std::vector<Feats>& generated, int n)
+{
+    const Meta& m = rt.meta();
+    const int D = m.D;
+    const int NT = m.transitionFrames;
+    SegmentSetup s;
+    s.first = generated.empty();
+    s.length = n;
+    std::vector<float> obs;
+    if (s.first) {
+        obs.assign(size_t(n) * D, 0.0f);
+        s.mask.assign(size_t(n) * D, 0.0f);
+    } else {
+        Feats lm = std::move(generated.back());
+        generated.pop_back();
+        generated.push_back({lm.T - NT, std::vector<float>(lm.v.begin(), lm.v.end() - size_t(NT) * D)});
+        s.latest = {NT, std::vector<float>(lm.v.end() - size_t(NT) * D, lm.v.end())};
+        s.tr = rt.transition(s.latest);
+        s.length = n + NT;
+        s.heading = s.tr.heading;
+        obs = s.tr.observed;
+        obs.resize(size_t(s.length) * D, 0.0f);
+        s.mask = s.tr.mask;
+        s.mask.resize(size_t(s.length) * D, 0.0f);
+    }
+    s.observedNorm.resize(obs.size());
+    for (size_t k = 0; k < obs.size(); ++k) s.observedNorm[k] = (obs[k] - m.mean[k % D]) / m.stdEps[k % D];
+    s.constrained = std::any_of(s.mask.begin(), s.mask.end(), [](float v) { return v != 0.0f; });
+    return s;
+}
+
+// DDIM with separated classifier-free guidance; returns the UN-normalized features.
+Feats sampleSegment(Runtime& rt, const KimodoMath::DdimSchedule& sched, const std::vector<float>& text,
+                    std::vector<float> x, const SegmentSetup& s, const std::function<bool()>& onStep)
+{
+    StageTimer timer("sample segment");
+    const Meta& m = rt.meta();
+    if (x.size() != size_t(s.length) * m.D) throw KimodoFailure("noise has the wrong size");
+    const std::vector<float> zeroMask(s.mask.size(), 0.0f);
+    const std::vector<float> zeroText(text.size(), 0.0f);
+    std::vector<float> pred(x.size());
+    const int steps = int(sched.timesteps.size());
+    for (int i = steps - 1; i >= 0; --i) {
+        const int64_t t = sched.timesteps[size_t(i)];
+        const auto pText = rt.denoise(x, s.length, {&text, t, s.heading, &zeroMask, &s.observedNorm});
+        const auto pUnc = rt.denoise(x, s.length, {&zeroText, t, s.heading, &zeroMask, &s.observedNorm});
+        // Unconstrained, the constraint pass equals the unconditional one: two passes instead of three.
+        const auto pCons = s.constrained ? rt.denoise(x, s.length, {&zeroText, t, s.heading, &s.mask, &s.observedNorm}) : pUnc;
+        for (size_t k = 0; k < x.size(); ++k)
+            pred[k] = pUnc[k] + m.wText * (pText[k] - pUnc[k]) + m.wConstraint * (pCons[k] - pUnc[k]);
+        KimodoMath::ddimStep(sched, i, pred.data(), x.data(), x.size());
+        if (onStep && !onStep()) throw KimodoCancelled();
+    }
+    Feats motion{s.length, std::vector<float>(x.size())};
+    for (size_t k = 0; k < x.size(); ++k) motion.v[k] = x[k] * m.stdEps[k % m.D] + m.mean[k % m.D];
+    return motion;
+}
+
+// The no-post-processing junction: linspace(1, 0, NT) blend of the previous tail and the new transition frames.
+Feats blendTransition(const Feats& latest, const Feats& motion, int NT, int D)
+{
+    Feats blended{NT, std::vector<float>(size_t(NT) * D)};
+    for (int f = 0; f < NT; ++f) {
+        const float alpha = NT > 1 ? 1.0f - float(f) / float(NT - 1) : 1.0f;
+        for (int k = 0; k < D; ++k) {
+            const size_t i = size_t(f) * D + size_t(k);
+            blended.v[i] = latest.v[i] * alpha + (1.0f - alpha) * motion.v[i];
+        }
+    }
+    return blended;
+}
+
+// Places a sampled segment in world space and appends it (post-processed, or blended into the previous tail).
+void stitchSegment(Runtime& rt, std::vector<Feats>& generated, Feats motion, const SegmentSetup& s, int n, bool post)
+{
+    const Meta& m = rt.meta();
+    if (s.first) {
+        generated.push_back(post ? postprocess(rt, motion, nullptr) : std::move(motion));
+        return;
+    }
+    for (int f = 0; f < s.length; ++f) {
+        motion.v[size_t(f) * m.D + size_t(m.smoothRootStart)] += s.tr.root2d[0];
+        motion.v[size_t(f) * m.D + size_t(m.smoothRootStart) + 2] += s.tr.root2d[1];
+    }
+    if (post) {
+        generated.push_back(postprocess(rt, motion, &s.tr));
+        return;
+    }
+    const int NT = m.transitionFrames;
+    generated.push_back(blendTransition(s.latest, motion, NT, m.D));
+    generated.push_back({n, std::vector<float>(motion.v.begin() + size_t(NT) * m.D, motion.v.end())});
+}
+
 // kimodo_model._multiprompt, transcribed from scripts/verify_kimodo_native.py (Native.generate).
 Runtime::Decoded generateOne(Runtime& rt, const std::vector<int>& frames, const SampleInputs& in, int steps, bool post,
                              const std::function<bool()>& onStep)
 {
-    const Meta& m = rt.meta();
-    const int D = m.D, NT = m.transitionFrames;
-    const KimodoMath::DdimSchedule sched = KimodoMath::ddimSchedule(m.acpBase, steps);
+    const KimodoMath::DdimSchedule sched = KimodoMath::ddimSchedule(rt.meta().acpBase, steps);
     std::vector<Feats> generated;
     for (size_t idx = 0; idx < frames.size(); ++idx) {
-        const int n = frames[idx];
-        const bool first = generated.empty();
-        int length = n;
-        float heading = 0.0f;
-        std::vector<float> obs, mask;
-        Runtime::Transition tr;
-        Feats latest;
-        if (first) {
-            obs.assign(size_t(length) * D, 0.0f);
-            mask.assign(size_t(length) * D, 0.0f);
-        } else {
-            Feats lm = std::move(generated.back());
-            generated.pop_back();
-            Feats head{lm.T - NT, std::vector<float>(lm.v.begin(), lm.v.end() - size_t(NT) * D)};
-            latest = {NT, std::vector<float>(lm.v.end() - size_t(NT) * D, lm.v.end())};
-            generated.push_back(std::move(head));
-            tr = rt.transition(latest);
-            length = n + NT;
-            heading = tr.heading;
-            obs = tr.observed;
-            obs.resize(size_t(length) * D, 0.0f);
-            mask = tr.mask;
-            mask.resize(size_t(length) * D, 0.0f);
-        }
-        std::vector<float> obsNorm(obs.size());
-        for (size_t k = 0; k < obs.size(); ++k) obsNorm[k] = (obs[k] - m.mean[k % D]) / m.stdEps[k % D];
-        const bool constrained = std::any_of(mask.begin(), mask.end(), [](float v) { return v != 0.0f; });
-        const std::vector<float> zeroMask(mask.size(), 0.0f);
-        const std::vector<float> zeroText(in.text[idx].size(), 0.0f);
-
-        StageTimer timer("sample segment");
-        std::vector<float> x = in.noise[idx];
-        if (x.size() != size_t(length) * D) throw std::runtime_error("noise has the wrong size");
-        std::vector<float> pred(x.size());
-        for (int i = steps - 1; i >= 0; --i) {
-            const int64_t t = sched.timesteps[size_t(i)];
-            const auto pText = rt.denoise(x, length, in.text[idx], t, heading, zeroMask, obsNorm);
-            const auto pUnc = rt.denoise(x, length, zeroText, t, heading, zeroMask, obsNorm);
-            const std::vector<float> pCons = constrained ? rt.denoise(x, length, zeroText, t, heading, mask, obsNorm) : pUnc;
-            for (size_t k = 0; k < x.size(); ++k)
-                pred[k] = pUnc[k] + m.wText * (pText[k] - pUnc[k]) + m.wConstraint * (pCons[k] - pUnc[k]);
-            KimodoMath::ddimStep(sched, i, pred.data(), x.data(), x.size());
-            if (onStep && !onStep()) throw std::runtime_error("cancelled");
-        }
-        Feats motion{length, std::vector<float>(x.size())};
-        for (size_t k = 0; k < x.size(); ++k) motion.v[k] = x[k] * m.stdEps[k % D] + m.mean[k % D];
-
-        if (!first) {
-            for (int f = 0; f < length; ++f) {
-                motion.v[size_t(f) * D + size_t(m.smoothRootStart)] += tr.root2d[0];
-                motion.v[size_t(f) * D + size_t(m.smoothRootStart) + 2] += tr.root2d[1];
-            }
-            if (post) {
-                motion = postprocess(rt, motion, &tr);
-            } else {
-                Feats blended{NT, std::vector<float>(size_t(NT) * D)};
-                for (int f = 0; f < NT; ++f) {
-                    const float alpha = NT > 1 ? 1.0f - float(f) / float(NT - 1) : 1.0f;   // linspace(1, 0, NT)
-                    for (int k = 0; k < D; ++k)
-                        blended.v[size_t(f) * D + k] = latest.v[size_t(f) * D + k] * alpha + (1.0f - alpha) * motion.v[size_t(f) * D + k];
-                }
-                generated.push_back(std::move(blended));
-                motion = {n, std::vector<float>(motion.v.begin() + size_t(NT) * D, motion.v.end())};
-            }
-        } else if (post) {
-            motion = postprocess(rt, motion, nullptr);
-        }
-        generated.push_back(std::move(motion));
+        const SegmentSetup s = prepareSegment(rt, generated, frames[idx]);
+        Feats motion = sampleSegment(rt, sched, in.text[idx], in.noise[idx], s, onStep);
+        stitchSegment(rt, generated, std::move(motion), s, frames[idx], post);
     }
     Feats full;
     for (const Feats& g : generated) {
@@ -487,6 +581,36 @@ Runtime::Decoded generateOne(Runtime& rt, const std::vector<int>& frames, const 
         full.v.insert(full.v.end(), g.v.begin(), g.v.end());
     }
     return rt.decode(full);
+}
+
+// SOMA-30 -> SOMA-77 interchange arrays (relaxed-hand rest rotations for the joints the model does not drive).
+InterchangeArrays toInterchange(const Meta& meta, const Runtime::Decoded& d, bool rootMotion)
+{
+    const size_t J77 = meta.names77.size();
+    InterchangeArrays a;
+    a.names = meta.names77;
+    a.parents = meta.parents77;
+    a.restJoints = meta.rest77;
+    a.fps = meta.fps;
+    a.localRotMats.resize(size_t(d.T) * J77 * 9);
+    for (int t = 0; t < d.T; ++t) {
+        std::copy(meta.relaxed77.begin(), meta.relaxed77.end(), a.localRotMats.begin() + size_t(t) * J77 * 9);
+        for (int k = 0; k < meta.J30; ++k)
+            std::copy_n(d.local.begin() + (size_t(t) * meta.J30 + k) * 9, 9,
+                        a.localRotMats.begin() + (size_t(t) * J77 + size_t(meta.slice77[size_t(k)])) * 9);
+    }
+    a.rootPositions = d.root;
+    if (!rootMotion)
+        for (int t = 0; t < d.T; ++t) {
+            a.rootPositions[size_t(t) * 3] = d.root[0];
+            a.rootPositions[size_t(t) * 3 + 2] = d.root[2];
+        }
+    a.contactChannels = 6;   // [L heel, L toe, L toe-end, R heel, R toe, R toe-end]
+    for (int t = 0; t < d.T; ++t) {
+        const float* c = &d.contacts[size_t(t) * 4];
+        a.footContacts.insert(a.footContacts.end(), {c[0], c[1], c[1], c[2], c[3], c[3]});
+    }
+    return a;
 }
 
 #endif // ENABLE_ONNX
@@ -562,198 +686,242 @@ QString KimodoNative::description()
 
 bool KimodoNative::downloadModels(QString* error, const KimodoPredictor::ProgressFn& progress)
 {
-    if (qEnvironmentVariableIsSet("QTMESH_KIMODO_NO_DOWNLOAD")) {
-        if (error) *error = QStringLiteral("QTMESH_KIMODO_NO_DOWNLOAD is set");
+    const auto fail = [error](const QString& msg) {
+        if (error) *error = msg;
         return false;
-    }
+    };
+    if (qEnvironmentVariableIsSet("QTMESH_KIMODO_NO_DOWNLOAD")) return fail(QStringLiteral("QTMESH_KIMODO_NO_DOWNLOAD is set"));
     QDir().mkpath(modelDir());
     const std::vector<ModelFile> files = modelFiles();
+    const int total = int(files.size());
     int done = 0;
+    // The progress callback doubles as the cancel probe, polled DURING each transfer too (the GGUF alone is 8 GB).
+    bool cancelled = false;
+    const auto probe = [&progress, &done, total, &cancelled] {
+        cancelled = cancelled || (progress && !progress(QStringLiteral("download"), done, total));
+        return cancelled;
+    };
     for (const ModelFile& f : files) {
-        if (progress && !progress(QStringLiteral("download"), done, int(files.size()))) {
-            if (error) *error = QStringLiteral("cancelled");
-            return false;
-        }
+        if (probe()) return fail(QStringLiteral("cancelled"));
         ModelFetch::Request req;
         req.url = f.url;
         req.destination = QDir(modelDir()).filePath(f.name);
         req.label = QStringLiteral("kimodo/%1").arg(f.name);
         req.timeoutMs = f.approxBytes > 1000000000LL ? 4 * 3600 * 1000 : 30 * 60 * 1000;
         req.expectedSha256 = f.sha256;
-        const ModelFetch::Outcome out = ModelFetch::ensureBlocking(req);
-        if (!out.ok) {
-            if (error) *error = QStringLiteral("%1: %2").arg(f.name, out.error);
-            return false;
-        }
+        req.cancelled = probe;
+        if (const ModelFetch::Outcome out = ModelFetch::ensureBlocking(req); !out.ok)
+            return fail(out.cancelled ? QStringLiteral("cancelled") : QStringLiteral("%1: %2").arg(f.name, out.error));
         ++done;
     }
-    if (progress) progress(QStringLiteral("download"), done, int(files.size()));
+    // A Stop pressed during the last file still counts.
+    if (probe()) return fail(QStringLiteral("cancelled"));
     return true;
 }
+
+#ifdef ENABLE_ONNX
+namespace {
+
+// Everything predict() needs before the first graph runs.
+struct NativeJob {
+    Meta meta;
+    QString dir;
+    int steps = 100;
+    std::vector<int> frames;
+    QStringList texts;
+    std::vector<std::vector<float>> textFeat;
+    AudioToFace::NpzReader fixture;
+    bool useFixture = false;
+    bool fixtureText = false;
+};
+
+QString notReadyReason(const KimodoPredictor::Options& o, const QString& fixturePath)
+{
+    if (!KimodoNative::buildSupported()) return KimodoNative::description();
+    if (!o.constraintsPath.isEmpty())
+        return QStringLiteral("Kimodo constraints files are supported by the Python runtime only (--runtime python)");
+    // A fixture (tests / parity checks: text features + noise from an NPZ) replaces the text encoder, so only the
+    // GGUF and its licence texts may be absent then.
+    QStringList missing;
+    KimodoNative::modelsInstalled(&missing);
+    if (!fixturePath.isEmpty())
+        missing.removeIf([](const QString& n) { return n.contains(QLatin1String("Llama-3")) || n.contains(QLatin1String("LLM2Vec")); });
+    if (!missing.isEmpty())
+        return QStringLiteral("the native Kimodo models are not downloaded (~%1 GB): request the download first "
+                              "(CLI --download, MCP download:true, or the Download button)")
+            .arg(double(KimodoNative::missingBytes()) / 1e9, 0, 'f', 1);
+    return {};
+}
+
+bool prepareJob(const KimodoPredictor::Options& o, NativeJob* job, QString* err)
+{
+    job->dir = KimodoNative::modelDir();
+    if (!loadMeta(QDir(job->dir).filePath(QStringLiteral("kimodo_meta.json")), &job->meta, err)) return false;
+    job->steps = o.diffusionSteps > 0 ? o.diffusionSteps : 100;
+    if (job->steps > int(job->meta.acpBase.size())) {
+        *err = QStringLiteral("diffusion steps must be at most %1").arg(job->meta.acpBase.size());
+        return false;
+    }
+    for (const MotionSegment& s : o.segments) {
+        const int f = std::max(2, int(s.duration * double(job->meta.fps)));
+        if (f < 8) {
+            *err = QStringLiteral("every segment must be at least %1 s long").arg(8.0 / double(job->meta.fps), 0, 'f', 2);
+            return false;
+        }
+        job->frames.push_back(f);
+        job->texts << KimodoMath::sanitizeText(s.text);
+    }
+    const QString fixturePath = qEnvironmentVariable("QTMESH_KIMODO_NATIVE_FIXTURE");
+    if (!fixturePath.isEmpty() && !job->fixture.open(fixturePath, err)) {
+        *err = QStringLiteral("fixture: %1").arg(*err);
+        return false;
+    }
+    job->useFixture = !fixturePath.isEmpty();
+    job->fixtureText = job->useFixture && job->fixture.contains(QStringLiteral("text_0"));
+    return true;
+}
+
+// Text features: from the fixture when it carries them (text_<s>), else the llama.cpp encoder.
+bool encodeTexts(NativeJob* job, const KimodoPredictor::ProgressFn& progress, QString* err)
+{
+    if (job->fixtureText) {
+        for (int s = 0; s < int(job->texts.size()); ++s) {
+            const auto a = job->fixture.read(QStringLiteral("text_%1").arg(s), err);
+            if (!a.valid() || a.data.size() != size_t(job->meta.textDim)) {
+                *err = QStringLiteral("fixture text_%1: %2").arg(s).arg(*err);
+                return false;
+            }
+            job->textFeat.push_back(a.data);
+        }
+        return true;
+    }
+    if (progress && !progress(QStringLiteral("load_text_encoder"), 0, 1)) {
+        *err = QStringLiteral("cancelled");
+        return false;
+    }
+    StageTimer timer("text encoder");
+    const auto enc = KimodoTextEncoder::encode(QDir(job->dir).filePath(QString::fromLatin1(kTextEncoderFile)), job->texts, 99,
+                                               [&progress] { return progress && !progress(QStringLiteral("encode_text"), 0, 1); });
+    if (!enc.ok) {
+        *err = enc.error;
+        return false;
+    }
+    job->textFeat = enc.embeddings;
+    return true;
+}
+
+// Gaussian diffusion noise for variation v, segment s (or the fixture's). Not a security context: std::mt19937_64
+// gives the reproducible, seedable stream a --seed promises.
+std::vector<float> noiseFor(NativeJob& job, std::mt19937_64& rng, int v, size_t s)
+{
+    const int len = job.frames[s] + (s == 0 ? 0 : job.meta.transitionFrames);
+    std::vector<float> noise(size_t(len) * job.meta.D);
+    if (job.useFixture) {
+        QString err;
+        const auto a = job.fixture.read(QStringLiteral("noise_%1_%2").arg(v).arg(s), &err);
+        if (!a.valid() || a.data.size() != noise.size())
+            throw KimodoFailure(QStringLiteral("fixture noise_%1_%2: %3").arg(v).arg(s).arg(err).toStdString());
+        return a.data;
+    }
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    for (float& x : noise) x = gauss(rng);
+    return noise;
+}
+
+QJsonObject manifestOf(const KimodoPredictor::Options& o, const NativeJob& job, const QStringList& written, double seconds)
+{
+    QJsonArray segs;
+    for (const MotionSegment& s : o.segments)
+        segs.append(QJsonObject{{QStringLiteral("text"), s.text}, {QStringLiteral("duration"), s.duration}});
+    return QJsonObject{
+        {QStringLiteral("format"), QStringLiteral("qtmesh-motion-interchange")},
+        {QStringLiteral("format_version"), kInterchangeVersion},
+        {QStringLiteral("source"), QStringLiteral("kimodo")},
+        {QStringLiteral("runtime"), QStringLiteral("native")},
+        {QStringLiteral("segments"), segs},
+        {QStringLiteral("text_conditioning"), job.fixtureText ? QStringLiteral("fixture") : QStringLiteral("prompt")},
+        {QStringLiteral("seed"), o.hasSeed ? QJsonValue(o.seed) : QJsonValue()},
+        {QStringLiteral("text_encoder"), QStringLiteral("llama.cpp Q8_0 (Llama-3-LLM2Vec-8B-Kimodo-TextEncoder)")},
+        {QStringLiteral("num_samples"), o.numSamples},
+        {QStringLiteral("diffusion_steps"), job.steps},
+        {QStringLiteral("root_motion"), o.rootMotion},
+        {QStringLiteral("postprocess"), o.postprocess},
+        {QStringLiteral("files"), QJsonArray::fromStringList(written)},
+        {QStringLiteral("fps"), double(job.meta.fps)},
+        {QStringLiteral("joints"), int(job.meta.names77.size())},
+        {QStringLiteral("model"), QStringLiteral("kimodo-soma-rp-v1.2")},
+        {QStringLiteral("device"), QStringLiteral("onnxruntime")},
+        {QStringLiteral("seconds"), seconds},
+    };
+}
+
+// Every variation through the motion model; writes motion_NN.npz + result.json. Throws KimodoFailure/KimodoCancelled.
+KimodoPredictor::Result runVariations(const KimodoPredictor::Options& o, NativeJob& job, const QString& outDir,
+                                      const KimodoPredictor::ProgressFn& progress)
+{
+    std::unique_ptr<Runtime> rt;
+    {
+        StageTimer timer("load onnx");
+        rt = std::make_unique<Runtime>(job.meta, job.dir);
+    }
+    // Reproducible diffusion noise from --seed, NOT a security context (no secret derives from it).
+    std::mt19937_64 rng(o.hasSeed ? uint64_t(uint32_t(o.seed)) : uint64_t(std::random_device{}()));   // NOSONAR
+    const int totalSteps = job.steps * int(job.frames.size()) * o.numSamples;
+    int doneSteps = 0;
+    const auto onStep = [&progress, &doneSteps, totalSteps] {
+        ++doneSteps;
+        return !progress || progress(QStringLiteral("generate"), doneSteps, totalSteps);
+    };
+    const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
+    KimodoPredictor::Result result;
+    result.outputDir = outDir;
+    for (int v = 0; v < o.numSamples; ++v) {
+        SampleInputs in;
+        in.text = job.textFeat;
+        for (size_t s = 0; s < job.frames.size(); ++s) in.noise.push_back(noiseFor(job, rng, v, s));
+        const Runtime::Decoded d = generateOne(*rt, job.frames, in, job.steps, o.postprocess, onStep);
+        const QString path = QDir(outDir).filePath(QStringLiteral("motion_%1.npz").arg(v, 2, 10, QLatin1Char('0')));
+        if (QString err; !saveInterchange(path, toInterchange(job.meta, d, o.rootMotion), &err)) throw KimodoFailure(err.toStdString());
+        result.files << path;
+        if (progress) progress(QStringLiteral("write"), v + 1, o.numSamples);
+    }
+    result.manifest = manifestOf(o, job, result.files, double(QDateTime::currentMSecsSinceEpoch() - t0) / 1000.0);
+    QFile mf(QDir(outDir).filePath(QStringLiteral("result.json")));
+    if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) mf.write(QJsonDocument(result.manifest).toJson());
+    result.ok = true;
+    return result;
+}
+
+} // namespace
+#endif
 
 KimodoPredictor::Result KimodoNative::predict(const KimodoPredictor::Options& o, const KimodoPredictor::ProgressFn& progress)
 {
 #ifndef ENABLE_ONNX
-    Q_UNUSED(o); Q_UNUSED(progress);
+    Q_UNUSED(o);
+    Q_UNUSED(progress);
     return failed(description());
 #else
-    if (!buildSupported()) return failed(description());
-    if (!o.constraintsPath.isEmpty())
-        return failed(QStringLiteral("Kimodo constraints files are supported by the Python runtime only (--runtime python)"));
-    // A fixture (tests / parity checks: text features + noise from an NPZ) replaces the text encoder, so only the
-    // GGUF and its licence texts may be absent then.
-    const QString fixturePath = qEnvironmentVariable("QTMESH_KIMODO_NATIVE_FIXTURE");
-    QStringList missing;
-    modelsInstalled(&missing);
-    if (!fixturePath.isEmpty())
-        missing.removeIf([](const QString& n) { return n.contains(QLatin1String("Llama-3")) || n.contains(QLatin1String("LLM2Vec")); });
-    if (!missing.isEmpty())
-        return failed(QStringLiteral("the native Kimodo models are not downloaded (~%1 GB): request the download first "
-                                     "(CLI --download, MCP download:true, or the Download button)")
-                          .arg(double(missingBytes()) / 1e9, 0, 'f', 1));
-    const QString dir = modelDir();
-    Meta meta;
+    if (QString err; !KimodoPredictor::validateOptions(o, &err)) return failed(err);
+    if (const QString why = notReadyReason(o, qEnvironmentVariable("QTMESH_KIMODO_NATIVE_FIXTURE")); !why.isEmpty())
+        return failed(why);
+    NativeJob job;
     QString err;
-    if (!loadMeta(QDir(dir).filePath(QStringLiteral("kimodo_meta.json")), &meta, &err)) return failed(err);
-
-    const int steps = o.diffusionSteps > 0 ? o.diffusionSteps : 100;
-    std::vector<int> frames;
-    QStringList texts;
-    for (const MotionSegment& s : o.segments) {
-        frames.push_back(std::max(2, int(s.duration * double(meta.fps))));
-        texts << KimodoMath::sanitizeText(s.text);
-    }
-    for (int f : frames)
-        if (f < 8) return failed(QStringLiteral("every segment must be at least %1 s long").arg(8.0 / double(meta.fps), 0, 'f', 2));
-
-    AudioToFace::NpzReader fixture;
-    const bool useFixture = !fixturePath.isEmpty() && fixture.open(fixturePath, &err);
-    if (!fixturePath.isEmpty() && !useFixture) return failed(QStringLiteral("fixture: %1").arg(err));
-
-    // Text features: from the fixture when it carries them (text_<s>), else the llama.cpp encoder.
-    std::vector<std::vector<float>> textFeat;
-    if (useFixture && fixture.contains(QStringLiteral("text_0"))) {
-        for (int s = 0; s < int(texts.size()); ++s) {
-            const auto a = fixture.read(QStringLiteral("text_%1").arg(s), &err);
-            if (!a.valid() || a.data.size() != size_t(meta.textDim)) return failed(QStringLiteral("fixture text_%1: %2").arg(s).arg(err));
-            textFeat.push_back(a.data);
-        }
-    } else {
-        if (progress && !progress(QStringLiteral("load_text_encoder"), 0, 1)) return failed(QStringLiteral("cancelled"));
-        StageTimer timer("text encoder");
-        const auto enc = KimodoTextEncoder::encode(QDir(dir).filePath(QString::fromLatin1(kTextEncoderFile)), texts, 99,
-                                                   [&] { return progress && !progress(QStringLiteral("encode_text"), 0, 1); });
-        if (!enc.ok) return failed(enc.error);
-        textFeat = enc.embeddings;
-    }
-
+    if (!prepareJob(o, &job, &err) || !encodeTexts(&job, progress, &err)) return failed(err);
     if (progress && !progress(QStringLiteral("load_model"), 0, 1)) return failed(QStringLiteral("cancelled"));
     QString outDir = o.outputDir;
     if (outDir.isEmpty())
         outDir = QDir(AppStorage::persistentRoot()).filePath(QStringLiteral("generated_motion/kimodo_%1").arg(QDateTime::currentMSecsSinceEpoch()));
     if (!QDir().mkpath(outDir)) return failed(QStringLiteral("cannot create %1").arg(outDir));
-
-    KimodoPredictor::Result result;
-    result.outputDir = outDir;
     try {
-        std::unique_ptr<Runtime> rtHolder;
-        {
-            StageTimer timer("load onnx");
-            rtHolder = std::make_unique<Runtime>(meta, dir);
-        }
-        Runtime& rt = *rtHolder;
-        std::mt19937_64 rng(o.hasSeed ? uint64_t(uint32_t(o.seed)) : uint64_t(std::random_device{}()));
-        std::normal_distribution<float> gauss(0.0f, 1.0f);
-        const int totalSteps = steps * int(frames.size()) * o.numSamples;
-        int doneSteps = 0;
-        bool cancelled = false;
-        const auto onStep = [&] {
-            ++doneSteps;
-            if (progress && !progress(QStringLiteral("generate"), doneSteps, totalSteps)) cancelled = true;
-            return !cancelled;
-        };
-        const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
-        const size_t J77 = meta.names77.size();
-        for (int v = 0; v < o.numSamples; ++v) {
-            SampleInputs in;
-            in.text = textFeat;
-            for (size_t s = 0; s < frames.size(); ++s) {
-                const int len = frames[s] + (s == 0 ? 0 : meta.transitionFrames);
-                std::vector<float> noise(size_t(len) * meta.D);
-                if (useFixture) {
-                    const auto a = fixture.read(QStringLiteral("noise_%1_%2").arg(v).arg(s), &err);
-                    if (!a.valid() || a.data.size() != noise.size()) return failed(QStringLiteral("fixture noise_%1_%2: %3").arg(v).arg(s).arg(err));
-                    noise = a.data;
-                } else {
-                    for (float& x : noise) x = gauss(rng);
-                }
-                in.noise.push_back(std::move(noise));
-            }
-            const Runtime::Decoded d = generateOne(rt, frames, in, steps, o.postprocess, onStep);
-
-            // SOMA-30 -> SOMA-77 (relaxed-hand rest rotations for the joints the model does not drive).
-            InterchangeArrays a;
-            a.names = meta.names77;
-            a.parents = meta.parents77;
-            a.restJoints = meta.rest77;
-            a.fps = meta.fps;
-            a.localRotMats.resize(size_t(d.T) * J77 * 9);
-            for (int t = 0; t < d.T; ++t) {
-                std::copy(meta.relaxed77.begin(), meta.relaxed77.end(), a.localRotMats.begin() + size_t(t) * J77 * 9);
-                for (int k = 0; k < meta.J30; ++k)
-                    std::copy_n(d.local.begin() + (size_t(t) * meta.J30 + k) * 9, 9,
-                                a.localRotMats.begin() + (size_t(t) * J77 + size_t(meta.slice77[size_t(k)])) * 9);
-            }
-            a.rootPositions = d.root;
-            if (!o.rootMotion)
-                for (int t = 0; t < d.T; ++t) {
-                    a.rootPositions[size_t(t) * 3] = d.root[0];
-                    a.rootPositions[size_t(t) * 3 + 2] = d.root[2];
-                }
-            a.contactChannels = 6;   // [L heel, L toe, L toe-end, R heel, R toe, R toe-end]
-            for (int t = 0; t < d.T; ++t) {
-                const float* c = &d.contacts[size_t(t) * 4];
-                a.footContacts.insert(a.footContacts.end(), {c[0], c[1], c[1], c[2], c[3], c[3]});
-            }
-            const QString path = QDir(outDir).filePath(QStringLiteral("motion_%1.npz").arg(v, 2, 10, QLatin1Char('0')));
-            if (!saveInterchange(path, a, &err)) return failed(err);
-            result.files << path;
-            if (progress) progress(QStringLiteral("write"), v + 1, o.numSamples);
-        }
-
-        QJsonArray segs, files;
-        for (size_t s = 0; s < o.segments.size(); ++s)
-            segs.append(QJsonObject{{QStringLiteral("text"), o.segments[s].text}, {QStringLiteral("duration"), o.segments[s].duration}});
-        for (const QString& f : result.files) files.append(f);
-        result.manifest = QJsonObject{
-            {QStringLiteral("format"), QStringLiteral("qtmesh-motion-interchange")},
-            {QStringLiteral("format_version"), kInterchangeVersion},
-            {QStringLiteral("source"), QStringLiteral("kimodo")},
-            {QStringLiteral("runtime"), QStringLiteral("native")},
-            {QStringLiteral("segments"), segs},
-            {QStringLiteral("text_conditioning"), useFixture && fixture.contains(QStringLiteral("text_0")) ? QStringLiteral("fixture")
-                                                                                                         : QStringLiteral("prompt")},
-            {QStringLiteral("seed"), o.hasSeed ? QJsonValue(o.seed) : QJsonValue()},
-            {QStringLiteral("text_encoder"), QStringLiteral("llama.cpp Q8_0 (Llama-3-LLM2Vec-8B-Kimodo-TextEncoder)")},
-            {QStringLiteral("num_samples"), o.numSamples},
-            {QStringLiteral("diffusion_steps"), steps},
-            {QStringLiteral("root_motion"), o.rootMotion},
-            {QStringLiteral("postprocess"), o.postprocess},
-            {QStringLiteral("files"), files},
-            {QStringLiteral("fps"), double(meta.fps)},
-            {QStringLiteral("joints"), int(J77)},
-            {QStringLiteral("model"), QStringLiteral("kimodo-soma-rp-v1.2")},
-            {QStringLiteral("device"), QStringLiteral("onnxruntime")},
-            {QStringLiteral("seconds"), double(QDateTime::currentMSecsSinceEpoch() - t0) / 1000.0},
-        };
-        QFile mf(QDir(outDir).filePath(QStringLiteral("result.json")));
-        if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) mf.write(QJsonDocument(result.manifest).toJson());
-    } catch (const std::exception& e) {
-        return failed(QString::fromUtf8(e.what()) == QLatin1String("cancelled") ? QStringLiteral("cancelled")
-                                                                                 : QStringLiteral("native Kimodo failed: %1").arg(QString::fromUtf8(e.what())));
+        return runVariations(o, job, outDir, progress);
+    } catch (const KimodoCancelled&) {
+        return failed(QStringLiteral("cancelled"));
+    } catch (const KimodoFailure& e) {
+        return failed(QStringLiteral("native Kimodo failed: %1").arg(QString::fromUtf8(e.what())));
+    } catch (const Ort::Exception& e) {
+        return failed(QStringLiteral("native Kimodo failed (ONNX Runtime): %1").arg(QString::fromUtf8(e.what())));
     }
-    result.ok = true;
-    return result;
 #endif
 }
 

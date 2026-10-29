@@ -46,8 +46,8 @@ QString fitDocLength(const llama_vocab* vocab, QString text)
 {
     int n = int(tokenize(vocab, text, false).size());
     while (n > kDocMaxLength) {
-        const QStringList words = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-        const int keep = int(double(words.size()) * (double(kDocMaxLength) / double(n)));
+        const auto words = text.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        const auto keep = int(double(words.size()) * (double(kDocMaxLength) / double(n)));
         text = words.mid(0, keep).join(QLatin1Char(' '));
         n = int(tokenize(vocab, text, false).size());
     }
@@ -56,6 +56,54 @@ QString fitDocLength(const llama_vocab* vocab, QString text)
 
 struct ModelDeleter { void operator()(llama_model* m) const { if (m) llama_model_free(m); } };
 struct ContextDeleter { void operator()(llama_context* c) const { if (c) llama_free(c); } };
+struct BatchGuard {
+    llama_batch batch;
+    explicit BatchGuard(int n) : batch(llama_batch_init(n, 0, 1)) {}
+    BatchGuard(const BatchGuard&) = delete;
+    BatchGuard& operator=(const BatchGuard&) = delete;
+    ~BatchGuard() { llama_batch_free(batch); }
+};
+
+// One prompt -> its LLM2Vec embedding: mean of the last hidden states over `{prompt}<|eot_id|>` (skip_instruction).
+bool encodeOne(llama_context* ctx, const llama_vocab* vocab, int dim, const QString& raw, std::vector<float>* out, QString* error)
+{
+    out->assign(size_t(dim), 0.0f);
+    if (raw.trimmed().isEmpty()) return true;   // Kimodo zeroes the features of an empty prompt
+    const KimodoMath::LlmPrompt p = KimodoMath::llm2vecPrompt(fitDocLength(vocab, raw));
+    std::vector<llama_token> ids = tokenize(vocab, p.full, true);
+    if (int(ids.size()) > kMaxLength) ids.resize(size_t(kMaxLength));
+    const int pooled = std::min<int>(int(tokenize(vocab, p.pooled, false).size()), int(ids.size()));
+    if (pooled <= 0) {
+        *error = QStringLiteral("the prompt tokenized to nothing");
+        return false;
+    }
+    llama_memory_clear(llama_get_memory(ctx), true);
+    BatchGuard guard(int(ids.size()));
+    llama_batch& batch = guard.batch;
+    for (size_t i = 0; i < ids.size(); ++i) {
+        batch.token[i] = ids[i];
+        batch.pos[i] = llama_pos(i);
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = true;   // per-token embeddings (pooling NONE) are produced for output tokens only
+    }
+    batch.n_tokens = int(ids.size());
+    if (const int rc = llama_decode(ctx, batch); rc != 0) {
+        *error = QStringLiteral("llama_decode failed (%1) in the Kimodo text encoder").arg(rc);
+        return false;
+    }
+    std::vector<double> acc(size_t(dim), 0.0);
+    for (int i = int(ids.size()) - pooled; i < int(ids.size()); ++i) {
+        const float* e = llama_get_embeddings_ith(ctx, i);
+        if (!e) {
+            *error = QStringLiteral("llama.cpp returned no embedding for token %1").arg(i);
+            return false;
+        }
+        for (int k = 0; k < dim; ++k) acc[size_t(k)] += double(e[k]);
+    }
+    for (int k = 0; k < dim; ++k) (*out)[size_t(k)] = float(acc[size_t(k)] / double(pooled));
+    return true;
+}
 
 } // namespace
 #endif
@@ -101,48 +149,8 @@ KimodoTextEncoder::Result KimodoTextEncoder::encode(const QString& ggufPath, con
             r.error = QStringLiteral("cancelled");
             return r;
         }
-        std::vector<float> out(size_t(dim), 0.0f);
-        if (raw.trimmed().isEmpty()) {   // Kimodo zeroes the features of an empty prompt
-            r.embeddings.push_back(std::move(out));
-            continue;
-        }
-        const KimodoMath::LlmPrompt p = KimodoMath::llm2vecPrompt(fitDocLength(vocab, raw));
-        std::vector<llama_token> ids = tokenize(vocab, p.full, true);
-        if (int(ids.size()) > kMaxLength) ids.resize(size_t(kMaxLength));
-        const int pooled = std::min<int>(int(tokenize(vocab, p.pooled, false).size()), int(ids.size()));
-        if (pooled <= 0) {
-            r.error = QStringLiteral("the prompt tokenized to nothing");
-            return r;
-        }
-        llama_memory_clear(llama_get_memory(ctx.get()), true);
-        llama_batch batch = llama_batch_init(int(ids.size()), 0, 1);
-        for (size_t i = 0; i < ids.size(); ++i) {
-            batch.token[i] = ids[i];
-            batch.pos[i] = llama_pos(i);
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i] = true;   // per-token embeddings (pooling NONE) are produced for output tokens only
-        }
-        batch.n_tokens = int(ids.size());
-        const int rc = llama_decode(ctx.get(), batch);
-        if (rc != 0) {
-            llama_batch_free(batch);
-            r.error = QStringLiteral("llama_decode failed (%1) in the Kimodo text encoder").arg(rc);
-            return r;
-        }
-        // LLM2Vec mean pooling with skip_instruction: the last `pooled` hidden states (prompt + <|eot_id|>).
-        std::vector<double> acc(size_t(dim), 0.0);
-        for (int i = int(ids.size()) - pooled; i < int(ids.size()); ++i) {
-            const float* e = llama_get_embeddings_ith(ctx.get(), i);
-            if (!e) {
-                llama_batch_free(batch);
-                r.error = QStringLiteral("llama.cpp returned no embedding for token %1").arg(i);
-                return r;
-            }
-            for (int k = 0; k < dim; ++k) acc[size_t(k)] += double(e[k]);
-        }
-        llama_batch_free(batch);
-        for (int k = 0; k < dim; ++k) out[size_t(k)] = float(acc[size_t(k)] / double(pooled));
+        std::vector<float> out;
+        if (!encodeOne(ctx.get(), vocab, dim, raw, &out, &r.error)) return r;
         r.embeddings.push_back(std::move(out));
     }
     r.ok = true;

@@ -1,16 +1,16 @@
 #include "SomaSkeleton.h"
 
 #include <algorithm>
-#include <cstring>
+#include <array>
+#include <string_view>
 
 namespace AIMotion {
 
 namespace {
 
-bool endsWith(const std::string& s, const char* suffix)
+bool endsWith(const std::string& s, std::string_view suffix)
 {
-    const size_t n = std::strlen(suffix);
-    return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 // Body joints, side-free part. Exact names only: a near miss must stay Unknown.
@@ -22,15 +22,14 @@ const std::pair<const char*, const char*> kLimb[] = {
     {"Shoulder", "Shoulder"}, {"Arm", "Arm"}, {"ForeArm", "ForeArm"}, {"Hand", "Hand"},
     {"Leg", "UpLeg"}, {"Shin", "Leg"}, {"Foot", "Foot"}, {"ToeBase", "ToeBase"},
 };
-const char* kLongFingers[] = {"Index", "Middle", "Ring", "Pinky"};
+const std::array<const char*, 4> kLongFingers = {"Index", "Middle", "Ring", "Pinky"};
 
 bool splitSide(const std::string& n, std::string* side, std::string* part)
 {
-    for (const char* s : {"Left", "Right"}) {
-        const size_t len = std::strlen(s);
-        if (n.size() > len && n.compare(0, len, s) == 0) {
-            *side = s;
-            *part = n.substr(len);
+    for (const std::string_view s : {std::string_view("Left"), std::string_view("Right")}) {
+        if (n.size() > s.size() && n.compare(0, s.size(), s) == 0) {
+            *side = std::string(s);
+            *part = n.substr(s.size());
             return true;
         }
     }

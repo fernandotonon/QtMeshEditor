@@ -86,6 +86,10 @@ public:
     static QString pythonRuntimeDescription();
     /// Accepted Options::runtime values.
     static QStringList runtimeModes() { return {QStringLiteral("auto"), QStringLiteral("native"), QStringLiteral("python")}; }
+    /// Upper bound of Options::diffusionSteps: Kimodo's training schedule has 1000 steps.
+    static constexpr int kMaxDiffusionSteps = 1000;
+    /// Range/enum checks shared by the CLI, MCP and predict() (run them BEFORE any model download).
+    static bool validateOptions(const Options& o, QString* error);
     /// "native" | "python" for these options, or "" with `why` set when nothing can run them.
     static QString resolveRuntime(const Options& o, QString* why = nullptr);
 

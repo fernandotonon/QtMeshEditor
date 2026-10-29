@@ -171,10 +171,13 @@ TEST(SomaSkeleton, InPlaceClipsKeepTheRootHeight)
 {
     Motion m;
     m.rootPos = {{0.1f, 0.9f, 0.2f}, {0.6f, 1.3f, 1.2f}, {1.1f, 0.5f, 2.2f}};
+    m.restJoints = {{0.05f, 0.0f, -0.1f}};
     freezeHorizontalRoot(&m);
     for (const Ogre::Vector3& p : m.rootPos) {
-        EXPECT_FLOAT_EQ(p.x, 0.1f);
-        EXPECT_FLOAT_EQ(p.z, 0.2f);
+        // The REST root's x/z, not the first frame's: the retargeter measures the root delta from the rest, so a
+        // first-frame pin left a constant horizontal offset on the whole in-place clip.
+        EXPECT_FLOAT_EQ(p.x, 0.05f);
+        EXPECT_FLOAT_EQ(p.z, -0.1f);
     }
     EXPECT_FLOAT_EQ(m.rootPos[1].y, 1.3f) << "a jump still lifts";
     EXPECT_FLOAT_EQ(m.rootPos[2].y, 0.5f) << "a crouch still lowers";

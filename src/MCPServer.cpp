@@ -5926,6 +5926,84 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
     }
 }
 
+namespace {
+
+Ogre::Entity* findSkinnedEntity(Manager* mgr, const QString& name)
+{
+    for (auto* ent : mgr->getEntities()) {
+        if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton()) continue;
+        if (name.isEmpty() || QString::fromStdString(ent->getName()) == name) return static_cast<Ogre::Entity*>(ent);
+    }
+    return nullptr;
+}
+
+// MCP arguments -> Kimodo options; empty string = ok, else the error. Validated BEFORE any model download, so a
+// bad request never costs a 9 GB transfer.
+QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor::Options* o)
+{
+    if (args.contains(QStringLiteral("segments"))) {
+        for (const QJsonValue& v : args.value(QStringLiteral("segments")).toArray()) {
+            const QJsonObject seg = v.toObject();
+            o->segments.push_back({seg.value(QStringLiteral("text")).toString(), seg.value(QStringLiteral("duration")).toDouble(5.0)});
+        }
+    } else {
+        const QString prompt = args.value(QStringLiteral("prompt")).toString();
+        if (prompt.trimmed().isEmpty()) return QStringLiteral("kimodo needs 'prompt' or 'segments'.");
+        const double d = args.value(QStringLiteral("duration")).toDouble(0.0);
+        o->segments.push_back({prompt, d > 0.0 ? d : 5.0});
+    }
+    o->numSamples = args.value(QStringLiteral("variations")).toInt(1);
+    if (args.contains(QStringLiteral("seed"))) {
+        o->hasSeed = true;
+        o->seed = args.value(QStringLiteral("seed")).toInt();
+    }
+    o->diffusionSteps = args.value(QStringLiteral("diffusion_steps")).toInt(0);
+    o->rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
+    o->postprocess = args.value(QStringLiteral("postprocess")).toBool(true);
+    o->runtime = args.value(QStringLiteral("runtime")).toString().toLower();
+    QString err;
+    return AIMotion::KimodoPredictor::validateOptions(*o, &err) ? QString() : err;
+}
+
+} // namespace
+
+// Download (on request) + generate. Empty QJsonObject = ok (files/manifest/outputDir filled), else the error result.
+QJsonObject MCPServer::runKimodoGeneration(const QJsonObject& args, QStringList* files, QJsonObject* manifest, QString* outputDir)
+{
+    using namespace AIMotion;
+    KimodoPredictor::Options o;
+    if (const QString err = kimodoOptionsFromArgs(args, &o); !err.isEmpty()) return makeErrorResult(QStringLiteral("Error: %1").arg(err));
+    // One Stop request covers the download AND the generation: it is cleared here only, never in between.
+    m_toolCancelRequested = false;
+    QElapsedTimer pumpClock;
+    pumpClock.start();
+    // Main-thread tool: pump at ~20 Hz so the window paints and Stop reaches m_toolCancelRequested.
+    const auto progress = [this, &pumpClock](const QString& stage, int done, int total) {
+        emit toolProgress(QStringLiteral("generate_motion"), QStringLiteral("kimodo: %1").arg(stage), done, total);
+        if (pumpClock.elapsed() >= 50) {
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;
+    };
+    // The ~9 GB native models download only on an explicit request (download:true), never implicitly.
+    if (args.value(QStringLiteral("download")).toBool(false) && !KimodoNative::modelsInstalled()) {
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"), QStringLiteral("MCP generate_motion download native models"));
+        if (QString derr; !KimodoNative::downloadModels(&derr, progress))
+            return makeErrorResult(QStringLiteral("Error: Kimodo model download failed: %1").arg(derr));
+    }
+    if (m_toolCancelRequested) return makeErrorResult(QStringLiteral("Error: Kimodo: cancelled"));
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
+        QStringLiteral("MCP generate_motion segments=%1 variations=%2 runtime=%3").arg(o.segments.size()).arg(o.numSamples)
+            .arg(KimodoPredictor::resolveRuntime(o)));
+    const auto r = KimodoPredictor::predict(o, progress);
+    if (!r.ok) return makeErrorResult(QStringLiteral("Error: Kimodo: %1").arg(r.error));
+    *files = r.files;
+    *manifest = r.manifest;
+    *outputDir = r.outputDir;
+    return {};
+}
+
 QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
 {
     using namespace AIMotion;
@@ -5933,21 +6011,14 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
     if (!mgr) return makeErrorResult("Error: Manager not available");
 
     const QString entityName = args.value(QStringLiteral("entity_name")).toString();
-    const auto findEntity = [mgr](const QString& name) -> Ogre::Entity* {
-        for (auto* ent : mgr->getEntities()) {
-            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton()) continue;
-            if (name.isEmpty() || QString::fromStdString(ent->getName()) == name) return static_cast<Ogre::Entity*>(ent);
-        }
-        return nullptr;
-    };
-    Ogre::Entity* entity = findEntity(entityName);
-    if (!entity)
+    const Ogre::Entity* initial = findSkinnedEntity(mgr, entityName);
+    if (!initial)
         return makeErrorResult(entityName.isEmpty() ? QStringLiteral("Error: no skinned mesh found: Kimodo motion needs a rigged humanoid")
                                                     : QStringLiteral("Error: skinned entity '%1' not found").arg(entityName));
     // Generation pumps the event loop, so the user may delete or replace the rig meanwhile: keep its identity
     // (name + mesh), never the raw pointer, and resolve it again before applying.
-    const QString targetName = QString::fromStdString(entity->getName());
-    const Ogre::Mesh* targetMesh = entity->getMesh().get();
+    const QString targetName = QString::fromStdString(initial->getName());
+    const Ogre::Mesh* targetMesh = initial->getMesh().get();
 
     QStringList files;
     QJsonObject manifest;
@@ -5956,64 +6027,25 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
         if (files.isEmpty()) return makeErrorResult("Error: 'motion_files' must be a non-empty array of .npz paths.");
         SentryReporter::addBreadcrumb(QStringLiteral("ai.tool_call"), QStringLiteral("MCP generate_motion motion_files=%1").arg(files.size()));
     } else {
-        KimodoPredictor::Options o;
-        if (args.contains(QStringLiteral("segments"))) {
-            for (const QJsonValue& v : args.value(QStringLiteral("segments")).toArray()) {
-                const QJsonObject seg = v.toObject();
-                o.segments.push_back({seg.value(QStringLiteral("text")).toString(), seg.value(QStringLiteral("duration")).toDouble(5.0)});
-            }
-        } else {
-            const QString prompt = args.value(QStringLiteral("prompt")).toString();
-            if (prompt.trimmed().isEmpty()) return makeErrorResult("Error: kimodo needs 'prompt' or 'segments'.");
-            const double d = args.value(QStringLiteral("duration")).toDouble(0.0);
-            o.segments.push_back({prompt, d > 0.0 ? d : 5.0});
-        }
-        o.numSamples = args.value(QStringLiteral("variations")).toInt(1);
-        if (args.contains(QStringLiteral("seed"))) { o.hasSeed = true; o.seed = args.value(QStringLiteral("seed")).toInt(); }
-        o.diffusionSteps = args.value(QStringLiteral("diffusion_steps")).toInt(0);
-        o.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
-        o.postprocess = args.value(QStringLiteral("postprocess")).toBool(true);
-        o.runtime = args.value(QStringLiteral("runtime")).toString().toLower();
-        if (!o.runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o.runtime))
-            return makeErrorResult(QStringLiteral("Error: 'runtime' must be one of: %1.").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))));
-        // The ~9 GB native models download only on an explicit request (download:true), never implicitly.
-        if (args.value(QStringLiteral("download")).toBool(false) && !KimodoNative::modelsInstalled()) {
-            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"), QStringLiteral("MCP generate_motion download native models"));
-            QString derr;
-            if (!KimodoNative::downloadModels(&derr, [this](const QString& stage, int done, int total) {
-                    emit toolProgress(QStringLiteral("generate_motion"), QStringLiteral("kimodo: %1").arg(stage), done, total);
-                    return !m_toolCancelRequested;
-                }))
-                return makeErrorResult(QStringLiteral("Error: Kimodo model download failed: %1").arg(derr));
-        }
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
-            QStringLiteral("MCP generate_motion segments=%1 variations=%2 runtime=%3").arg(o.segments.size()).arg(o.numSamples)
-                .arg(KimodoPredictor::resolveRuntime(o)));
-
-        // Main-thread tool: pump at ~20 Hz so the window paints and Stop reaches m_toolCancelRequested.
-        m_toolCancelRequested = false;
-        QElapsedTimer pumpClock;
-        pumpClock.start();
-        const auto r = KimodoPredictor::predict(o, [this, &pumpClock](const QString& stage, int done, int total) {
-            emit toolProgress(QStringLiteral("generate_motion"), QStringLiteral("kimodo: %1").arg(stage), done, total);
-            if (pumpClock.elapsed() >= 50) {
-                pumpClock.restart();
-                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-            }
-            return !m_toolCancelRequested;
-        });
-        if (!r.ok) return makeErrorResult(QStringLiteral("Error: Kimodo: %1").arg(r.error));
-        files = r.files;
-        manifest = r.manifest;
-        entity = findEntity(targetName);
-        if (!entity || entity->getMesh().get() != targetMesh)
+        QString outputDir;
+        if (QJsonObject err = runKimodoGeneration(args, &files, &manifest, &outputDir); !err.isEmpty()) return err;
+        const Ogre::Entity* now = findSkinnedEntity(mgr, targetName);
+        if (!now || now->getMesh().get() != targetMesh)
             return makeErrorResult(QStringLiteral("Error: '%1' was removed or replaced while Kimodo ran; the motion is saved in %2 "
-                                                  "(apply it with motion_files)").arg(targetName, r.outputDir));
+                                                  "(apply it with motion_files)").arg(targetName, outputDir));
     }
+    Ogre::Entity* entity = findSkinnedEntity(mgr, targetName);
+    if (!entity) return makeErrorResult(QStringLiteral("Error: skinned entity '%1' not found").arg(targetName));
+    return applyKimodoMotion(args, entity, files, manifest);
+}
 
+// Apply the motion files as one undo step, then export when output_path asks; a failed export takes the clips back.
+QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* entity, const QStringList& files,
+                                         const QJsonObject& manifest)
+{
+    using namespace AIMotion;
     std::vector<Motion> motions;
-    QString loadErr;
-    if (!loadMotionFiles(files, &motions, &loadErr)) return makeErrorResult(QStringLiteral("Error: %1").arg(loadErr));
+    if (QString loadErr; !loadMotionFiles(files, &motions, &loadErr)) return makeErrorResult(QStringLiteral("Error: %1").arg(loadErr));
 
     SceneApplyOptions so;
     so.baseName = args.value(QStringLiteral("clip_name")).toString();
@@ -6021,27 +6053,32 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
     so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return makeErrorResult(QStringLiteral("Error: %1").arg(applied.error));
-    if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
 
+    const QString entityName = QString::fromStdString(entity->getName());
     const QString outPath = args.value(QStringLiteral("output_path")).toString();
     if (!outPath.isEmpty()) {
         Ogre::SceneNode* node = entity->getParentSceneNode();
-        if (!node) return makeErrorResult(QStringLiteral("Error: applied %1 clip(s) but '%2' is not attached to a scene node, so it cannot be exported")
-                                              .arg(applied.clips.size()).arg(targetName));
-        if (MeshImporterExporter::exporter(node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
-            return makeErrorResult(QStringLiteral("Error: applied %1 clip(s) but export to %2 failed").arg(applied.clips.size()).arg(outPath));
+        const bool exported = node && MeshImporterExporter::exporter(node, outPath, CLIPipeline::formatForExtension(outPath)) == 0;
+        if (!exported) {
+            // A retry must not stack more uniquely-named clips: take this batch back.
+            rollbackAppliedMotions(entity, applied);
+            if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
+            return makeErrorResult(node ? QStringLiteral("Error: export to %1 failed; the %2 new clip(s) were removed").arg(outPath).arg(applied.clips.size())
+                                        : QStringLiteral("Error: '%1' is not attached to a scene node, so it cannot be exported; the new clips were removed").arg(entityName));
+        }
     }
+    if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
 
     QJsonArray clips;
     for (const ApplyOutcome& out : applied.outcomes) clips.append(outcomeJson(out));
     QJsonObject report{{QStringLiteral("backend"), QStringLiteral("kimodo")},
-                       {QStringLiteral("entity"), QString::fromStdString(entity->getName())},
+                       {QStringLiteral("entity"), entityName},
                        {QStringLiteral("clips"), clips},
                        {QStringLiteral("motion_files"), QJsonArray::fromStringList(files)}};
     if (!manifest.isEmpty()) report.insert(QStringLiteral("kimodo"), manifest);
     if (!outPath.isEmpty()) report.insert(QStringLiteral("output_path"), outPath);
     return makeSuccessResult(QStringLiteral("Applied %1 Kimodo clip(s) to %2: %3\n%4")
-                                 .arg(applied.clips.size()).arg(QString::fromStdString(entity->getName()), applied.clips.join(QStringLiteral(", ")),
+                                 .arg(applied.clips.size()).arg(entityName, applied.clips.join(QStringLiteral(", ")),
                                       QString::fromUtf8(QJsonDocument(report).toJson(QJsonDocument::Compact))));
 }
 

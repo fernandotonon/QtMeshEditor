@@ -140,8 +140,10 @@ TEST(KimodoNative, CorrectionWithoutContactsKeepsTheMotion)
     }
     const std::vector<float> root0 = root, rot0 = rot;
     std::string err;
-    ASSERT_TRUE(KimodoCorrection::correctMotion(root, rot, std::vector<float>(root.size(), 0.0f), rot0, KimodoCorrection::Masks{},
-                                                std::vector<float>(size_t(T) * 4, 0.0f), rig, 0.5f, 0.04f, &err))
+    const std::vector<float> rootTarget(root.size(), 0.0f);
+    const std::vector<float> contacts(size_t(T) * 4, 0.0f);
+    ASSERT_TRUE(KimodoCorrection::correctMotion({&root, &rot, &rootTarget, &rot0, &contacts}, KimodoCorrection::Masks{}, rig,
+                                                {0.5f, 0.04f}, &err))
         << err;
     for (size_t k = 0; k < root.size(); ++k) EXPECT_NEAR(root[k], root0[k], 1e-3) << "root " << k;
     for (size_t k = 0; k < rot.size(); k += 4) {
@@ -153,8 +155,11 @@ TEST(KimodoNative, CorrectionWithoutContactsKeepsTheMotion)
 TEST(KimodoNative, CorrectionRejectsBadSizes)
 {
     const KimodoCorrection::Rig rig = legRig();
-    std::vector<float> root(9, 0.0f), rot(10, 0.0f);
+    std::vector<float> root(9, 0.0f);
+    std::vector<float> rot(10, 0.0f);
+    const std::vector<float> contacts(12, 0.0f);
     std::string err;
-    EXPECT_FALSE(KimodoCorrection::correctMotion(root, rot, root, rot, {}, std::vector<float>(12, 0.0f), rig, 0.5f, 0.04f, &err));
+    EXPECT_FALSE(KimodoCorrection::correctMotion({&root, &rot, &root, &rot, &contacts}, {}, rig, {0.5f, 0.04f}, &err));
     EXPECT_FALSE(err.empty());
+    EXPECT_FALSE(KimodoCorrection::correctMotion({}, {}, rig, {}, &err)) << "missing arrays are rejected, not dereferenced";
 }

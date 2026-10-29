@@ -10,6 +10,7 @@
 #include <QJsonDocument>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace AIMotion {
@@ -47,91 +48,133 @@ QString shapeText(const AudioToFace::NpyArray& a)
 
 } // namespace
 
-bool loadInterchange(const QString& npzPath, Motion* out, QString* error)
-{
-    if (!out) return fail(error, QStringLiteral("no output"));
-    AudioToFace::NpzReader npz;
-    QString err;
-    if (!npz.open(npzPath, &err)) return fail(error, err);
+namespace {
 
+bool allFinite(const AudioToFace::NpyArray& a)
+{
+    return std::all_of(a.data.begin(), a.data.end(), [](float v) { return std::isfinite(v); });
+}
+
+bool checkVersion(AudioToFace::NpzReader& npz, QString* error)
+{
+    QString err;
     const auto version = npz.read(QStringLiteral("format_version"), &err);
     if (!version.valid()) return fail(error, QStringLiteral("not a motion interchange file (no format_version)"));
     if (!std::isfinite(version.data[0])) return fail(error, QStringLiteral("format_version is not a number"));
     if (int(version.data[0]) != kInterchangeVersion)
         return fail(error, QStringLiteral("motion interchange version %1 is not supported (expected %2)")
                                .arg(int(version.data[0])).arg(kInterchangeVersion));
+    return true;
+}
 
-    const QStringList names = npz.readStrings(QStringLiteral("joint_names"), &err);
-    if (names.isEmpty()) return fail(error, QStringLiteral("joint_names: %1").arg(err));
-    const int J = int(names.size());
+// The arrays every interchange file carries, with their shapes checked against each other.
+struct RawArrays {
+    QStringList names;
+    AudioToFace::NpyArray parents;
+    AudioToFace::NpyArray rest;
+    AudioToFace::NpyArray rots;
+    AudioToFace::NpyArray root;
+    AudioToFace::NpyArray fps;
+    int J = 0;
+    int T = 0;
+};
 
-    const auto parents = npz.read(QStringLiteral("joint_parents"), &err);
-    const auto rest = npz.read(QStringLiteral("rest_joints"), &err);
-    const auto rots = npz.read(QStringLiteral("local_rot_mats"), &err);
-    const auto root = npz.read(QStringLiteral("root_positions"), &err);
-    const auto fps = npz.read(QStringLiteral("fps"), &err);
-    if (!parents.valid() || !rest.valid() || !rots.valid() || !root.valid() || !fps.valid())
+bool readArrays(AudioToFace::NpzReader& npz, RawArrays* a, QString* error)
+{
+    QString err;
+    a->names = npz.readStrings(QStringLiteral("joint_names"), &err);
+    if (a->names.isEmpty()) return fail(error, QStringLiteral("joint_names: %1").arg(err));
+    a->J = int(a->names.size());
+    a->parents = npz.read(QStringLiteral("joint_parents"), &err);
+    a->rest = npz.read(QStringLiteral("rest_joints"), &err);
+    a->rots = npz.read(QStringLiteral("local_rot_mats"), &err);
+    a->root = npz.read(QStringLiteral("root_positions"), &err);
+    a->fps = npz.read(QStringLiteral("fps"), &err);
+    if (!a->parents.valid() || !a->rest.valid() || !a->rots.valid() || !a->root.valid() || !a->fps.valid())
         return fail(error, QStringLiteral("missing array: %1").arg(err));
-
-    if (parents.elementCount() != J) return fail(error, QStringLiteral("joint_parents has %1 entries for %2 joints").arg(parents.elementCount()).arg(J));
-    if (rest.shape != std::vector<int64_t>{J, 3}) return fail(error, QStringLiteral("rest_joints shape %1").arg(shapeText(rest)));
-    if (rots.shape.size() != 4 || rots.shape[1] != J || rots.shape[2] != 3 || rots.shape[3] != 3)
-        return fail(error, QStringLiteral("local_rot_mats shape %1, expected [T,%2,3,3]").arg(shapeText(rots)).arg(J));
-    const int T = int(rots.shape[0]);
-    if (T < 2) return fail(error, QStringLiteral("need at least 2 frames"));
-    if (root.shape != std::vector<int64_t>{T, 3}) return fail(error, QStringLiteral("root_positions shape %1").arg(shapeText(root)));
-    if (!(fps.data[0] > 0.0f) || fps.data[0] > 1000.0f) return fail(error, QStringLiteral("bad fps %1").arg(fps.data[0]));
+    const int J = a->J;
+    if (a->parents.elementCount() != J) return fail(error, QStringLiteral("joint_parents has %1 entries for %2 joints").arg(a->parents.elementCount()).arg(J));
+    if (a->rest.shape != std::vector<int64_t>{J, 3}) return fail(error, QStringLiteral("rest_joints shape %1").arg(shapeText(a->rest)));
+    if (a->rots.shape.size() != 4 || a->rots.shape[1] != J || a->rots.shape[2] != 3 || a->rots.shape[3] != 3)
+        return fail(error, QStringLiteral("local_rot_mats shape %1, expected [T,%2,3,3]").arg(shapeText(a->rots)).arg(J));
+    a->T = int(a->rots.shape[0]);
+    if (a->T < 2) return fail(error, QStringLiteral("need at least 2 frames"));
+    if (a->root.shape != std::vector<int64_t>{a->T, 3}) return fail(error, QStringLiteral("root_positions shape %1").arg(shapeText(a->root)));
+    if (!(a->fps.data[0] > 0.0f) || a->fps.data[0] > 1000.0f) return fail(error, QStringLiteral("bad fps %1").arg(a->fps.data[0]));
     // Every value below reaches std::lround or the retargeter's root translation: reject NaN/inf up front.
-    const auto allFinite = [](const AudioToFace::NpyArray& a) {
-        for (float v : a.data)
-            if (!std::isfinite(v)) return false;
-        return true;
-    };
-    if (!allFinite(parents)) return fail(error, QStringLiteral("joint_parents has a non-finite value"));
-    if (!allFinite(rest)) return fail(error, QStringLiteral("rest_joints has a non-finite value"));
-    if (!allFinite(root)) return fail(error, QStringLiteral("root_positions has a non-finite value"));
+    if (!allFinite(a->parents)) return fail(error, QStringLiteral("joint_parents has a non-finite value"));
+    if (!allFinite(a->rest)) return fail(error, QStringLiteral("rest_joints has a non-finite value"));
+    if (!allFinite(a->root)) return fail(error, QStringLiteral("root_positions has a non-finite value"));
+    return true;
+}
 
-    Motion m;
-    m.fps = fps.data[0];
-    for (int j = 0; j < J; ++j) {
-        m.names.push_back(names[j].toStdString());
-        const int p = int(std::lround(parents.data[size_t(j)]));
+bool readSkeleton(const RawArrays& a, Motion* m, QString* error)
+{
+    m->fps = a.fps.data[0];
+    for (int j = 0; j < a.J; ++j) {
+        m->names.push_back(a.names[j].toStdString());
+        const int p = int(std::lround(a.parents.data[size_t(j)]));
         if (p >= j || p < -1 || (p == -1 && j != 0))
             return fail(error, QStringLiteral("joint %1 (%2) has parent %3: parents must precede children and only joint 0 may be a root")
-                                   .arg(j).arg(names[j]).arg(p));
-        m.parents.push_back(p);
-        m.restJoints.emplace_back(rest.data[size_t(j) * 3], rest.data[size_t(j) * 3 + 1], rest.data[size_t(j) * 3 + 2]);
+                                   .arg(j).arg(a.names[j]).arg(p));
+        m->parents.push_back(p);
+        m->restJoints.emplace_back(a.rest.data[size_t(j) * 3], a.rest.data[size_t(j) * 3 + 1], a.rest.data[size_t(j) * 3 + 2]);
     }
+    return true;
+}
 
-    m.localRot.assign(size_t(T), std::vector<Ogre::Quaternion>(size_t(J)));
-    for (int t = 0; t < T; ++t) {
-        for (int j = 0; j < J; ++j) {
-            const float* mat = &rots.data[(size_t(t) * J + j) * 9];
-            for (int k = 0; k < 9; ++k)
-                if (!std::isfinite(mat[k])) return fail(error, QStringLiteral("non-finite rotation at frame %1 joint %2").arg(t).arg(names[j]));
-            // A real rotation has det ~ +1; a reflection or a zero matrix would orthonormalise into garbage.
-            const float det = mat[0] * (mat[4] * mat[8] - mat[5] * mat[7]) - mat[1] * (mat[3] * mat[8] - mat[5] * mat[6])
-                            + mat[2] * (mat[3] * mat[7] - mat[4] * mat[6]);
-            if (std::fabs(det - 1.0f) > 0.05f)
-                return fail(error, QStringLiteral("frame %1 joint %2 is not a rotation (det %3)").arg(t).arg(names[j]).arg(det));
-            m.localRot[size_t(t)][size_t(j)] = quatFromMatrix(mat);
+// One 3x3 must be a finite rotation: det ~ +1 (a reflection or a zero matrix would orthonormalise into garbage).
+bool checkRotation(const float* mat, int t, const QString& joint, QString* error)
+{
+    if (!std::all_of(mat, mat + 9, [](float v) { return std::isfinite(v); }))
+        return fail(error, QStringLiteral("non-finite rotation at frame %1 joint %2").arg(t).arg(joint));
+    const float det = mat[0] * (mat[4] * mat[8] - mat[5] * mat[7]) - mat[1] * (mat[3] * mat[8] - mat[5] * mat[6])
+                    + mat[2] * (mat[3] * mat[7] - mat[4] * mat[6]);
+    if (std::fabs(det - 1.0f) > 0.05f)
+        return fail(error, QStringLiteral("frame %1 joint %2 is not a rotation (det %3)").arg(t).arg(joint).arg(det));
+    return true;
+}
+
+bool readFrames(const RawArrays& a, Motion* m, QString* error)
+{
+    m->localRot.assign(size_t(a.T), std::vector<Ogre::Quaternion>(size_t(a.J)));
+    for (int t = 0; t < a.T; ++t) {
+        for (int j = 0; j < a.J; ++j) {
+            const float* mat = &a.rots.data[(size_t(t) * a.J + j) * 9];
+            if (!checkRotation(mat, t, a.names[j], error)) return false;
+            m->localRot[size_t(t)][size_t(j)] = quatFromMatrix(mat);
         }
-        m.rootPos.emplace_back(root.data[size_t(t) * 3], root.data[size_t(t) * 3 + 1], root.data[size_t(t) * 3 + 2]);
+        m->rootPos.emplace_back(a.root.data[size_t(t) * 3], a.root.data[size_t(t) * 3 + 1], a.root.data[size_t(t) * 3 + 2]);
     }
+    return true;
+}
 
-    if (npz.contains(QStringLiteral("foot_contacts"))) {
-        const auto fc = npz.read(QStringLiteral("foot_contacts"), &err);
-        if (fc.valid() && fc.shape.size() == 2 && fc.shape[0] == T) {
-            const int C = int(fc.shape[1]);
-            for (int t = 0; t < T; ++t)
-                m.contacts.emplace_back(fc.data.begin() + size_t(t) * C, fc.data.begin() + size_t(t + 1) * C);
-        }
-    }
+void readContacts(AudioToFace::NpzReader& npz, int T, Motion* m)
+{
+    if (!npz.contains(QStringLiteral("foot_contacts"))) return;
+    QString err;
+    const auto fc = npz.read(QStringLiteral("foot_contacts"), &err);
+    if (!fc.valid() || fc.shape.size() != 2 || fc.shape[0] != T) return;
+    const auto C = size_t(fc.shape[1]);
+    for (size_t t = 0; t < size_t(T); ++t) m->contacts.emplace_back(fc.data.begin() + t * C, fc.data.begin() + (t + 1) * C);
+}
 
+} // namespace
+
+bool loadInterchange(const QString& npzPath, Motion* out, QString* error)
+{
+    if (!out) return fail(error, QStringLiteral("no output"));
+    AudioToFace::NpzReader npz;
+    if (QString err; !npz.open(npzPath, &err)) return fail(error, err);
+    if (!checkVersion(npz, error)) return false;
+    RawArrays a;
+    if (!readArrays(npz, &a, error)) return false;
+    Motion m;
+    if (!readSkeleton(a, &m, error) || !readFrames(a, &m, error)) return false;
+    readContacts(npz, a.T, &m);
     // result.json beside the file: provenance (model, seed, prompts). Optional.
     QFile manifest(QFileInfo(npzPath).dir().filePath(QStringLiteral("result.json")));
     if (manifest.open(QIODevice::ReadOnly)) m.meta = QJsonDocument::fromJson(manifest.readAll()).object();
-
     *out = std::move(m);
     return true;
 }
@@ -203,20 +246,22 @@ Motion resample(const Motion& m, float fps)
 
 namespace {
 
+std::array<uint32_t, 256> crcTable()
+{
+    std::array<uint32_t, 256> table{};
+    for (uint32_t i = 0; i < 256; ++i) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; ++k) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+        table[i] = c;
+    }
+    return table;
+}
+
 uint32_t crc32Of(const QByteArray& data)
 {
-    static uint32_t table[256];
-    static bool init = false;
-    if (!init) {
-        for (uint32_t i = 0; i < 256; ++i) {
-            uint32_t c = i;
-            for (int k = 0; k < 8; ++k) c = (c & 1u) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            table[i] = c;
-        }
-        init = true;
-    }
+    static const std::array<uint32_t, 256> table = crcTable();
     uint32_t c = 0xFFFFFFFFu;
-    for (char ch : data) c = table[(c ^ uint8_t(ch)) & 0xFFu] ^ (c >> 8);
+    for (const char ch : data) c = table[(c ^ static_cast<unsigned char>(ch)) & 0xFFu] ^ (c >> 8);
     return c ^ 0xFFFFFFFFu;
 }
 
@@ -226,8 +271,11 @@ void put32(QByteArray& b, uint32_t v) { for (int k = 0; k < 4; ++k) b.append(cha
 // .npy version 1.0: magic, version, little-endian header length, a dict padded with spaces to 64 bytes.
 QByteArray npy(const QByteArray& descr, const std::vector<int64_t>& shape, const QByteArray& payload)
 {
-    QByteArray dims;
-    for (size_t i = 0; i < shape.size(); ++i) dims += QByteArray::number(qlonglong(shape[i])) + (shape.size() == 1 ? "," : (i + 1 < shape.size() ? ", " : ""));
+    // numpy's tuple repr: "(J,)" for one dimension, "(T, J, 3)" otherwise.
+    QByteArrayList parts;
+    for (const int64_t d : shape) parts << QByteArray::number(qlonglong(d));
+    QByteArray dims = parts.join(", ");
+    if (shape.size() == 1) dims += ',';
     QByteArray header = "{'descr': '" + descr + "', 'fortran_order': False, 'shape': (" + dims + "), }";
     const int total = 10 + int(header.size()) + 1;
     header += QByteArray((64 - total % 64) % 64, ' ') + '\n';

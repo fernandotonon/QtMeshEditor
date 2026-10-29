@@ -274,6 +274,8 @@ private:
     QJsonObject toolMotionInBetween(const QJsonObject &args);
     QJsonObject toolGenerateMotion(const QJsonObject &args);    // #411 text-to-motion
     QJsonObject toolGenerateMotionKimodo(const QJsonObject &args);   // NVIDIA Kimodo backend / saved motion files
+    QJsonObject runKimodoGeneration(const QJsonObject& args, QStringList* files, QJsonObject* manifest, QString* outputDir);
+    QJsonObject applyKimodoMotion(const QJsonObject& args, Ogre::Entity* entity, const QStringList& files, const QJsonObject& manifest);
     QJsonObject toolAdjustArmSpace(const QJsonObject &args);    // #854 arm-space
     QJsonObject toolPinFeet(const QJsonObject &args);           // #856 foot-contact pin
     QJsonObject toolSegmentMesh(const QJsonObject &args);

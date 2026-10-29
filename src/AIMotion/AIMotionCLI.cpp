@@ -15,6 +15,8 @@
 #include <OgreSceneNode.h>
 
 #include <QFileInfo>
+
+#include <cmath>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -52,67 +54,140 @@ bool parseSegment(const QString& spec, MotionSegment* out, QString* error)
     return true;
 }
 
+namespace {
+
+// Request -> generation options. 0 = ok, else the exit code (the message is already printed).
+int buildOptions(const CliRequest& req, KimodoPredictor::Options* o)
+{
+    if (!req.segments.isEmpty()) {
+        for (const QString& s : req.segments) {
+            MotionSegment seg;
+            QString e;
+            if (!parseSegment(s, &seg, &e)) return fail(e, 2);
+            o->segments.push_back(seg);
+        }
+    } else {
+        if (req.prompt.trimmed().isEmpty()) return fail(QStringLiteral("--generate needs a prompt"), 2);
+        o->segments.push_back({req.prompt, req.duration > 0.0 ? req.duration : 5.0});
+    }
+    o->numSamples = req.variations;
+    o->hasSeed = req.hasSeed;
+    o->seed = req.seed;
+    o->diffusionSteps = req.diffusionSteps;
+    o->rootMotion = req.rootMotion;
+    o->postprocess = req.postprocess;
+    o->constraintsPath = req.constraintsPath;
+    o->textEncoderUrl = req.textEncoderUrl;
+    o->textEncoderQuant = req.textEncoderQuant;
+    o->runtime = req.runtime;
+    if (!o->runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o->runtime))
+        return fail(QStringLiteral("--runtime must be one of: %1").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))), 2);
+    if (QString e; !KimodoPredictor::validateOptions(*o, &e)) return fail(e, 2);
+    return 0;
+}
+
+// Generate (downloading the native models first when --download asks for it). 0 = ok, else the exit code.
+int generateFiles(const CliRequest& req, QStringList* files, QJsonObject* manifest)
+{
+    KimodoPredictor::Options o;
+    if (const int code = buildOptions(req, &o)) return code;
+    if (req.download && !KimodoNative::modelsInstalled()) {
+        note(QStringLiteral("(kimodo: downloading the native models, ~%1 GB)").arg(double(KimodoNative::missingBytes()) / 1e9, 0, 'f', 1));
+        if (QString e; !KimodoNative::downloadModels(&e)) return fail(QStringLiteral("download failed: %1").arg(e));
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
+                                  QStringLiteral("CLI generate segments=%1 variations=%2").arg(o.segments.size()).arg(o.numSamples));
+    QString lastStage;
+    const auto r = KimodoPredictor::predict(o, [&lastStage](const QString& stage, int, int) {
+        if (stage != lastStage) {
+            note(QStringLiteral("(kimodo: %1)").arg(stage));
+            lastStage = stage;
+        }
+        return true;
+    });
+    if (!r.ok) return fail(r.error);
+    *files = r.files;
+    *manifest = r.manifest;
+    return 0;
+}
+
+Ogre::Entity* firstSkinnedEntity()
+{
+    for (auto* e : Manager::getSingleton()->getEntities())
+        if (e && e->getMovableType() == "Entity" && static_cast<Ogre::Entity*>(e)->hasSkeleton())
+            return static_cast<Ogre::Entity*>(e);
+    return nullptr;
+}
+
+// #854 arm space, as the other generate backends do. A rig with no keyed arm roles cannot take it: say so.
+void applyArmSpace(Ogre::Entity* entity, const QStringList& clips, float degrees)
+{
+    if (std::abs(degrees) <= 1e-4f) return;
+    for (const QString& clip : clips) {
+        if (AnimationMerger::adjustArmSpace(entity->getMesh()->getSkeleton().get(), clip.toStdString(), degrees))
+            note(QStringLiteral("(arm-space: %1 deg on %2)").arg(degrees).arg(clip));
+        else
+            note(QStringLiteral("Warning: --arm-space skipped on %1 (no keyed shoulder/collar bones)").arg(clip));
+    }
+}
+
+void writeReport(const CliRequest& req, const QJsonArray& clips, const QString& output, const QStringList& files,
+                 const QJsonObject& manifest)
+{
+    if (req.json) {
+        QJsonObject root{{QStringLiteral("backend"), QStringLiteral("kimodo")},
+                         {QStringLiteral("mapVersion"), QString::fromLatin1(kSomaMapVersion)},
+                         {QStringLiteral("clips"), clips},
+                         {QStringLiteral("output"), QFileInfo(output).absoluteFilePath()},
+                         {QStringLiteral("source"), manifest.isEmpty() ? QJsonValue(QJsonArray::fromStringList(files)) : QJsonValue(manifest)}};
+        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + QLatin1Char('\n'));
+    } else {
+        CLIPipeline::writeOutput(QStringLiteral("Kimodo motion: %1 clip(s) on %2 -> %3\n")
+                                     .arg(clips.size()).arg(QFileInfo(req.rigPath).fileName(), QFileInfo(output).fileName()));
+    }
+}
+
+} // namespace
+
+QString kimodoOnlyOption(const CliRequest& req)
+{
+    const std::pair<bool, const char*> flags[] = {
+        {!req.segments.isEmpty(), "--segment"},
+        {req.variations != 1, "--variations"},
+        {req.hasSeed, "--seed"},
+        {req.diffusionSteps != 0, "--diffusion-steps"},
+        {!req.rootMotion, "--no-root-motion"},
+        {!req.postprocess, "--no-postprocess"},
+        {!req.constraintsPath.isEmpty(), "--constraints"},
+        {!req.textEncoderUrl.isEmpty(), "--text-encoder-url"},
+        {!req.textEncoderQuant.isEmpty(), "--text-encoder-quant"},
+        {!req.runtime.isEmpty(), "--runtime"},
+        {req.download, "--download"},
+        {!req.name.isEmpty(), "--name"},
+    };
+    for (const auto& [set, flag] : flags)
+        if (set) return QString::fromLatin1(flag);
+    return {};
+}
+
 int runCli(const CliRequest& req)
 {
     if (!QFileInfo::exists(req.rigPath)) return fail(QStringLiteral("File not found: %1").arg(req.rigPath));
     if (req.variations < 1 || req.variations > 16) return fail(QStringLiteral("--variations must be 1..16"), 2);
+    // A non-finite angle would write NaN rotations, and the default output overwrites the input rig.
+    if (!std::isfinite(req.armSpaceDeg)) return fail(QStringLiteral("--arm-space must be a finite number of degrees"), 2);
 
     QStringList files = req.applyMotion;
     QJsonObject manifest;
-    if (files.isEmpty()) {
-        KimodoPredictor::Options o;
-        if (!req.segments.isEmpty()) {
-            for (const QString& s : req.segments) {
-                MotionSegment seg;
-                QString e;
-                if (!parseSegment(s, &seg, &e)) return fail(e, 2);
-                o.segments.push_back(seg);
-            }
-        } else {
-            if (req.prompt.trimmed().isEmpty()) return fail(QStringLiteral("--generate needs a prompt"), 2);
-            o.segments.push_back({req.prompt, req.duration > 0.0 ? req.duration : 5.0});
-        }
-        o.numSamples = req.variations;
-        o.hasSeed = req.hasSeed;
-        o.seed = req.seed;
-        o.diffusionSteps = req.diffusionSteps;
-        o.rootMotion = req.rootMotion;
-        o.postprocess = req.postprocess;
-        o.constraintsPath = req.constraintsPath;
-        o.textEncoderUrl = req.textEncoderUrl;
-        o.textEncoderQuant = req.textEncoderQuant;
-        o.runtime = req.runtime;
-        if (!o.runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o.runtime))
-            return fail(QStringLiteral("--runtime must be one of: %1").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))), 2);
-        if (req.download && !KimodoNative::modelsInstalled()) {
-            note(QStringLiteral("(kimodo: downloading the native models, ~%1 GB)").arg(double(KimodoNative::missingBytes()) / 1e9, 0, 'f', 1));
-            QString e;
-            if (!KimodoNative::downloadModels(&e)) return fail(QStringLiteral("download failed: %1").arg(e));
-        }
-        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
-                                      QStringLiteral("CLI generate segments=%1 variations=%2").arg(o.segments.size()).arg(o.numSamples));
-        QString lastStage;
-        const auto r = KimodoPredictor::predict(o, [&](const QString& stage, int done, int total) {
-            if (stage != lastStage) { note(QStringLiteral("(kimodo: %1)").arg(stage)); lastStage = stage; }
-            Q_UNUSED(done); Q_UNUSED(total);
-            return true;
-        });
-        if (!r.ok) return fail(r.error);
-        files = r.files;
-        manifest = r.manifest;
-    }
+    if (files.isEmpty())
+        if (const int code = generateFiles(req, &files, &manifest)) return code;
 
     std::vector<Motion> motions;
     if (QString e; !loadMotionFiles(files, &motions, &e)) return fail(e);
 
     if (!CLIPipeline::initOgreHeadless()) return 1;
     MeshImporterExporter::importer({QFileInfo(req.rigPath).absoluteFilePath()});
-    Ogre::Entity* entity = nullptr;
-    for (auto* e : Manager::getSingleton()->getEntities())
-        if (e && e->getMovableType() == "Entity" && static_cast<Ogre::Entity*>(e)->hasSkeleton()) {
-            entity = static_cast<Ogre::Entity*>(e);
-            break;
-        }
+    Ogre::Entity* entity = firstSkinnedEntity();
     if (!entity) return fail(QStringLiteral("%1 has no skinned mesh: Kimodo motion needs a rigged humanoid").arg(req.rigPath));
     SceneApplyOptions so;
     so.baseName = req.name;
@@ -121,10 +196,7 @@ int runCli(const CliRequest& req)
     so.undoable = false;   // one-shot process
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);
-    if (std::abs(req.armSpaceDeg) > 1e-4f)   // #854, as the other generate backends do
-        for (const QString& clip : applied.clips)
-            if (AnimationMerger::adjustArmSpace(entity->getMesh()->getSkeleton().get(), clip.toStdString(), req.armSpaceDeg))
-                note(QStringLiteral("(arm-space: %1 deg on %2)").arg(req.armSpaceDeg).arg(clip));
+    applyArmSpace(entity, applied.clips, req.armSpaceDeg);
 
     QJsonArray clips;
     for (const ApplyOutcome& out : applied.outcomes) {
@@ -137,18 +209,7 @@ int runCli(const CliRequest& req)
     if (MeshImporterExporter::exporter(entity->getParentSceneNode(), QFileInfo(output).absoluteFilePath(),
                                        CLIPipeline::formatForExtension(output)) != 0)
         return fail(QStringLiteral("export failed"));
-
-    if (req.json) {
-        QJsonObject root{{QStringLiteral("backend"), QStringLiteral("kimodo")},
-                         {QStringLiteral("mapVersion"), QString::fromLatin1(kSomaMapVersion)},
-                         {QStringLiteral("clips"), clips},
-                         {QStringLiteral("output"), QFileInfo(output).absoluteFilePath()},
-                         {QStringLiteral("source"), manifest.isEmpty() ? QJsonValue(QJsonArray::fromStringList(files)) : QJsonValue(manifest)}};
-        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + QLatin1Char('\n'));
-    } else {
-        CLIPipeline::writeOutput(QStringLiteral("Kimodo motion: %1 clip(s) on %2 -> %3\n")
-                                     .arg(clips.size()).arg(QFileInfo(req.rigPath).fileName(), QFileInfo(output).fileName()));
-    }
+    writeReport(req, clips, output, files, manifest);
     return 0;
 }
 

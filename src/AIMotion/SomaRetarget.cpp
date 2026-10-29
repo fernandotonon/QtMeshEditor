@@ -108,12 +108,49 @@ std::array<std::vector<int>, 5> handChains(const Retarget::RigDesc& rig, const s
 void freezeHorizontalRoot(Motion* m)
 {
     if (!m || m->rootPos.empty()) return;
-    const Ogre::Vector3 first = m->rootPos.front();
-    for (Ogre::Vector3& p : m->rootPos) {   // the interchange is y-up: keep y, pin x/z to the first frame
-        p.x = first.x;
-        p.z = first.z;
+    // Pin x/z to the REST root (what the retargeter measures the root delta from), keep y: a jump still lifts and a
+    // sit still lowers. Pinning to the first frame instead left its offset from the rest on every frame.
+    const Ogre::Vector3 rest = m->restJoints.empty() ? m->rootPos.front() : m->restJoints.front();
+    for (Ogre::Vector3& p : m->rootPos) {
+        p.x = rest.x;
+        p.z = rest.z;
     }
 }
+
+namespace {
+
+const std::array<const char*, 5> kFingers = {"Thumb", "Index", "Middle", "Ring", "Pinky"};
+
+// The normal name match already found this hand's fingers.
+bool handHasNamedFingers(const Retarget::BoneMap& map, const std::string& side)
+{
+    return std::any_of(kFingers.begin(), kFingers.end(), [&](const char* f) {
+        return !map.targetFor(side + "Hand" + f + (std::string(f) == "Thumb" ? "1" : "2")).empty();
+    });
+}
+
+// SOMA -> rig pairs for one hand's five chains (thumb first). `clash` = a target joint is already driven.
+std::vector<Retarget::BonePair> fingerPairs(const Motion& m, const Retarget::RigDesc& target, const std::string& side,
+                                            const std::array<std::vector<int>, 5>& chains, const std::vector<char>& used,
+                                            bool* clash)
+{
+    std::vector<Retarget::BonePair> pairs;
+    for (size_t f = 0; f < chains.size(); ++f) {
+        const std::vector<int>& c = chains[f];
+        const size_t first = c.size() > 3 ? c.size() - 3 : 0;   // a 4-joint chain starts with a metacarpal
+        for (size_t j = first; j < c.size(); ++j) {
+            const int phalanx = int(j - first) + 1;   // 1..3 in standard numbering
+            // SOMA numbers the long fingers from the metacarpal (Index2 = proximal phalanx), the thumb 1:1.
+            const std::string src = side + "Hand" + kFingers[f] + std::to_string(f == 0 ? phalanx : phalanx + 1);
+            if (m.indexOf(src) < 0) continue;
+            *clash = *clash || used[size_t(c[j])];
+            pairs.push_back({src, target.names[size_t(c[j])]});
+        }
+    }
+    return pairs;
+}
+
+} // namespace
 
 QStringList addUnnamedFingerChains(const Motion& m, const Retarget::RigDesc& target, Retarget::BoneMap* map,
                                    QStringList* notes)
@@ -123,40 +160,23 @@ QStringList addUnnamedFingerChains(const Motion& m, const Retarget::RigDesc& tar
     std::vector<char> used(size_t(target.size()), 0);
     for (const auto& p : map->pairs)
         if (const int t = target.indexOf(p.target); t >= 0) used[size_t(t)] = 1;
-    const auto hasSource = [&](const std::string& n) { return std::find(m.names.begin(), m.names.end(), n) != m.names.end(); };
-    static const char* kFingers[] = {"Thumb", "Index", "Middle", "Ring", "Pinky"};
+    const auto skip = [notes](const std::string& side, const QString& why) {
+        if (notes) *notes << QStringLiteral("%1 fingers not inferred: %2").arg(QString::fromStdString(side), why);
+    };
 
-    for (const char* side : {"Left", "Right"}) {
-        const std::string s = side;
-        const int hand = target.indexOf(map->targetFor(s + "Hand"));
-        if (hand < 0) continue;
-        bool named = false;   // the normal name match already found this hand's fingers
-        for (const char* f : kFingers)
-            if (!map->targetFor(s + "Hand" + f + (std::string(f) == "Thumb" ? "1" : "2")).empty()) named = true;
-        if (named) continue;
+    for (const std::string side : {"Left", "Right"}) {
+        const int hand = target.indexOf(map->targetFor(side + "Hand"));
+        if (hand < 0 || handHasNamedFingers(*map, side)) continue;
         QString why;
         const std::array<std::vector<int>, 5> chains = handChains(target, world, hand, &why);
         if (chains[0].empty()) {
-            if (notes) *notes << QStringLiteral("%1 fingers not inferred: %2").arg(QString::fromStdString(s), why);
+            skip(side, why);
             continue;
         }
-        std::vector<Retarget::BonePair> pairs;
         bool clash = false;
-        for (size_t f = 0; f < 5; ++f) {
-            const std::vector<int>& c = chains[f];
-            const size_t first = c.size() > 3 ? c.size() - 3 : 0;   // a 4-joint chain starts with a metacarpal
-            const bool thumb = f == 0;
-            for (size_t j = first; j < c.size(); ++j) {
-                const int phalanx = int(j - first) + 1;   // 1..3 in standard numbering
-                // SOMA numbers the long fingers from the metacarpal (Index2 = proximal phalanx), the thumb 1:1.
-                const std::string src = s + "Hand" + kFingers[f] + std::to_string(thumb ? phalanx : phalanx + 1);
-                if (!hasSource(src)) continue;
-                if (used[size_t(c[j])]) clash = true;
-                pairs.push_back({src, target.names[size_t(c[j])]});
-            }
-        }
+        const std::vector<Retarget::BonePair> pairs = fingerPairs(m, target, side, chains, used, &clash);
         if (clash) {
-            if (notes) *notes << QStringLiteral("%1 fingers not inferred: a finger joint is already driven").arg(QString::fromStdString(s));
+            skip(side, QStringLiteral("a finger joint is already driven"));
             continue;
         }
         for (const auto& p : pairs) {
@@ -193,6 +213,48 @@ Retarget::BoneMap somaBoneMap(const Motion& m, const std::vector<std::string>& t
     return map;
 }
 
+namespace {
+
+Retarget::Options somaRetargetOptions(const Retarget::RigDesc& target)
+{
+    Retarget::Options ro;
+    // In-place clips still carry the root's HEIGHT (a jump lifts, a sit lowers): freezeHorizontalRoot already removed
+    // the travel, so the root translation is always retargeted. TranslationMode::None would drop the height too.
+    ro.translation = Retarget::TranslationMode::Root;
+    ro.alignDirections = true;   // SOMA rest is a T-pose; A-pose rigs need the per-limb alignment
+    // Spine/neck/head and feet keep plain orientation transport: their rest curvature / ankle pitch is a rig convention, not a
+    // pose (the same rule as the SAM 3D Body path, measured there: 25-38 degrees of torso bend otherwise).
+    for (const std::string& name : target.names) {
+        const int role = MotionInbetween::canonicalIndexForBone(QString::fromStdString(name));
+        const QString lower = QString::fromStdString(name).toLower();
+        if ((role >= 0 && role <= 5) || lower.contains(QLatin1String("foot")) || lower.contains(QLatin1String("toe")))
+            ro.noAlignTargets.push_back(name);
+    }
+    ro.sourceRest = Retarget::SourceRest::Bind;
+    return ro;
+}
+
+// Target bones the clip drives (mapped bones + the root, which carries translation even when its rotation is
+// unmapped); fills the counts and the undriven list of `out`.
+std::vector<char> drivenBones(const Retarget::BoneMap& map, const Retarget::RigDesc& target, ApplyOutcome* out)
+{
+    std::vector<char> animated(size_t(target.size()), 0);
+    for (const auto& p : map.pairs) {
+        const int t = target.indexOf(p.target);
+        if (t < 0) continue;
+        animated[size_t(t)] = 1;
+        ++out->mappedBones;
+        if (isFingerName(QString::fromStdString(p.source))) ++out->fingerBones;   // SOMA names: also counts unnamed rig fingers
+    }
+    if (const int r = out->report.rootTarget.empty() ? -1 : target.indexOf(out->report.rootTarget); r >= 0)
+        animated[size_t(r)] = 1;
+    for (int i = 0; i < target.size(); ++i)
+        if (!animated[size_t(i)]) out->unmappedTarget << QString::fromStdString(target.names[size_t(i)]);
+    return animated;
+}
+
+} // namespace
+
 ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motion, const std::string& clip,
                                    const ApplyOptions& options)
 {
@@ -224,38 +286,13 @@ ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motio
     if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
         for (const auto& p : map.pairs) fprintf(stderr, "[soma-map] %s -> %s\n", p.source.c_str(), p.target.c_str());
 
-    Retarget::Options ro;
-    // In-place clips still carry the root's HEIGHT (a jump lifts, a sit lowers): freezeHorizontalRoot already removed
-    // the travel, so the root translation is always retargeted. TranslationMode::None would drop the height too.
-    ro.translation = Retarget::TranslationMode::Root;
-    ro.alignDirections = true;   // SOMA rest is a T-pose; A-pose rigs need the per-limb alignment
-    // Spine/neck/head and feet keep plain orientation transport: their rest curvature / ankle pitch is a rig convention, not a
-    // pose (the same rule as the SAM 3D Body path, measured there: 25-38 degrees of torso bend otherwise).
-    for (const std::string& name : target.names) {
-        const int role = MotionInbetween::canonicalIndexForBone(QString::fromStdString(name));
-        const QString lower = QString::fromStdString(name).toLower();
-        if ((role >= 0 && role <= 5) || lower.contains(QLatin1String("foot")) || lower.contains(QLatin1String("toe")))
-            ro.noAlignTargets.push_back(name);
-    }
-    ro.sourceRest = Retarget::SourceRest::Bind;
+    const Retarget::Options ro = somaRetargetOptions(target);
 
     const std::vector<Retarget::LocalPose> posed =
         Retarget::retargetFrames(rigDesc(m), localPoses(m), target, map, ro, &out.report);
     if (posed.empty()) { out.error = out.report.error; return out; }
 
-    std::vector<char> animated(size_t(target.size()), 0);
-    for (const auto& p : map.pairs) {
-        const int t = target.indexOf(p.target);
-        if (t < 0) continue;
-        animated[size_t(t)] = 1;
-        ++out.mappedBones;
-        if (isFingerName(QString::fromStdString(p.source))) ++out.fingerBones;   // SOMA names: also counts unnamed rig fingers
-    }
-    // The root carries translation even when its own rotation is unmapped.
-    if (!out.report.rootTarget.empty())
-        if (const int r = target.indexOf(out.report.rootTarget); r >= 0) animated[size_t(r)] = 1;
-    for (int i = 0; i < target.size(); ++i)
-        if (!animated[size_t(i)]) out.unmappedTarget << QString::fromStdString(target.names[size_t(i)]);
+    const std::vector<char> animated = drivenBones(map, target, &out);
 
     std::vector<float> times(posed.size());
     for (size_t i = 0; i < times.size(); ++i) times[i] = float(i) / m.fps;
