@@ -5932,14 +5932,21 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
     if (!mgr) return makeErrorResult("Error: Manager not available");
 
     const QString entityName = args.value(QStringLiteral("entity_name")).toString();
-    Ogre::Entity* entity = nullptr;
-    for (auto* ent : mgr->getEntities()) {
-        if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton()) continue;
-        if (entityName.isEmpty() || QString::fromStdString(ent->getName()) == entityName) { entity = ent; break; }
-    }
+    const auto findEntity = [mgr](const QString& name) -> Ogre::Entity* {
+        for (auto* ent : mgr->getEntities()) {
+            if (!ent || ent->getMovableType() != "Entity" || !ent->hasSkeleton()) continue;
+            if (name.isEmpty() || QString::fromStdString(ent->getName()) == name) return static_cast<Ogre::Entity*>(ent);
+        }
+        return nullptr;
+    };
+    Ogre::Entity* entity = findEntity(entityName);
     if (!entity)
         return makeErrorResult(entityName.isEmpty() ? QStringLiteral("Error: no skinned mesh found: Kimodo motion needs a rigged humanoid")
                                                     : QStringLiteral("Error: skinned entity '%1' not found").arg(entityName));
+    // Generation pumps the event loop, so the user may delete or replace the rig meanwhile: keep its identity
+    // (name + mesh), never the raw pointer, and resolve it again before applying.
+    const QString targetName = QString::fromStdString(entity->getName());
+    const Ogre::Mesh* targetMesh = entity->getMesh().get();
 
     QStringList files;
     QJsonObject manifest;
@@ -5983,6 +5990,10 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
         if (!r.ok) return makeErrorResult(QStringLiteral("Error: Kimodo: %1").arg(r.error));
         files = r.files;
         manifest = r.manifest;
+        entity = findEntity(targetName);
+        if (!entity || entity->getMesh().get() != targetMesh)
+            return makeErrorResult(QStringLiteral("Error: '%1' was removed or replaced while Kimodo ran; the motion is saved in %2 "
+                                                  "(apply it with motion_files)").arg(targetName, r.outputDir));
     }
 
     std::vector<Motion> motions;

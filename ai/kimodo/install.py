@@ -42,7 +42,6 @@ import shutil
 import subprocess
 import sys
 import urllib.request
-import venv
 
 KIMODO_REPO = "https://github.com/nv-tlabs/kimodo.git"
 KIMODO_REV = "e1c219c99b4b94ba48be1fb6a1cbc64ecee4c954"
@@ -73,6 +72,8 @@ def default_dest() -> str:
     # Must match AppStorage::persistentRoot() (QStandardPaths AppDataLocation: organisation + application).
     if os.environ.get("QTMESH_KIMODO_ENV"):
         return os.environ["QTMESH_KIMODO_ENV"]
+    if os.environ.get("SNAP_USER_COMMON"):   # AppStorage::persistentRoot() under Snap: stable across refreshes, flat name
+        return os.path.join(os.environ["SNAP_USER_COMMON"], "QtMeshEditor", "kimodo")
     if sys.platform.startswith("linux"):
         base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     elif sys.platform == "darwin":
@@ -158,8 +159,14 @@ def main() -> None:
                     help="ARM only: build MotionCorrection with the pinned sse2neon header (see module doc)")
     args = ap.parse_args()
 
-    if sys.version_info < (3, 10):
-        raise SystemExit("Python >= 3.10 is required")
+    # The venv is created BY the requested interpreter, so validate that one, not the one running this script.
+    try:
+        ver = subprocess.run([args.python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+                             check=True, capture_output=True, text=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise SystemExit(f"cannot run --python {args.python}: {e}")
+    if tuple(int(x) for x in ver.split(".")) < (3, 10):
+        raise SystemExit(f"Python >= 3.10 is required ({args.python} is {ver})")
     dest = os.path.abspath(args.dest)
     os.makedirs(dest, exist_ok=True)
     env_dir = os.path.join(dest, "env")
@@ -176,7 +183,7 @@ def main() -> None:
 
     if not os.path.isdir(env_dir):
         log(f"creating virtualenv {env_dir}")
-        venv.EnvBuilder(with_pip=True).create(env_dir)
+        run([args.python, "-m", "venv", env_dir])
     py = os.path.join(env_dir, "Scripts" if os.name == "nt" else "bin", "python.exe" if os.name == "nt" else "python")
     run([py, "-m", "pip", "install", "--upgrade", "pip"])
     torch_cmd = [py, "-m", "pip", "install", "torch"]

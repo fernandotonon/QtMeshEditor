@@ -20,7 +20,7 @@ namespace Ogre { class Skeleton; }
 namespace AIMotion {
 
 struct ApplyOptions {
-    bool rootMotion = true;      ///< carry the root translation (scaled to the rig's height)
+    bool rootMotion = true;      ///< carry the root's horizontal travel; off = in place, the height is always kept
     bool replace = false;        ///< overwrite an existing clip of the same name
     float fps = 30.0f;           ///< keyframe rate of the written clip (resampled, duration kept)
 };
@@ -53,6 +53,10 @@ Retarget::BoneMap somaBoneMap(const Motion& m, const std::vector<std::string>& t
 /// appended to `notes`. Returns the "SOMA -> rig bone" pairs it added.
 QStringList addUnnamedFingerChains(const Motion& m, const Retarget::RigDesc& target, Retarget::BoneMap* map,
                                    QStringList* notes = nullptr);
+
+/// Pin the root's horizontal (x/z) position to the first frame, keeping its height: an in-place clip, matching the
+/// sidecar's --no-root-motion (a jump still lifts, a sit still lowers).
+void freezeHorizontalRoot(Motion* m);
 
 ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motion, const std::string& clip,
                                    const ApplyOptions& options = {});

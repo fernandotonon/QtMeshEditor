@@ -105,6 +105,16 @@ std::array<std::vector<int>, 5> handChains(const Retarget::RigDesc& rig, const s
 
 } // namespace
 
+void freezeHorizontalRoot(Motion* m)
+{
+    if (!m || m->rootPos.empty()) return;
+    const Ogre::Vector3 first = m->rootPos.front();
+    for (Ogre::Vector3& p : m->rootPos) {   // the interchange is y-up: keep y, pin x/z to the first frame
+        p.x = first.x;
+        p.z = first.z;
+    }
+}
+
 QStringList addUnnamedFingerChains(const Motion& m, const Retarget::RigDesc& target, Retarget::BoneMap* map,
                                    QStringList* notes)
 {
@@ -197,7 +207,8 @@ ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motio
         return out;
     }
 
-    const Motion m = resample(motion, options.fps > 0.0f ? options.fps : motion.fps);
+    Motion m = resample(motion, options.fps > 0.0f ? options.fps : motion.fps);
+    if (!options.rootMotion) freezeHorizontalRoot(&m);
     std::vector<unsigned short> handles;
     const Retarget::RigDesc target = Retarget::describeSkeleton(skeleton, &handles);
     Retarget::BoneMap map = somaBoneMap(m, target.names, &out.unmappedSource, &out.excludedSource);
@@ -214,7 +225,9 @@ ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motio
         for (const auto& p : map.pairs) fprintf(stderr, "[soma-map] %s -> %s\n", p.source.c_str(), p.target.c_str());
 
     Retarget::Options ro;
-    ro.translation = options.rootMotion ? Retarget::TranslationMode::Root : Retarget::TranslationMode::None;
+    // In-place clips still carry the root's HEIGHT (a jump lifts, a sit lowers): freezeHorizontalRoot already removed
+    // the travel, so the root translation is always retargeted. TranslationMode::None would drop the height too.
+    ro.translation = Retarget::TranslationMode::Root;
     ro.alignDirections = true;   // SOMA rest is a T-pose; A-pose rigs need the per-limb alignment
     // Spine/neck/head and feet keep plain orientation transport: their rest curvature / ankle pitch is a rig convention, not a
     // pose (the same rule as the SAM 3D Body path, measured there: 25-38 degrees of torso bend otherwise).
@@ -239,7 +252,7 @@ ApplyOutcome applyMotionToSkeleton(Ogre::Skeleton* skeleton, const Motion& motio
         if (isFingerName(QString::fromStdString(p.source))) ++out.fingerBones;   // SOMA names: also counts unnamed rig fingers
     }
     // The root carries translation even when its own rotation is unmapped.
-    if (options.rootMotion && !out.report.rootTarget.empty())
+    if (!out.report.rootTarget.empty())
         if (const int r = target.indexOf(out.report.rootTarget); r >= 0) animated[size_t(r)] = 1;
     for (int i = 0; i < target.size(); ++i)
         if (!animated[size_t(i)]) out.unmappedTarget << QString::fromStdString(target.names[size_t(i)]);

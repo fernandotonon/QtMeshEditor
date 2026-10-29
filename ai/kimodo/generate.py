@@ -201,6 +201,8 @@ def runtime_root() -> str:
     """Where the runtime keeps derived files: QTMESH_KIMODO_ENV, else the app-data kimodo dir (install.py's default)."""
     if os.environ.get("QTMESH_KIMODO_ENV"):
         return os.environ["QTMESH_KIMODO_ENV"]
+    if os.environ.get("SNAP_USER_COMMON"):   # AppStorage::persistentRoot() under Snap (same rule as install.py)
+        return os.path.join(os.environ["SNAP_USER_COMMON"], "QtMeshEditor", "kimodo")
     if sys.platform.startswith("linux"):
         base = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     elif sys.platform == "darwin":
