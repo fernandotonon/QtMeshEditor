@@ -12380,187 +12380,9 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.openAnimationPicker() }
             }
-            Text {
-                text: "— or generate from text (experimental AI model):"
-                color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
-                topPadding: 4
-            }
-            Row {
-                width: parent.width - 16; spacing: 6
-                Rectangle {
-                    width: parent.width - genBtn.width - 6; height: 24; radius: 3
-                    color: PropertiesPanelController.inputColor
-                    border.color: genPromptIn.activeFocus ? PropertiesPanelController.highlightColor
-                                                           : PropertiesPanelController.borderColor
-                    TextInput {
-                        id: genPromptIn
-                        anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
-                        verticalAlignment: TextInput.AlignVCenter
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
-                        clip: true
-                        // selectByMouse lets a click position the caret AND take
-                        // keyboard focus — without it a bare TextInput embedded
-                        // in a QQuickWidget stays unfocused on click (the other
-                        // working fields in this panel all set it). activeFocus-
-                        // OnPress is the default but stated for clarity.
-                        selectByMouse: true
-                        activeFocusOnPress: true
-                        // Belt-and-suspenders focus grab: after using the
-                        // arm-space slider / arm buttons (which take focus and
-                        // can leave the QQuickWidget's focus on the viewport),
-                        // a plain click here didn't always re-focus the field.
-                        // Force it on press and let the event through (accepted
-                        // = false) so selectByMouse still positions the caret.
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.IBeamCursor
-                            onPressed: function(mouse) {
-                                // Widget-level focus first (see imgGenPromptIn).
-                                PropertiesPanelController.focusPanel()
-                                genPromptIn.forceActiveFocus()
-                                mouse.accepted = false
-                            }
-                        }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: !genPromptIn.text && !genPromptIn.activeFocus
-                            text: "e.g. walk, run, jump, wave…"
-                            color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 11
-                        }
-                        onAccepted: genBtn.run()
-                    }
-                }
-                Rectangle {
-                    id: genBtn
-                    width: 74; height: 24; radius: 3
-                    opacity: genBtnBusy ? 0.5 : 1.0
-                    property bool genBtnBusy: false
-                    color: genMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
-                         : genMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
-                         : PropertiesPanelController.highlightColor
-                    function run() {
-                        if (genBtnBusy || !genPromptIn.text.trim()) return
-                        genBtnBusy = true
-                        genStatus.text = useModelChk.checked
-                            ? "Generating (experimental model)…"
-                            : "Generating… (first use downloads the motion library)"
-                        genStatus.isError = false
-                        // Generate a CLEAN clip — arm-space is always an
-                        // explicit post-adjustment starting from 0, never baked
-                        // into generation (a leftover slider value silently
-                        // skewing every new clip is exactly the bug this fixes).
-                        var gr = AnimationControlController.generateMotion(
-                                     genPromptIn.text, 0.0, useModelChk.checked,
-                                     0.0, footPinChk.checked, -1,
-                                     descentChk.checked)
-                        if (gr && gr.animation) {
-                            lastGeneratedAnim = gr.animation
-                            // Point the slider at the fresh clip at a neutral 0
-                            // (reverts any prior target — see setArmSpaceTarget).
-                            setArmSpaceTarget(gr.animation, gr.entity || "")
-                        }
-                        genBtnBusy = false
-                        // generateMotion adds an AnimationState synchronously, but
-                        // it lives on AnimationControlController — the Inspector
-                        // list (PropertiesPanelController.animationData) won't know
-                        // until something re-queries. Refresh it directly so the
-                        // new clip appears without reselecting the entity.
-                        refreshAnimData()
-                    }
-                    Text { anchors.centerIn: parent; text: "Generate"; color: "white"; font.pixelSize: 11 }
-                    MouseArea { id: genMa; anchors.fill: parent; hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor; onClicked: genBtn.run() }
-                }
-            }
-            // Opt into the EXPERIMENTAL trained model (falls back to the template
-            // library automatically). Default OFF = the reliable template retarget.
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: useModelChk
-                    property bool checked: false
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: useModelChk.checked = !useModelChk.checked }
-                }
-                Text {
-                    text: "Use trained model (experimental)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            // #856: foot-contact cleanup — ON by default (detect ground-contact
-            // spans + IK-pin the feet so they plant instead of skating).
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: footPinChk
-                    property bool checked: true
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: activeFocus ? "white"
-                                              : PropertiesPanelController.borderColor
-                    activeFocusOnTab: true
-                    Accessible.role: Accessible.CheckBox
-                    Accessible.name: "Pin feet (contact cleanup)"
-                    Accessible.checkable: true
-                    Accessible.checked: checked
-                    Accessible.onToggleAction: checked = !checked
-                    Keys.onSpacePressed: checked = !checked
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: footPinChk.checked = !footPinChk.checked }
-                }
-                Text {
-                    text: "Pin feet (contact cleanup)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            // #838: vertical root descent — lower the body to the ground on
-            // crouch/pickup/sit/crawl/death clips. ON by default; helps most
-            // such clips but a few author the squat purely in the joints, so
-            // this lets the user turn it off when it over-sinks.
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: descentChk
-                    property bool checked: true
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: activeFocus ? "white"
-                                              : PropertiesPanelController.borderColor
-                    activeFocusOnTab: true
-                    Accessible.role: Accessible.CheckBox
-                    Accessible.name: "Lower body on crouch and pickup clips"
-                    Accessible.checkable: true
-                    Accessible.checked: checked
-                    Accessible.onToggleAction: checked = !checked
-                    Keys.onSpacePressed: checked = !checked
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: descentChk.checked = !descentChk.checked }
-                }
-                Text {
-                    text: "Lower body (crouch/pickup)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            // ── NVIDIA Kimodo text-to-motion (diffusion, optional sidecar) ────
-            // Runs on a worker thread (KimodoController); every variation lands
+            // ── Generate from text: NVIDIA Kimodo (the only text-to-motion model in the panel until our own
+            // model matches it; then the user picks the model here). Runs on a worker thread (KimodoController);
+            // every variation lands
             // as its own clip, one undo step. One prompt, or one segment per
             // line ("walk forward @3") for a continuous multi-step motion.
             Connections {
@@ -12574,7 +12396,7 @@ Rectangle {
                 }
             }
             Text {
-                text: "— or NVIDIA Kimodo (text-to-motion diffusion):"
+                text: "— or generate from text (NVIDIA Kimodo):"
                 color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
                 topPadding: 6
             }
@@ -12630,16 +12452,16 @@ Rectangle {
                 spacing: 6
                 Text { text: "Seconds"; color: PropertiesPanelController.textColor; font.pixelSize: 10
                        anchors.verticalCenter: parent.verticalCenter }
-                InspectorIntField { id: kimodoDuration; from: 1; to: 600; value: 5; accessibleLabel: "Kimodo seconds"
+                InspectorIntField { id: kimodoDuration; from: 1; to: 600; value: 2; accessibleLabel: "Kimodo seconds"
                                      anchors.verticalCenter: parent.verticalCenter }
                 Text { text: "Variations"; color: PropertiesPanelController.textColor; font.pixelSize: 10
                        anchors.verticalCenter: parent.verticalCenter }
-                InspectorIntField { id: kimodoVariations; from: 1; to: 16; value: 2; width: 40
+                InspectorIntField { id: kimodoVariations; from: 1; to: 16; value: 1; width: 40
                                      accessibleLabel: "Kimodo variations"; anchors.verticalCenter: parent.verticalCenter }
             }
             Row {
                 spacing: 10
-                InspectorCheckBox { id: kimodoRootChk; text: "Root motion"; checked: true }
+                InspectorCheckBox { id: kimodoRootChk; text: "Root motion"; checked: false }
                 InspectorCheckBox { id: kimodoSeedChk; text: "Fixed seed"; checked: false }
                 InspectorIntField { id: kimodoSeed; visible: kimodoSeedChk.checked; from: 0; to: 999999; value: 1
                                      width: 64; accessibleLabel: "Kimodo seed"; anchors.verticalCenter: parent.verticalCenter }
@@ -12654,7 +12476,7 @@ Rectangle {
                         kimodoDuration.commit(); kimodoVariations.commit(); kimodoSeed.commit()
                         KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value, kimodoVariations.value,
                                                   kimodoSeedChk.checked ? kimodoSeed.value : -1,
-                                                  kimodoRootChk.checked, footPinChk.checked)
+                                                  kimodoRootChk.checked, true)   // feet always pinned (foot-contact cleanup)
                     }
                 }
                 InspectorButton {
@@ -12662,12 +12484,6 @@ Rectangle {
                     width: 64
                     text: "Cancel"
                     onClicked: KimodoController.cancel()
-                }
-                InspectorButton {
-                    visible: !KimodoController.busy
-                    width: 136
-                    text: "Apply saved motion…"
-                    onClicked: KimodoController.applyMotionFile(kimodoRootChk.checked, footPinChk.checked)
                 }
             }
             ProgressBar {
@@ -12783,26 +12599,6 @@ Rectangle {
                 color: PropertiesPanelController.textColor; opacity: 0.5
                 font.pixelSize: 9
             }
-            TextEdit {
-                id: genStatus
-                property bool isError: false
-                visible: text.length > 0
-                width: parent.width - 16; wrapMode: TextEdit.Wrap; font.pixelSize: 9; opacity: 0.85
-                color: isError ? "#e06c6c" : PropertiesPanelController.textColor
-                // Selectable so a failure message can be COPIED — see mgStatus.
-                readOnly: true
-                selectByMouse: true
-                activeFocusOnPress: true
-                cursorVisible: false
-                persistentSelection: true
-            }
-            Connections {
-                target: AnimationControlController
-                function onGenerateMotionStatus(message, isError) {
-                    genStatus.text = message; genStatus.isError = isError
-                }
-            }
-
             // Play/Pause button + playback speed (applies to selected entity only)
             Row {
                 spacing: 8
