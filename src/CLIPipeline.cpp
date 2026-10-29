@@ -1,4 +1,5 @@
 #include "CLIPipeline.h"
+#include "AIMotion/AIMotionCLI.h"
 #include "EmbeddedTextureCache.h"
 #include "PaintBakeTargets.h"
 #include "PaintChannel.h"
@@ -3308,6 +3309,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
+    // NVIDIA Kimodo backend (--backend kimodo) and --apply-motion <interchange.npz>: see src/AIMotion/AIMotionCLI.h.
+    QString generateBackend;          // --backend template|model|kimodo
+    AIMotion::CliRequest kimodoReq;
     int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
@@ -3430,6 +3434,18 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--facing") { facingMode = true; continue; }
         // #837: turn an existing animation 180° to face the other way (e.g.
         // toward the camera). Standalone: needs --animation, writes to -o.
+        if (arg == "--backend" && i + 1 < argc) { generateBackend = QString(argv[++i]).toLower(); continue; }
+        if (arg == "--apply-motion" && i + 1 < argc) { kimodoReq.applyMotion << QString::fromLocal8Bit(argv[++i]); continue; }
+        if (arg == "--segment" && i + 1 < argc) { kimodoReq.segments << QString::fromLocal8Bit(argv[++i]); continue; }
+        if (arg == "--variations" && i + 1 < argc) { kimodoReq.variations = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--seed" && i + 1 < argc) { kimodoReq.hasSeed = true; kimodoReq.seed = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--diffusion-steps" && i + 1 < argc) { kimodoReq.diffusionSteps = QString(argv[++i]).toInt(); continue; }
+        if (arg == "--no-root-motion") { kimodoReq.rootMotion = false; continue; }
+        if (arg == "--no-postprocess") { kimodoReq.postprocess = false; continue; }
+        if (arg == "--constraints" && i + 1 < argc) { kimodoReq.constraintsPath = QString::fromLocal8Bit(argv[++i]); continue; }
+        if (arg == "--text-encoder-url" && i + 1 < argc) { kimodoReq.textEncoderUrl = QString(argv[++i]); continue; }
+        if (arg == "--text-encoder-quant" && i + 1 < argc) { kimodoReq.textEncoderQuant = QString(argv[++i]).toLower(); continue; }
+        if (arg == "--name" && i + 1 < argc) { kimodoReq.name = QString::fromLocal8Bit(argv[++i]); continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -3581,6 +3597,24 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.
+    if (generateBackend == QLatin1String("kimodo") || !kimodoReq.applyMotion.isEmpty()) {
+        if (!kimodoReq.applyMotion.isEmpty() && generateMode) {
+            err() << "Error: --apply-motion and --generate are exclusive." << Qt::endl;
+            return 2;
+        }
+        kimodoReq.rigPath = filePath;
+        kimodoReq.outputPath = outputPath;
+        kimodoReq.prompt = generatePrompt;
+        kimodoReq.duration = generateDuration > 0.0f ? generateDuration : 5.0;
+        kimodoReq.footPin = generateFootPin;
+        kimodoReq.json = jsonOutput;
+        return AIMotion::runCli(kimodoReq);
+    }
+    if (!generateBackend.isEmpty() && generateBackend != QLatin1String("template") && generateBackend != QLatin1String("model")) {
+        err() << "Error: --backend must be template, model or kimodo." << Qt::endl;
+        return 2;
+    }
+    if (generateBackend == QLatin1String("model")) generateUseModel = true;
     if (generateMode) {
         if (generatePrompt.trimmed().isEmpty()) {
             err() << "Error: --generate requires a prompt, e.g. --generate \"walking\"." << Qt::endl;

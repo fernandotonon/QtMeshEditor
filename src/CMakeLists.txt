@@ -250,6 +250,13 @@ BodyFromPhoto/BodyFromPhotoCLI.cpp
 BodyFromPhoto/SamBodyMotion.cpp
 BodyFromPhoto/SamBodyRetarget.cpp
 BodyFromPhoto/SamBodySequence.cpp
+AIMotion/MotionInterchange.cpp
+AIMotion/SomaSkeleton.cpp
+AIMotion/SomaRetarget.cpp
+AIMotion/KimodoPredictor.cpp
+AIMotion/AIMotionCLI.cpp
+AIMotion/MotionSceneApply.cpp
+AIMotion/KimodoController.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp

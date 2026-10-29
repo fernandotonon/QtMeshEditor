@@ -173,6 +173,45 @@ For a one-page overview of every model and what it does in the app, see
   the runtime resolves; every surface reports a clean "runtime not installed"
   message otherwise (no crash).
 
+## NVIDIA Kimodo — text-to-motion diffusion, sidecar backend
+
+- **Model:** NVIDIA **Kimodo**, `nvidia/Kimodo-SOMA-RP-v1.2` (~1.1 GB
+  safetensors) — text (and multi-segment timeline) to whole-body motion on the
+  SOMA skeleton. NOT an ONNX consumer: it runs as an out-of-process **Python
+  sidecar** (`ai/kimodo/`), the TRELLIS.2 pattern. Nothing is bundled or
+  mirrored; the user installs the isolated environment with
+  `ai/kimodo/install.py` and weights download from their publishers on the
+  first generation, with the user's own Hugging Face login.
+- **Licences:** code https://github.com/nv-tlabs/kimodo — **Apache-2.0**,
+  pinned `e1c219c99b4b94ba48be1fb6a1cbc64ecee4c954`. Weights — **NVIDIA Open
+  Model License** (commercial use permitted; keep the licence/notice with any
+  redistribution — we do not redistribute). Text encoder: LLM2Vec LoRA
+  adapters `McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp(-supervised)` —
+  **MIT** — on `meta-llama/Meta-Llama-3-8B-Instruct`, **Meta Llama 3 Community
+  License, GATED** (~16 GB): the user accepts Meta's licence on Hugging Face
+  themselves. ARM builds only: `sse2neon` v1.8.0 (**MIT**, SHA-256 pinned in
+  `install.py`) to compile Kimodo's x86-SIMD MotionCorrection extension.
+- **Quantized text encoder (local derivative):** by default the sidecar
+  quantizes the Llama 3 encoder to int8 ONCE on the user's machine, from the
+  user's own gated download (`ai/kimodo/textenc_quant.py`). That checkpoint is a
+  derivative of Meta Llama 3: it stays local and QtMeshEditor never bundles,
+  mirrors or uploads it.
+- **Training on outputs:** Kimodo outputs are not Derivative Models (NVIDIA Open
+  Model License §1.1; NVIDIA claims no ownership of outputs, §2.4), so they may
+  train our own text-to-motion model (`scripts/build-kimodo-t2m-corpus.py`).
+  Llama 3 embeddings are never stored or used as training data.
+- **Excluded:** the research-only `Kimodo-SMPLX-RP` checkpoint (NVIDIA R&D
+  licence) and anything SMPL/SMPL-X — `generate.py` refuses any non-SOMA model.
+- **Credentials:** QtMeshEditor never reads, stores, passes on a command line,
+  or logs a Hugging Face token; the Hugging Face libraries in the sidecar read
+  the user's own login (`hf auth login` / `HF_TOKEN` in their environment).
+- **Interchange:** the sidecar writes a versioned motion NPZ (SOMA-77 local
+  rotations, root path, foot contacts, rest skeleton); everything after it —
+  the explicit versioned SOMA -> standard bone map (`somaskel77-standard-v1`),
+  retarget (#523 incompatible-skeleton retargeter), foot pinning, undo,
+  export — is QtMeshEditor C++ (`src/AIMotion/`). Saved motions re-apply with
+  no Python (`--apply-motion`, MCP `motion_files`, panel "Apply saved motion…").
+
 ## U²-Net — background removal for image-to-3D (epic #764)
 
 - **Model:** U²-Net salient-object detection (`u2net.onnx`) — the default

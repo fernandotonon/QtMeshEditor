@@ -216,6 +216,36 @@ Rectangle {
     // Inspector button factory, FILE scope so every section shares one look
     // (raw QML — the Themed* wrappers blank this dynamically-loaded panel, so
     // raw controls are styled with the PropertiesPanelController palette).
+    // Compact integer entry in the Inspector palette (the default SpinBox style
+    // renders white and hides its value at panel widths).
+    component InspectorIntField: Rectangle {
+        id: iifRoot
+        property int value: 0
+        property int from: 0
+        property int to: 100
+        property string accessibleLabel: ""
+        width: 56; height: 22; radius: 3
+        color: PropertiesPanelController.inputColor
+        border.color: iifInput.activeFocus ? PropertiesPanelController.highlightColor
+                                           : PropertiesPanelController.borderColor
+        Accessible.role: Accessible.SpinBox
+        Accessible.name: accessibleLabel
+        TextInput {
+            id: iifInput
+            anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
+            verticalAlignment: TextInput.AlignVCenter
+            color: PropertiesPanelController.textColor; font.pixelSize: 11
+            selectByMouse: true; clip: true
+            text: String(iifRoot.value)
+            validator: IntValidator { bottom: iifRoot.from; top: iifRoot.to }
+            onEditingFinished: {
+                var v = parseInt(text)
+                iifRoot.value = isNaN(v) ? iifRoot.from : Math.max(iifRoot.from, Math.min(iifRoot.to, v))
+                text = String(iifRoot.value)
+            }
+        }
+    }
+
     component InspectorButton: Rectangle {
         id: ibRoot
         property alias text: ibLabel.text
@@ -12525,6 +12555,119 @@ Rectangle {
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                     anchors.verticalCenter: parent.verticalCenter
                 }
+            }
+            // ── NVIDIA Kimodo text-to-motion (diffusion, optional sidecar) ────
+            // Runs on a worker thread (KimodoController); every variation lands
+            // as its own clip, one undo step. One prompt, or one segment per
+            // line ("walk forward @3") for a continuous multi-step motion.
+            Connections {
+                target: KimodoController
+                function onApplied(entity, clips) {
+                    if (clips.length > 0) {
+                        lastGeneratedAnim = clips[0]
+                        setArmSpaceTarget(clips[0], entity)
+                    }
+                    refreshAnimData()
+                }
+            }
+            Text {
+                text: "— or NVIDIA Kimodo (text-to-motion diffusion):"
+                color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
+                topPadding: 6
+            }
+            Text {
+                visible: !KimodoController.runtimeAvailable
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: KimodoController.runtimeDescription
+                color: PropertiesPanelController.textColor; opacity: 0.6; font.pixelSize: 9
+            }
+            Rectangle {
+                width: parent.width - 16; height: 52; radius: 3
+                color: PropertiesPanelController.inputColor
+                border.color: kimodoPromptIn.activeFocus ? PropertiesPanelController.highlightColor
+                                                          : PropertiesPanelController.borderColor
+                TextEdit {
+                    id: kimodoPromptIn
+                    anchors.fill: parent; anchors.margins: 5
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    wrapMode: TextEdit.Wrap; selectByMouse: true; clip: true
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.IBeamCursor
+                        onPressed: function(mouse) {
+                            PropertiesPanelController.focusPanel()
+                            kimodoPromptIn.forceActiveFocus()
+                            mouse.accepted = false
+                        }
+                    }
+                    Text {
+                        visible: !kimodoPromptIn.text && !kimodoPromptIn.activeFocus
+                        width: parent.width; wrapMode: Text.Wrap
+                        text: "a person walks forward and waves\n(or one segment per line: sit down @2)"
+                        color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 10
+                    }
+                }
+            }
+            Row {
+                spacing: 6
+                Text { text: "Seconds"; color: PropertiesPanelController.textColor; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                InspectorIntField { id: kimodoDuration; from: 1; to: 600; value: 5; accessibleLabel: "Kimodo seconds"
+                                     anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "Variations"; color: PropertiesPanelController.textColor; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                InspectorIntField { id: kimodoVariations; from: 1; to: 16; value: 2; width: 40
+                                     accessibleLabel: "Kimodo variations"; anchors.verticalCenter: parent.verticalCenter }
+            }
+            Row {
+                spacing: 10
+                InspectorCheckBox { id: kimodoRootChk; text: "Root motion"; checked: true }
+                InspectorCheckBox { id: kimodoSeedChk; text: "Fixed seed"; checked: false }
+                InspectorIntField { id: kimodoSeed; visible: kimodoSeedChk.checked; from: 0; to: 999999; value: 1
+                                     width: 64; accessibleLabel: "Kimodo seed"; anchors.verticalCenter: parent.verticalCenter }
+            }
+            Row {
+                spacing: 6
+                InspectorButton {
+                    width: 128
+                    text: KimodoController.busy ? "Generating…" : "Generate (Kimodo)"
+                    clickEnabled: !KimodoController.busy && kimodoPromptIn.text.trim().length > 0
+                    onClicked: KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value,
+                                                         kimodoVariations.value,
+                                                         kimodoSeedChk.checked ? kimodoSeed.value : -1,
+                                                         kimodoRootChk.checked, footPinChk.checked)
+                }
+                InspectorButton {
+                    visible: KimodoController.busy
+                    width: 64
+                    text: "Cancel"
+                    onClicked: KimodoController.cancel()
+                }
+                InspectorButton {
+                    visible: !KimodoController.busy
+                    width: 136
+                    text: "Apply saved motion…"
+                    onClicked: KimodoController.applyMotionFile()
+                }
+            }
+            ProgressBar {
+                visible: KimodoController.busy
+                width: parent.width - 16
+                indeterminate: KimodoController.progress < 0
+                value: Math.max(0, KimodoController.progress)
+            }
+            Text {
+                visible: KimodoController.busy || KimodoController.status.length > 0
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: KimodoController.busy && KimodoController.stage.length > 0
+                      ? "Kimodo: " + KimodoController.stage + "…" : KimodoController.status
+                color: KimodoController.lastOk ? PropertiesPanelController.textColor : "#e06c6c"
+                font.pixelSize: 10
+            }
+            Text {
+                visible: !KimodoController.busy && KimodoController.lastClips.length > 1
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "Each variation is its own clip — play them from the list above and delete the ones you don't want."
+                color: PropertiesPanelController.textColor; opacity: 0.55; font.pixelSize: 9
             }
             // ── Arm space (#854): Mixamo-style widen/tuck post-process ────────
             // Targets `armSpaceAnim` — the last generated clip by default, or

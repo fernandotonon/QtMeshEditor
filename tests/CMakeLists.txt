@@ -268,6 +268,17 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodySequence.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionInterchange.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaSkeleton.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaRetarget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/AIMotionCLI.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionSceneApply.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionInterchange_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaSkeleton_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoPredictor_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor_test.cpp
