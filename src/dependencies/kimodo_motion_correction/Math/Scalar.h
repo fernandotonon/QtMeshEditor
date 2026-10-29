@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdlib.h>   // QtMeshEditor: labs/llabs (upstream relied on a transitive include)
 
 //
 // Scalar related methods

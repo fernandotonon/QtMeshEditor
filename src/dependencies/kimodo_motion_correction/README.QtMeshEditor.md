@@ -17,5 +17,6 @@ Local modifications (all marked in the sources):
    the build targets AVX, so the library needs SSE4.1 at most on x86 and runs on CPUs without AVX.
 4. `Math/Scalar.h`, `Math/Vector.h`: `Compiler.h` / `Debug.h` are included by relative path (`../`), because the
    editor's include path made a different `Debug.h` win and the build lost the `ASSERT` macros.
+5. `Math/Scalar.h`: includes `<stdlib.h>` for `labs`/`llabs`, which upstream got transitively (the macOS CI SDK does not).
 
 Built by `cmake/KimodoMotionCorrection.cmake`.
