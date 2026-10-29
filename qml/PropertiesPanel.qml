@@ -224,6 +224,9 @@ Rectangle {
         property int from: 0
         property int to: 100
         property string accessibleLabel: ""
+        // Apply the text being typed now (value only updates on Enter / focus loss): call before reading
+        // `value` from an action that the user can trigger while still editing.
+        function commit() { iifInput.editingFinished() }
         width: 56; height: 22; radius: 3
         color: PropertiesPanelController.inputColor
         border.color: iifInput.activeFocus ? PropertiesPanelController.highlightColor
@@ -12631,10 +12634,12 @@ Rectangle {
                     width: 128
                     text: KimodoController.busy ? "Generating…" : "Generate (Kimodo)"
                     clickEnabled: !KimodoController.busy && kimodoPromptIn.text.trim().length > 0
-                    onClicked: KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value,
-                                                         kimodoVariations.value,
-                                                         kimodoSeedChk.checked ? kimodoSeed.value : -1,
-                                                         kimodoRootChk.checked, footPinChk.checked)
+                    onClicked: {
+                        kimodoDuration.commit(); kimodoVariations.commit(); kimodoSeed.commit()
+                        KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value, kimodoVariations.value,
+                                                  kimodoSeedChk.checked ? kimodoSeed.value : -1,
+                                                  kimodoRootChk.checked, footPinChk.checked)
+                    }
                 }
                 InspectorButton {
                     visible: KimodoController.busy
@@ -12646,7 +12651,7 @@ Rectangle {
                     visible: !KimodoController.busy
                     width: 136
                     text: "Apply saved motion…"
-                    onClicked: KimodoController.applyMotionFile()
+                    onClicked: KimodoController.applyMotionFile(kimodoRootChk.checked, footPinChk.checked)
                 }
             }
             ProgressBar {

@@ -26,9 +26,9 @@
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
-#ifdef ENABLE_MOCAP
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
+#ifdef ENABLE_MOCAP
 #include "Mocap/FaceCapMapper.h"
 #include "Mocap/FaceCapPredictor.h"
 #include "Mocap/MocapRecorder.h"
@@ -6009,9 +6009,13 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
 
     const QString outPath = args.value(QStringLiteral("output_path")).toString();
-    if (!outPath.isEmpty()
-        && MeshImporterExporter::exporter(entity->getParentSceneNode(), outPath, CLIPipeline::formatForExtension(outPath)) != 0)
-        return makeErrorResult(QStringLiteral("Error: applied %1 clip(s) but export to %2 failed").arg(applied.clips.size()).arg(outPath));
+    if (!outPath.isEmpty()) {
+        Ogre::SceneNode* node = entity->getParentSceneNode();
+        if (!node) return makeErrorResult(QStringLiteral("Error: applied %1 clip(s) but '%2' is not attached to a scene node, so it cannot be exported")
+                                              .arg(applied.clips.size()).arg(targetName));
+        if (MeshImporterExporter::exporter(node, outPath, CLIPipeline::formatForExtension(outPath)) != 0)
+            return makeErrorResult(QStringLiteral("Error: applied %1 clip(s) but export to %2 failed").arg(applied.clips.size()).arg(outPath));
+    }
 
     QJsonArray clips;
     for (const ApplyOutcome& out : applied.outcomes) clips.append(outcomeJson(out));

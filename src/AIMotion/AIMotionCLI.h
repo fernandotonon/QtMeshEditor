@@ -28,6 +28,7 @@ struct CliRequest {
     QString constraintsPath;
     QString textEncoderUrl;
     QString textEncoderQuant;       ///< auto|none|int8|int4 (empty = sidecar default)
+    float armSpaceDeg = 0.0f;       ///< #854 arm-space swing applied to every written clip (0 = none)
     bool json = false;
 };
 

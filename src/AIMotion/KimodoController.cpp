@@ -248,13 +248,13 @@ bool KimodoController::applyMotionFiles(const QStringList& files, bool rootMotio
     return applyFiles(entity, files, rootMotion, footPin);
 }
 
-bool KimodoController::applyMotionFile()
+bool KimodoController::applyMotionFile(bool rootMotion, bool footPin)
 {
     const QString start = m_lastMotionDir.isEmpty() ? motionRoot() : m_lastMotionDir;
     const QStringList files = QFileDialog::getOpenFileNames(dialogParent(), QStringLiteral("Apply saved motion"), start,
                                                             QStringLiteral("QtMeshEditor motion (*.npz)"), nullptr,
                                                             QFileDialog::DontUseNativeDialog);
-    return !files.isEmpty() && applyMotionFiles(files);
+    return !files.isEmpty() && applyMotionFiles(files, rootMotion, footPin);
 }
 
 void KimodoController::openMotionFolder()

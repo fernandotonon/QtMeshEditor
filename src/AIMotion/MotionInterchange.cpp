@@ -56,6 +56,7 @@ bool loadInterchange(const QString& npzPath, Motion* out, QString* error)
 
     const auto version = npz.read(QStringLiteral("format_version"), &err);
     if (!version.valid()) return fail(error, QStringLiteral("not a motion interchange file (no format_version)"));
+    if (!std::isfinite(version.data[0])) return fail(error, QStringLiteral("format_version is not a number"));
     if (int(version.data[0]) != kInterchangeVersion)
         return fail(error, QStringLiteral("motion interchange version %1 is not supported (expected %2)")
                                .arg(int(version.data[0])).arg(kInterchangeVersion));
@@ -80,6 +81,15 @@ bool loadInterchange(const QString& npzPath, Motion* out, QString* error)
     if (T < 2) return fail(error, QStringLiteral("need at least 2 frames"));
     if (root.shape != std::vector<int64_t>{T, 3}) return fail(error, QStringLiteral("root_positions shape %1").arg(shapeText(root)));
     if (!(fps.data[0] > 0.0f) || fps.data[0] > 1000.0f) return fail(error, QStringLiteral("bad fps %1").arg(fps.data[0]));
+    // Every value below reaches std::lround or the retargeter's root translation: reject NaN/inf up front.
+    const auto allFinite = [](const AudioToFace::NpyArray& a) {
+        for (float v : a.data)
+            if (!std::isfinite(v)) return false;
+        return true;
+    };
+    if (!allFinite(parents)) return fail(error, QStringLiteral("joint_parents has a non-finite value"));
+    if (!allFinite(rest)) return fail(error, QStringLiteral("rest_joints has a non-finite value"));
+    if (!allFinite(root)) return fail(error, QStringLiteral("root_positions has a non-finite value"));
 
     Motion m;
     m.fps = fps.data[0];

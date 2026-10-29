@@ -4,6 +4,7 @@
 #include "MotionSceneApply.h"
 #include "SomaRetarget.h"
 #include "SomaSkeleton.h"
+#include "../AnimationMerger.h"
 #include "../CLIPipeline.h"
 #include "../Manager.h"
 #include "../MeshImporterExporter.h"
@@ -111,6 +112,10 @@ int runCli(const CliRequest& req)
     so.undoable = false;   // one-shot process
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);
+    if (std::abs(req.armSpaceDeg) > 1e-4f)   // #854, as the other generate backends do
+        for (const QString& clip : applied.clips)
+            if (AnimationMerger::adjustArmSpace(entity->getMesh()->getSkeleton().get(), clip.toStdString(), req.armSpaceDeg))
+                note(QStringLiteral("(arm-space: %1 deg on %2)").arg(req.armSpaceDeg).arg(clip));
 
     QJsonArray clips;
     for (const ApplyOutcome& out : applied.outcomes) {

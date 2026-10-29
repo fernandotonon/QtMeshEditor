@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 using namespace AIMotion;
 
@@ -189,4 +190,24 @@ TEST(MotionInterchange, ResampleKeepsDurationAndEndpoints)
     // Halfway rotation is the slerp midpoint: 15 degrees.
     const Ogre::Quaternion half(Ogre::Radian(float(M_PI / 12)), Ogre::Vector3::UNIT_Y);
     EXPECT_TRUE(r.localRot[1][1].equals(half, Ogre::Radian(1e-3f)));
+}
+
+TEST(MotionInterchange, RefusesNonFiniteValues)
+{
+    QTemporaryDir dir;
+    Motion m;
+    QString err;
+    Chain root;
+    root.root[4] = std::numeric_limits<float>::quiet_NaN();   // frame 1, y
+    const QString p = dir.filePath(QStringLiteral("root.npz"));
+    ASSERT_TRUE(root.write(p));
+    EXPECT_FALSE(loadInterchange(p, &m, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("root_positions")));
+
+    Chain parents;
+    parents.parents[1] = std::numeric_limits<float>::infinity();
+    const QString q = dir.filePath(QStringLiteral("parents.npz"));
+    ASSERT_TRUE(parents.write(q));
+    EXPECT_FALSE(loadInterchange(q, &m, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("joint_parents")));
 }

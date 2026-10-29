@@ -59,8 +59,8 @@ public:
     Q_INVOKABLE bool generate(const QString& prompt, double duration, int variations, int seed,
                               bool rootMotion, bool footPin);
     Q_INVOKABLE void cancel();
-    /// Pick saved motion_NN.npz file(s) and apply them to the selected rig.
-    Q_INVOKABLE bool applyMotionFile();
+    /// Pick saved motion_NN.npz file(s) and apply them to the selected rig with the panel's settings.
+    Q_INVOKABLE bool applyMotionFile(bool rootMotion = true, bool footPin = true);
     /// Non-dialog variant (tests / scripting).
     bool applyMotionFiles(const QStringList& files, bool rootMotion = true, bool footPin = true);
     Q_INVOKABLE void openMotionFolder();

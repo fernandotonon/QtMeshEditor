@@ -157,18 +157,35 @@ static QString deduplicateName(const QString& desired, QSet<QString>& existingNa
 // Additionally, AnimationProcessor stores translations in bone-local space (pre-multiplied
 // by the inverse binding-pose orientation).  If the source and target skeletons have
 // different binding-pose orientations for the same bone — e.g. an animation-only FBX has
-// identity root while a mesh FBX has a baked R_x(+90°) root — the stored delta must be
-// re-expressed in the target bone's local space.
-// We apply: corrected = (q_src⁻¹ * q_dst) * stored
+// identity root while a mesh FBX has a baked R_x(+90°) root.
+//
+// Translation keys are deltas in the bone's PARENT space (AnimationProcessor; Ogre applies
+// them with translate(), TS_PARENT). Re-expressing one in the target means changing frame
+// from the source parent to the target parent, through the rotation between the two
+// skeleton spaces. That rotation is read from the bind poses of the bones' roots
+// (R = rootDst * rootSrc⁻¹), which carries any Z-up → Y-up bake of the target:
+//     corrected = Wp_dst⁻¹ * R * Wp_src * stored        (Wp = parent's bind world orientation)
+// For a root bone that is R; for any other bone of the same rig it is the identity.
+// Rotation keys are bind-relative in the bone's own frame and pass through unchanged.
+static Ogre::Quaternion bindWorldOrientation(const Ogre::Node* n)
+{
+    Ogre::Quaternion q = Ogre::Quaternion::IDENTITY;
+    for (; n; n = n->getParent()) q = n->getInitialOrientation() * q;
+    return q;
+}
+
+static const Ogre::Node* rootOf(const Ogre::Node* n)
+{
+    while (n && n->getParent()) n = n->getParent();
+    return n;
+}
+
 static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton* srcSkel,
                                    int srcUpAxis = 1, int baseUpAxis = 1)
 {
+    // A Z-up source on a Y-up base whose root binds do NOT encode the axis change (different rigs, e.g.
+    // an Unreal clip on a Mixamo character): fall back to the explicit Z-up -> Y-up step for the travel.
     const bool needsZupToYup = (srcUpAxis == 2 && baseUpAxis == 1);
-
-    // Z-up (Assimp/FBX after ConvertToLeftHanded) → Y-up (Ogre) for translations:
-    //   R_x(-90°): (x,y,z) → (x, z, -y)
-    // Rotations are stored in bone-local space and pass through unchanged —
-    // the baked dest bone orientation provides the correct world-space result.
 
     // Build name→handle map for the base skeleton
     std::unordered_map<std::string, unsigned short> baseHandleByName;
@@ -197,15 +214,12 @@ static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton
             dstTrack->setAssociatedNode(baseSkel->getBone(baseHandle));
             dstTrack->setUseShortestRotationPath(srcTrack->getUseShortestRotationPath());
 
-            // Per-bone binding-pose orientation correction.
-            // AnimationProcessor stores translate/rotate keyframes in the source bone's
-            // local space (divided by the source bone's binding-pose orientation).
-            // If source and target have different binding poses for this bone, re-express
-            // the stored values in the target bone's local space:
-            //   corrected = (q_dst⁻¹ * q_src) * stored
-            const Ogre::Quaternion q_src = srcSkel->getBone(srcHandle)->getOrientation();
-            const Ogre::Quaternion q_dst = baseSkel->getBone(baseHandle)->getOrientation();
-            const Ogre::Quaternion boneCorrection = q_src.Inverse() * q_dst;
+            const Ogre::Bone* srcBone = srcSkel->getBone(srcHandle);
+            const Ogre::Bone* dstBone = baseSkel->getBone(baseHandle);
+            const Ogre::Quaternion spaceRot = rootOf(dstBone)->getInitialOrientation()
+                                            * rootOf(srcBone)->getInitialOrientation().Inverse();
+            const Ogre::Quaternion boneCorrection = bindWorldOrientation(dstBone->getParent()).Inverse()
+                                                  * spaceRot * bindWorldOrientation(srcBone->getParent());
             const bool needsBoneCorrection = !boneCorrection.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-4f));
 
             for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k)
@@ -216,22 +230,9 @@ static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton
                 Ogre::Vector3 t = kf->getTranslate();
                 Ogre::Quaternion r = kf->getRotation();
 
-                // Step 1: correct translation for binding-pose orientation mismatch.
-                // Translations are stored in bone-local space (AnimationProcessor divides by
-                // the source bone's binding-pose orientation). If the target bone has a
-                // different binding-pose orientation, re-express the vector in that space.
-                // Rotations do NOT need this correction — the target binding pose already
-                // provides the equivalent compensation via the scene-node/skeleton setup.
-                if (needsBoneCorrection) {
-                    t = boneCorrection * t;
-                }
-                // Step 2: convert coordinate system (Z-up source → Y-up base).
-                // R_x(-90°) maps (x,y,z) → (x, z, -y): Z-up axis becomes Y-up.
-                // Rotations pass through unchanged — bone-local storage makes them
-                // self-consistent once the dest binding pose is baked to Y-up.
-                if (needsZupToYup) {
+                if (needsBoneCorrection) t = boneCorrection * t;
+                if (needsZupToYup && spaceRot.equals(Ogre::Quaternion::IDENTITY, Ogre::Radian(1e-3f)))
                     t = Ogre::Vector3(t.x, t.z, -t.y);
-                }
 
                 dstKf->setTranslate(t);
                 dstKf->setRotation(r);

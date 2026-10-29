@@ -3434,18 +3434,36 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--facing") { facingMode = true; continue; }
         // #837: turn an existing animation 180° to face the other way (e.g.
         // toward the camera). Standalone: needs --animation, writes to -o.
-        if (arg == "--backend" && i + 1 < argc) { generateBackend = QString(argv[++i]).toLower(); continue; }
-        if (arg == "--apply-motion" && i + 1 < argc) { kimodoReq.applyMotion << QString::fromLocal8Bit(argv[++i]); continue; }
-        if (arg == "--segment" && i + 1 < argc) { kimodoReq.segments << QString::fromLocal8Bit(argv[++i]); continue; }
-        if (arg == "--variations" && i + 1 < argc) { kimodoReq.variations = QString(argv[++i]).toInt(); continue; }
-        if (arg == "--seed" && i + 1 < argc) { kimodoReq.hasSeed = true; kimodoReq.seed = QString(argv[++i]).toInt(); continue; }
-        if (arg == "--diffusion-steps" && i + 1 < argc) { kimodoReq.diffusionSteps = QString(argv[++i]).toInt(); continue; }
+        // Kimodo / backend options: a missing value or a bad integer is a usage error, never "take the next
+        // flag as the value" (`--seed --no-root-motion` used to seed 0 and leave root motion on).
+        if (arg == "--backend" || arg == "--apply-motion" || arg == "--segment" || arg == "--variations"
+            || arg == "--seed" || arg == "--diffusion-steps" || arg == "--constraints" || arg == "--text-encoder-url"
+            || arg == "--text-encoder-quant" || arg == "--name") {
+            const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
+            if (v.isEmpty() || (v.startsWith(QLatin1Char('-')) && arg != "--segment")) {
+                err() << "Error: " << arg << " needs a value." << Qt::endl;
+                return 2;
+            }
+            ++i;
+            bool ok = true;
+            if (arg == "--backend") generateBackend = v.toLower();
+            else if (arg == "--apply-motion") kimodoReq.applyMotion << v;
+            else if (arg == "--segment") kimodoReq.segments << v;
+            else if (arg == "--variations") kimodoReq.variations = v.toInt(&ok);
+            else if (arg == "--seed") { kimodoReq.hasSeed = true; kimodoReq.seed = v.toInt(&ok); }
+            else if (arg == "--diffusion-steps") kimodoReq.diffusionSteps = v.toInt(&ok);
+            else if (arg == "--constraints") kimodoReq.constraintsPath = v;
+            else if (arg == "--text-encoder-url") kimodoReq.textEncoderUrl = v;
+            else if (arg == "--text-encoder-quant") kimodoReq.textEncoderQuant = v.toLower();
+            else kimodoReq.name = v;
+            if (!ok) {
+                err() << "Error: " << arg << " needs an integer, got '" << v << "'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--no-root-motion") { kimodoReq.rootMotion = false; continue; }
         if (arg == "--no-postprocess") { kimodoReq.postprocess = false; continue; }
-        if (arg == "--constraints" && i + 1 < argc) { kimodoReq.constraintsPath = QString::fromLocal8Bit(argv[++i]); continue; }
-        if (arg == "--text-encoder-url" && i + 1 < argc) { kimodoReq.textEncoderUrl = QString(argv[++i]); continue; }
-        if (arg == "--text-encoder-quant" && i + 1 < argc) { kimodoReq.textEncoderQuant = QString(argv[++i]).toLower(); continue; }
-        if (arg == "--name" && i + 1 < argc) { kimodoReq.name = QString::fromLocal8Bit(argv[++i]); continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -3597,7 +3615,12 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.
+    if (generateUseModel && !generateBackend.isEmpty() && generateBackend != QLatin1String("model")) {
+        err() << "Error: --model selects the model backend; it conflicts with --backend " << generateBackend << "." << Qt::endl;
+        return 2;
+    }
     if (generateBackend == QLatin1String("kimodo") || !kimodoReq.applyMotion.isEmpty()) {
+        kimodoReq.armSpaceDeg = armSpaceDeg;
         if (!kimodoReq.applyMotion.isEmpty() && generateMode) {
             err() << "Error: --apply-motion and --generate are exclusive." << Qt::endl;
             return 2;
