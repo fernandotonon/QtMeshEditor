@@ -30,7 +30,7 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
 **Versioning**
 
 - **Always follow the latest GitHub release** — use the Marketplace floating tag `fernandotonon/QtMeshEditor@v1` (same pattern as the [Marketplace example](https://github.com/marketplace/actions/qtmesheditor)). The composite action defaults to `image-tag: latest`, so the Docker CLI tracks the newest published `ghcr.io/fernandotonon/qtmesh` image.
-- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.58.1**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
+- **Reproducible builds** — pin the action and the container to the same semver as this repository’s `project(QtMeshEditor VERSION …)` in `CMakeLists.txt` (currently **3.59.0**). After bumping the version in CMake, run `./scripts/sync-doc-versions-from-cmake.sh` to refresh the pinned refs in `README.md` and the docs site fallback; CI enforces the match with `./scripts/sync-doc-versions-from-cmake.sh --check`.
 
 Pinned workflow template (action + `ghcr.io` image aligned):
 
@@ -48,10 +48,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@3.58.1
+        uses: fernandotonon/QtMeshEditor@3.59.0
         with:
           command: scan
-          image-tag: "3.58.1"
+          image-tag: "3.59.0"
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
@@ -76,37 +76,37 @@ Release tags are listed on the [releases page](https://github.com/fernandotonon/
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@3.58.1
+- uses: fernandotonon/QtMeshEditor@3.59.0
   with:
     command: validate
     input-file: ./models/character.fbx
-    image-tag: "3.58.1"
+    image-tag: "3.59.0"
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@3.58.1
+- uses: fernandotonon/QtMeshEditor@3.59.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
-    image-tag: "3.58.1"
+    image-tag: "3.59.0"
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@3.58.1
+- uses: fernandotonon/QtMeshEditor@3.59.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
     output-file: ./output/dance_optimized.fbx
     options: --resample 30
-    image-tag: "3.58.1"
+    image-tag: "3.59.0"
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@3.58.1
+- uses: fernandotonon/QtMeshEditor@3.59.0
   id: info
   with:
     command: info
     input-file: ./models/character.fbx
     options: --json
-    image-tag: "3.58.1"
+    image-tag: "3.59.0"
 
 # Docker (alternative — :latest tracks newest image; pin :3.4.0 to match semver action ref)
 # The image is multi-arch (linux/amd64 + linux/arm64), so it runs natively on
@@ -162,6 +162,9 @@ qtmesh anim model.fbx --list
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
 qtmesh anim model.fbx --resample 30 -o optimized.fbx
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+# Text to motion with NVIDIA Kimodo, run natively (no Python); --download fetches its ~9 GB of models once
+qtmesh anim rigged.glb --generate "a person walks forward and waves" --backend kimodo --download -o walking.glb
+qtmesh anim rigged.glb --backend kimodo --segment "walk forward@3" --segment "sit down@2" --variations 2 -o out.glb
 
 # Export animation pose as static mesh (3D printing)
 qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl
@@ -342,6 +345,7 @@ Split View|Skeleton Animation Controls
 - **Asset scanning** — ESLint for 3D assets: check naming, complexity, skeletons, formats
 - **QtMesh Cloud** — sign in, upload asset projects (model + textures + materials + animations), browse/open from [qtmesh.dev](https://qtmesh.dev); CLI (`qtmesh cloud …`) and MCP (`cloud_*` tools) parity
 - **40+ format support** — FBX, glTF, OBJ, Collada, STL, Ogre Mesh, and more
+- **Text to motion (NVIDIA Kimodo)** — type what the character should do and get a retargeted clip, run locally without Python (Kimodo-SOMA-RP-v1.2 + a Llama 3 text encoder; *Built with Meta Llama 3*). Guide: [docs/KIMODO.md](docs/KIMODO.md)
 - **Animation merge** — combine Mixamo clips into one file
 - **Animation resampling** — reduce keyframe density for game engines
 - **Pose export** — bake animation frames as static meshes (3D printing)

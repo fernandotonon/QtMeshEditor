@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 3.58.1 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 3.59.0 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -502,6 +502,12 @@ message(STATUS "xatlas enabled (auto UV unwrap)")
 #  retopo --algo quadriflow`.
 ##############################################################
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuadriFlow.cmake)
+
+##############################################################
+#  NVIDIA Kimodo MotionCorrection (Apache-2.0, vendored): the
+#  post-processing of the native Kimodo runtime (src/AIMotion).
+##############################################################
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/KimodoMotionCorrection.cmake)
 
 ##############################################################
 #  stb — Radiance .hdr decode for HDR environment maps (#467).

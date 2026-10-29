@@ -151,6 +151,7 @@
 #include "ThemeManager.h"
 #include "IsometricSpritesController.h"
 #include "RetargetController.h"
+#include "AIMotion/KimodoController.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
 #include "DNA/DnaCorrectiveManager.h"
@@ -897,6 +898,7 @@ MainWindow::~MainWindow()
         ViewportLightSoloController::kill();
         IsometricSpritesController::kill();
         RetargetController::kill();
+        AIMotion::KimodoController::kill();
         AnimGeneratorManager::kill();
         ConstraintManager::kill();
         DnaCorrectiveManager::kill();
@@ -1273,6 +1275,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<RetargetController>("PropertiesPanel", 1, 0, "RetargetController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return RetargetController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AIMotion::KimodoController>("PropertiesPanel", 1, 0, "KimodoController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIMotion::KimodoController::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<AnimGeneratorManager>("PropertiesPanel", 1, 0, "AnimGeneratorManager",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {

@@ -1,6 +1,10 @@
 #include "BoneProcessor.h"
 #include <set>
 
+#include <OgreAnimation.h>
+#include <OgreAnimationTrack.h>
+#include <OgreKeyFrame.h>
+
 void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scene) {
     this->skeleton = skeleton;
 
@@ -73,12 +77,26 @@ void BoneProcessor::bakeRootRotation(const Ogre::SkeletonPtr& skeleton,
     // Bake a rest-pose rotation into the root bones so no scene-node rotation
     // is needed. Only root bones (no parent in the Ogre skeleton) need it;
     // child bones' local transforms are parent-relative and correct as-is.
-    const Ogre::Quaternion R_x90 = rotation;
+    //
+    // A root's translation keys are deltas in its PARENT space (AnimationProcessor;
+    // Ogre applies them with translate(), TS_PARENT), i.e. in the space this
+    // rotation re-expresses, so they turn with the bind: a Z-up root's travel
+    // along +Z must come out along the baked up/forward axis, not stay on Z.
+    // Rotation keys are bind-relative in the bone's own frame and need nothing.
     for (unsigned short i = 0; i < skeleton->getNumBones(); ++i) {
         Ogre::Bone* bone = skeleton->getBone(i);
-        if (bone->getParent() == nullptr) {
-            bone->setPosition(R_x90 * bone->getPosition());
-            bone->setOrientation(R_x90 * bone->getOrientation());
+        if (bone->getParent() != nullptr) continue;
+        bone->setPosition(rotation * bone->getPosition());
+        bone->setOrientation(rotation * bone->getOrientation());
+        for (unsigned short a = 0; a < skeleton->getNumAnimations(); ++a) {
+            Ogre::Animation* anim = skeleton->getAnimation(a);
+            if (!anim->hasNodeTrack(bone->getHandle())) continue;
+            Ogre::NodeAnimationTrack* track = anim->getNodeTrack(bone->getHandle());
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); ++k) {
+                Ogre::TransformKeyFrame* kf = track->getNodeKeyFrame(k);
+                kf->setTranslate(rotation * kf->getTranslate());
+            }
+            track->_keyFrameDataChanged();
         }
     }
 }

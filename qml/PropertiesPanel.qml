@@ -216,6 +216,39 @@ Rectangle {
     // Inspector button factory, FILE scope so every section shares one look
     // (raw QML — the Themed* wrappers blank this dynamically-loaded panel, so
     // raw controls are styled with the PropertiesPanelController palette).
+    // Compact integer entry in the Inspector palette (the default SpinBox style
+    // renders white and hides its value at panel widths).
+    component InspectorIntField: Rectangle {
+        id: iifRoot
+        property int value: 0
+        property int from: 0
+        property int to: 100
+        property string accessibleLabel: ""
+        // Apply the text being typed now (value only updates on Enter / focus loss): call before reading
+        // `value` from an action that the user can trigger while still editing.
+        function commit() { iifInput.editingFinished() }
+        width: 56; height: 22; radius: 3
+        color: PropertiesPanelController.inputColor
+        border.color: iifInput.activeFocus ? PropertiesPanelController.highlightColor
+                                           : PropertiesPanelController.borderColor
+        Accessible.role: Accessible.SpinBox
+        Accessible.name: accessibleLabel
+        TextInput {
+            id: iifInput
+            anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
+            verticalAlignment: TextInput.AlignVCenter
+            color: PropertiesPanelController.textColor; font.pixelSize: 11
+            selectByMouse: true; clip: true
+            text: String(iifRoot.value)
+            validator: IntValidator { bottom: iifRoot.from; top: iifRoot.to }
+            onEditingFinished: {
+                var v = parseInt(text)
+                iifRoot.value = isNaN(v) ? iifRoot.from : Math.max(iifRoot.from, Math.min(iifRoot.to, v))
+                text = String(iifRoot.value)
+            }
+        }
+    }
+
     component InspectorButton: Rectangle {
         id: ibRoot
         property alias text: ibLabel.text
@@ -12347,184 +12380,131 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.openAnimationPicker() }
             }
+            // ── Generate from text: NVIDIA Kimodo (the only text-to-motion model in the panel until our own
+            // model matches it; then the user picks the model here). Runs on a worker thread (KimodoController);
+            // every variation lands
+            // as its own clip, one undo step. One prompt, or one segment per
+            // line ("walk forward @3") for a continuous multi-step motion.
+            Connections {
+                target: KimodoController
+                function onApplied(entity, clips) {
+                    if (clips.length > 0) {
+                        lastGeneratedAnim = clips[0]
+                        setArmSpaceTarget(clips[0], entity)
+                    }
+                    refreshAnimData()
+                }
+            }
             Text {
-                text: "— or generate from text (experimental AI model):"
+                text: "— or generate from text (NVIDIA Kimodo):"
                 color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
-                topPadding: 4
+                topPadding: 6
             }
-            Row {
-                width: parent.width - 16; spacing: 6
-                Rectangle {
-                    width: parent.width - genBtn.width - 6; height: 24; radius: 3
-                    color: PropertiesPanelController.inputColor
-                    border.color: genPromptIn.activeFocus ? PropertiesPanelController.highlightColor
-                                                           : PropertiesPanelController.borderColor
-                    TextInput {
-                        id: genPromptIn
-                        anchors.fill: parent; anchors.leftMargin: 6; anchors.rightMargin: 6
-                        verticalAlignment: TextInput.AlignVCenter
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
-                        clip: true
-                        // selectByMouse lets a click position the caret AND take
-                        // keyboard focus — without it a bare TextInput embedded
-                        // in a QQuickWidget stays unfocused on click (the other
-                        // working fields in this panel all set it). activeFocus-
-                        // OnPress is the default but stated for clarity.
-                        selectByMouse: true
-                        activeFocusOnPress: true
-                        // Belt-and-suspenders focus grab: after using the
-                        // arm-space slider / arm buttons (which take focus and
-                        // can leave the QQuickWidget's focus on the viewport),
-                        // a plain click here didn't always re-focus the field.
-                        // Force it on press and let the event through (accepted
-                        // = false) so selectByMouse still positions the caret.
-                        MouseArea {
-                            anchors.fill: parent
-                            cursorShape: Qt.IBeamCursor
-                            onPressed: function(mouse) {
-                                // Widget-level focus first (see imgGenPromptIn).
-                                PropertiesPanelController.focusPanel()
-                                genPromptIn.forceActiveFocus()
-                                mouse.accepted = false
-                            }
+            Text {
+                visible: !KimodoController.runtimeAvailable
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: KimodoController.runtimeDescription
+                color: PropertiesPanelController.textColor; opacity: 0.6; font.pixelSize: 9
+            }
+            // Native (Python-free) runtime: its models download only when the user asks.
+            InspectorButton {
+                // InspectorButton sizes from parent.width: never put it in a Row without an explicit width
+                // (a Row's width comes from its children: a binding loop that broke this tab's layout).
+                visible: KimodoController.nativeDownloadable && !KimodoController.busy
+                width: parent.width - 16
+                text: "Download Kimodo models (" + KimodoController.nativeDownloadSize + ")"
+                clickEnabled: !KimodoController.busy
+                onClicked: KimodoController.downloadNativeModels()
+            }
+            Text {
+                // Meta Llama 3 Community License 1.b.i(B): the text encoder is a Llama 3 derivative.
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "Built with Meta Llama 3. Kimodo by NVIDIA (Open Model License); text encoder: Meta Llama 3 Community License."
+                color: PropertiesPanelController.textColor; opacity: 0.45; font.pixelSize: 9
+            }
+            Rectangle {
+                width: parent.width - 16; height: 52; radius: 3
+                color: PropertiesPanelController.inputColor
+                border.color: kimodoPromptIn.activeFocus ? PropertiesPanelController.highlightColor
+                                                          : PropertiesPanelController.borderColor
+                TextEdit {
+                    id: kimodoPromptIn
+                    anchors.fill: parent; anchors.margins: 5
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    wrapMode: TextEdit.Wrap; selectByMouse: true; clip: true
+                    MouseArea {
+                        anchors.fill: parent; cursorShape: Qt.IBeamCursor
+                        onPressed: function(mouse) {
+                            PropertiesPanelController.focusPanel()
+                            kimodoPromptIn.forceActiveFocus()
+                            mouse.accepted = false
                         }
-                        Text {
-                            anchors.verticalCenter: parent.verticalCenter
-                            visible: !genPromptIn.text && !genPromptIn.activeFocus
-                            text: "e.g. walk, run, jump, wave…"
-                            color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 11
-                        }
-                        onAccepted: genBtn.run()
+                    }
+                    Text {
+                        visible: !kimodoPromptIn.text && !kimodoPromptIn.activeFocus
+                        width: parent.width; wrapMode: Text.Wrap
+                        text: "a person walks forward and waves\n(or one segment per line: sit down @2)"
+                        color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 10
                     }
                 }
-                Rectangle {
-                    id: genBtn
-                    width: 74; height: 24; radius: 3
-                    opacity: genBtnBusy ? 0.5 : 1.0
-                    property bool genBtnBusy: false
-                    color: genMa.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
-                         : genMa.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
-                         : PropertiesPanelController.highlightColor
-                    function run() {
-                        if (genBtnBusy || !genPromptIn.text.trim()) return
-                        genBtnBusy = true
-                        genStatus.text = useModelChk.checked
-                            ? "Generating (experimental model)…"
-                            : "Generating… (first use downloads the motion library)"
-                        genStatus.isError = false
-                        // Generate a CLEAN clip — arm-space is always an
-                        // explicit post-adjustment starting from 0, never baked
-                        // into generation (a leftover slider value silently
-                        // skewing every new clip is exactly the bug this fixes).
-                        var gr = AnimationControlController.generateMotion(
-                                     genPromptIn.text, 0.0, useModelChk.checked,
-                                     0.0, footPinChk.checked, -1,
-                                     descentChk.checked)
-                        if (gr && gr.animation) {
-                            lastGeneratedAnim = gr.animation
-                            // Point the slider at the fresh clip at a neutral 0
-                            // (reverts any prior target — see setArmSpaceTarget).
-                            setArmSpaceTarget(gr.animation, gr.entity || "")
-                        }
-                        genBtnBusy = false
-                        // generateMotion adds an AnimationState synchronously, but
-                        // it lives on AnimationControlController — the Inspector
-                        // list (PropertiesPanelController.animationData) won't know
-                        // until something re-queries. Refresh it directly so the
-                        // new clip appears without reselecting the entity.
-                        refreshAnimData()
+            }
+            Row {
+                spacing: 6
+                Text { text: "Seconds"; color: PropertiesPanelController.textColor; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                InspectorIntField { id: kimodoDuration; from: 1; to: 600; value: 2; accessibleLabel: "Kimodo seconds"
+                                     anchors.verticalCenter: parent.verticalCenter }
+                Text { text: "Variations"; color: PropertiesPanelController.textColor; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                InspectorIntField { id: kimodoVariations; from: 1; to: 16; value: 1; width: 40
+                                     accessibleLabel: "Kimodo variations"; anchors.verticalCenter: parent.verticalCenter }
+            }
+            Row {
+                spacing: 10
+                InspectorCheckBox { id: kimodoRootChk; text: "Root motion"; checked: false }
+                InspectorCheckBox { id: kimodoSeedChk; text: "Fixed seed"; checked: false }
+                InspectorIntField { id: kimodoSeed; visible: kimodoSeedChk.checked; from: 0; to: 999999; value: 1
+                                     width: 64; accessibleLabel: "Kimodo seed"; anchors.verticalCenter: parent.verticalCenter }
+            }
+            Row {
+                spacing: 6
+                InspectorButton {
+                    width: 128
+                    text: KimodoController.busy ? "Generating…" : "Generate (Kimodo)"
+                    clickEnabled: !KimodoController.busy && kimodoPromptIn.text.trim().length > 0
+                    onClicked: {
+                        kimodoDuration.commit(); kimodoVariations.commit(); kimodoSeed.commit()
+                        KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value, kimodoVariations.value,
+                                                  kimodoSeedChk.checked ? kimodoSeed.value : -1,
+                                                  kimodoRootChk.checked, true)   // feet always pinned (foot-contact cleanup)
                     }
-                    Text { anchors.centerIn: parent; text: "Generate"; color: "white"; font.pixelSize: 11 }
-                    MouseArea { id: genMa; anchors.fill: parent; hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor; onClicked: genBtn.run() }
+                }
+                InspectorButton {
+                    visible: KimodoController.busy
+                    width: 64
+                    text: "Cancel"
+                    onClicked: KimodoController.cancel()
                 }
             }
-            // Opt into the EXPERIMENTAL trained model (falls back to the template
-            // library automatically). Default OFF = the reliable template retarget.
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: useModelChk
-                    property bool checked: false
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: PropertiesPanelController.borderColor
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: useModelChk.checked = !useModelChk.checked }
-                }
-                Text {
-                    text: "Use trained model (experimental)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+            ProgressBar {
+                visible: KimodoController.busy
+                width: parent.width - 16
+                indeterminate: KimodoController.progress < 0
+                value: Math.max(0, KimodoController.progress)
             }
-            // #856: foot-contact cleanup — ON by default (detect ground-contact
-            // spans + IK-pin the feet so they plant instead of skating).
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: footPinChk
-                    property bool checked: true
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: activeFocus ? "white"
-                                              : PropertiesPanelController.borderColor
-                    activeFocusOnTab: true
-                    Accessible.role: Accessible.CheckBox
-                    Accessible.name: "Pin feet (contact cleanup)"
-                    Accessible.checkable: true
-                    Accessible.checked: checked
-                    Accessible.onToggleAction: checked = !checked
-                    Keys.onSpacePressed: checked = !checked
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: footPinChk.checked = !footPinChk.checked }
-                }
-                Text {
-                    text: "Pin feet (contact cleanup)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+            Text {
+                visible: KimodoController.busy || KimodoController.status.length > 0
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: KimodoController.busy && KimodoController.stage.length > 0
+                      ? "Kimodo: " + KimodoController.stage + "…" : KimodoController.status
+                color: KimodoController.lastOk ? PropertiesPanelController.textColor : "#e06c6c"
+                font.pixelSize: 10
             }
-            // #838: vertical root descent — lower the body to the ground on
-            // crouch/pickup/sit/crawl/death clips. ON by default; helps most
-            // such clips but a few author the squat purely in the joints, so
-            // this lets the user turn it off when it over-sinks.
-            Row {
-                spacing: 6
-                Rectangle {
-                    id: descentChk
-                    property bool checked: true
-                    width: 14; height: 14; radius: 2
-                    anchors.verticalCenter: parent.verticalCenter
-                    color: checked ? PropertiesPanelController.highlightColor
-                                   : PropertiesPanelController.inputColor
-                    border.color: activeFocus ? "white"
-                                              : PropertiesPanelController.borderColor
-                    activeFocusOnTab: true
-                    Accessible.role: Accessible.CheckBox
-                    Accessible.name: "Lower body on crouch and pickup clips"
-                    Accessible.checkable: true
-                    Accessible.checked: checked
-                    Accessible.onToggleAction: checked = !checked
-                    Keys.onSpacePressed: checked = !checked
-                    Text { anchors.centerIn: parent; visible: parent.checked
-                           text: "✓"; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent
-                                onClicked: descentChk.checked = !descentChk.checked }
-                }
-                Text {
-                    text: "Lower body (crouch/pickup)"
-                    color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+            Text {
+                visible: !KimodoController.busy && KimodoController.lastClips.length > 1
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "Each variation is its own clip — play them from the list above and delete the ones you don't want."
+                color: PropertiesPanelController.textColor; opacity: 0.55; font.pixelSize: 9
             }
             // ── Arm space (#854): Mixamo-style widen/tuck post-process ────────
             // Targets `armSpaceAnim` — the last generated clip by default, or
@@ -12619,26 +12599,6 @@ Rectangle {
                 color: PropertiesPanelController.textColor; opacity: 0.5
                 font.pixelSize: 9
             }
-            TextEdit {
-                id: genStatus
-                property bool isError: false
-                visible: text.length > 0
-                width: parent.width - 16; wrapMode: TextEdit.Wrap; font.pixelSize: 9; opacity: 0.85
-                color: isError ? "#e06c6c" : PropertiesPanelController.textColor
-                // Selectable so a failure message can be COPIED — see mgStatus.
-                readOnly: true
-                selectByMouse: true
-                activeFocusOnPress: true
-                cursorVisible: false
-                persistentSelection: true
-            }
-            Connections {
-                target: AnimationControlController
-                function onGenerateMotionStatus(message, isError) {
-                    genStatus.text = message; genStatus.isError = isError
-                }
-            }
-
             // Play/Pause button + playback speed (applies to selected entity only)
             Row {
                 spacing: 8

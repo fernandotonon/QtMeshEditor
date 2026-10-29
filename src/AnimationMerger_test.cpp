@@ -242,6 +242,58 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
     Ogre::SkeletonManager::getSingleton().remove(skelB);
 }
 
+// A Z-up source whose root bind differs from the Y-up base's only by a YAW about Z does not encode the axis change:
+// its upward root travel must still arrive as +Y. The old test (spaceRot == identity) skipped the conversion here
+// and turned a jump into horizontal travel.
+TEST_F(AnimationMergerTest, ZupRootYawStillConvertsTravelToYup)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+    auto skelA = createTestSkeleton("zyaw_base", {"root", "spine"}, {"idle"});
+    auto skelB = createTestSkeleton("zyaw_src", {"root", "spine"}, {});
+    skelB->getBone(0)->setOrientation(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_Z));
+    skelB->setBindingPose();
+    auto* anim = skelB->createAnimation("jump", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(skelB->getBone(0));
+    track->createNodeKeyFrame(0.0f)->setTranslate(Ogre::Vector3::ZERO);
+    track->createNodeKeyFrame(1.0f)->setTranslate(Ogre::Vector3(0, 0, 1));   // up, in the Z-up source
+    AnimationMerger::registerSkeletonUpAxis("zyaw_src", 2);
+    AnimationMerger::registerSkeletonUpAxis("zyaw_base", 1);
+
+    auto meshA = createInMemoryMesh("zyaw_mesh_a", skelA);
+    auto meshB = createInMemoryMesh("zyaw_mesh_b", skelB);
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* nodeA = sceneMgr->getRootSceneNode()->createChildSceneNode("zyawBaseNode");
+    auto* entityA = sceneMgr->createEntity("zyawBaseEntity", meshA);
+    nodeA->attachObject(entityA);
+    auto* nodeB = sceneMgr->getRootSceneNode()->createChildSceneNode("zyawSrcNode");
+    auto* entityB = sceneMgr->createEntity("zyawSrcEntity", meshB);
+    nodeB->attachObject(entityB);
+
+    QString err;
+    auto* merged = AnimationMerger::mergeAnimations(entityA, {entityA, entityB}, err);
+    ASSERT_NE(merged, nullptr) << err.toStdString();
+    const Ogre::SkeletonPtr skel = merged->getMesh()->getSkeleton();
+    std::string clip;
+    for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+        if (skel->getAnimation(i)->getName().find("jump") != std::string::npos) clip = skel->getAnimation(i)->getName();
+    ASSERT_FALSE(clip.empty());
+    const Ogre::Vector3 t = skel->getAnimation(clip)->getNodeTrack(0)->getNodeKeyFrame(1)->getTranslate();
+    EXPECT_NEAR(t.y, 1.0f, 1e-4f) << "the lift arrives as +Y; got " << t.x << ", " << t.y << ", " << t.z;
+    EXPECT_NEAR(t.z, 0.0f, 1e-4f);
+
+    nodeA->detachAllObjects();
+    nodeB->detachAllObjects();
+    sceneMgr->destroyEntity(entityA);
+    sceneMgr->destroyEntity(entityB);
+    sceneMgr->destroySceneNode(nodeA);
+    sceneMgr->destroySceneNode(nodeB);
+    Ogre::MeshManager::getSingleton().remove(meshA);
+    Ogre::MeshManager::getSingleton().remove(meshB);
+    Ogre::SkeletonManager::getSingleton().remove(skelA);
+    Ogre::SkeletonManager::getSingleton().remove(skelB);
+}
+
 TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 {
     ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";

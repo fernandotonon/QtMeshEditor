@@ -1,4 +1,5 @@
 #include "CLIPipeline.h"
+#include "AIMotion/AIMotionCLI.h"
 #include "EmbeddedTextureCache.h"
 #include "PaintBakeTargets.h"
 #include "PaintChannel.h"
@@ -3308,6 +3309,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
+    // NVIDIA Kimodo backend (--backend kimodo) and --apply-motion <interchange.npz>: see src/AIMotion/AIMotionCLI.h.
+    QString generateBackend;          // --backend template|model|kimodo
+    AIMotion::CliRequest kimodoReq;
     int generateVariant = -1;         // --variant N → force a specific template clip index (curation)
     float armSpaceDeg = 0.0f;         // #854: Mixamo-style arm-space swing (degrees)
     bool armSpaceSet = false;         // --arm-space given (standalone post-adjust)
@@ -3430,6 +3434,39 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--facing") { facingMode = true; continue; }
         // #837: turn an existing animation 180° to face the other way (e.g.
         // toward the camera). Standalone: needs --animation, writes to -o.
+        // Kimodo / backend options: a missing value or a bad integer is a usage error, never "take the next
+        // flag as the value" (`--seed --no-root-motion` used to seed 0 and leave root motion on).
+        if (arg == "--backend" || arg == "--apply-motion" || arg == "--segment" || arg == "--variations"
+            || arg == "--seed" || arg == "--diffusion-steps" || arg == "--constraints" || arg == "--text-encoder-url"
+            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime") {
+            const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
+            if (v.isEmpty() || (v.startsWith(QLatin1Char('-')) && arg != "--segment")) {
+                err() << "Error: " << arg << " needs a value." << Qt::endl;
+                return 2;
+            }
+            ++i;
+            bool ok = true;
+            if (arg == "--backend") generateBackend = v.toLower();
+            else if (arg == "--apply-motion") kimodoReq.applyMotion << v;
+            else if (arg == "--segment") kimodoReq.segments << v;
+            else if (arg == "--variations") kimodoReq.variations = v.toInt(&ok);
+            else if (arg == "--seed") { kimodoReq.hasSeed = true; kimodoReq.seed = v.toInt(&ok); }
+            else if (arg == "--diffusion-steps") kimodoReq.diffusionSteps = v.toInt(&ok);
+            else if (arg == "--constraints") kimodoReq.constraintsPath = v;
+            else if (arg == "--text-encoder-url") kimodoReq.textEncoderUrl = v;
+            else if (arg == "--text-encoder-quant") kimodoReq.textEncoderQuant = v.toLower();
+            else if (arg == "--runtime") kimodoReq.runtime = v.toLower();
+            else kimodoReq.name = v;
+            if (!ok) {
+                err() << "Error: " << arg << " needs an integer, got '" << v << "'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--no-root-motion") { kimodoReq.rootMotion = false; continue; }
+        if (arg == "--no-postprocess") { kimodoReq.postprocess = false; continue; }
+        // Native Kimodo: fetch its ~9 GB of models (an explicit request; generation never downloads on its own).
+        if (arg == "--download") { kimodoReq.download = true; continue; }
         if (arg == "--generate" && i + 1 < argc) {
             generateMode = true;
             generatePrompt = QString::fromLocal8Bit(argv[++i]);
@@ -3581,6 +3618,33 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // #411: text-to-motion (template-clip MVP). Self-contained — load → match a
     // motion-library clip → retarget → export. Handled before the other modes.
+    if (generateUseModel && !generateBackend.isEmpty() && generateBackend != QLatin1String("model")) {
+        err() << "Error: --model selects the model backend; it conflicts with --backend " << generateBackend << "." << Qt::endl;
+        return 2;
+    }
+    if (generateBackend == QLatin1String("kimodo") || !kimodoReq.applyMotion.isEmpty()) {
+        kimodoReq.armSpaceDeg = armSpaceDeg;
+        if (!kimodoReq.applyMotion.isEmpty() && generateMode) {
+            err() << "Error: --apply-motion and --generate are exclusive." << Qt::endl;
+            return 2;
+        }
+        kimodoReq.rigPath = filePath;
+        kimodoReq.outputPath = outputPath;
+        kimodoReq.prompt = generatePrompt;
+        kimodoReq.duration = generateDuration > 0.0f ? generateDuration : 5.0;
+        kimodoReq.footPin = generateFootPin;
+        kimodoReq.json = jsonOutput;
+        return AIMotion::runCli(kimodoReq);
+    }
+    if (!generateBackend.isEmpty() && generateBackend != QLatin1String("template") && generateBackend != QLatin1String("model")) {
+        err() << "Error: --backend must be template, model or kimodo." << Qt::endl;
+        return 2;
+    }
+    if (const QString flag = generateMode ? AIMotion::kimodoOnlyOption(kimodoReq) : QString(); !flag.isEmpty()) {
+        err() << "Error: " << flag << " is a Kimodo option: add --backend kimodo." << Qt::endl;
+        return 2;
+    }
+    if (generateBackend == QLatin1String("model")) generateUseModel = true;
     if (generateMode) {
         if (generatePrompt.trimmed().isEmpty()) {
             err() << "Error: --generate requires a prompt, e.g. --generate \"walking\"." << Qt::endl;
@@ -3970,6 +4034,11 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
         err() << "       qtmesh anim <file> --in-between --gap-frames N [--start-time S] [--end-time S] [--no-model] [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --dump-canonical <out.json> [--animation <name>]   (#839: 22-joint world-frame clip extraction)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --generate \"<prompt>\" [--duration S] [-o <output>]   (template library; --model = experimental model)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --generate \"<prompt>\" --backend kimodo [--segment \"TEXT@SEC\"]... [--variations N] [--seed N]" << Qt::endl;
+        err() << "                          [--diffusion-steps N] [--no-root-motion] [--no-postprocess] [--runtime auto|native|python]" << Qt::endl;
+        err() << "                          [--download] [--name CLIP] [--json] -o <output>   (NVIDIA Kimodo; --download fetches ~9 GB once)" << Qt::endl;
+        err() << "       qtmesh anim <rig> --apply-motion motion_00.npz [...] -o <output>   (re-apply a saved Kimodo motion)" << Qt::endl;
         return 2;
     }
 
