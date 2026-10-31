@@ -288,7 +288,7 @@ SceneApplyResult applyCanonicalMotionsToEntity(Ogre::Entity* entity, const std::
         if (options.rootMotion)
             if (QString err; !addFootDrivenRootMotion(skel, clip, &err))
                 qWarning("QtMesh T2M root motion skipped on %s: %s", clip.c_str(), qPrintable(err));
-        AnimationMerger::smoothBakeAnimation(skel, clip, 12, m.fps);   // removes retarget trembling
+        if (options.smoothFps > 0) AnimationMerger::smoothBakeAnimation(skel, clip, options.smoothFps, m.fps);   // removes trembling
         if (options.footPin) AnimationMerger::pinFeet(skel, clip);
         r.clips << QString::fromStdString(clip);
     }

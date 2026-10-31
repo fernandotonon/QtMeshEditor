@@ -233,7 +233,7 @@ int runT2MCli(const CliRequest& req)
 
     QtMeshT2M::Options o;
     o.prompt = req.prompt;
-    o.duration = req.duration > 0.0 ? req.duration : 2.0;
+    o.duration = req.duration;   // the caller defaults an ABSENT --duration; an invalid one must reach validateOptions
     o.variations = req.variations;
     o.hasSeed = req.hasSeed;
     o.seed = req.seed;
@@ -260,6 +260,7 @@ int runT2MCli(const CliRequest& req)
     so.baseName = req.name.isEmpty() ? QStringLiteral("generated_qtmesh_t2m") : req.name;
     so.rootMotion = req.rootMotion;
     so.footPin = req.footPin;
+    so.smoothFps = req.smoothFps;
     so.undoable = false;
     const SceneApplyResult applied = applyCanonicalMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);

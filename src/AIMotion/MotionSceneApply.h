@@ -28,6 +28,7 @@ struct SceneApplyOptions {
     bool rootMotion = true;
     bool footPin = true;
     bool undoable = true;      ///< push one undo macro (off for headless one-shots)
+    int smoothFps = 12;        ///< canonical clips: sparse smoothing bake rate (0 = off)
 };
 
 struct SceneApplyResult {

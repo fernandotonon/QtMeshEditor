@@ -68,7 +68,9 @@ void KimodoController::kill()
 KimodoController::KimodoController(QObject* parent) : QObject(parent)
 {
     const QString saved = QSettings().value(QStringLiteral("ai/textToMotionBackend")).toString();
-    m_backend = backends().contains(saved) ? saved : QStringLiteral("kimodo");
+    // A saved qtmesh_t2m on a build without ONNX/llama.cpp falls back to Kimodo (the setting itself is kept).
+    const bool usable = backends().contains(saved) && (saved != QLatin1String("qtmesh_t2m") || QtMeshT2M::buildSupported());
+    m_backend = usable ? saved : QStringLiteral("kimodo");
     refreshRuntime();
 }
 

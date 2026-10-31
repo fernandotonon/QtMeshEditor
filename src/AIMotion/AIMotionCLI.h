@@ -31,6 +31,7 @@ struct CliRequest {
     QString runtime;                ///< auto|native|python (empty = auto)
     bool download = false;          ///< --download: fetch the native Kimodo models first (explicit request)
     float armSpaceDeg = 0.0f;       ///< #854 arm-space swing applied to every written clip (0 = none)
+    int smoothFps = 12;             ///< QtMesh T2M: sparse smoothing bake rate (--smooth-fps; 0 = --no-smooth-bake)
     bool json = false;
 };
 

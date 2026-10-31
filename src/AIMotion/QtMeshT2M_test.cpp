@@ -39,6 +39,13 @@ TEST(QtMeshT2M, PlanFramesAddsALeadInMarginWithinTheModelLength)
     QtMeshT2M::planFrames(400, &request, &trim);   // longer than the model: clamped, nothing to trim
     EXPECT_EQ(request, QtMeshT2M::kMaxFrames);
     EXPECT_EQ(trim, 0);
+
+    QtMeshT2M::planFrames(60, &request, &trim, 60);   // a shorter custom export: never ask past its T
+    EXPECT_EQ(request, 60);
+    EXPECT_EQ(trim, 0);
+    QtMeshT2M::planFrames(45, &request, &trim, 60);
+    EXPECT_EQ(request, 60);
+    EXPECT_EQ(trim, 15);
 }
 
 TEST(QtMeshT2M, LeadInTrimStopsAtTheFirstMovingFrame)

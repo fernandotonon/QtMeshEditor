@@ -6056,6 +6056,7 @@ QJsonObject MCPServer::toolGenerateMotionT2M(const QJsonObject &args)
         return makeErrorResult(entityName.isEmpty() ? QStringLiteral("Error: no skinned mesh found: generated motion needs a rigged humanoid")
                                                     : QStringLiteral("Error: skinned entity '%1' not found").arg(entityName));
     const QString targetName = QString::fromStdString(initial->getName());
+    const Ogre::Mesh* targetMesh = initial->getMesh().get();   // the event loop pumps below: the rig may be replaced
 
     QtMeshT2M::Options o;
     o.prompt = args.value(QStringLiteral("prompt")).toString();
@@ -6089,7 +6090,8 @@ QJsonObject MCPServer::toolGenerateMotionT2M(const QJsonObject &args)
     if (!gen.ok) return makeErrorResult(QStringLiteral("Error: QtMesh T2M: %1").arg(gen.error));
 
     Ogre::Entity* entity = findSkinnedEntity(mgr, targetName);
-    if (!entity) return makeErrorResult(QStringLiteral("Error: '%1' was removed while QtMesh T2M ran").arg(targetName));
+    if (!entity || entity->getMesh().get() != targetMesh)
+        return makeErrorResult(QStringLiteral("Error: '%1' was removed or replaced while QtMesh T2M ran").arg(targetName));
     std::vector<CanonicalMotion> motions;
     for (const auto& c : gen.clips) motions.push_back({c.quats, gen.fps, gen.restWorld, gen.restDir});
     SceneApplyOptions so;

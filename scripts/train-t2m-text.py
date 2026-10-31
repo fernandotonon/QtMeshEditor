@@ -22,8 +22,9 @@ import argparse
 import importlib.util
 import json
 import math
-import re
 import os
+import re
+import sys
 
 import numpy as np
 import torch
@@ -257,6 +258,8 @@ def main():
         net.load_state_dict(ck["net"]); opt.load_state_dict(ck["opt"]); sched.load_state_dict(ck["sched"])
         start = ck["epoch"] + 1
         print(f"resumed at epoch {start}", flush=True)
+    elif a.export_only and not a.init:
+        sys.exit(f"--export-only needs trained weights: no {ckpt} and no --init")
     elif a.init:
         ck = torch.load(os.path.expanduser(a.init), map_location=dev, weights_only=True)
         net.load_state_dict(ck["net"])

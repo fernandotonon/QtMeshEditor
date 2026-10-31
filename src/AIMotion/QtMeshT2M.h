@@ -94,8 +94,12 @@ public:
     /// Leading frames whose mean per-role rotation speed (roles 14 and 18 excluded: the model never learned them)
     /// stays below `stillDegPerFrame`, at most `maxTrim`. Pure.
     static int leadInFrames(const Frames& q, int maxTrim, float stillDegPerFrame = kStillDegPerFrame);
-    /// Frames to request and the most that may be trimmed for a wanted length. Pure.
-    static void planFrames(int wanted, int* request, int* maxTrim);
+    /// Frames to request and the most that may be trimmed for a wanted length, within the model's `maxFrames`
+    /// (its T: a custom export can be shorter than 150). Pure.
+    static void planFrames(int wanted, int* request, int* maxTrim, int maxFrames = kMaxFrames);
+    /// The installed files that carry a pinned digest (default hosting only) match it. Hashes once per process for
+    /// each (path, size, mtime). False with `error` naming the file to delete.
+    static bool verifyInstalledFiles(QString* error);
 };
 
 } // namespace AIMotion

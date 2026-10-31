@@ -1,6 +1,7 @@
 #include "QtMeshT2M.h"
 
 #include "../AppStorage.h"
+#include "../ModelDownloader.h"
 #include "../ModelFetch.h"
 
 #ifdef ENABLE_ONNX
@@ -11,6 +12,7 @@
 #include <llama.h>
 #endif
 
+#include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -271,6 +273,36 @@ bool QtMeshT2M::downloadModels(QString* error, const ProgressFn& progress)
     return true;
 }
 
+bool QtMeshT2M::verifyInstalledFiles(QString* error)
+{
+    // Downloads are verified, but an existing file is never re-fetched: a same-size corrupt copy would load and
+    // produce wrong motion silently (the #1025 lesson), so check it before the first load. Per-process cache.
+    static std::mutex mutex;
+    static std::map<QString, QString> verified;   // path -> "size:mtime" that matched
+    for (const ModelFile& f : modelFiles()) {
+        if (f.sha256.isEmpty()) continue;
+        const QString path = QDir(modelDir()).filePath(f.name);
+        const QFileInfo info(path);
+        const QString stamp = QStringLiteral("%1:%2").arg(info.size()).arg(info.lastModified().toMSecsSinceEpoch());
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (const auto it = verified.find(path); it != verified.end() && it->second == stamp) continue;
+        }
+        QString hashError;
+        const QString digest = ModelDownloader::sha256HexOfFile(path, &hashError);
+        if (digest.compare(f.sha256, Qt::CaseInsensitive) != 0) {
+            if (error)
+                *error = hashError.isEmpty()
+                    ? QStringLiteral("%1 is corrupt (SHA-256 mismatch): delete it and download QtMesh T2M again").arg(QDir::toNativeSeparators(path))
+                    : QStringLiteral("cannot verify %1: %2").arg(QDir::toNativeSeparators(path), hashError);
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(mutex);
+        verified[path] = stamp;
+    }
+    return true;
+}
+
 bool QtMeshT2M::validateOptions(const Options& o, QString* error)
 {
     const auto fail = [error](const QString& m) {
@@ -285,10 +317,11 @@ bool QtMeshT2M::validateOptions(const Options& o, QString* error)
     return true;
 }
 
-void QtMeshT2M::planFrames(int wanted, int* request, int* maxTrim)
+void QtMeshT2M::planFrames(int wanted, int* request, int* maxTrim, int maxFrames)
 {
-    wanted = std::clamp(wanted, 2, kMaxFrames);
-    *request = std::min(kMaxFrames, wanted + kLeadInFrames);
+    maxFrames = std::max(2, maxFrames);
+    wanted = std::clamp(wanted, 2, maxFrames);
+    *request = std::min(maxFrames, wanted + kLeadInFrames);
     *maxTrim = *request - wanted;
 }
 
@@ -323,6 +356,7 @@ QtMeshT2M::Result QtMeshT2M::generate(const Options& o, const ProgressFn& progre
         r.error = QStringLiteral("QtMesh T2M model not downloaded (missing %1)").arg(missing.join(QStringLiteral(", ")));
         return r;
     }
+    if (!verifyInstalledFiles(&r.error)) return r;
     const QDir dir(modelDir());
     Meta meta;
     if (!loadMeta(dir.filePath(QString::fromLatin1(kMetaFile)), &meta, &r.error)) return r;
@@ -334,7 +368,7 @@ QtMeshT2M::Result QtMeshT2M::generate(const Options& o, const ProgressFn& progre
     if (wantedRaw > meta.T)
         r.note = QStringLiteral("QtMesh T2M generates at most %1 s; the clip is %1 s long").arg(double(meta.T) / meta.fps, 0, 'f', 0);
     int request = 0, maxTrim = 0;
-    planFrames(std::min(wantedRaw, meta.T), &request, &maxTrim);
+    planFrames(std::min(wantedRaw, meta.T), &request, &maxTrim, meta.T);
     const int wanted = request - maxTrim;
 
     const auto step = [&progress](const char* stage, int done, int total) {
@@ -410,7 +444,12 @@ QtMeshT2M::Result QtMeshT2M::generate(const Options& o, const ProgressFn& progre
         return r;
     }
     r.sampleSeconds = double(timer.elapsed()) / 1000.0;
-    step("generate", o.variations, o.variations);
+    // A Stop pressed during the last run must not hand back a clip.
+    if (!step("generate", o.variations, o.variations)) {
+        r.clips.clear();
+        r.error = QStringLiteral("cancelled");
+        return r;
+    }
     r.ok = true;
     return r;
 #endif
