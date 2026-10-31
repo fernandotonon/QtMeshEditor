@@ -260,6 +260,7 @@ AIMotion/KimodoController.cpp
 AIMotion/KimodoMath.cpp
 AIMotion/KimodoTextEncoder.cpp
 AIMotion/KimodoNative.cpp
+AIMotion/QtMeshT2M.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp

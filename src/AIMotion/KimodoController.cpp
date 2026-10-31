@@ -3,6 +3,7 @@
 
 #include "KimodoPredictor.h"
 #include "MotionSceneApply.h"
+#include "QtMeshT2M.h"
 #include "../AnimationControlController.h"
 #include "../AppStorage.h"
 #include "../GamificationManager.h"
@@ -17,6 +18,7 @@
 #include <QFileDialog>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSettings>
 #include <QThread>
 #include <QUrl>
 
@@ -65,7 +67,47 @@ void KimodoController::kill()
 
 KimodoController::KimodoController(QObject* parent) : QObject(parent)
 {
+    const QString saved = QSettings().value(QStringLiteral("ai/textToMotionBackend")).toString();
+    m_backend = backends().contains(saved) ? saved : QStringLiteral("kimodo");
     refreshRuntime();
+}
+
+void KimodoController::setBackend(const QString& b)
+{
+    if (!backends().contains(b) || b == m_backend) return;
+    m_backend = b;
+    QSettings().setValue(QStringLiteral("ai/textToMotionBackend"), b);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("text-to-motion backend: %1").arg(b));
+    emit backendChanged();
+}
+
+bool KimodoController::t2mSupported() const { return QtMeshT2M::buildSupported(); }
+bool KimodoController::t2mReady() const { return QtMeshT2M::buildSupported() && QtMeshT2M::modelsInstalled(); }
+
+QString KimodoController::t2mDownloadSize() const
+{
+    return QStringLiteral("%1 MB").arg(double(QtMeshT2M::missingBytes()) / 1e6, 0, 'f', 0);
+}
+
+void KimodoController::downloadT2MModels()
+{
+    if (m_busy || !t2mSupported() || t2mReady()) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("download model"));
+    m_cancel = false;
+    setBusy(true);
+    QString err;
+    const bool ok = QtMeshT2M::downloadModels(&err, [this](const QString&, int done, int total) {
+        m_stage = QStringLiteral("downloading QtMesh T2M (%1/%2 files)").arg(done).arg(total);
+        m_progress = total > 0 ? double(done) / double(total) : -1.0;
+        emit progressChanged();
+        return !m_cancel.load();
+    });
+    setBusy(false);
+    m_stage.clear();
+    m_progress = -1.0;
+    emit progressChanged();
+    emit runtimeChanged();
+    setStatus(ok ? QStringLiteral("QtMesh T2M downloaded.") : QStringLiteral("QtMesh T2M download failed: %1").arg(err), ok);
 }
 
 KimodoController::~KimodoController()
@@ -187,7 +229,8 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
     if (m_busy) return false;
     refreshRuntime();
     Ogre::Entity* entity = targetEntity();
-    if (!entity) { setStatus(QStringLiteral("Select a rigged mesh first: Kimodo motion needs a skeleton."), false); return false; }
+    if (!entity) { setStatus(QStringLiteral("Select a rigged mesh first: generated motion needs a skeleton."), false); return false; }
+    if (m_backend == QLatin1String("qtmesh_t2m")) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
 
     KimodoPredictor::Options o;
     QStringList texts;
@@ -245,6 +288,78 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         applyFiles(target, result->files, rootMotion, footPin);
     });
     m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
+    m_worker->start();
+    return true;
+}
+
+bool KimodoController::generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed,
+                                   bool rootMotion, bool footPin)
+{
+    QtMeshT2M::Options o;
+    o.prompt = prompt.trimmed();
+    o.duration = duration > 0.0 ? duration : 2.0;
+    o.variations = qBound(1, variations, 16);
+    o.hasSeed = seed >= 0;
+    o.seed = qMax(0, seed);
+    if (QString e; !QtMeshT2M::validateOptions(o, &e)) { setStatus(e, false); return false; }
+    if (!t2mReady()) { setStatus(QtMeshT2M::description(), false); return false; }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("GUI generate variations=%1").arg(o.variations));
+    GamificationManager::noteFeature(QStringLiteral("animation_blend"));
+    const std::string entityName = entity->getName();
+    auto result = std::make_shared<QtMeshT2M::Result>();
+    m_cancel = false;
+    m_stage = QStringLiteral("starting");
+    m_progress = -1.0;
+    emit progressChanged();
+    setStatus(QStringLiteral("Generating with QtMesh T2M…"), true);
+    setBusy(true);
+
+    QPointer<KimodoController> self(this);
+    m_worker = QThread::create([this, o, result]() {
+        *result = QtMeshT2M::generate(o, [this](const QString& stage, int done, int total) {
+            const double p = total > 0 ? double(done) / double(total) : -1.0;
+            QMetaObject::invokeMethod(this, [this, stage, p]() {
+                m_stage = stage;
+                m_progress = p;
+                emit progressChanged();
+            }, Qt::QueuedConnection);
+            return !m_cancel.load();
+        });
+    });
+    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin]() {
+        if (!self) return;
+        m_worker->deleteLater();
+        m_worker = nullptr;
+        setBusy(false);
+        m_stage.clear();
+        m_progress = -1.0;
+        emit progressChanged();
+        if (!result->ok) {
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("GUI generate failed: %1").arg(result->error));
+            setStatus(result->error == QLatin1String("cancelled") ? QStringLiteral("Cancelled.") : result->error, false);
+            return;
+        }
+        Ogre::Entity* target = entityByName(entityName);
+        if (!target) { setStatus(QStringLiteral("The rig was removed while QtMesh T2M ran."), false); return; }
+        std::vector<CanonicalMotion> motions;
+        for (const auto& c : result->clips) motions.push_back({c.quats, result->fps, result->restWorld, result->restDir});
+        SceneApplyOptions so;
+        so.baseName = QStringLiteral("generated_qtmesh_t2m");
+        so.rootMotion = rootMotion;
+        so.footPin = footPin;
+        const SceneApplyResult r = applyCanonicalMotionsToEntity(target, motions, so);
+        if (!r.ok) { setStatus(r.error, false); return; }
+        if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
+        m_lastClips = r.clips;
+        QString msg = QStringLiteral("Added %1 to %2 (QtMesh T2M, %3 s).")
+                          .arg(r.clips.join(QStringLiteral(", ")), QString::fromStdString(target->getName()))
+                          .arg(result->encodeSeconds + result->sampleSeconds, 0, 'f', 1);
+        if (!result->note.isEmpty()) msg += QLatin1Char(' ') + result->note + QLatin1Char('.');
+        setStatus(msg, true);
+        emit applied(QString::fromStdString(target->getName()), r.clips);
+    });
+    m_worker->setParent(this);
     m_worker->start();
     return true;
 }

@@ -1,7 +1,7 @@
 #pragma once
 
-// QML_SINGLETON behind the Animation panel's "NVIDIA Kimodo" text-to-motion
-// block. Generation (native runtime or the Python sidecar) runs on a WORKER thread (minutes of
+// QML_SINGLETON behind the Animation panel's text-to-motion block: NVIDIA Kimodo (the default) or the smaller,
+// experimental QtMesh T2M model (`backend`, persisted as ai/textToMotionBackend). Generation (native runtime or the Python sidecar) runs on a WORKER thread (minutes of
 // diffusion must not freeze the editor); the result is applied on the main
 // thread (Ogre and the undo stack live there) as one clip per variation, one
 // undo step for the batch. A saved motion (motion_NN.npz) can be re-applied
@@ -40,6 +40,11 @@ class KimodoController : public QObject
     /// The native (Python-free) runtime is built in but its models are not downloaded yet.
     Q_PROPERTY(bool nativeDownloadable READ nativeDownloadable NOTIFY runtimeChanged)
     Q_PROPERTY(QString nativeDownloadSize READ nativeDownloadSize NOTIFY runtimeChanged)
+    /// "kimodo" (default) | "qtmesh_t2m".
+    Q_PROPERTY(QString backend READ backend WRITE setBackend NOTIFY backendChanged)
+    Q_PROPERTY(bool t2mSupported READ t2mSupported CONSTANT)
+    Q_PROPERTY(bool t2mReady READ t2mReady NOTIFY runtimeChanged)
+    Q_PROPERTY(QString t2mDownloadSize READ t2mDownloadSize NOTIFY runtimeChanged)
 
 public:
     static KimodoController* instance();
@@ -57,6 +62,12 @@ public:
     QString lastMotionDir() const { return m_lastMotionDir; }
     bool nativeDownloadable() const;
     QString nativeDownloadSize() const;
+    QString backend() const { return m_backend; }
+    void setBackend(const QString& b);
+    bool t2mSupported() const;
+    bool t2mReady() const;
+    QString t2mDownloadSize() const;
+    static QStringList backends() { return {QStringLiteral("kimodo"), QStringLiteral("qtmesh_t2m")}; }
 
     /// Generate on the selected rig. `prompt` is one prompt, or one segment per
     /// line ("walk forward @3" — a trailing @SECONDS sets that line's duration,
@@ -64,6 +75,8 @@ public:
     /// it could not start (the reason is in `status`).
     Q_INVOKABLE bool generate(const QString& prompt, double duration, int variations, int seed,
                               bool rootMotion, bool footPin);
+    /// Download the QtMesh T2M model (~740 MB, explicit request; main thread, like downloadNativeModels).
+    Q_INVOKABLE void downloadT2MModels();
     Q_INVOKABLE void cancel();
     /// Pick saved motion_NN.npz file(s) and apply them to the selected rig with the panel's settings.
     Q_INVOKABLE bool applyMotionFile(bool rootMotion = true, bool footPin = true);
@@ -85,6 +98,7 @@ signals:
     void progressChanged();
     void statusChanged();
     void runtimeChanged();
+    void backendChanged();
     /// Clips were added to `entity` (the panel refreshes its list and selects the first).
     void applied(const QString& entity, const QStringList& clips);
 
@@ -98,6 +112,8 @@ private:
     void setStatus(const QString& s, bool ok);
     void setBusy(bool b);
     bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin);
+    bool generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed, bool rootMotion,
+                     bool footPin);
 
     bool m_busy = false;
     QString m_stage;
@@ -108,6 +124,7 @@ private:
     QString m_runtimeDescription;
     QStringList m_lastClips;
     QString m_lastMotionDir;
+    QString m_backend;
     QThread* m_worker = nullptr;
     std::atomic<bool> m_cancel{false};
 };

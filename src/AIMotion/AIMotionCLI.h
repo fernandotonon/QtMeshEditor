@@ -39,6 +39,11 @@ bool parseSegment(const QString& spec, MotionSegment* out, QString* error);
 
 int runCli(const CliRequest& req);
 
+/// `--backend qtmesh_t2m`: the experimental QtMesh T2M model (single prompt). Uses prompt, duration, variations,
+/// seed, name, download, --no-root-motion (travel is estimated from the feet), arm space and json; refuses the
+/// Kimodo-only options.
+int runT2MCli(const CliRequest& req);
+
 /// The first Kimodo-only option set on `req` ("--runtime", "--download", ...), or empty. Other backends reject
 /// them instead of silently ignoring them.
 QString kimodoOnlyOption(const CliRequest& req);

@@ -12380,8 +12380,8 @@ Rectangle {
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.openAnimationPicker() }
             }
-            // ── Generate from text: NVIDIA Kimodo (the only text-to-motion model in the panel until our own
-            // model matches it; then the user picks the model here). Runs on a worker thread (KimodoController);
+            // ── Generate from text: NVIDIA Kimodo (default) or the smaller, experimental QtMesh T2M model, picked
+            // here (KimodoController.backend, persisted). Runs on a worker thread (KimodoController);
             // every variation lands
             // as its own clip, one undo step. One prompt, or one segment per
             // line ("walk forward @3") for a continuous multi-step motion.
@@ -12396,12 +12396,49 @@ Rectangle {
                 }
             }
             Text {
-                text: "— or generate from text (NVIDIA Kimodo):"
+                text: "— or generate from text:"
                 color: PropertiesPanelController.textColor; opacity: 0.7; font.pixelSize: 10
                 topPadding: 6
             }
+            Row {
+                id: t2mBackendRow
+                width: parent.width - 16; spacing: 6
+                readonly property var ids: KimodoController.t2mSupported ? ["kimodo", "qtmesh_t2m"] : ["kimodo"]
+                readonly property bool isT2M: KimodoController.backend === "qtmesh_t2m"
+                Text { id: t2mModelLbl; text: "Model"; color: PropertiesPanelController.textColor; font.pixelSize: 10
+                       anchors.verticalCenter: parent.verticalCenter }
+                ThemedComboBox {
+                    width: parent.width - t2mModelLbl.width - 6
+                    height: 22
+                    font.pixelSize: 11
+                    model: KimodoController.t2mSupported ? ["NVIDIA Kimodo (default)", "QtMesh T2M (experimental, small)"]
+                                                         : ["NVIDIA Kimodo (default)"]
+                    currentIndex: Math.max(0, t2mBackendRow.ids.indexOf(KimodoController.backend))
+                    onActivated: function(index) {
+                        if (index >= 0 && index < t2mBackendRow.ids.length)
+                            KimodoController.backend = t2mBackendRow.ids[index]
+                    }
+                    enabled: !KimodoController.busy
+                }
+            }
+            // QtMesh T2M: our own model. Experimental, but ~12x smaller than Kimodo and fast: meant for lower-end machines.
             Text {
-                visible: !KimodoController.runtimeAvailable
+                visible: t2mBackendRow.isT2M
+                width: parent.width - 16; wrapMode: Text.Wrap
+                text: "Experimental: QtMesh T2M is our own model, trained on Kimodo, CMU and CC0 motion. It is much smaller "
+                      + "and faster than Kimodo (about 740 MB, seconds per clip), so it is intended for lower-end machines; "
+                      + "expect lower quality. One prompt per clip, up to 5 s; root motion is estimated from the feet."
+                color: "#d9a441"; font.pixelSize: 9
+            }
+            InspectorButton {
+                visible: t2mBackendRow.isT2M && !KimodoController.t2mReady && !KimodoController.busy
+                width: parent.width - 16
+                text: "Download QtMesh T2M (" + KimodoController.t2mDownloadSize + ")"
+                clickEnabled: !KimodoController.busy
+                onClicked: KimodoController.downloadT2MModels()
+            }
+            Text {
+                visible: !t2mBackendRow.isT2M && !KimodoController.runtimeAvailable
                 width: parent.width - 16; wrapMode: Text.Wrap
                 text: KimodoController.runtimeDescription
                 color: PropertiesPanelController.textColor; opacity: 0.6; font.pixelSize: 9
@@ -12410,7 +12447,7 @@ Rectangle {
             InspectorButton {
                 // InspectorButton sizes from parent.width: never put it in a Row without an explicit width
                 // (a Row's width comes from its children: a binding loop that broke this tab's layout).
-                visible: KimodoController.nativeDownloadable && !KimodoController.busy
+                visible: !t2mBackendRow.isT2M && KimodoController.nativeDownloadable && !KimodoController.busy
                 width: parent.width - 16
                 text: "Download Kimodo models (" + KimodoController.nativeDownloadSize + ")"
                 clickEnabled: !KimodoController.busy
@@ -12418,6 +12455,7 @@ Rectangle {
             }
             Text {
                 // Meta Llama 3 Community License 1.b.i(B): the text encoder is a Llama 3 derivative.
+                visible: !t2mBackendRow.isT2M
                 width: parent.width - 16; wrapMode: Text.Wrap
                 text: "Built with Meta Llama 3. Kimodo by NVIDIA (Open Model License); text encoder: Meta Llama 3 Community License."
                 color: PropertiesPanelController.textColor; opacity: 0.45; font.pixelSize: 9
@@ -12443,7 +12481,8 @@ Rectangle {
                     Text {
                         visible: !kimodoPromptIn.text && !kimodoPromptIn.activeFocus
                         width: parent.width; wrapMode: Text.Wrap
-                        text: "a person walks forward and waves\n(or one segment per line: sit down @2)"
+                        text: t2mBackendRow.isT2M ? "a person walks forward"
+                                                  : "a person walks forward and waves\n(or one segment per line: sit down @2)"
                         color: PropertiesPanelController.textColor; opacity: 0.4; font.pixelSize: 10
                     }
                 }
@@ -12470,7 +12509,7 @@ Rectangle {
                 spacing: 6
                 InspectorButton {
                     width: 128
-                    text: KimodoController.busy ? "Generating…" : "Generate (Kimodo)"
+                    text: KimodoController.busy ? "Generating…" : (t2mBackendRow.isT2M ? "Generate (QtMesh T2M)" : "Generate (Kimodo)")
                     clickEnabled: !KimodoController.busy && kimodoPromptIn.text.trim().length > 0
                     onClicked: {
                         kimodoDuration.commit(); kimodoVariations.commit(); kimodoSeed.commit()
@@ -12496,7 +12535,7 @@ Rectangle {
                 visible: KimodoController.busy || KimodoController.status.length > 0
                 width: parent.width - 16; wrapMode: Text.Wrap
                 text: KimodoController.busy && KimodoController.stage.length > 0
-                      ? "Kimodo: " + KimodoController.stage + "…" : KimodoController.status
+                      ? (t2mBackendRow.isT2M ? "QtMesh T2M: " : "Kimodo: ") + KimodoController.stage + "…" : KimodoController.status
                 color: KimodoController.lastOk ? PropertiesPanelController.textColor : "#e06c6c"
                 font.pixelSize: 10
             }

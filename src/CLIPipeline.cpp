@@ -3636,8 +3636,22 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         kimodoReq.json = jsonOutput;
         return AIMotion::runCli(kimodoReq);
     }
+    if (generateBackend == QLatin1String("qtmesh_t2m") || generateBackend == QLatin1String("qtmesh-t2m")) {
+        if (!generateMode) {
+            err() << "Error: --backend qtmesh_t2m needs --generate \"<prompt>\"." << Qt::endl;
+            return 2;
+        }
+        kimodoReq.armSpaceDeg = armSpaceDeg;
+        kimodoReq.rigPath = filePath;
+        kimodoReq.outputPath = outputPath;
+        kimodoReq.prompt = generatePrompt;
+        kimodoReq.duration = generateDuration > 0.0f ? generateDuration : 2.0;
+        kimodoReq.footPin = generateFootPin;
+        kimodoReq.json = jsonOutput;
+        return AIMotion::runT2MCli(kimodoReq);
+    }
     if (!generateBackend.isEmpty() && generateBackend != QLatin1String("template") && generateBackend != QLatin1String("model")) {
-        err() << "Error: --backend must be template, model or kimodo." << Qt::endl;
+        err() << "Error: --backend must be template, model, kimodo or qtmesh_t2m." << Qt::endl;
         return 2;
     }
     if (const QString flag = generateMode ? AIMotion::kimodoOnlyOption(kimodoReq) : QString(); !flag.isEmpty()) {
