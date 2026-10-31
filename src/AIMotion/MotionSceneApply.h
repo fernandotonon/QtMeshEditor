@@ -15,9 +15,11 @@
 #include <QString>
 #include <QStringList>
 
+#include <array>
+#include <string>
 #include <vector>
 
-namespace Ogre { class Entity; }
+namespace Ogre { class Entity; class Skeleton; }
 
 namespace AIMotion {
 
@@ -26,6 +28,7 @@ struct SceneApplyOptions {
     bool rootMotion = true;
     bool footPin = true;
     bool undoable = true;      ///< push one undo macro (off for headless one-shots)
+    int smoothFps = 12;        ///< canonical clips: sparse smoothing bake rate (0 = off)
 };
 
 struct SceneApplyResult {
@@ -45,6 +48,24 @@ QString variantClipName(const QString& base, int index);
 
 SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Motion>& motions,
                                       const SceneApplyOptions& options = {});
+
+/// QtMesh T2M output: 22-role canonical WORLD-frame clips, retargeted through AnimationMerger::applyMotionClip (the
+/// template-library path) + the sparse smoothing bake + foot pinning. Same naming, rollback and one-undo-step
+/// contract as applyMotionsToEntity; `outcomes` stays empty (no SOMA joint report).
+struct CanonicalMotion {
+    std::vector<std::vector<std::array<float, 4>>> quats;   ///< [frames][22]
+    int fps = 30;
+    std::vector<std::array<float, 4>> restWorld;
+    std::vector<std::array<float, 3>> restDir;
+};
+/// Root travel for a rotation-only clip: per hips keyframe the LOWER foot is taken as planted and the hips move
+/// by the opposite of its horizontal slide (plane across the bind hips->head axis). Feet must map to canonical
+/// roles 17/21. False (with `error`) when the rig or clip cannot take it; the clip is then left unchanged.
+bool addFootDrivenRootMotion(Ogre::Skeleton* skel, const std::string& clip, QString* error = nullptr);
+
+/// `options.rootMotion` adds addFootDrivenRootMotion (the model itself is rotation-only).
+SceneApplyResult applyCanonicalMotionsToEntity(Ogre::Entity* entity, const std::vector<CanonicalMotion>& motions,
+                                               const SceneApplyOptions& options = {});
 
 /// Per-clip report (mapped / unmapped / excluded joints) shared by the CLI and MCP JSON.
 QJsonObject outcomeJson(const ApplyOutcome& out);

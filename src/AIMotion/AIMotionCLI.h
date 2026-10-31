@@ -31,6 +31,7 @@ struct CliRequest {
     QString runtime;                ///< auto|native|python (empty = auto)
     bool download = false;          ///< --download: fetch the native Kimodo models first (explicit request)
     float armSpaceDeg = 0.0f;       ///< #854 arm-space swing applied to every written clip (0 = none)
+    int smoothFps = 12;             ///< QtMesh T2M: sparse smoothing bake rate (--smooth-fps; 0 = --no-smooth-bake)
     bool json = false;
 };
 
@@ -38,6 +39,11 @@ struct CliRequest {
 bool parseSegment(const QString& spec, MotionSegment* out, QString* error);
 
 int runCli(const CliRequest& req);
+
+/// `--backend qtmesh_t2m`: the experimental QtMesh T2M model (single prompt). Uses prompt, duration, variations,
+/// seed, name, download, --no-root-motion (travel is estimated from the feet), arm space and json; refuses the
+/// Kimodo-only options.
+int runT2MCli(const CliRequest& req);
 
 /// The first Kimodo-only option set on `req` ("--runtime", "--download", ...), or empty. Other backends reject
 /// them instead of silently ignoring them.

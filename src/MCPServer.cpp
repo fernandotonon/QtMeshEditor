@@ -29,6 +29,7 @@
 #include "AIMotion/KimodoNative.h"
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
+#include "AIMotion/QtMeshT2M.h"
 #ifdef ENABLE_MOCAP
 #include "Mocap/FaceCapMapper.h"
 #include "Mocap/FaceCapPredictor.h"
@@ -5589,8 +5590,10 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
         // NVIDIA Kimodo diffusion backend (or re-applying saved interchange files) has its own path.
         const QString backend = args.value(QStringLiteral("backend")).toString().trimmed().toLower();
         if (!backend.isEmpty() && backend != QLatin1String("template") && backend != QLatin1String("model")
-            && backend != QLatin1String("kimodo"))
-            return makeErrorResult("Error: 'backend' must be template, model or kimodo.");
+            && backend != QLatin1String("kimodo") && backend != QLatin1String("qtmesh_t2m"))
+            return makeErrorResult("Error: 'backend' must be template, model, kimodo or qtmesh_t2m.");
+        if (backend == QLatin1String("qtmesh_t2m"))
+            return toolGenerateMotionT2M(args);
         if (backend == QLatin1String("kimodo") || args.contains(QStringLiteral("motion_files")))
             return toolGenerateMotionKimodo(args);
 
@@ -6037,6 +6040,87 @@ QJsonObject MCPServer::toolGenerateMotionKimodo(const QJsonObject &args)
     Ogre::Entity* entity = findSkinnedEntity(mgr, targetName);
     if (!entity) return makeErrorResult(QStringLiteral("Error: skinned entity '%1' not found").arg(targetName));
     return applyKimodoMotion(args, entity, files, manifest);
+}
+
+QJsonObject MCPServer::toolGenerateMotionT2M(const QJsonObject &args)
+{
+    using namespace AIMotion;
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return makeErrorResult("Error: Manager not available");
+    for (const char* k : {"segments", "diffusion_steps", "postprocess", "runtime", "motion_files"})
+        if (args.contains(QLatin1String(k)))
+            return makeErrorResult(QStringLiteral("Error: '%1' is a Kimodo option; qtmesh_t2m generates one motion per prompt.").arg(QLatin1String(k)));
+    const QString entityName = args.value(QStringLiteral("entity_name")).toString();
+    const Ogre::Entity* initial = findSkinnedEntity(mgr, entityName);
+    if (!initial)
+        return makeErrorResult(entityName.isEmpty() ? QStringLiteral("Error: no skinned mesh found: generated motion needs a rigged humanoid")
+                                                    : QStringLiteral("Error: skinned entity '%1' not found").arg(entityName));
+    const QString targetName = QString::fromStdString(initial->getName());
+    const Ogre::Mesh* targetMesh = initial->getMesh().get();   // the event loop pumps below: the rig may be replaced
+
+    QtMeshT2M::Options o;
+    o.prompt = args.value(QStringLiteral("prompt")).toString();
+    o.duration = args.value(QStringLiteral("duration")).toDouble(2.0);
+    o.variations = args.value(QStringLiteral("variations")).toInt(1);
+    o.hasSeed = args.contains(QStringLiteral("seed"));
+    o.seed = args.value(QStringLiteral("seed")).toInt(0);
+    if (QString e; !QtMeshT2M::validateOptions(o, &e)) return makeErrorResult(QStringLiteral("Error: %1").arg(e));
+    if (!QtMeshT2M::buildSupported()) return makeErrorResult(QStringLiteral("Error: %1").arg(QtMeshT2M::description()));
+
+    m_toolCancelRequested = false;
+    QElapsedTimer pumpClock;
+    pumpClock.start();
+    const auto progress = [this, &pumpClock](const QString& stage, int done, int total) {
+        emit toolProgress(QStringLiteral("generate_motion"), QStringLiteral("qtmesh_t2m: %1").arg(stage), done, total);
+        if (pumpClock.elapsed() >= 50) {
+            pumpClock.restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;
+    };
+    if (!QtMeshT2M::modelsInstalled()) {
+        if (!args.value(QStringLiteral("download")).toBool(false))
+            return makeErrorResult(QStringLiteral("Error: %1: pass download:true to fetch it").arg(QtMeshT2M::description()));
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("MCP generate_motion download"));
+        if (QString derr; !QtMeshT2M::downloadModels(&derr, progress))
+            return makeErrorResult(QStringLiteral("Error: QtMesh T2M download failed: %1").arg(derr));
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("MCP generate_motion variations=%1").arg(o.variations));
+    const QtMeshT2M::Result gen = QtMeshT2M::generate(o, progress);
+    if (!gen.ok) return makeErrorResult(QStringLiteral("Error: QtMesh T2M: %1").arg(gen.error));
+
+    Ogre::Entity* entity = findSkinnedEntity(mgr, targetName);
+    if (!entity || entity->getMesh().get() != targetMesh)
+        return makeErrorResult(QStringLiteral("Error: '%1' was removed or replaced while QtMesh T2M ran").arg(targetName));
+    std::vector<CanonicalMotion> motions;
+    for (const auto& c : gen.clips) motions.push_back({c.quats, gen.fps, gen.restWorld, gen.restDir});
+    SceneApplyOptions so;
+    so.baseName = args.value(QStringLiteral("clip_name")).toString(QStringLiteral("generated_qtmesh_t2m"));
+    so.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
+    so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
+    const SceneApplyResult applied = applyCanonicalMotionsToEntity(entity, motions, so);
+    if (!applied.ok) return makeErrorResult(QStringLiteral("Error: %1").arg(applied.error));
+    const QString outPath = args.value(QStringLiteral("output_path")).toString();
+    if (!outPath.isEmpty()) {
+        Ogre::SceneNode* node = entity->getParentSceneNode();
+        if (!node || MeshImporterExporter::exporter(node, outPath, CLIPipeline::formatForExtension(outPath)) != 0) {
+            rollbackAppliedMotions(entity, applied);
+            if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
+            return makeErrorResult(QStringLiteral("Error: export to %1 failed; the %2 new clip(s) were removed").arg(outPath).arg(applied.clips.size()));
+        }
+    }
+    if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
+    QJsonObject report{{QStringLiteral("backend"), QStringLiteral("qtmesh_t2m")},
+                       {QStringLiteral("experimental"), true},
+                       {QStringLiteral("entity"), targetName},
+                       {QStringLiteral("clips"), QJsonArray::fromStringList(applied.clips)},
+                       {QStringLiteral("encode_seconds"), gen.encodeSeconds},
+                       {QStringLiteral("sample_seconds"), gen.sampleSeconds}};
+    if (!gen.note.isEmpty()) report.insert(QStringLiteral("note"), gen.note);
+    if (!outPath.isEmpty()) report.insert(QStringLiteral("output_path"), outPath);
+    return makeSuccessResult(QStringLiteral("Applied %1 QtMesh T2M clip(s) (experimental) to %2: %3\n%4")
+                                 .arg(applied.clips.size()).arg(targetName, applied.clips.join(QStringLiteral(", ")),
+                                      QString::fromUtf8(QJsonDocument(report).toJson(QJsonDocument::Compact))));
 }
 
 // Apply the motion files as one undo step, then export when output_path asks; a failed export takes the clips back.
@@ -13007,19 +13091,19 @@ QJsonArray MCPServer::buildToolsList()
         props["smooth_fps"] = QJsonObject{{"type", "number"}, {"description", "Sparse keyframe rate for the smooth-bake pass. Lower = smoother but softer motion. Default 12."}};
         props["vertical_descent"] = QJsonObject{{"type", "boolean"}, {"description", "Lower the body to the ground on non-locomotion crouch/pickup/sit/crawl/death clips (#838, descent-only). Default true; set false to keep the root at standing height when the descent over-sinks on a given clip. No effect on locomotion actions."}};
         props["variant_index"] = QJsonObject{{"type", "integer"}, {"description", "Select an EXACT clip from the library by index (parity with CLI --variant / the GUI picker) instead of keyword-matching a prompt. Forces the template path. When given, 'prompt' is optional. Out-of-range indices error."}};
-        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"template", "model", "kimodo"}},
-            {"description", "Motion source. 'template' (default): the curated clip library. 'model': the experimental in-house ONNX model (same as model:true). 'kimodo': NVIDIA Kimodo text-to-motion diffusion (Kimodo-SOMA-RP-v1.2, commercially usable) natively (ONNX Runtime + llama.cpp, no Python; its ~9 GB of models download once on request: pass download:true) or through the optional Python sidecar (ai/kimodo/install.py). Built with Meta Llama 3: the text encoder is a Llama 3 derivative under the Meta Llama 3 Community License. Kimodo takes 'prompt' + 'duration' or 'segments', and 'variations', 'seed', 'diffusion_steps', 'root_motion', 'postprocess'; every variation becomes its own clip (name, name_v2, ...), all in ONE undo step. Slow (minutes); reports progress and honours Stop."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"template", "model", "kimodo", "qtmesh_t2m"}},
+            {"description", "Motion source. 'template' (default): the curated clip library. 'model': the experimental in-house ONNX model (same as model:true). 'kimodo': NVIDIA Kimodo text-to-motion diffusion (Kimodo-SOMA-RP-v1.2, commercially usable) natively (ONNX Runtime + llama.cpp, no Python; its ~9 GB of models download once on request: pass download:true) or through the optional Python sidecar (ai/kimodo/install.py). Built with Meta Llama 3: the text encoder is a Llama 3 derivative under the Meta Llama 3 Community License. Kimodo takes 'prompt' + 'duration' or 'segments', and 'variations', 'seed', 'diffusion_steps', 'root_motion', 'postprocess'; every variation becomes its own clip (name, name_v2, ...), all in ONE undo step. Slow (minutes); reports progress and honours Stop. 'qtmesh_t2m': QtMeshEditor's own text-to-motion model, EXPERIMENTAL, much smaller (~740 MB download incl. its Qwen3-Embedding text encoder, pass download:true once) and fast (seconds), intended for lower-end machines; one prompt per call (no segments), up to 5 s, root travel estimated from the planted foot (root_motion:false = in place); takes 'prompt', 'duration' (default 2), 'variations', 'seed', 'root_motion', 'clip_name'."}};
         props["segments"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "object"}}},
             {"description", "kimodo only: a multi-segment timeline [{\"text\":\"walk forward\",\"duration\":3},{\"text\":\"sit down\",\"duration\":2}] generated as ONE continuous motion with model-made transitions. Overrides prompt/duration."}};
-        props["variations"] = QJsonObject{{"type", "integer"}, {"description", "kimodo only: how many variations to generate (1..16, default 1)."}};
-        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "kimodo only: random seed for reproducible results."}};
+        props["variations"] = QJsonObject{{"type", "integer"}, {"description", "kimodo / qtmesh_t2m: how many variations to generate (1..16, default 1)."}};
+        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "kimodo / qtmesh_t2m: random seed for reproducible results."}};
         props["diffusion_steps"] = QJsonObject{{"type", "integer"}, {"description", "kimodo only: denoising steps (default: the model's own)."}};
-        props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: keep the root translation (scaled to the rig's height). Default true; false = in-place motion."}};
+        props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo / qtmesh_t2m: keep the root translation (Kimodo: its own, scaled to the rig's height; qtmesh_t2m: estimated from the planted foot). Default true; false = in-place motion."}};
         props["postprocess"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: Kimodo's own foot-skate cleanup. Default true."}};
-        props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "kimodo / motion_files: base clip name (default generated_kimodo)."}};
+        props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "kimodo / qtmesh_t2m / motion_files: base clip name (default generated_kimodo or generated_qtmesh_t2m)."}};
         props["runtime"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "native", "python"}},
             {"description", "kimodo only: 'auto' (default: native when its models are downloaded, else the Python sidecar), 'native' or 'python' (constraints files need python)."}};
-        props["download"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: download the native Kimodo models (~9 GB, once) before generating. Default false: generation never downloads on its own."}};
+        props["download"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo / qtmesh_t2m: download the selected backend's models (Kimodo ~9 GB, QtMesh T2M ~740 MB; once) before generating. Default false: generation never downloads on its own."}};
         props["motion_files"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}},
             {"description", "Re-apply saved QtMeshEditor motion interchange files (motion_NN.npz written by an earlier Kimodo run, kept under <AppData>/generated_motion/) to the rig with NO inference and no Python. Each file becomes one clip."}};
         props["script"] = QJsonObject{{"type", "object"}, {"description", "Composed motion timeline (#1010), skipping prompt parsing: {\"steps\":[{\"action\":\"walk\",\"duration_s\":2.0},{\"action\":\"sit\"},{\"action\":\"wave\",\"repeat\":2}]}. Each 'action' must resolve to a library action (synonyms allowed); unresolvable entries are reported, never silently played. Two or more steps are stitched into ONE continuous clip at their best-matching pose pair with a short crossfade. A plain multi-step 'prompt' composes the same way without this argument."}};

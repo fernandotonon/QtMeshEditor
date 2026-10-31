@@ -3,6 +3,7 @@
 #include "KimodoNative.h"
 #include "MotionInterchange.h"
 #include "MotionSceneApply.h"
+#include "QtMeshT2M.h"
 #include "SomaRetarget.h"
 #include "SomaSkeleton.h"
 #include "../AnimationMerger.h"
@@ -210,6 +211,84 @@ int runCli(const CliRequest& req)
                                        CLIPipeline::formatForExtension(output)) != 0)
         return fail(QStringLiteral("export failed"));
     writeReport(req, clips, output, files, manifest);
+    return 0;
+}
+
+int runT2MCli(const CliRequest& req)
+{
+    if (!QFileInfo::exists(req.rigPath)) return fail(QStringLiteral("File not found: %1").arg(req.rigPath));
+    if (!std::isfinite(req.armSpaceDeg)) return fail(QStringLiteral("--arm-space must be a finite number of degrees"), 2);
+    const std::pair<bool, const char*> kimodoOnly[] = {
+        {!req.segments.isEmpty(), "--segment"},
+        {req.diffusionSteps != 0, "--diffusion-steps"},
+        {!req.postprocess, "--no-postprocess"},
+        {!req.constraintsPath.isEmpty(), "--constraints"},
+        {!req.textEncoderUrl.isEmpty(), "--text-encoder-url"},
+        {!req.textEncoderQuant.isEmpty(), "--text-encoder-quant"},
+        {!req.runtime.isEmpty(), "--runtime"},
+        {!req.applyMotion.isEmpty(), "--apply-motion"},
+    };
+    for (const auto& [set, flag] : kimodoOnly)
+        if (set) return fail(QStringLiteral("%1 is a Kimodo option (QtMesh T2M generates one motion per prompt)").arg(QLatin1String(flag)), 2);
+
+    QtMeshT2M::Options o;
+    o.prompt = req.prompt;
+    o.duration = req.duration;   // the caller defaults an ABSENT --duration; an invalid one must reach validateOptions
+    o.variations = req.variations;
+    o.hasSeed = req.hasSeed;
+    o.seed = req.seed;
+    if (QString e; !QtMeshT2M::validateOptions(o, &e)) return fail(e, 2);
+    if (!QtMeshT2M::buildSupported()) return fail(QtMeshT2M::description());
+    if (!QtMeshT2M::modelsInstalled()) {
+        if (!req.download)
+            return fail(QStringLiteral("%1: add --download to fetch it").arg(QtMeshT2M::description()));
+        note(QStringLiteral("(qtmesh_t2m: downloading the model, ~%1 MB)").arg(double(QtMeshT2M::missingBytes()) / 1e6, 0, 'f', 0));
+        if (QString e; !QtMeshT2M::downloadModels(&e)) return fail(QStringLiteral("download failed: %1").arg(e));
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.qtmesh_t2m"), QStringLiteral("CLI generate variations=%1").arg(o.variations));
+    const QtMeshT2M::Result gen = QtMeshT2M::generate(o);
+    if (!gen.ok) return fail(gen.error);
+    if (!gen.note.isEmpty()) note(QStringLiteral("(qtmesh_t2m: %1)").arg(gen.note));
+
+    if (!CLIPipeline::initOgreHeadless()) return 1;
+    MeshImporterExporter::importer({QFileInfo(req.rigPath).absoluteFilePath()});
+    Ogre::Entity* entity = firstSkinnedEntity();
+    if (!entity) return fail(QStringLiteral("%1 has no skinned mesh: generated motion needs a rigged humanoid").arg(req.rigPath));
+    std::vector<CanonicalMotion> motions;
+    for (const auto& c : gen.clips) motions.push_back({c.quats, gen.fps, gen.restWorld, gen.restDir});
+    SceneApplyOptions so;
+    so.baseName = req.name.isEmpty() ? QStringLiteral("generated_qtmesh_t2m") : req.name;
+    so.rootMotion = req.rootMotion;
+    so.footPin = req.footPin;
+    so.smoothFps = req.smoothFps;
+    so.undoable = false;
+    const SceneApplyResult applied = applyCanonicalMotionsToEntity(entity, motions, so);
+    if (!applied.ok) return fail(applied.error);
+    applyArmSpace(entity, applied.clips, req.armSpaceDeg);
+
+    const QString output = req.outputPath.isEmpty() ? req.rigPath : req.outputPath;
+    if (MeshImporterExporter::exporter(entity->getParentSceneNode(), QFileInfo(output).absoluteFilePath(),
+                                       CLIPipeline::formatForExtension(output)) != 0)
+        return fail(QStringLiteral("export failed"));
+    if (req.json) {
+        QJsonArray clips;
+        for (size_t i = 0; i < gen.clips.size() && i < size_t(applied.clips.size()); ++i)
+            clips.append(QJsonObject{{QStringLiteral("name"), applied.clips[int(i)]},
+                                     {QStringLiteral("frames"), int(gen.clips[i].quats.size())},
+                                     {QStringLiteral("trimmedLeadInFrames"), gen.clips[i].trimmedFrames}});
+        const QJsonObject root{{QStringLiteral("backend"), QStringLiteral("qtmesh_t2m")},
+                               {QStringLiteral("experimental"), true},
+                               {QStringLiteral("clips"), clips},
+                               {QStringLiteral("encodeSeconds"), gen.encodeSeconds},
+                               {QStringLiteral("sampleSeconds"), gen.sampleSeconds},
+                               {QStringLiteral("note"), gen.note},
+                               {QStringLiteral("output"), QFileInfo(output).absoluteFilePath()}};
+        CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact)) + QLatin1Char('\n'));
+    } else {
+        CLIPipeline::writeOutput(QStringLiteral("QtMesh T2M motion (experimental): %1 clip(s) on %2 -> %3 (text %4 s, motion %5 s)\n")
+                                     .arg(applied.clips.size()).arg(QFileInfo(req.rigPath).fileName(), QFileInfo(output).fileName())
+                                     .arg(gen.encodeSeconds, 0, 'f', 2).arg(gen.sampleSeconds, 0, 'f', 2));
+    }
     return 0;
 }
 

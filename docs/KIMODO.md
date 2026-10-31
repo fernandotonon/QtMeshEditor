@@ -21,7 +21,7 @@ interrupts the transfer. Overrides: `QTMESH_KIMODO_MODEL_BASE_URL` / `QTMESH_KIM
 ## Panel
 
 Select a rigged character, switch to **Animation** mode, and in **Animations** type a prompt under
-*generate from text (NVIDIA Kimodo)*. Defaults: 2 s, 1 variation, root motion off (the clip stays in place).
+*generate from text* (Model: NVIDIA Kimodo). Defaults: 2 s, 1 variation, root motion off (the clip stays in place).
 One prompt per line makes a continuous multi-step motion; `@SECONDS` at the end of a line sets that step's length:
 
 ```
@@ -61,6 +61,34 @@ takes the new clips back out of the scene.
 On an Apple M-series Mac, ~18 s per 5 s variation at the default 100 steps, plus ~4 s to load the models and encode the prompt (fewer `diffusion_steps` is faster). The
 native runtime reproduces Kimodo's own PyTorch output on the same inputs to a 2e-4 maximum joint-rotation
 difference and 0.003 cm root difference, with identical foot contacts (`scripts/export-kimodo-onnx.py --verify`).
+
+## QtMesh T2M: the small, experimental alternative
+
+The same panel has a **Model** picker: *NVIDIA Kimodo (default)* or *QtMesh T2M (experimental, small)*, QtMeshEditor's
+own text-to-motion model (trained on Kimodo-generated clips and our CC0/CC-BY motion library). It is meant for lower-end machines:
+
+| On this Mac (M-series, one 3 s clip) | NVIDIA Kimodo | QtMesh T2M |
+|---|---|---|
+| Download | ~9.2 GB | ~740 MB |
+| Text encoding | ~1.1 s (+ loading the 8 GB encoder) | ~0.3 s |
+| Motion sampling | ~14 s | ~2.7 s |
+| Whole CLI run (import, generate, export) | ~18-21 s | ~5 s |
+| Peak resident memory | ~7.6-8.2 GB | ~0.87 GB |
+
+Expect lower quality: one prompt per clip (no `@SECONDS` timelines), up to 5 s, and results vary with the seed
+(of ten jump seeds, four bend the knees 70-86 degrees and four barely move: generate a few variations). The model
+outputs rotations only; with **Root motion** on (`--no-root-motion` / `root_motion: false` turn it off) the editor
+moves the character by the slide of the planted foot (measured: walk ~1.4 m/s, run ~1.9 m/s); the root never
+rises, so jumps stay on the spot. It is a separate download (*Download QtMesh T2M* in the
+panel, `--download` / `download: true`).
+
+```bash
+qtmesh anim rigged.glb --generate "a person waves with the right hand" --backend qtmesh_t2m --duration 3 --download -o out.glb
+```
+
+MCP: `{"backend": "qtmesh_t2m", "prompt": "...", "duration": 3, "variations": 1, "seed": 1, "download": true}`.
+Clips are named `generated_qtmesh_t2m`, `_v2`, …, in one undo step. They are retargeted with the same
+incompatible-skeleton retargeter as Kimodo (#523), so a rig facing −Z gets the motion turned, not mirrored.
 
 ## Licences
 

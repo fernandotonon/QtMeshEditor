@@ -3308,6 +3308,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     bool generateMode = false;        // #411: text-to-motion (template-clip MVP)
     QString generatePrompt;           // --generate "<prompt>"
     float generateDuration = 0.0f;    // --duration N (seconds; 0 = clip's native length)
+    bool generateDurationSet = false; // --duration given (QtMesh T2M validates it instead of defaulting)
+    bool generateDurationValid = true;
     bool generateUseModel = false;    // --model → experimental trained t2m model (template fallback)
     // NVIDIA Kimodo backend (--backend kimodo) and --apply-motion <interchange.npz>: see src/AIMotion/AIMotionCLI.h.
     QString generateBackend;          // --backend template|model|kimodo
@@ -3492,7 +3494,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--duration" && i + 1 < argc) {
-            generateDuration = QString(argv[++i]).toFloat();
+            generateDuration = QString(argv[++i]).toFloat(&generateDurationValid);
+            generateDurationSet = true;
             continue;
         }
         if (arg == "--arm-spread" && i + 1 < argc) {
@@ -3622,6 +3625,23 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "Error: --model selects the model backend; it conflicts with --backend " << generateBackend << "." << Qt::endl;
         return 2;
     }
+    // Before the Kimodo branch: that one also takes --apply-motion, which QtMesh T2M refuses.
+    if (generateBackend == QLatin1String("qtmesh_t2m") || generateBackend == QLatin1String("qtmesh-t2m")) {
+        if (!generateMode) {
+            err() << "Error: --backend qtmesh_t2m needs --generate \"<prompt>\"." << Qt::endl;
+            return 2;
+        }
+        kimodoReq.armSpaceDeg = armSpaceDeg;
+        kimodoReq.rigPath = filePath;
+        kimodoReq.outputPath = outputPath;
+        kimodoReq.prompt = generatePrompt;
+        // An explicit --duration goes through as given (so -1 or "abc" is rejected), only an absent one defaults.
+        kimodoReq.duration = !generateDurationSet ? 2.0 : (generateDurationValid ? double(generateDuration) : -1.0);
+        kimodoReq.smoothFps = generateSmoothFps;
+        kimodoReq.footPin = generateFootPin;
+        kimodoReq.json = jsonOutput;
+        return AIMotion::runT2MCli(kimodoReq);
+    }
     if (generateBackend == QLatin1String("kimodo") || !kimodoReq.applyMotion.isEmpty()) {
         kimodoReq.armSpaceDeg = armSpaceDeg;
         if (!kimodoReq.applyMotion.isEmpty() && generateMode) {
@@ -3637,7 +3657,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return AIMotion::runCli(kimodoReq);
     }
     if (!generateBackend.isEmpty() && generateBackend != QLatin1String("template") && generateBackend != QLatin1String("model")) {
-        err() << "Error: --backend must be template, model or kimodo." << Qt::endl;
+        err() << "Error: --backend must be template, model, kimodo or qtmesh_t2m." << Qt::endl;
         return 2;
     }
     if (const QString flag = generateMode ? AIMotion::kimodoOnlyOption(kimodoReq) : QString(); !flag.isEmpty()) {

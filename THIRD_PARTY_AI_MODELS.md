@@ -229,6 +229,28 @@ For a one-page overview of every model and what it does in the app, see
   export — is QtMeshEditor C++ (`src/AIMotion/`). Saved motions re-apply with
   no Python (`--apply-motion`, MCP `motion_files`, panel "Apply saved motion…").
 
+## QtMesh T2M — our own text-to-motion model (experimental, small)
+
+- **Model:** `t2m-text.onnx` (~98 MB, 22.6 M parameters) — a flow-matching transformer trained from scratch by us
+  (`scripts/train-t2m-text.py`, cache built by `scripts/prep-t2m-text.py`). Output: 22-role canonical world-frame
+  clips, up to 5 s (root travel is estimated in the editor from the planted foot). Runs natively (ONNX Runtime,
+  CPU), no Python. Selectable next to Kimodo in the Animation panel (Kimodo stays the default), CLI
+  `--backend qtmesh_t2m`, MCP `backend:"qtmesh_t2m"`.
+- **Training data:** (1) 3,400 clips WE generated with NVIDIA Kimodo (`scripts/build-kimodo-t2m-corpus.py`) —
+  Kimodo outputs are not Derivative Models under the NVIDIA Open Model License (see the Kimodo entry), so they may
+  train our model; (2) the windows behind the v8 action-label model: the curated template library
+  (`motion-library-v2.json`) and the scraped motion corpus (`QtMeshEditor-motion-corpus`) — **CC0 and CC-BY-4.0**.
+  The CC-BY credits of both travel with the model as `ATTRIBUTION.md` (downloaded with it). Kimodo's Llama 3 text
+  embeddings were never stored or trained on: our model is conditioned on Qwen3 embeddings computed separately.
+- **Text encoder:** **Qwen3-Embedding-0.6B** (Qwen team, Alibaba Cloud) — **Apache-2.0** (declared on the model
+  card; the repository ships no LICENSE file, so we ship the Apache-2.0 text with an attribution header as
+  `LICENSE-Qwen3-Embedding.txt`). Used as a Q8_0 GGUF (~640 MB) through the bundled llama.cpp.
+- **Hosting:** `fernandotonon/QtMeshEditor-models` `qtmesh_t2m/` (the app's source, pinned to a hub commit with
+  SHA-256 digests) and `fernandotonon/QtMeshEditor-t2m` `qtmesh_t2m/` (model card with Kimodo comparison GIFs):
+  `t2m-text.onnx`, `t2m-text.json`, `Qwen3-Embedding-0.6B-Q8_0.gguf`, `LICENSE-Qwen3-Embedding.txt`,
+  `ATTRIBUTION.md`. Downloads only on request. Overrides `QTMESH_QTMESH_T2M_BASE_URL` / QSettings
+  `ai/qtmeshT2mBaseUrl`, guard `QTMESH_QTMESH_T2M_NO_DOWNLOAD`.
+
 ## U²-Net — background removal for image-to-3D (epic #764)
 
 - **Model:** U²-Net salient-object detection (`u2net.onnx`) — the default
