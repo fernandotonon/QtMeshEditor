@@ -194,21 +194,24 @@ WriteResult write(const QString& path, const Scene& scene)
                 }
             }
 
-            // A shape whose data never moves keeps ONE sample.
-            auto posSamples = [&](const Shape& s) {
-                return allEqualToFirst(s.framePositions) ? size_t(1)
-                                                         : s.framePositions.size();
-            };
-            auto xfSamples = [&](const Shape& s) {
-                return allEqualToFirst(s.frameXforms) ? std::min<size_t>(s.frameXforms.size(), 1)
-                                                      : s.frameXforms.size();
-            };
+            // A shape whose data never moves keeps ONE sample. Decided ONCE per
+            // shape: comparing every frame against the first inside the frame
+            // loop made a static mesh cost O(frames^2 * vertices).
+            std::vector<size_t> posSampleCount(scene.shapes.size());
+            std::vector<size_t> xfSampleCount(scene.shapes.size());
+            for (size_t i = 0; i < scene.shapes.size(); ++i) {
+                const Shape& s = scene.shapes[i];
+                posSampleCount[i] = allEqualToFirst(s.framePositions)
+                    ? size_t(1) : s.framePositions.size();
+                xfSampleCount[i] = allEqualToFirst(s.frameXforms)
+                    ? std::min<size_t>(s.frameXforms.size(), 1) : s.frameXforms.size();
+            }
 
             for (int f = 0; f < frames; ++f) {
                 for (size_t i = 0; i < scene.shapes.size(); ++i) {
                     const Shape& s = scene.shapes[i];
 
-                    const size_t nx = xfSamples(s);
+                    const size_t nx = xfSampleCount[i];
                     const bool needIdentity = (f == 0 && nx == 0);
                     if (needIdentity || static_cast<size_t>(f) < nx) {
                         XformSample xs;
@@ -223,7 +226,7 @@ WriteResult write(const QString& path, const Scene& scene)
                         writers[i].xform->getSchema().set(xs);
                     }
 
-                    if (static_cast<size_t>(f) >= posSamples(s))
+                    if (static_cast<size_t>(f) >= posSampleCount[i])
                         continue;
                     const std::vector<float>& pf = s.framePositions[static_cast<size_t>(f)];
                     for (size_t v = 0; v < posStore[i].size(); ++v)

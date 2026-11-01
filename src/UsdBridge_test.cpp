@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QRegularExpression>
 #include <QTemporaryDir>
 
 #include <assimp/material.h>
@@ -564,6 +565,68 @@ TEST(UsdBridgeWrite, MorphWeightClipsAreAuthoredAndReportedAsNotImported) {
     EXPECT_EQ(back->mMeshes[0]->mNumAnimMeshes, 1u) << "the shape itself still imports";
     EXPECT_TRUE(warn.contains("weight", Qt::CaseInsensitive))
         << "the dropped weight animation must be reported, not silent";
+}
+
+TEST(UsdBridgeWrite, MorphWeightsAreInterpolatedAtInsertedJointKeyTimes) {
+    QTemporaryDir tmp;
+    ScenePtr scene = makeRiggedScene();   // "Wave": joint keys at 0, 1, 2 s
+    UsdBridge::MorphWeightClip clip;
+    clip.name = "Wave";                    // same name -> merged into one SkelAnimation
+    clip.shapes = { "Bulge: big" };
+    clip.times = { 0.0, 2.0 };             // no morph key at the joint key t = 1 s
+    clip.weights = { { 0.0f }, { 1.0f } };
+    UsdBridge::setWriteExtras({ clip });
+    const QString path = tmp.filePath("interp.usda");
+    QString err;
+    ASSERT_TRUE(UsdBridge::writeScene(path, scene.get(), &err)) << err.toStdString();
+    UsdBridge::clearWriteExtras();
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(f.readAll());
+    // t = 1 s is time code 24: holding the earlier key would write 0, the
+    // linear value is 0.5.
+    EXPECT_TRUE(text.contains(QRegularExpression(R"(24:\s*\[0\.5\])")))
+        << "weight at the inserted sample time must be interpolated";
+    EXPECT_FALSE(text.contains(QRegularExpression(R"(24:\s*\[0\])")));
+}
+
+TEST(UsdBridgeWrite, BlendShapeTokensAreSharedBetweenMeshAndClip) {
+    QTemporaryDir tmp;
+    ScenePtr scene = makeRiggedScene(false);
+    aiMesh* m = scene->mMeshes[0];
+    // two shapes whose names sanitise to the same identifier
+    auto* second = new aiAnimMesh();
+    second->mName = aiString("Bulge  big");   // "Bulge: big" and this both -> Bulge__big? use clearly equal
+    second->mNumVertices = m->mNumVertices;
+    second->mVertices = new aiVector3D[m->mNumVertices];
+    for (unsigned i = 0; i < m->mNumVertices; ++i) second->mVertices[i] = m->mVertices[i];
+    second->mVertices[0].x += 0.5f;
+    second->mWeight = 1.0f;
+    aiAnimMesh** shapes = new aiAnimMesh*[2]{ m->mAnimMeshes[0], second };
+    delete[] m->mAnimMeshes;
+    m->mAnimMeshes = shapes;
+    m->mNumAnimMeshes = 2;
+    m->mAnimMeshes[0]->mName = aiString("Smile-L");
+    m->mAnimMeshes[1]->mName = aiString("Smile L");
+
+    UsdBridge::MorphWeightClip clip;
+    clip.name = "Talk";
+    clip.shapes = { "Smile-L", "Smile L" };
+    clip.times = { 0.0, 1.0 };
+    clip.weights = { { 0.0f, 1.0f }, { 1.0f, 0.0f } };
+    UsdBridge::setWriteExtras({ clip });
+    const QString path = tmp.filePath("tokens.usda");
+    QString err;
+    ASSERT_TRUE(UsdBridge::writeScene(path, scene.get(), &err)) << err.toStdString();
+    UsdBridge::clearWriteExtras();
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::ReadOnly));
+    const QString text = QString::fromUtf8(f.readAll());
+    // The same ordered, DISTINCT token pair appears on the mesh and on the clip.
+    const QRegularExpression pair(R"(\[\s*"Smile_L"\s*,\s*"Smile_L_1"\s*\])");
+    EXPECT_EQ(text.count(pair), 2) << "mesh skel:blendShapes and clip blendShapes must match";
+    EXPECT_TRUE(text.contains("def BlendShape \"Smile_L\""));
+    EXPECT_TRUE(text.contains("def BlendShape \"Smile_L_1\""));
 }
 
 // ---------------------------------------------------------------------------

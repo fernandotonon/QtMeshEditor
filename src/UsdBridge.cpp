@@ -398,11 +398,18 @@ void setPrimvar(GeomMesh& mesh, const char* name, Attribute&& attr, Interpolatio
     mesh.props.emplace(name, Property(std::move(attr)));
 }
 
+// Blend-shape name -> unique USD identifier, built ONCE over every mesh's shapes
+// and every morph clip, so the BlendShape prim names, `skel:blendShapes` and the
+// SkelAnimation's `blendShapes` can never disagree (two names that sanitise to
+// the same identifier get distinct tokens, e.g. "Smile-L" / "Smile L").
+using ShapeTokens = std::map<std::string, std::string>;
+
 void applyApis(Prim& prim, bool materialBinding, bool skelBinding);
 
 Prim buildMeshPrim(const aiMesh* am, const std::string& primName, const SkeletonInfo* sk,
                    const std::string* skelPath, const std::string* materialPath,
-                   bool forceSkinToJoint0, const std::string& meshPath)
+                   bool forceSkinToJoint0, const std::string& meshPath,
+                   const ShapeTokens& shapeTokenMap)
 {
     GeomMesh mesh;
     mesh.name = primName;
@@ -497,8 +504,11 @@ Prim buildMeshPrim(const aiMesh* am, const std::string& primName, const Skeleton
             const aiAnimMesh* shape = am->mAnimMeshes[s];
             if (!shape->mVertices || shape->mNumVertices != am->mNumVertices) continue;
             const std::string original = shape->mName.C_Str();
+            auto tokIt = shapeTokenMap.find(original);
             const std::string bsName = names.unique(
-                sanitizeIdentifier(original, "shape" + std::to_string(s)));
+                tokIt != shapeTokenMap.end()
+                    ? tokIt->second
+                    : sanitizeIdentifier(original, "shape" + std::to_string(s)));
 
             BlendShape bs;
             bs.name = bsName;
@@ -624,7 +634,7 @@ std::vector<double> unionTimes(const aiAnimation* anim, const std::set<std::stri
 // `morph` (optional) adds blendShapes + weights.
 Prim buildSkelAnimation(const std::string& name, const SkeletonInfo& sk,
                         const aiAnimation* anim, const MorphWeightClip* morph,
-                        double* endTime)
+                        double* endTime, const ShapeTokens& shapeTokenMap)
 {
     SkelAnimation sa;
     sa.name = name;
@@ -692,20 +702,42 @@ Prim buildSkelAnimation(const std::string& name, const SkeletonInfo& sk,
 
     if (morph && !morph->shapes.empty()) {
         std::vector<value::token> shapeTokens;
-        for (const auto& s : morph->shapes)
-            shapeTokens.push_back(value::token(sanitizeIdentifier(s, "shape")));
+        for (const auto& s : morph->shapes) {
+            auto it = shapeTokenMap.find(s);
+            shapeTokens.push_back(value::token(
+                it != shapeTokenMap.end() ? it->second : sanitizeIdentifier(s, "shape")));
+        }
         sa.blendShapes.set_value(std::move(shapeTokens));
 
         Animatable<std::vector<float>> weights;
         for (double t : times) {
-            // hold the nearest earlier morph key (weights are authored per key)
-            size_t k = 0;
-            for (size_t i = 0; i < morph->times.size(); ++i)
-                if (morph->times[i] <= t + 1e-6) k = i;
-            std::vector<float> w = morph->weights.empty()
-                ? std::vector<float>(morph->shapes.size(), 0.0f)
-                : morph->weights[std::min(k, morph->weights.size() - 1)];
-            w.resize(morph->shapes.size(), 0.0f);
+            // Linear between the surrounding morph keys (what the glTF export
+            // does). The sample times are the UNION with the joint clip's, so
+            // holding the earlier key would change the authored animation at
+            // every inserted time.
+            const size_t nShapes = morph->shapes.size();
+            std::vector<float> w(nShapes, 0.0f);
+            const size_t nKeys = std::min(morph->times.size(), morph->weights.size());
+            if (nKeys > 0) {
+                size_t hi = 0;
+                while (hi < nKeys && morph->times[hi] < t - 1e-9) ++hi;
+                if (hi == 0) {
+                    w = morph->weights[0];
+                } else if (hi >= nKeys) {
+                    w = morph->weights[nKeys - 1];
+                } else {
+                    const double t0 = morph->times[hi - 1], t1 = morph->times[hi];
+                    const float f = t1 > t0 ? static_cast<float>((t - t0) / (t1 - t0)) : 0.0f;
+                    const auto& a = morph->weights[hi - 1];
+                    const auto& b = morph->weights[hi];
+                    for (size_t i = 0; i < nShapes; ++i) {
+                        const float av = i < a.size() ? a[i] : 0.0f;
+                        const float bv = i < b.size() ? b[i] : 0.0f;
+                        w[i] = av + (bv - av) * f;
+                    }
+                }
+                w.resize(nShapes, 0.0f);
+            }
             weights.add_sample(t * kTimeCodesPerSecond, w);
         }
         sa.blendShapeWeights.set_value(std::move(weights));
@@ -809,6 +841,22 @@ bool writeSceneImpl(const QString& path, const aiScene* scene, QString* err, QSt
     if (scene->mNumMaterials > 0)
         rootPrim.add_child(std::move(materialsScope), true, &aerr);
 
+    // ---------- blend-shape tokens (shared by meshes and clips) ----------
+    ShapeTokens shapeTokenMap;
+    {
+        NameSet tokens;
+        auto add = [&](const std::string& original) {
+            if (!shapeTokenMap.count(original))
+                shapeTokenMap[original] = tokens.unique(sanitizeIdentifier(
+                    original, "shape" + std::to_string(shapeTokenMap.size())));
+        };
+        for (unsigned m = 0; m < scene->mNumMeshes; ++m)
+            for (unsigned a = 0; a < scene->mMeshes[m]->mNumAnimMeshes; ++a)
+                add(scene->mMeshes[m]->mAnimMeshes[a]->mName.C_Str());
+        for (const auto& mc : t_morphClips)
+            for (const auto& s : mc.shapes) add(s);
+    }
+
     // ---------- geometry (+ skeleton) ----------
     const bool needSkel = sk.valid() || morphOnlySkeleton;
     const std::string rigName = "Rig";
@@ -833,7 +881,7 @@ bool writeSceneImpl(const QString& path, const aiScene* scene, QString* err, QSt
         Prim meshPrim = buildMeshPrim(am, meshName, needSkel ? &sk : nullptr,
                                       needSkel ? &skelPath : nullptr, matPath,
                                       shapeBound && morphOnlySkeleton,
-                                      parentPath + "/" + meshName);
+                                      parentPath + "/" + meshName, shapeTokenMap);
         if (needSkel)
             rigPrim.add_child(std::move(meshPrim), true, &aerr);
         else
@@ -892,7 +940,7 @@ bool writeSceneImpl(const QString& path, const aiScene* scene, QString* err, QSt
         auto addClip = [&](const std::string& rawName, const aiAnimation* anim,
                            const MorphWeightClip* morph) {
             const std::string clipName = clipNames.unique(sanitizeIdentifier(rawName, "Clip"));
-            Prim clipPrim = buildSkelAnimation(clipName, animSk, anim, morph, &endTime);
+            Prim clipPrim = buildSkelAnimation(clipName, animSk, anim, morph, &endTime, shapeTokenMap);
             if (firstClipPath.empty())
                 firstClipPath = skelPath + "/" + clipName;
             // The display name keeps the original (possibly non-identifier) text.
