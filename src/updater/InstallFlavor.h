@@ -7,7 +7,7 @@
  * @brief How the running binary was installed — gates the in-app auto-updater.
  *
  * Package-manager flavors must defer to their own update channel (brew, winget,
- * snap, apt, flatpak, docker pull). Only @ref InstallFlavor::Portable receives
+ * snap, apt/dnf, flatpak, docker pull). Only @ref InstallFlavor::Portable receives
  * download → verify → install → restart. See docs/AUTO_UPDATER_DESIGN.md (#440).
  */
 namespace InstallFlavor {
@@ -19,6 +19,7 @@ enum class Flavor {
     Snap,       ///< Linux snap (qtmesheditor)
     Flatpak,    ///< Linux Flatpak install
     Debian,     ///< Linux .deb / apt install under /usr
+    Rpm,        ///< Fedora / RHEL / openSUSE .rpm under /usr (#1081)
     Docker,     ///< Container image (/.dockerenv)
     Unknown,    ///< Dev/CI build tree, ambiguous layout — no self-update
 };

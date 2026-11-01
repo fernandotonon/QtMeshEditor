@@ -66,6 +66,24 @@ function detectVisitorOs() {
   return 'unknown';
 }
 
+/** Best-effort CPU arch from UA (Flatpak release bundle is x86_64-only). */
+function detectVisitorArch() {
+  if (typeof navigator === 'undefined') {
+    return 'unknown';
+  }
+  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const userAgent = (navigator.userAgent || '').toLowerCase();
+  const source = `${platform} ${userAgent}`;
+  if (source.includes('aarch64') || source.includes('arm64') || /\barmv[678]\b/.test(source)) {
+    return 'arm64';
+  }
+  if (source.includes('x86_64') || source.includes('amd64') || source.includes('x86-64') || source.includes('wow64')) {
+    return 'x86_64';
+  }
+  // Most desktop Linux UAs omit arch; default to x86_64 (matches Flatpak).
+  return 'x86_64';
+}
+
 function getStoreLabel(method) {
   return method.split('/')[0].trim();
 }
@@ -105,12 +123,48 @@ function App() {
   const portalTriggerRef = useRef(null);
   const cliTabButtonRefs = useRef([]);
   const detectedOs = useMemo(detectVisitorOs, []);
+  const detectedArch = useMemo(detectVisitorArch, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
-  const recommendedInstall = useMemo(
-    () => installOptions.find((item) => item.platform === detectedPlatform) || null,
-    [detectedPlatform]
-  );
+  // Flatpak is the cross-distro default on x86_64 (UA rarely names Fedora/RHEL).
+  // The release .flatpak is amd64-only — steer ARM64 visitors to snap/RPM/deb.
+  const recommendedInstall = useMemo(() => {
+    if (!detectedPlatform) {
+      return null;
+    }
+    if (detectedPlatform === 'Linux') {
+      if (detectedArch === 'arm64') {
+        return (
+          installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+          installOptions.find((item) => item.platform === 'Fedora / RHEL') ||
+          installOptions.find((item) => item.platform === 'Debian / Ubuntu') ||
+          installOptions.find((item) => item.platform === 'Linux') ||
+          null
+        );
+      }
+      return (
+        installOptions.find((item) => item.method === 'Flatpak') ||
+        installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+        installOptions.find((item) => item.platform === 'Linux') ||
+        null
+      );
+    }
+    return installOptions.find((item) => item.platform === detectedPlatform) || null;
+  }, [detectedPlatform, detectedArch]);
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
+  const portalInstallOptions = useMemo(() => {
+    if (detectedPlatform === 'Linux') {
+      return installOptions.filter(
+        (item) =>
+          item.platform === 'Linux' ||
+          item.platform === 'Fedora / RHEL' ||
+          item.platform === 'Debian / Ubuntu'
+      );
+    }
+    if (recommendedInstall) {
+      return [recommendedInstall];
+    }
+    return installOptions;
+  }, [detectedPlatform, recommendedInstall]);
   const githubActionExample = useMemo(
     () => pipelineExamples.githubAction
       .replace('__QTMESH_ACTION_REF__', qtmeshActionRef)
@@ -355,7 +409,7 @@ function App() {
                     {hero.ctaSecondary}
                   </ButtonLink>
                 </div>
-                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Docker, or release binaries.</p>
+                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries.</p>
               </div>
 
               <ul className={styles.proofRow} aria-label="Product proof points">
@@ -659,7 +713,7 @@ function App() {
             id="install"
             eyebrow="Install"
             title="Install QtMeshEditor and start scanning"
-            subtitle="Choose your platform path: winget, Homebrew, snap, Docker, or release binaries."
+            subtitle="Choose your platform path: winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries."
           >
             <div className={styles.installPortalEntryActions}>
               <button
@@ -676,7 +730,7 @@ function App() {
 
             <div className={styles.installGrid}>
               {installOptions.map((option) => (
-                <article key={option.platform} className={styles.installMethodCard}>
+                <article key={`${option.platform}-${option.method}`} className={styles.installMethodCard}>
                   <div className={styles.installMethodHeader}>
                     <h3>{option.platform}</h3>
                     <span>{option.method}</span>
@@ -782,25 +836,40 @@ function App() {
               </div>
 
               <div className={styles.installPortalGrid}>
-                {recommendedInstall ? (
-                  <article className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}>
-                    <div className={styles.installPortalCardTop}>
-                      <h3>{recommendedInstall.platform}</h3>
-                      <div className={styles.installPortalCardActions}>
-                        <span>{recommendedInstall.method}</span>
-                        <button
-                          type="button"
-                          className={styles.installPortalCopyButton}
-                          onClick={handleCopyInstallCommand}
-                        >
-                          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
-                    <pre>
-                      <code>{recommendedInstall.command}</code>
-                    </pre>
-                  </article>
+                {portalInstallOptions.length > 0 ? (
+                  portalInstallOptions.map((option) => {
+                    const isRecommended =
+                      recommendedInstall &&
+                      option.platform === recommendedInstall.platform &&
+                      option.method === recommendedInstall.method;
+                    return (
+                      <article
+                        key={`${option.platform}-${option.method}`}
+                        className={`${styles.installPortalCard}${
+                          isRecommended ? ` ${styles.installPortalCardRecommended}` : ''
+                        }`}
+                      >
+                        <div className={styles.installPortalCardTop}>
+                          <h3>{option.platform}</h3>
+                          <div className={styles.installPortalCardActions}>
+                            <span>{option.method}</span>
+                            {isRecommended ? (
+                              <button
+                                type="button"
+                                className={styles.installPortalCopyButton}
+                                onClick={handleCopyInstallCommand}
+                              >
+                                {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <pre>
+                          <code>{option.command}</code>
+                        </pre>
+                      </article>
+                    );
+                  })
                 ) : (
                   <p className={styles.installPortalFallback}>
                     OS detection is unavailable in this browser. Use the latest release download links below.
