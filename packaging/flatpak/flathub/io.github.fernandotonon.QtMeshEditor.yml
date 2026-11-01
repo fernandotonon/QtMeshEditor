@@ -1,0 +1,91 @@
+# Flathub submission draft — mirrors Snap by installing the release .deb.
+# Flathub policy prefers building open-source apps from source; this draft is
+# intended for a human-opened submission PR that requests an exception (Qt 6.9
+# + Ogre + Assimp + optional AI deps make a full offline Flatpak build a large
+# separate effort). Update sha256 whenever the release .deb changes.
+#
+# Do NOT open this as an automated Flathub PR: Flathub forbids AI agents from
+# opening submission PRs / generating manifests. Review and submit manually:
+#   https://docs.flathub.org/docs/for-app-authors/submission
+
+id: io.github.fernandotonon.QtMeshEditor
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: qtmesheditor
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-run/pipewire-0:ro
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --env=QT_QPA_PLATFORM=xcb
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+modules:
+  - name: qtmesheditor
+    buildsystem: simple
+    build-commands:
+      - |
+        set -euo pipefail
+        DEST="${FLATPAK_DEST}"
+        mkdir -p extract
+        ar x qtmesheditor_amd64.deb
+        tar -xf data.tar.* -C extract
+
+        install -d "${DEST}/bin"
+        install -d "${DEST}/lib/qtmesheditor"
+        install -d "${DEST}/share/qtmesheditor"
+        install -d "${DEST}/share/applications"
+        install -d "${DEST}/share/metainfo"
+        install -d "${DEST}/share/mime/packages"
+        install -d "${DEST}/share/icons/hicolor"
+        install -d "${DEST}/share/doc/qtmesheditor"
+
+        cp -a extract/usr/share/qtmesheditor/. "${DEST}/share/qtmesheditor/"
+        cp -a extract/usr/lib/qtmesheditor/. "${DEST}/lib/qtmesheditor/"
+        if [ -d extract/usr/share/doc/qtmesheditor ]; then
+          cp -a extract/usr/share/doc/qtmesheditor/. "${DEST}/share/doc/qtmesheditor/"
+        fi
+        if [ -f extract/usr/share/mime/packages/qtmesheditor-mimetypes.xml ]; then
+          install -m644 extract/usr/share/mime/packages/qtmesheditor-mimetypes.xml \
+            "${DEST}/share/mime/packages/qtmesheditor-mimetypes.xml"
+        fi
+
+        if [ -f "${DEST}/share/qtmesheditor/cfg/plugins.cfg" ]; then
+          sed -i 's|^PluginFolder=.*|PluginFolder=/app/lib/qtmesheditor|' \
+            "${DEST}/share/qtmesheditor/cfg/plugins.cfg"
+        fi
+
+        install -m755 qtmesheditor-launcher.sh "${DEST}/bin/qtmesheditor"
+        install -m755 qtmesh-launcher.sh "${DEST}/bin/qtmesh"
+        install -m644 io.github.fernandotonon.QtMeshEditor.desktop \
+          "${DEST}/share/applications/io.github.fernandotonon.QtMeshEditor.desktop"
+        install -m644 io.github.fernandotonon.QtMeshEditor.metainfo.xml \
+          "${DEST}/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+        cp -a icons/hicolor/. "${DEST}/share/icons/hicolor/"
+    sources:
+      - type: file
+        url: https://github.com/fernandotonon/QtMeshEditor/releases/download/3.60.0/qtmesheditor_amd64.deb
+        sha256: 30dab61755c858f1e678139377db2bf69c399a909ba1b5f8049bd85f4888b6bf
+      # After copying this YAML + sibling files to the Flathub branch root:
+      - type: file
+        path: qtmesheditor-launcher.sh
+      - type: file
+        path: qtmesh-launcher.sh
+      - type: file
+        path: io.github.fernandotonon.QtMeshEditor.desktop
+      - type: file
+        path: io.github.fernandotonon.QtMeshEditor.metainfo.xml
+      - type: dir
+        path: icons
