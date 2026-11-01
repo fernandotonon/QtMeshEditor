@@ -31,13 +31,14 @@ TEST(AlembicImporterStandalone, UnavailableWithoutFlag) {
 #include <Alembic/AbcGeom/All.h>
 
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 namespace {
 
 // Write a tiny 2-frame quad vertex cache to `path`: a unit quad whose 4 verts
 // translate +Y over frame 1. Round-trips through the same reader the app uses.
-void writeQuadCache(const std::string& path) {
+void writeQuadCache(const std::string& path, int frames = 2) {
     using namespace Alembic::AbcGeom;
     OArchive archive(Alembic::AbcCoreOgawa::WriteArchive(), path);
     // 30fps uniform time sampling.
@@ -69,6 +70,14 @@ void writeQuadCache(const std::string& path) {
     OPolyMeshSchema::Sample s1;
     s1.setPositions(posSample1);
     schema.set(s1);
+    if (frames > 2) {
+        std::vector<Imath::V3f> p2 = {
+            {0, 2, 0}, {1, 2, 0}, {1, 2, 1}, {0, 2, 1}};
+        Abc::V3fArraySample posSample2(p2);
+        OPolyMeshSchema::Sample s2;
+        s2.setPositions(posSample2);
+        schema.set(s2);
+    }
     // archive flushes on destruction (end of scope).
 }
 
@@ -136,11 +145,19 @@ TEST_F(AlembicImporterTest, ReadInfoMatchesDecode) {
 
 // B3: maxFrames caps the decode and flags truncation (no silent cap).
 TEST_F(AlembicImporterTest, MaxFramesTruncates) {
-    auto rr = AlembicImporter::readFrameSet(abcPath, /*maxFrames=*/1);
+    // A 3-frame cache capped at 2: still animatable, flagged as truncated.
+    const std::string path3 = abcPath.toStdString() + ".3f.abc";
+    writeQuadCache(path3, 3);
+    auto rr = AlembicImporter::readFrameSet(QString::fromStdString(path3), /*maxFrames=*/2);
     ASSERT_TRUE(rr.ok) << rr.error.toStdString();
-    EXPECT_EQ(rr.frames.frames.size(), 1u);
-    EXPECT_EQ(rr.totalFrames, 2);
+    EXPECT_EQ(rr.frames.frames.size(), 2u);
+    EXPECT_EQ(rr.totalFrames, 3);
     EXPECT_TRUE(rr.truncated);
+    std::remove(path3.c_str());
+
+    // A cap that leaves < 2 frames has nothing to animate and must fail soft.
+    auto one = AlembicImporter::readFrameSet(abcPath, /*maxFrames=*/1);
+    EXPECT_FALSE(one.ok);
 
     // maxFrames >= total (or 0) must not flag truncation.
     auto full = AlembicImporter::readFrameSet(abcPath, /*maxFrames=*/0);

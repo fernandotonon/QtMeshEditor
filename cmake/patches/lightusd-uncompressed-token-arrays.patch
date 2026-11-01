@@ -1,0 +1,22 @@
+diff --git a/src/crate-writer-values.cc b/src/crate-writer-values.cc
+index cf7a6bf..42e8a89 100644
+--- a/src/crate-writer-values.cc
++++ b/src/crate-writer-values.cc
+@@ -1471,9 +1471,14 @@ int64_t CrateWriter::WriteValueBody(const crate::CrateValue& value,
+     for (const auto& tok : *token_array) {
+       idxs.push_back(GetOrCreateToken(tok.str()).value);
+     }
+-    if (WriteCompressedArray32(reinterpret_cast<const uint32_t *>(idxs.data()), count,
+-                              "token", is_compressed, err) < 0) {
+-      return -1;
++    // OpenUSD stores token arrays as raw TokenIndex values (never compressed);
++    // a compressed one is misread by pxr-based readers (garbage joint paths).
++    if (is_compressed) { (*is_compressed) = false; }
++    for (uint32_t ti : idxs) {
++      if (!Write(ti)) {
++        if (err) *err = "Failed to write token array element";
++        return -1;
++      }
+     }
+   }
+   // Path array - special handling (paths are stored as indices)

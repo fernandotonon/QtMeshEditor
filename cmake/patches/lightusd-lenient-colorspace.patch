@@ -1,0 +1,21 @@
+diff --git a/src/tydra/render-data-material.cc b/src/tydra/render-data-material.cc
+index 3de768c..5854f59 100644
+--- a/src/tydra/render-data-material.cc
++++ b/src/tydra/render-data-material.cc
+@@ -2620,10 +2620,13 @@ bool RenderSceneConverter::ConvertUVTexture(const RenderSceneConverterEnv &env,
+ 
+     if (!sourceColorSpaceSet && inferColorSpaceFailed &&
+         authored_color_space_set) {
++      // DCC exporters write their own colour-space names (Blender:
++      // "srgb_rec709_display"); failing the whole scene for a texture tag is
++      // far worse than treating it as the default (sRGB) and carrying on.
+       value::token cs_token(authored_color_space);
+-      PUSH_ERROR_AND_RETURN(
+-          fmt::format("Invalid or unknown colorSpace metadataum: {}. Please "
+-                      "report an issue to LightUSD github repo.",
++      PUSH_WARN(
++          fmt::format("Unknown colorSpace metadataum: {}. Using the default "
++                      "colour space.",
+                       cs_token.str()));
+     }
+ 

@@ -26,6 +26,8 @@
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
+#include "UsdBridge.h"
+#include "AlembicExporter.h"
 #include "AIMotion/KimodoNative.h"
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
@@ -2080,9 +2082,51 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
         if (!node) {
             return makeErrorResult("Error: Selected scene node is null");
         }
-        const int exportResult = MeshImporterExporter::exporter(node, path, format);
+        // Alembic (#527): a bake with options, over every selected entity.
+        if (path.endsWith(QStringLiteral(".abc"), Qt::CaseInsensitive)
+            || format.contains(QStringLiteral("Alembic"), Qt::CaseInsensitive)) {
+            if (!AlembicExporter::available())
+                return makeErrorResult("Alembic export is not compiled in "
+                                       "(rebuild with -DENABLE_ALEMBIC=ON)");
+            AlembicExporter::Options o;
+            if (args.contains("fps")) o.fps = args["fps"].toDouble(30.0);
+            if (args.contains("start_time")) o.startTime = args["start_time"].toDouble(-1.0);
+            if (args.contains("end_time")) o.endTime = args["end_time"].toDouble(-1.0);
+            if (args.contains("animation")) o.animationName = args["animation"].toString();
+            if (args.contains("node_animations")) o.nodeAnimations = args["node_animations"].toBool(true);
+            QList<Ogre::Entity*> ents;
+            Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+            for (int i = 0; i < sel->getNodesCount(); ++i) {
+                Ogre::SceneNode* n = sel->getSceneNode(i);
+                if (n && sm->hasEntity(n->getName()))
+                    ents.append(sm->getEntity(n->getName()));
+            }
+            const AlembicExporter::Result ar = AlembicExporter::exportEntities(ents, path, o);
+            if (!ar.ok)
+                return makeErrorResult(QStringLiteral("Alembic export failed: %1").arg(ar.error));
+            return makeSuccessResult(QStringLiteral(
+                "Exported Alembic cache to: %1 (%2 mesh(es), %3 frame(s) @ %4 fps%5)")
+                .arg(path).arg(ar.shapeCount).arg(ar.frameCount).arg(o.fps)
+                .arg(ar.animationsUsed.isEmpty() ? QString()
+                     : QStringLiteral(", clip: %1").arg(ar.animationsUsed.join(", "))));
+        }
+        // USD (#527): a .usd/.usda/.usdc/.usdz path selects the matching
+        // writer; the file extension decides ASCII vs Crate vs Package.
+        QString effectiveFormat = format;
+        if (UsdBridge::isUsdPath(path)
+            || format.startsWith(QStringLiteral("USD"), Qt::CaseInsensitive)) {
+            if (!UsdBridge::available())
+                return makeErrorResult(UsdBridge::unavailableMessage());
+            if (!args.contains("format") || !format.startsWith(QStringLiteral("USD"))) {
+                const QString ext = QFileInfo(path).suffix().toLower();
+                effectiveFormat = ext == QLatin1String("usda") ? QStringLiteral("USD ASCII (*.usda)")
+                                : ext == QLatin1String("usdz") ? QStringLiteral("USD Package (*.usdz)")
+                                                               : QStringLiteral("USD Crate (*.usdc)");
+            }
+        }
+        const int exportResult = MeshImporterExporter::exporter(node, path, effectiveFormat);
         if (exportResult == 0) {
-            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path, format));
+            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path, effectiveFormat));
         }
         return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3")
             .arg(path, format).arg(exportResult));
@@ -12724,8 +12768,15 @@ QJsonArray MCPServer::buildToolsList()
             "'Ogre XML (*.mesh.xml)', 'Collada (*.dae)', 'X (*.x)', 'OBJ (*.obj)', "
             "'OBJ without MTL (*.objnomtl)', 'STL (*.stl)', 'PLY (*.ply)', '3DS (*.3ds)', "
             "'glTF 2.0 (*.gltf2)', 'glTF 2.0 Binary (*.glb2)', 'Assimp Binary (*.assbin)', "
-            "'FBX Binary (*.fbx)', 'PlayStation TMD (*.tmd)'. "
-            "Default: 'Ogre Mesh (*.mesh)'"}};
+            "'FBX Binary (*.fbx)', 'PlayStation TMD (*.tmd)', 'Alembic (*.abc)', "
+            "'USD ASCII (*.usda)', 'USD Crate (*.usdc)', 'USD Package (*.usdz)'. "
+            "Default: 'Ogre Mesh (*.mesh)'. A path ending in .abc selects Alembic and "
+            ".usd/.usda/.usdc/.usdz selects USD automatically (needs -DENABLE_USD)."}};
+        properties["fps"] = QJsonObject{{"type", "number"}, {"description", "Alembic only: sample rate (default 30)."}};
+        properties["animation"] = QJsonObject{{"type", "string"}, {"description", "Alembic only: clip to bake (default: the playing clips, else the longest clip)."}};
+        properties["start_time"] = QJsonObject{{"type", "number"}, {"description", "Alembic only: range start in seconds (default 0)."}};
+        properties["end_time"] = QJsonObject{{"type", "number"}, {"description", "Alembic only: range end in seconds (default: clip length)."}};
+        properties["node_animations"] = QJsonObject{{"type", "boolean"}, {"description", "Alembic only: also bake node transform clips (default true)."}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"path"};
 

@@ -14,6 +14,8 @@
 #include "MeshImporterExporter.h"
 #include "MeshDracoEncoder.h"
 #include "AlembicImporter.h"
+#include "AlembicExporter.h"
+#include <cmath>
 #include "SceneLightsIO.h"
 #include "SceneLightsCLI.h"
 #include "Mocap/MocapCLI.h"
@@ -1030,7 +1032,12 @@ QString CLIPipeline::formatForExtension(const QString& path)
         {".mesh", "Ogre Mesh (*.mesh)"},
         {".assbin", "Assimp Binary (*.assbin)"},
         {".tmd", "PlayStation TMD (*.tmd)"},
-        {".rsd", "PlayStation RSD (*.rsd)"}
+        {".rsd", "PlayStation RSD (*.rsd)"},
+        {".abc", "Alembic (*.abc)"},
+        {".usdz", "USD Package (*.usdz)"},
+        {".usda", "USD ASCII (*.usda)"},
+        {".usdc", "USD Crate (*.usdc)"},
+        {".usd", "USD Crate (*.usdc)"}
     };
 
     for (const ExtensionFormat& entry : extensionFormats) {
@@ -1051,6 +1058,17 @@ bool parseCliInt(const QString& text, int* out)
     if (ok && out)
         *out = v;
     return ok;
+}
+
+bool parseCliDouble(const QString& text, double* out)
+{
+    bool ok = false;
+    const double v = text.toDouble(&ok);
+    if (ok && std::isfinite(v) && out) {
+        *out = v;
+        return true;
+    }
+    return false;
 }
 
 bool parseCliFloat(const QString& text, float* out)
@@ -1947,6 +1965,8 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 {
     // Parse: convert <file> -o <output> [--format fmt] [--compress draco]
     QString inputPath, outputPath, format, compress;
+    AlembicExporter::Options abcOpts;
+    bool abcFlagSeen = false;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1963,6 +1983,31 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
             compress = QString(argv[++i]).toLower();
             continue;
         }
+        // Alembic (.abc) bake options (#527).
+        if (arg == "--fps" && i + 1 < argc) {
+            if (!parseCliDouble(QString(argv[++i]), &abcOpts.fps) || !(abcOpts.fps > 0.0)) {
+                err() << "Error: --fps needs a number > 0." << Qt::endl;
+                return 2;
+            }
+            abcFlagSeen = true;
+            continue;
+        }
+        if ((arg == "--start-time" || arg == "--end-time") && i + 1 < argc) {
+            double v = 0.0;
+            if (!parseCliDouble(QString(argv[++i]), &v) || v < 0.0) {
+                err() << "Error: " << arg << " needs a number >= 0." << Qt::endl;
+                return 2;
+            }
+            (arg == "--start-time" ? abcOpts.startTime : abcOpts.endTime) = v;
+            abcFlagSeen = true;
+            continue;
+        }
+        if (arg == "--animation" && i + 1 < argc) {
+            abcOpts.animationName = QString(argv[++i]);
+            abcFlagSeen = true;
+            continue;
+        }
+        if (arg == "--no-node-anim") { abcOpts.nodeAnimations = false; abcFlagSeen = true; continue; }
         if (!arg.startsWith("-") && inputPath.isEmpty()) {
             inputPath = arg;
             continue;
@@ -1971,8 +2016,26 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     if (inputPath.isEmpty() || outputPath.isEmpty()) {
         err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt] [--compress draco]" << Qt::endl;
+        err() << "Usage: qtmesh convert <file> -o <output> [--format fmt] [--compress draco]\n"
+                 "       qtmesh convert <file> -o out.abc [--fps N] [--animation NAME] "
+                 "[--start-time S] [--end-time S] [--no-node-anim]" << Qt::endl;
         return 2;
+    }
+
+    const bool abcOutput = QFileInfo(outputPath).suffix().compare("abc", Qt::CaseInsensitive) == 0;
+    if (abcFlagSeen && !abcOutput) {
+        err() << "Error: --fps/--animation/--start-time/--end-time/--no-node-anim "
+                 "only apply to .abc output." << Qt::endl;
+        return 2;
+    }
+    if (abcOutput && !compress.isEmpty()) {
+        err() << "Error: --compress does not apply to .abc output." << Qt::endl;
+        return 2;
+    }
+    if (abcOutput && !AlembicExporter::available()) {
+        err() << "Error: Alembic export is not compiled in (rebuild with "
+                 "-DENABLE_ALEMBIC=ON)." << Qt::endl;
+        return 1;
     }
 
     // Validate --compress up front (before the expensive import/export) so the
@@ -2025,6 +2088,27 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     QFileInfo outFi(outputPath);
     QString absOutput = outFi.absoluteFilePath();
+
+    if (abcOutput) {
+        // A cache holds every mesh of the file (one xform + mesh per entity),
+        // so unlike the single-entity formats this exports them all.
+        const AlembicExporter::Result ar =
+            AlembicExporter::exportEntities(entities, absOutput, abcOpts);
+        if (!ar.ok) {
+            SentryReporter::captureMessage(
+                QString("CLI convert: Alembic export failed: %1").arg(ar.error), "error");
+            err() << "Error: Alembic export failed: " << ar.error << Qt::endl;
+            return 1;
+        }
+        cliWrite(QString("Converted: %1 -> %2 (%3 mesh%4, %5 frame%6 @ %7 fps%8)\n")
+                 .arg(fi.fileName(), outFi.fileName())
+                 .arg(ar.shapeCount).arg(ar.shapeCount == 1 ? "" : "es")
+                 .arg(ar.frameCount).arg(ar.frameCount == 1 ? "" : "s")
+                 .arg(abcOpts.fps)
+                 .arg(ar.animationsUsed.isEmpty() ? QString()
+                      : QString(", clip: %1").arg(ar.animationsUsed.join(", "))));
+        return 0;
+    }
 
     int result = MeshImporterExporter::exporter(node, absOutput, fmt);
     if (result != 0) {

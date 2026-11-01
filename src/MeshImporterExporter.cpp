@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include "MeshImporterExporter.h"
 #include "AlembicImporter.h"
+#include "AlembicExporter.h"
+#include "UsdBridge.h"
 #include "DNA/DnaScene.h"
 #include "FeedbackReportHelper.h"
 #include <assimp/Importer.hpp>
@@ -136,6 +138,14 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"FBX Binary (*.fbx)", ".fbx"},
     {"PlayStation TMD (*.tmd)", ".tmd"},
     {"PlayStation RSD (*.rsd)", ".rsd"}
+#ifdef ENABLE_ALEMBIC
+    ,{"Alembic (*.abc)", ".abc"}
+#endif
+#ifdef ENABLE_USD
+    ,{"USD ASCII (*.usda)", ".usda"}
+    ,{"USD Crate (*.usdc)", ".usdc"}
+    ,{"USD Package (*.usdz)", ".usdz"}
+#endif
 };
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
@@ -2499,6 +2509,7 @@ static void reconstructNodeClipsFromFile(const QString& filePath,
 {
     if (filePath.isEmpty() || !sn || !en) return;
     Assimp::Importer aimp;
+    UsdBridge::registerImporter(aimp);
     const aiScene* aiscene = aimp.ReadFile(filePath.toStdString(), 0);
     reconstructNodeClipsFromAiScene(aiscene, sn, en);
 }
@@ -3612,6 +3623,7 @@ QString MeshImporterExporter::importFileDialogFilterFromExtensionList(
         {"Biovision BVH (*.bvh)",          {".bvh"}},
         {"LightWave (*.lwo *.lws *.lxo)",  {".lwo", ".lws", ".lxo"}},
         {"Alembic vertex cache (*.abc)",   {".abc"}},
+        {"USD (*.usd *.usda *.usdc *.usdz)", {".usd", ".usda", ".usdc", ".usdz"}},
         {"MetaHuman DNA (*.dna)",          {".dna"}},
         {"PlayStation RSD / TMD / Psy-Q PLY (*.rsd *.tmd *.ply)", {".rsd", ".tmd", ".ply"}},
     };
@@ -4088,6 +4100,37 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
     return uri;
 }
 
+// Morph-weight clips handed to the USD writer (#527): an aiScene has no slot
+// for morph-weight animation, so — like the glTF post-process — the clips are
+// decoded from the Ogre mesh and passed through UsdBridge::setWriteExtras.
+// Columns follow the mesh pose list, which is also the blend-shape order
+// buildAiScene wrote into aiMesh::mAnimMeshes.
+static std::vector<UsdBridge::MorphWeightClip> usdMorphClips(const Ogre::Entity* entity)
+{
+    std::vector<UsdBridge::MorphWeightClip> out;
+    if (!entity || !entity->getMesh()) return out;
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    const int numTargets = static_cast<int>(mesh->getPoseCount());
+    if (numTargets <= 0) return out;
+
+    std::vector<std::string> shapeNames;
+    for (const Ogre::Pose* p : mesh->getPoseList())
+        shapeNames.push_back(p ? p->getName() : std::string());
+
+    for (const MorphWeightClip& clip : collectMorphWeightClips(entity, numTargets)) {
+        UsdBridge::MorphWeightClip c;
+        c.name = clip.name;
+        c.shapes = shapeNames;
+        for (size_t k = 0; k < clip.times.size(); ++k) {
+            c.times.push_back(static_cast<double>(clip.times[k]));
+            c.weights.emplace_back(clip.weights.begin() + k * numTargets,
+                                   clip.weights.begin() + (k + 1) * numTargets);
+        }
+        out.push_back(std::move(c));
+    }
+    return out;
+}
+
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
                                     bool stripAnimations)
 {
@@ -4204,6 +4247,16 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
         writeMotionGraphSidecar(_uri, e);
+    } else if (_format == QStringLiteral("Alembic (*.abc)")) {
+        // Bakes skeletal / vertex / morph / node animation into a vertex cache
+        // (#527). Default options: 30 fps over every enabled clip.
+        AlembicExporter::Result ar = AlembicExporter::exportEntities(
+            { const_cast<Ogre::Entity*>(e) }, _uri);
+        if (!ar.ok) {
+            Ogre::LogManager::getSingleton().logError(
+                "Alembic export failed: " + ar.error.toStdString());
+            return -1;
+        }
     } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
@@ -4596,6 +4649,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 {"gltf", "gltf2"},  // short alias used by LOD exporter
                 {"glb", "glb2"},    // short alias used by LOD exporter
                 {"Assimp Binary (*.assbin)", "assbin"},
+                {"USD ASCII (*.usda)", "usda"},
+                {"USD Crate (*.usdc)", "usdc"},
+                {"USD Package (*.usdz)", "usdz"},
             };
 
             QString formatId = assimpFormatIds.value(_format, file.suffix());
@@ -4623,6 +4679,18 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
 
             Assimp::Exporter exporter;
+            // USD (#527) is a registered Assimp exporter backed by LightUSD
+            // (a no-op registration in a build without -DENABLE_USD).
+            UsdBridge::registerExporter(exporter);
+            const bool isUsdFormat = formatId == "usda" || formatId == "usdc" ||
+                                     formatId == "usd" || formatId == "usdz";
+            if (isUsdFormat) {
+                // A .usdz embeds its textures, so they must sit next to the
+                // output BEFORE the writer runs.
+                if (formatId == "usdz")
+                    exportMaterial(e, file);
+                UsdBridge::setWriteExtras(usdMorphClips(e));
+            }
             // Handedness (#977): the import no longer mirrors — the scene IS
             // the source space, so no export applies ConvertToLeftHanded
             // either. The only convention difference is UVs: the import
@@ -4638,6 +4706,8 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
                                              exportFlags, &exportProps);
+            if (isUsdFormat)
+                UsdBridge::clearWriteExtras();
             if (result != AI_SUCCESS)
             {
                 auto msg = QString("Assimp export to %1 failed (code %2): %3")
@@ -4671,7 +4741,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 // (`mesh.extras.targetNames`, #921) and FBX writes them per
                 // blend-shape channel, so this is for the remaining formats;
                 // the importer still reads sidecars written by older builds.
-                const bool namesTravelNatively = formatId == "gltf2" || formatId == "glb2";
+                // USD keeps the original blend-shape names as displayName.
+                const bool namesTravelNatively = formatId == "gltf2" || formatId == "glb2" ||
+                                                 isUsdFormat;
                 if (!namesTravelNatively && e->getMesh() && e->getMesh()->getPoseCount() > 0)
                 {
                     std::vector<QString> poseNames;
@@ -5443,6 +5515,7 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     // Parse the file BEFORE clearing the scene so we don't destroy
     // the user's work if the file is invalid.
     Assimp::Importer assimpImporter;
+    UsdBridge::registerImporter(assimpImporter);
     assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
     // Preserve the vertex/submesh indexing encoded in qtme.faces metadata.

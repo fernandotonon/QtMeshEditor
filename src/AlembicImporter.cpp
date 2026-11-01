@@ -277,13 +277,15 @@ static Ogre::MeshPtr buildBaseMesh(const QString& name,
         Abc::Int32ArraySamplePtr faceIdx = first.getFaceIndices();
         Abc::Int32ArraySamplePtr faceCnt = first.getFaceCounts();
         // Fan-triangulate each n-gon face (Alembic faces are arbitrary polygons).
+        // Alembic winds faces clockwise (Ogre: counter-clockwise), so each
+        // triangle is emitted with its last two corners swapped.
         size_t cursor = 0;
         for (size_t f = 0; f < faceCnt->size(); ++f) {
             const int n = (*faceCnt)[f];
             for (int t = 1; t + 1 < n; ++t) {
                 indices.push_back(static_cast<uint32_t>((*faceIdx)[cursor]));
-                indices.push_back(static_cast<uint32_t>((*faceIdx)[cursor + t]));
                 indices.push_back(static_cast<uint32_t>((*faceIdx)[cursor + t + 1]));
+                indices.push_back(static_cast<uint32_t>((*faceIdx)[cursor + t]));
             }
             cursor += static_cast<size_t>(n);
         }
@@ -352,6 +354,10 @@ Ogre::SceneNode* importToScene(const QString& path, QString* error)
         return nullptr;
     };
 
+    // #527: the import breadcrumb every format carries, tagged with its format.
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                                  QStringLiteral("import format=abc %1")
+                                      .arg(QFileInfo(path).fileName()));
     SentryReporter::addBreadcrumb(QStringLiteral("scene.anim.vertex_anim"),
                                   QStringLiteral("import Alembic %1")
                                       .arg(QFileInfo(path).fileName()));
