@@ -238,6 +238,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/PoseLibraryCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexAnimationManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicImporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AlembicExporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UsdBridge.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PoseSpaceRbf.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaReader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle.cpp
@@ -711,6 +713,9 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
     endif()
     if(ENABLE_ALEMBIC)
         list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_alembic)
+    endif()
+    if(ENABLE_USD)
+        list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_usd)
     endif()
     # epic #1095: DnaReader.cpp links OpenRigLogic when ENABLE_OPENRIGLOGIC is set
     # (the importer in MeshImporterExporter.cpp pulls it into every test binary).

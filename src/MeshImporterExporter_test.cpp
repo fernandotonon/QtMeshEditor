@@ -191,7 +191,15 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIW
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PlayStation RSD (*.rsd);;PlayStation TMD (*.tmd);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
+    QString expected = "3DS (*.3ds);;"
+#ifdef ENABLE_ALEMBIC
+        "Alembic (*.abc);;"
+#endif
+        "Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PlayStation RSD (*.rsd);;PlayStation TMD (*.tmd);;STL (*.stl);;"
+#ifdef ENABLE_USD
+        "USD ASCII (*.usda);;USD Crate (*.usdc);;USD Package (*.usdz);;"
+#endif
+        "X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
@@ -627,7 +635,23 @@ TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCount
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllFormats) {
     QString filter = MeshImporterExporter::exportFileDialogFilter();
     // One ";;" between each format entry (N formats => N-1 separators)
-    EXPECT_EQ(filter.count(";;"), 19);
+    // 19 separators for the base set; +1 for the Alembic row, +3 for the USD rows.
+    int expectedSeparators = 19;
+#ifdef ENABLE_ALEMBIC
+    expectedSeparators += 1;
+    EXPECT_TRUE(filter.contains("Alembic (*.abc)"));
+#else
+    EXPECT_FALSE(filter.contains("Alembic (*.abc)"));
+#endif
+#ifdef ENABLE_USD
+    expectedSeparators += 3;
+    EXPECT_TRUE(filter.contains("USD ASCII (*.usda)"));
+    EXPECT_TRUE(filter.contains("USD Crate (*.usdc)"));
+    EXPECT_TRUE(filter.contains("USD Package (*.usdz)"));
+#else
+    EXPECT_FALSE(filter.contains("USD ASCII (*.usda)"));
+#endif
+    EXPECT_EQ(filter.count(";;"), expectedSeparators);
     // Spot-check format keys
     EXPECT_TRUE(filter.contains("3DS (*.3ds)"));
     EXPECT_TRUE(filter.contains("Assimp Binary (*.assbin)"));

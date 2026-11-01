@@ -32,10 +32,14 @@ THE SOFTWARE.
 #include <assimp/Importer.hpp>
 
 #include "MaterialProcessor.h"
+#include "UsdBridge.h"
 
 class AssimpToOgreImporter {
 public:
-    AssimpToOgreImporter() : importer() {}
+    // USD (#527) is a registered Assimp loader backed by LightUSD (a no-op in a
+    // build without -DENABLE_USD), so .usd/.usda/.usdc/.usdz go through the
+    // same skeleton/skin/blend-shape/animation processors as every other format.
+    AssimpToOgreImporter() : importer() { UsdBridge::registerImporter(importer); }
 
     Ogre::MeshPtr loadModel(const std::string& path, bool convertToLeftHanded = true, unsigned int additionalFlags = 0);
 

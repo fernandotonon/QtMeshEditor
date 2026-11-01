@@ -344,7 +344,7 @@ endif()
 # VAT_POSE playback work WITHOUT Alembic; this flag adds the .abc reader
 # (cmake/Alembic.cmake, FetchContent). The C++ #ifdef ENABLE_ALEMBIC guards the
 # reader so a build without it still compiles and skips .abc with a clear message.
-option(ENABLE_ALEMBIC "Enable Alembic (.abc) vertex-animation import" OFF)
+option(ENABLE_ALEMBIC "Enable Alembic (.abc) vertex-animation import + export" OFF)
 
 if(ENABLE_ALEMBIC)
     include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Alembic.cmake)
@@ -352,6 +352,24 @@ if(ENABLE_ALEMBIC)
     message(STATUS "Alembic vertex-animation import enabled")
 else()
     message(STATUS "Alembic vertex-animation import disabled (VAT_POSE playback still available)")
+endif()
+##############################################################
+#  USD — .usd/.usda/.usdc/.usdz import + export (#527, Anim Slice J)
+##############################################################
+# LightUSD (formerly TinyUSDZ, Apache-2.0, dependency-free C++17) vendored via
+# FetchContent (cmake/Usd.cmake), NOT Pixar's OpenUSD: that drags in
+# TBB/Boost-era deps and has no maintained MinGW story. Default OFF: the library
+# adds ~40 MB of static code and a ~1 minute cold build. The C++ is
+# #ifdef ENABLE_USD-guarded (src/UsdBridge.*) so a build without it compiles,
+# links, and answers every USD request with "rebuild with -DENABLE_USD=ON".
+option(ENABLE_USD "Enable USD (.usd/.usda/.usdc/.usdz) import + export" OFF)
+
+if(ENABLE_USD)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/Usd.cmake)
+    add_definitions(-DENABLE_USD)
+    message(STATUS "USD import/export enabled (LightUSD)")
+else()
+    message(STATUS "USD import/export disabled (-DENABLE_USD=ON to enable)")
 endif()
 ##############################################################
 #  OpenRigLogic — MetaHuman DNA import / rig evaluation (epic #1095)

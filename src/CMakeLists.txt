@@ -229,6 +229,8 @@ NodeAnimationManager.cpp
 PoseLibrary.cpp
 VertexAnimationManager.cpp
 AlembicImporter.cpp
+AlembicExporter.cpp
+UsdBridge.cpp
 PoseSpaceRbf.cpp
 DNA/DnaReader.cpp
 CharacterGen/QmcBundle.cpp
@@ -905,6 +907,9 @@ endif()
 if(ENABLE_ALEMBIC)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_alembic)
 endif()
+if(ENABLE_USD)
+    target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_usd)
+endif()
 
 if(ENABLE_OPENRIGLOGIC)
     target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_openriglogic)
@@ -1176,6 +1181,10 @@ if(BUILD_TESTS)
 
     if(ENABLE_ALEMBIC)
         target_link_libraries(UnitTests qtmesh_alembic)
+    endif()
+
+    if(ENABLE_USD)
+        target_link_libraries(UnitTests qtmesh_usd)
     endif()
 
     if(ENABLE_OPENRIGLOGIC)
