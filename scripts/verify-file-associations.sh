@@ -42,7 +42,7 @@ check_contains "$ROOT/snap/snapcraft.yaml" "libsecret-1-0"
 
 echo "=== Flatpak / Fedora packaging (#1081) ==="
 check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.yml" "id: io.github.fernandotonon.QtMeshEditor"
-check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.yml" "runtime-version: '25.08'"
+check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.yml" "runtime-version: '26.08'"
 check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.desktop" "Exec=qtmesheditor %F"
 check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.metainfo.xml" "io.github.fernandotonon.QtMeshEditor"
 check_contains "$ROOT/packaging/flatpak/flathub/flathub.json" "x86_64"

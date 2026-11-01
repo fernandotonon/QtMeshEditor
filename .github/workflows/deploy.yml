@@ -3448,9 +3448,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     container:
-      # Matches org.freedesktop.Platform//25.08 in the manifest. Tags:
+      # Matches org.freedesktop.Platform//26.08 in the manifest. Tags:
       # https://github.com/orgs/flathub-infra/packages/container/package/flatpak-github-actions
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
       options: --privileged
     steps:
     - uses: actions/checkout@v4

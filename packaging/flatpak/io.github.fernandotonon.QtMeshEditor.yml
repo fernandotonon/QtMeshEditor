@@ -10,13 +10,15 @@
 
 id: io.github.fernandotonon.QtMeshEditor
 runtime: org.freedesktop.Platform
-runtime-version: '25.08'
+runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 command: qtmesheditor
 finish-args:
+  # Ogre needs X11 window handles (launcher forces QT_QPA_PLATFORM=xcb), so
+  # request X11 only — not wayland+x11 (flatpak-builder-lint warning) and not
+  # fallback-x11+wayland (implies native Wayland we do not use).
   - --share=ipc
   - --socket=x11
-  - --socket=wayland
   - --socket=pulseaudio
   - --device=dri
   - --share=network
