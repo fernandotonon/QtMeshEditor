@@ -216,7 +216,7 @@ export const installOptions = [
   {
     platform: 'Linux',
     method: 'Flatpak',
-    command: '# Download io.github.fernandotonon.QtMeshEditor.flatpak from GitHub Releases\nflatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak\n# CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help'
+    command: '# x86_64 only (release .flatpak is built from the amd64 .deb)\n# Download io.github.fernandotonon.QtMeshEditor.flatpak from GitHub Releases\nflatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak\n# CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help'
   },
   {
     platform: 'Fedora / RHEL',

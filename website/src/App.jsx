@@ -66,6 +66,24 @@ function detectVisitorOs() {
   return 'unknown';
 }
 
+/** Best-effort CPU arch from UA (Flatpak release bundle is x86_64-only). */
+function detectVisitorArch() {
+  if (typeof navigator === 'undefined') {
+    return 'unknown';
+  }
+  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const userAgent = (navigator.userAgent || '').toLowerCase();
+  const source = `${platform} ${userAgent}`;
+  if (source.includes('aarch64') || source.includes('arm64') || /\barmv[678]\b/.test(source)) {
+    return 'arm64';
+  }
+  if (source.includes('x86_64') || source.includes('amd64') || source.includes('x86-64') || source.includes('wow64')) {
+    return 'x86_64';
+  }
+  // Most desktop Linux UAs omit arch; default to x86_64 (matches Flatpak).
+  return 'x86_64';
+}
+
 function getStoreLabel(method) {
   return method.split('/')[0].trim();
 }
@@ -105,13 +123,24 @@ function App() {
   const portalTriggerRef = useRef(null);
   const cliTabButtonRefs = useRef([]);
   const detectedOs = useMemo(detectVisitorOs, []);
+  const detectedArch = useMemo(detectVisitorArch, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
-  // Flatpak is the cross-distro default (UA rarely names Fedora/RHEL).
+  // Flatpak is the cross-distro default on x86_64 (UA rarely names Fedora/RHEL).
+  // The release .flatpak is amd64-only — steer ARM64 visitors to snap/RPM/deb.
   const recommendedInstall = useMemo(() => {
     if (!detectedPlatform) {
       return null;
     }
     if (detectedPlatform === 'Linux') {
+      if (detectedArch === 'arm64') {
+        return (
+          installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+          installOptions.find((item) => item.platform === 'Fedora / RHEL') ||
+          installOptions.find((item) => item.platform === 'Debian / Ubuntu') ||
+          installOptions.find((item) => item.platform === 'Linux') ||
+          null
+        );
+      }
       return (
         installOptions.find((item) => item.method === 'Flatpak') ||
         installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
@@ -120,7 +149,7 @@ function App() {
       );
     }
     return installOptions.find((item) => item.platform === detectedPlatform) || null;
-  }, [detectedPlatform]);
+  }, [detectedPlatform, detectedArch]);
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
   const portalInstallOptions = useMemo(() => {
     if (detectedPlatform === 'Linux') {

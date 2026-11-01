@@ -28,6 +28,8 @@ if [[ ! -f "$DEB" ]]; then
   echo "error: .deb not found: $DEB" >&2
   exit 1
 fi
+# Absolute path before any `cd` (ar fallback runs in a temp dir).
+DEB="$(cd "$(dirname "$DEB")" && pwd)/$(basename "$DEB")"
 
 for tool in flatpak flatpak-builder; do
   command -v "$tool" >/dev/null || {

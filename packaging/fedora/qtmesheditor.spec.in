@@ -18,7 +18,7 @@ AutoReqProv:    no
 # The .deb already bundles Qt 6.9 / Ogre / Assimp under /usr/lib/qtmesheditor.
 # Keep only host GL / XCB / secrets / pulse that Flatpak/Snap also leave to the OS.
 Requires:       libxcb
-Requires:       libxcb-cursor
+Requires:       xcb-util-cursor
 Requires:       libX11
 Requires:       mesa-libGL
 Requires:       mesa-libEGL

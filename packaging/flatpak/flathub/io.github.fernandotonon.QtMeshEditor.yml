@@ -77,11 +77,17 @@ modules:
           "${DEST}/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
 
         # Flathub expects license text under share/licenses/$FLATPAK_ID.
+        # copyright references LGPL-3 by Debian common-licenses path — ship the
+        # text itself (bundled Qt is LGPL-3) plus the app MIT License.
         install -d "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor"
         if [ -f extract/usr/share/doc/qtmesheditor/copyright ]; then
           install -m644 extract/usr/share/doc/qtmesheditor/copyright \
             "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor/COPYING"
         fi
+        install -m644 LGPL-3.txt \
+          "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor/LGPL-3.txt"
+        install -m644 MIT.txt \
+          "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor/MIT.txt"
 
         cp -a icons/hicolor/. "${DEST}/share/icons/hicolor/"
     sources:
@@ -97,6 +103,10 @@ modules:
         path: io.github.fernandotonon.QtMeshEditor.desktop
       - type: file
         path: io.github.fernandotonon.QtMeshEditor.metainfo.xml
+      - type: file
+        path: licenses/LGPL-3.txt
+      - type: file
+        path: licenses/MIT.txt
       # dest keeps the top-level "icons/" name (dir sources copy CONTENTS only).
       - type: dir
         path: icons
