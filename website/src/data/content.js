@@ -216,17 +216,17 @@ export const installOptions = [
   {
     platform: 'Linux',
     method: 'Flatpak',
-    command: 'flatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak\n# CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help'
+    command: '# Download io.github.fernandotonon.QtMeshEditor.flatpak from GitHub Releases\nflatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak\n# CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help'
   },
   {
     platform: 'Fedora / RHEL',
     method: 'RPM',
-    command: 'sudo dnf install ./qtmesheditor_amd64.rpm\n# Download qtmesheditor_amd64.rpm from the latest GitHub release'
+    command: '# Download qtmesheditor_amd64.rpm (or _arm64) from GitHub Releases\nsudo dnf install ./qtmesheditor_amd64.rpm'
   },
   {
     platform: 'Debian / Ubuntu',
     method: 'deb',
-    command: 'sudo apt install ./qtmesheditor_amd64.deb\n# Download qtmesheditor_amd64.deb from the latest GitHub release'
+    command: '# Download qtmesheditor_amd64.deb (or _arm64) from GitHub Releases\nsudo apt install ./qtmesheditor_amd64.deb'
   },
   {
     platform: 'Docker',

@@ -106,21 +106,14 @@ function App() {
   const cliTabButtonRefs = useRef([]);
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
+  // Flatpak is the cross-distro default (UA rarely names Fedora/RHEL).
   const recommendedInstall = useMemo(() => {
     if (!detectedPlatform) {
       return null;
     }
     if (detectedPlatform === 'Linux') {
-      const ua = (typeof navigator !== 'undefined' ? navigator.userAgent || '' : '').toLowerCase();
-      if (ua.includes('fedora') || ua.includes('rhel') || ua.includes('centos')) {
-        return (
-          installOptions.find((item) => item.platform === 'Fedora / RHEL') ||
-          installOptions.find((item) => item.method === 'Flatpak') ||
-          installOptions.find((item) => item.platform === 'Linux') ||
-          null
-        );
-      }
       return (
+        installOptions.find((item) => item.method === 'Flatpak') ||
         installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
         installOptions.find((item) => item.platform === 'Linux') ||
         null
@@ -129,6 +122,20 @@ function App() {
     return installOptions.find((item) => item.platform === detectedPlatform) || null;
   }, [detectedPlatform]);
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
+  const portalInstallOptions = useMemo(() => {
+    if (detectedPlatform === 'Linux') {
+      return installOptions.filter(
+        (item) =>
+          item.platform === 'Linux' ||
+          item.platform === 'Fedora / RHEL' ||
+          item.platform === 'Debian / Ubuntu'
+      );
+    }
+    if (recommendedInstall) {
+      return [recommendedInstall];
+    }
+    return installOptions;
+  }, [detectedPlatform, recommendedInstall]);
   const githubActionExample = useMemo(
     () => pipelineExamples.githubAction
       .replace('__QTMESH_ACTION_REF__', qtmeshActionRef)
@@ -694,7 +701,7 @@ function App() {
 
             <div className={styles.installGrid}>
               {installOptions.map((option) => (
-                <article key={option.platform} className={styles.installMethodCard}>
+                <article key={`${option.platform}-${option.method}`} className={styles.installMethodCard}>
                   <div className={styles.installMethodHeader}>
                     <h3>{option.platform}</h3>
                     <span>{option.method}</span>
@@ -800,25 +807,40 @@ function App() {
               </div>
 
               <div className={styles.installPortalGrid}>
-                {recommendedInstall ? (
-                  <article className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}>
-                    <div className={styles.installPortalCardTop}>
-                      <h3>{recommendedInstall.platform}</h3>
-                      <div className={styles.installPortalCardActions}>
-                        <span>{recommendedInstall.method}</span>
-                        <button
-                          type="button"
-                          className={styles.installPortalCopyButton}
-                          onClick={handleCopyInstallCommand}
-                        >
-                          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
-                    <pre>
-                      <code>{recommendedInstall.command}</code>
-                    </pre>
-                  </article>
+                {portalInstallOptions.length > 0 ? (
+                  portalInstallOptions.map((option) => {
+                    const isRecommended =
+                      recommendedInstall &&
+                      option.platform === recommendedInstall.platform &&
+                      option.method === recommendedInstall.method;
+                    return (
+                      <article
+                        key={`${option.platform}-${option.method}`}
+                        className={`${styles.installPortalCard}${
+                          isRecommended ? ` ${styles.installPortalCardRecommended}` : ''
+                        }`}
+                      >
+                        <div className={styles.installPortalCardTop}>
+                          <h3>{option.platform}</h3>
+                          <div className={styles.installPortalCardActions}>
+                            <span>{option.method}</span>
+                            {isRecommended ? (
+                              <button
+                                type="button"
+                                className={styles.installPortalCopyButton}
+                                onClick={handleCopyInstallCommand}
+                              >
+                                {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
+                              </button>
+                            ) : null}
+                          </div>
+                        </div>
+                        <pre>
+                          <code>{option.command}</code>
+                        </pre>
+                      </article>
+                    );
+                  })
                 ) : (
                   <p className={styles.installPortalFallback}>
                     OS detection is unavailable in this browser. Use the latest release download links below.

@@ -83,6 +83,13 @@ sed -E \
   "$META_SRC" > "$META_OUT"
 
 # Ensure desktop files + MIME from repo packaging (authoritative).
+# AppStream launchable uses the Flatpak-style desktop id — install under that
+# name (and keep qtmesheditor.desktop as a compatible alias).
+install -D -m644 "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.desktop" \
+  "$PAYLOAD/usr/share/applications/io.github.fernandotonon.QtMeshEditor.desktop"
+# Flatpak desktop Icon=app-id; RPM icons are named qtmesheditor.png — rewrite.
+sed -i 's|^Icon=io.github.fernandotonon.QtMeshEditor$|Icon=qtmesheditor|' \
+  "$PAYLOAD/usr/share/applications/io.github.fernandotonon.QtMeshEditor.desktop"
 install -D -m644 "$ROOT/packaging/linux/qtmesheditor.desktop" \
   "$PAYLOAD/usr/share/applications/qtmesheditor.desktop"
 install -D -m644 "$ROOT/packaging/linux/qtmesheditor-url.desktop" \

@@ -18,10 +18,12 @@ AutoReqProv:    no
 # The .deb already bundles Qt 6.9 / Ogre / Assimp under /usr/lib/qtmesheditor.
 # Keep only host GL / XCB / secrets / pulse that Flatpak/Snap also leave to the OS.
 Requires:       libxcb
+Requires:       libxcb-cursor
 Requires:       libX11
 Requires:       mesa-libGL
 Requires:       mesa-libEGL
 Requires:       libglvnd-glx
+Requires:       vulkan-loader
 Requires:       pulseaudio-libs
 Requires:       libsecret
 
@@ -45,6 +47,7 @@ cp -a %{_builddir}/payload/. %{buildroot}/
 /usr/bin/qtmesh
 /usr/lib/qtmesheditor
 /usr/share/qtmesheditor
+/usr/share/applications/io.github.fernandotonon.QtMeshEditor.desktop
 /usr/share/applications/qtmesheditor.desktop
 /usr/share/applications/qtmesheditor-url.desktop
 /usr/share/mime/packages/qtmesheditor-mimetypes.xml

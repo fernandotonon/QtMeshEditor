@@ -204,7 +204,11 @@ QString updateCommandHint(Flavor flavor)
     case Flavor::Debian:
         return QStringLiteral("sudo apt update && sudo apt install qtmesheditor");
     case Flavor::Rpm:
-        return QStringLiteral("sudo dnf upgrade qtmesheditor");
+        // Local GitHub-release RPMs are not in a dnf repo yet — point at Releases.
+        return QStringLiteral(
+            "Download the latest qtmesheditor_*.rpm from "
+            "https://github.com/fernandotonon/QtMeshEditor/releases/latest "
+            "and install with: sudo dnf install ./qtmesheditor_*.rpm");
     case Flavor::Docker:
         return QStringLiteral("docker pull ghcr.io/fernandotonon/qtmesh");
     case Flavor::Portable:

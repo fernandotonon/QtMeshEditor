@@ -73,8 +73,8 @@ echo "==> flatpak-builder ($APP_ID $VERSION)"
 # Install runtimes if missing (no-op when already present).
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo || true
 flatpak install -y --user flathub \
-  org.freedesktop.Platform//24.08 \
-  org.freedesktop.Sdk//24.08 || true
+  org.freedesktop.Platform//25.08 \
+  org.freedesktop.Sdk//25.08 || true
 
 flatpak-builder --force-clean --user --install-deps-from=flathub \
   --repo="$REPO_DIR" \

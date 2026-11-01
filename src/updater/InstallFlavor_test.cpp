@@ -30,8 +30,8 @@ TEST(InstallFlavor, UpdateHintsMatchDocumentedCommands)
               QStringLiteral("sudo snap refresh qtmesheditor"));
     EXPECT_EQ(InstallFlavor::updateCommandHint(Flavor::Flatpak),
               QStringLiteral("flatpak update io.github.fernandotonon.QtMeshEditor"));
-    EXPECT_EQ(InstallFlavor::updateCommandHint(Flavor::Rpm),
-              QStringLiteral("sudo dnf upgrade qtmesheditor"));
+    EXPECT_TRUE(InstallFlavor::updateCommandHint(Flavor::Rpm)
+                    .contains(QStringLiteral("qtmesheditor_*.rpm")));
     EXPECT_TRUE(InstallFlavor::updateCommandHint(Flavor::Portable).isEmpty());
 }
 

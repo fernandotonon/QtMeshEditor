@@ -10,12 +10,12 @@
 
 id: io.github.fernandotonon.QtMeshEditor
 runtime: org.freedesktop.Platform
-runtime-version: '24.08'
+runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: qtmesheditor
 finish-args:
   - --share=ipc
-  - --socket=fallback-x11
+  - --socket=x11
   - --socket=wayland
   - --socket=pulseaudio
   - --device=dri
@@ -32,7 +32,6 @@ cleanup:
   - /include
   - /lib/pkgconfig
   - /share/man
-  - /share/doc/qtmesheditor/copyright
 modules:
   - name: qtmesheditor
     buildsystem: simple
@@ -78,6 +77,13 @@ modules:
           "${DEST}/share/applications/io.github.fernandotonon.QtMeshEditor.desktop"
         install -m644 io.github.fernandotonon.QtMeshEditor.metainfo.xml \
           "${DEST}/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+
+        # Flathub expects license text under share/licenses/$FLATPAK_ID.
+        install -d "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor"
+        if [ -f extract/usr/share/doc/qtmesheditor/copyright ]; then
+          install -m644 extract/usr/share/doc/qtmesheditor/copyright \
+            "${DEST}/share/licenses/io.github.fernandotonon.QtMeshEditor/COPYING"
+        fi
 
         # AppStream / desktop icons (app-id named).
         cp -a icons/hicolor/. "${DEST}/share/icons/hicolor/"

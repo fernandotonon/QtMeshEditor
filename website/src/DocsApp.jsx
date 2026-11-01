@@ -202,10 +202,10 @@ sudo snap install qtmesheditor
 flatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak
 # CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help
 
-# Fedora / RHEL (RPM from GitHub Releases)
+# Fedora / RHEL (RPM from GitHub Releases; use _arm64 on aarch64)
 sudo dnf install ./qtmesheditor_amd64.rpm
 
-# Debian / Ubuntu (.deb from GitHub Releases)
+# Debian / Ubuntu (.deb from GitHub Releases; use _arm64 on aarch64)
 sudo apt install ./qtmesheditor_amd64.deb
 
 # Docker

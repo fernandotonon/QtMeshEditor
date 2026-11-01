@@ -28,7 +28,7 @@ git checkout -b add-io.github.fernandotonon.QtMeshEditor new-pr
 APP=io.github.fernandotonon.QtMeshEditor
 SRC=/path/to/QtMeshEditor/packaging/flatpak
 cp "$SRC/flathub/$APP.yml" "./$APP.yml"
-# Rewrite local sources to same-directory paths in the copied YAML, then:
+cp "$SRC/flathub/flathub.json" ./flathub.json   # x86_64-only (amd64 .deb)
 cp "$SRC/qtmesheditor-launcher.sh" "$SRC/qtmesh-launcher.sh" .
 cp "$SRC/$APP.desktop" "$SRC/$APP.metainfo.xml" .
 cp -a "$SRC/icons" .

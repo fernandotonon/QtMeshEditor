@@ -3391,6 +3391,8 @@ jobs:
  rpm-publish:
     needs: build-linux
     if: github.event_name == 'release' && github.event.action == 'published'
+    permissions:
+      contents: write
     # Match runner arch to the .deb so rpmbuild accepts BuildArch (x86_64 vs aarch64).
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -3431,7 +3433,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         file: qtmesheditor_${{ matrix.arch }}.rpm
-        update_latest_release: true
+        release_id: ${{ github.event.release.id }}
         overwrite: false
         verbose: true
 
@@ -3442,11 +3444,13 @@ jobs:
  flatpak-publish:
     needs: build-linux
     if: github.event_name == 'release' && github.event.action == 'published'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     container:
-      # Matches org.freedesktop.Platform//24.08 in the manifest. Tags:
+      # Matches org.freedesktop.Platform//25.08 in the manifest. Tags:
       # https://github.com/orgs/flathub-infra/packages/container/package/flatpak-github-actions
-      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08
       options: --privileged
     steps:
     - uses: actions/checkout@v4
@@ -3493,7 +3497,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         file: io.github.fernandotonon.QtMeshEditor.flatpak
-        update_latest_release: true
+        release_id: ${{ github.event.release.id }}
         overwrite: false
         verbose: true
 
