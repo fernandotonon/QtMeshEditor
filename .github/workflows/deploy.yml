@@ -3391,11 +3391,16 @@ jobs:
  rpm-publish:
     needs: build-linux
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
+    # Match runner arch to the .deb so rpmbuild accepts BuildArch (x86_64 vs aarch64).
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     steps:
     - uses: actions/checkout@v4
 
@@ -3457,9 +3462,16 @@ jobs:
         test -f ./qtmesheditor_amd64.deb
         cp ./qtmesheditor_amd64.deb ./packaging/flatpak/qtmesheditor_amd64.deb
         # Builder image may lack dpkg-deb — read Version via ar+tar.
+        # Extract ALL ar members first; a literal `control.tar.*` arg does not
+        # glob inside an empty temp dir and makes `ar` fail.
         CTRL_DIR="$(mktemp -d)"
-        (cd "$CTRL_DIR" && ar x "$GITHUB_WORKSPACE/qtmesheditor_amd64.deb" control.tar.* \
-          && tar -xf control.tar.*)
+        (
+          cd "$CTRL_DIR"
+          ar x "$GITHUB_WORKSPACE/qtmesheditor_amd64.deb"
+          CTRL_TAR="$(printf '%s\n' control.tar.* | head -n1)"
+          test -f "$CTRL_TAR"
+          tar -xf "$CTRL_TAR"
+        )
         VERSION="$(awk -F': ' '/^Version:/{print $2; exit}' "$CTRL_DIR/control" | sed 's/-.*//')"
         rm -rf "$CTRL_DIR"
         TODAY="$(date -u '+%Y-%m-%d')"

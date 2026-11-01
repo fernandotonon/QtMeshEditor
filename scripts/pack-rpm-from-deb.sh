@@ -72,11 +72,15 @@ PY
   fi
 done
 
-# AppStream metainfo (same id as Flatpak).
+# AppStream metainfo (same id as Flatpak). Only stamp <release …>, never the
+# XML declaration's version="1.0" (that would make the file unreadable).
 META_SRC="$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+META_OUT="$PAYLOAD/usr/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+TODAY="$(date -u '+%Y-%m-%d')"
 mkdir -p "$PAYLOAD/usr/share/metainfo"
-sed "s/version=\"[0-9.]*\"/version=\"${VERSION}\"/" "$META_SRC" \
-  > "$PAYLOAD/usr/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+sed -E \
+  "s|<release version=\"[0-9.]+\" date=\"[0-9-]+\"/>|<release version=\"${VERSION}\" date=\"${TODAY}\"/>|" \
+  "$META_SRC" > "$META_OUT"
 
 # Ensure desktop files + MIME from repo packaging (authoritative).
 install -D -m644 "$ROOT/packaging/linux/qtmesheditor.desktop" \
@@ -95,7 +99,14 @@ sed \
   "$ROOT/packaging/fedora/qtmesheditor.spec.in" > "$SPEC"
 
 echo "==> rpmbuild -bb ($VERSION $RPM_ARCH)"
+# Cross-pack when the host arch differs (e.g. building aarch64 RPM on x86_64).
+HOST_ARCH="$(uname -m)"
+TARGET_ARGS=()
+if [[ "$RPM_ARCH" != "$HOST_ARCH" ]]; then
+  TARGET_ARGS=(--target "${RPM_ARCH}-linux")
+fi
 rpmbuild -bb \
+  "${TARGET_ARGS[@]}" \
   --define "_topdir $WORKDIR" \
   --define "_builddir $WORKDIR/BUILD" \
   --define "_rpmdir $WORKDIR/RPMS" \

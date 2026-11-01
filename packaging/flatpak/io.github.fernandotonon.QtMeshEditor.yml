@@ -93,5 +93,7 @@ modules:
         path: io.github.fernandotonon.QtMeshEditor.desktop
       - type: file
         path: io.github.fernandotonon.QtMeshEditor.metainfo.xml
+      # dest keeps the top-level "icons/" name (dir sources copy CONTENTS only).
       - type: dir
         path: icons
+        dest: icons

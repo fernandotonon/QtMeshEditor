@@ -41,8 +41,15 @@ if command -v dpkg-deb >/dev/null; then
   VERSION="$(dpkg-deb -f "$DEB" Version | sed 's/-.*//')"
 else
   # ar+tar fallback when dpkg is missing (rare on Fedora builders).
+  # Extract all members first — `ar x deb control.tar.*` does not glob.
   TMP_CTRL="$(mktemp -d)"
-  (cd "$TMP_CTRL" && ar x "$DEB" control.tar.* >/dev/null && tar -xf control.tar.*)
+  (
+    cd "$TMP_CTRL"
+    ar x "$DEB"
+    CTRL_TAR="$(printf '%s\n' control.tar.* | head -n1)"
+    test -f "$CTRL_TAR"
+    tar -xf "$CTRL_TAR"
+  )
   VERSION="$(awk -F': ' '/^Version:/{print $2; exit}' "$TMP_CTRL/control" | sed 's/-.*//')"
   rm -rf "$TMP_CTRL"
 fi
