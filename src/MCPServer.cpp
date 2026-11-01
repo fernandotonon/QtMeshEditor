@@ -26,15 +26,12 @@
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
 #include "AlembicImporter.h"
-<<<<<<< HEAD
 #include "UsdBridge.h"
 #include "AlembicExporter.h"
-=======
 #include "AIMotion/KimodoNative.h"
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
 #include "AIMotion/QtMeshT2M.h"
->>>>>>> origin/master
 #ifdef ENABLE_MOCAP
 #include "Mocap/FaceCapMapper.h"
 #include "Mocap/FaceCapPredictor.h"
