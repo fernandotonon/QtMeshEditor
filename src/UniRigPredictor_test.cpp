@@ -393,11 +393,10 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     // names that MotionInbetween::canonicalIndexForBone then resolves — the fix
     // for "0/22 resolved" on a UniRig rig.
     //
-    // CONVENTION: the labeler names the character's LEFT on the −X side (the
-    // glTF/Ogre Y-up, faces-+Z convention this targets), so the limbs below are
-    // laid out with the LEFT chain on −X and RIGHT on +X. (The retarget then does
-    // its own handedness compensation against the CMU clip so motion isn't
-    // mirrored — labels and motion are decoupled.)
+    // SIDES: the labeler names the FIRST-emitted arm/leg chain Left (UniRig
+    // emits in the mixamo template order, Left before Right). The chains below
+    // are emitted −X first, so −X is Left here; see the UniRigLabelingSides
+    // tests for the +X-first order real UniRig rigs use.
     // Seed unique positional names like the real predictor (jointName → joint_N),
     // so the test input mirrors production; the labeler's final uniqueness pass
     // also backstops any collision.
@@ -448,8 +447,8 @@ TEST(UniRigPredictor, LabelsAnatomicallyResolveCanonicalJoints)
     // Spot-check key roles map correctly.
     EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[0].name), 0);  // Hips
     EXPECT_EQ(MotionInbetween::canonicalIndexForBone(joints[4].name), 5);  // Head
-    // The −X hand (joints[7]) resolves to canon 13 (lhand); the +X hand
-    // (joints[10]) to canon 9 (rhand) — the labeler's −X=Left convention.
+    // The −X hand (joints[7], emitted first) resolves to canon 13 (lhand); the
+    // +X hand (joints[10]) to canon 9 (rhand).
     const int lh = MotionInbetween::canonicalIndexForBone(joints[7].name);
     EXPECT_EQ(lh, 13) << "left (−X) hand index " << lh;
     const int rh = MotionInbetween::canonicalIndexForBone(joints[10].name);
@@ -794,6 +793,65 @@ TEST(UniRigLabeling, TranslatedHumanoidKeepsSidesAndPlausibility)
     EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
     EXPECT_TRUE(hasName(j, "LeftArm"));  EXPECT_TRUE(hasName(j, "RightArm"));
     EXPECT_TRUE(hasName(j, "LeftUpLeg")); EXPECT_TRUE(hasName(j, "RightUpLeg"));
-    // and the character's LEFT is still the −X side of the ROOT
+    // and the character's LEFT is still the first-emitted (−X) side of the ROOT
     for (const auto& x : j) if (x.name == "LeftArm") EXPECT_LT(x.pos[0], 5.0);
+}
+
+// Left/right naming. Kimodo / QtMesh T2M / the #523 retargeter take a bone's
+// side from its NAME, so a swapped pair plays every clip mirrored, with the
+// gait running backwards relative to the body. Measured on real UniRig rigs of
+// TRELLIS.2 characters (which face +Z): UniRig emits the +X arm and the +X leg
+// first — its mixamo-ordered template's Left — and the old fixed "−X = Left"
+// rule (a leftover from the pre-#977 import mirror) named them Right.
+namespace {
+// syntheticHumanoid with the +X chains emitted first (the real UniRig order).
+std::vector<UniRigPredictor::Joint> humanoidPlusXFirst()
+{
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    return { J(0,0,0,-1), J(0,.3,0,0), J(0,.6,0,1), J(0,.8,0,2), J(0,.95,0,3),
+             J(.2,.6,0,2),  J(.45,.6,0,5),  J(.65,.6,0,6),
+             J(-.2,.6,0,2), J(-.45,.6,0,8), J(-.65,.6,0,9),
+             J(.1,-.1,0,0),  J(.1,-.5,0,11),  J(.1,-.9,0,12),
+             J(-.1,-.1,0,0), J(-.1,-.5,0,14), J(-.1,-.9,0,15) };
+}
+double xOf(const std::vector<UniRigPredictor::Joint>& j, const char* name)
+{
+    for (const auto& x : j) if (x.name == QLatin1String(name)) return x.pos[0];
+    ADD_FAILURE() << "no joint named " << name;
+    return 0.0;
+}
+} // namespace
+
+TEST(UniRigLabelingSides, FirstEmittedChainsAreLeftLikeRealUniRigRigs)
+{
+    auto j = humanoidPlusXFirst();
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_GT(xOf(j, "LeftArm"), 0.0);   EXPECT_LT(xOf(j, "RightArm"), 0.0);
+    EXPECT_GT(xOf(j, "LeftHand"), 0.0);  EXPECT_LT(xOf(j, "RightHand"), 0.0);
+    EXPECT_GT(xOf(j, "LeftUpLeg"), 0.0); EXPECT_LT(xOf(j, "RightUpLeg"), 0.0);
+    EXPECT_GT(xOf(j, "LeftFoot"), 0.0);  EXPECT_LT(xOf(j, "RightFoot"), 0.0);
+}
+
+TEST(UniRigLabelingSides, SidesFollowTheEmissionOrderNotAFixedAxis)
+{
+    // Same skeleton, emitted −X first: the names follow the model's order.
+    auto j = syntheticHumanoid();
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_LT(xOf(j, "LeftArm"), 0.0);   EXPECT_LT(xOf(j, "LeftUpLeg"), 0.0);
+}
+
+TEST(UniRigLabelingSides, ConflictingOrderFallsBackToFacingPlusZ)
+{
+    // Arms emitted +X first but legs −X first: no usable evidence, so the
+    // glTF convention decides — Y up, facing +Z, left = up x forward = +X.
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = {
+        J(0,0,0,-1), J(0,.3,0,0), J(0,.6,0,1), J(0,.8,0,2), J(0,.95,0,3),
+        J(.2,.6,0,2),  J(.45,.6,0,5),  J(.65,.6,0,6),
+        J(-.2,.6,0,2), J(-.45,.6,0,8), J(-.65,.6,0,9),
+        J(-.1,-.1,0,0), J(-.1,-.5,0,11), J(-.1,-.9,0,12),
+        J(.1,-.1,0,0),  J(.1,-.5,0,14),  J(.1,-.9,0,15) };
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_GT(xOf(j, "LeftArm"), 0.0);   EXPECT_GT(xOf(j, "LeftUpLeg"), 0.0);
+    EXPECT_LT(xOf(j, "RightArm"), 0.0);  EXPECT_LT(xOf(j, "RightUpLeg"), 0.0);
 }

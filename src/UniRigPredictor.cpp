@@ -404,20 +404,13 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     (void)upAxis;
 
     auto up   = [&](int i) { return joints[i].pos[U]; };
-    // SIDE SIGN → LEFT/RIGHT. Name bones ANATOMICALLY: a character's LEFT is on
-    // the −X side under the glTF/Ogre Y-up, faces-+Z convention this mesh uses,
-    // so −SIDE = Left. (We negate the raw SIDE so positive→Left.) This makes the
-    // LABELS correct. The text-to-motion RETARGET separately detects whether the
-    // rig's handedness matches the CMU data and swaps L/R in its OWN mapping if
-    // not (AnimationMerger::applyMotionClip) — so correct labels do NOT mirror
-    // the motion. Decoupling label-side from retarget-side is the fix for "labels
-    // flipped vs animation mirrored" being in tension.
-    // Measured RELATIVE TO THE ROOT (review on #1013): a rig whose local origin
-    // is off its sagittal plane — every joint at, say, x > 0 — would otherwise
-    // put all four limbs on one "side", mis-naming them AND failing the
-    // plausibility check below; translation must not change either.
+    // Signed offset on the SIDE axis, measured RELATIVE TO THE ROOT (review on
+    // #1013): a rig whose local origin is off its sagittal plane — every joint
+    // at, say, x > 0 — would otherwise put all four limbs on one "side",
+    // mis-naming them AND failing the plausibility check below. Which sign is
+    // the character's LEFT is decided once the limb chains are known (below).
     const double sideOrigin = joints[root].pos[SIDE];
-    auto side = [&](int i) { return -(joints[i].pos[SIDE] - sideOrigin); };
+    auto side = [&](int i) { return joints[i].pos[SIDE] - sideOrigin; };
     // setName ENFORCES UNIQUENESS — Ogre::Skeleton::createBone rejects duplicate
     // names ("RightArm already exists"). When the geometric classification lands
     // two joints on the same anatomical role (e.g. a clavicle + upper-arm both
@@ -500,8 +493,10 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     for (int i = 0; i < n; ++i) { topUp2 = std::max(topUp2, up(i)); botUp2 = std::min(botUp2, up(i)); }
     const double bodyH = std::max(1e-6, topUp2 - botUp2);
 
-    // #1013 plausibility bookkeeping: how many chains landed on each role/side.
-    int armL = 0, armR = 0, legL = 0, legR = 0;
+    // Classify every limb chain first and name it afterwards: which side is the
+    // character's LEFT depends on all of them (see leftIsPositive below).
+    struct Limb { std::vector<int> chain; bool isArm; bool positive; };
+    std::vector<Limb> limbs;
     // Limb roots = unclaimed children of any spine joint OR the root.
     std::vector<int> attach = spine; attach.push_back(root);
     for (int a : attach) {
@@ -528,16 +523,60 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
                 isArm = false;   // attached at/below the hips → leg
             else
                 isArm = (sideReach >= upDrop) && (dropFrac < 0.25);
-            const bool left  = (side(chain.front()) >= 0.0);
-            (isArm ? (left ? armL : armR) : (left ? legL : legR)) += 1;
-            const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
-            const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
-            const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
-            const QStringList& seq = isArm ? armN : legN;
-            for (int idx = 0; idx < static_cast<int>(chain.size()); ++idx) {
-                if (idx < seq.size()) setName(chain[idx], seq[idx]);
-                // extra distal joints (fingers/toes) keep their positional name
+            const bool positive = side(chain.front()) >= 0.0;
+            limbs.push_back({ std::move(chain), isArm, positive });
+        }
+    }
+
+    // LEFT/RIGHT. Name bones ANATOMICALLY (a character's own left), because
+    // name-keyed retargets (Kimodo, QtMesh T2M, #523) take the side from the
+    // name: a swapped pair turns into a mirrored clip whose gait runs
+    // backwards ("moonwalk") relative to the body.
+    //  1. UniRig's own evidence: it emits body joints in the mixamo template
+    //     order, where every Left chain comes before its Right twin, and it
+    //     learned the sides from the meshes it was trained on. So within the
+    //     arms (and within the legs) the FIRST-emitted chain is the left one.
+    //     Joints are in emission order here (index = emission index).
+    //  2. When that evidence is missing or the arms and legs disagree, the
+    //     glTF/Ogre convention: Y up, the character faces +Z, so its left is
+    //     up x forward = +X — Mixamo rigs measure LeftArm at x > 0 and
+    //     TRELLIS.2 characters face +Z. (Before #977 the importer mirrored
+    //     every asset and this rule said −X; it was never flipped back.)
+    bool leftIsPositive;
+    {
+        int votes = 0;   // +1: the positive side is left, −1: the negative side is
+        for (const bool arms : { true, false }) {
+            int firstPos = -1, firstNeg = -1, nPos = 0, nNeg = 0;
+            for (const auto& l : limbs) {
+                if (l.isArm != arms) continue;
+                int& first = l.positive ? firstPos : firstNeg;
+                (l.positive ? nPos : nNeg) += 1;
+                if (first < 0 || l.chain.front() < first) first = l.chain.front();
             }
+            if (nPos == 1 && nNeg == 1) votes += (firstPos < firstNeg) ? 1 : -1;
+        }
+        const int F = 3 - SIDE - U;   // the remaining (forward) axis
+        // Levi-Civita sign of (U, F, SIDE): +1 when e_U x e_F = +e_SIDE.
+        const bool cyclic = (F == (U + 1) % 3);
+        const bool conventionPositive = cyclic;   // left = up x (+forward)
+        leftIsPositive = votes > 0 ? true : votes < 0 ? false : conventionPositive;
+        if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
+            fprintf(stderr, "[UNIRIG-LABEL] left/right: emission-order votes=%d -> left is %sSIDE%s\n",
+                    votes, leftIsPositive ? "+" : "-", votes == 0 ? " (convention: faces +forward axis)" : "");
+    }
+
+    // #1013 plausibility bookkeeping: how many chains landed on each role/side.
+    int armL = 0, armR = 0, legL = 0, legR = 0;
+    for (const auto& l : limbs) {
+        const bool left = (l.positive == leftIsPositive);
+        (l.isArm ? (left ? armL : armR) : (left ? legL : legR)) += 1;
+        const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
+        const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
+        const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
+        const QStringList& seq = l.isArm ? armN : legN;
+        for (int idx = 0; idx < static_cast<int>(l.chain.size()); ++idx) {
+            if (idx < seq.size()) setName(l.chain[idx], seq[idx]);
+            // extra distal joints (fingers/toes) keep their positional name
         }
     }
 
@@ -566,8 +605,8 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     // assigned name, so a mislabel (wrong side / wrong role) can be diagnosed
     // from the actual positions instead of guessed at.
     if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG")) {
-        fprintf(stderr, "[UNIRIG-LABEL] upAxis=%d SIDE=%d (left=+SIDE) joints=%d\n",
-                U, SIDE, n);
+        fprintf(stderr, "[UNIRIG-LABEL] upAxis=%d SIDE=%d (left=%sSIDE) joints=%d\n",
+                U, SIDE, leftIsPositive ? "+" : "-", n);
         for (int i = 0; i < n; ++i)
             fprintf(stderr, "[UNIRIG-LABEL] j%-2d parent=%-2d pos=(%.3f,%.3f,%.3f) "
                     "up=%.3f side=%.3f -> %s\n",
