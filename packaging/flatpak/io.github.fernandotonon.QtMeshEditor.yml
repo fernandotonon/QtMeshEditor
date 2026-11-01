@@ -1,0 +1,97 @@
+# Flatpak manifest — wraps the Linux release .deb (same strategy as snap/snapcraft.yaml).
+# Build (CI or local):
+#   ./scripts/pack-flatpak-from-deb.sh /path/to/qtmesheditor_amd64.deb
+# Install from a release bundle:
+#   flatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak
+# Or after publishing to Flathub:
+#   flatpak install flathub io.github.fernandotonon.QtMeshEditor
+#
+# App ID is fixed — InstallFlavor::updateCommandHint(Flatpak) embeds it.
+
+id: io.github.fernandotonon.QtMeshEditor
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: qtmesheditor
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --share=network
+  - --filesystem=home
+  - --filesystem=xdg-documents
+  - --filesystem=xdg-download
+  - --filesystem=xdg-pictures
+  - --filesystem=xdg-run/pipewire-0:ro
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --env=QT_QPA_PLATFORM=xcb
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/man
+  - /share/doc/qtmesheditor/copyright
+modules:
+  - name: qtmesheditor
+    buildsystem: simple
+    build-commands:
+      - |
+        set -euo pipefail
+        DEST="${FLATPAK_DEST}"
+        mkdir -p extract
+        # ar + tar: no dpkg required inside the freedesktop SDK.
+        ar x qtmesheditor_amd64.deb
+        tar -xf data.tar.* -C extract
+
+        install -d "${DEST}/bin"
+        install -d "${DEST}/lib/qtmesheditor"
+        install -d "${DEST}/share/qtmesheditor"
+        install -d "${DEST}/share/applications"
+        install -d "${DEST}/share/metainfo"
+        install -d "${DEST}/share/mime/packages"
+        install -d "${DEST}/share/icons/hicolor"
+        install -d "${DEST}/share/doc/qtmesheditor"
+
+        # Payload from the .deb (usr/share + usr/lib).
+        cp -a extract/usr/share/qtmesheditor/. "${DEST}/share/qtmesheditor/"
+        cp -a extract/usr/lib/qtmesheditor/. "${DEST}/lib/qtmesheditor/"
+        if [ -d extract/usr/share/doc/qtmesheditor ]; then
+          cp -a extract/usr/share/doc/qtmesheditor/. "${DEST}/share/doc/qtmesheditor/"
+        fi
+        if [ -f extract/usr/share/mime/packages/qtmesheditor-mimetypes.xml ]; then
+          install -m644 extract/usr/share/mime/packages/qtmesheditor-mimetypes.xml \
+            "${DEST}/share/mime/packages/qtmesheditor-mimetypes.xml"
+        fi
+
+        # Remap Ogre PluginFolder to the Flatpak layout.
+        if [ -f "${DEST}/share/qtmesheditor/cfg/plugins.cfg" ]; then
+          sed -i 's|^PluginFolder=.*|PluginFolder=/app/lib/qtmesheditor|' \
+            "${DEST}/share/qtmesheditor/cfg/plugins.cfg"
+        fi
+
+        install -m755 qtmesheditor-launcher.sh "${DEST}/bin/qtmesheditor"
+        install -m755 qtmesh-launcher.sh "${DEST}/bin/qtmesh"
+
+        install -m644 io.github.fernandotonon.QtMeshEditor.desktop \
+          "${DEST}/share/applications/io.github.fernandotonon.QtMeshEditor.desktop"
+        install -m644 io.github.fernandotonon.QtMeshEditor.metainfo.xml \
+          "${DEST}/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml"
+
+        # AppStream / desktop icons (app-id named).
+        cp -a icons/hicolor/. "${DEST}/share/icons/hicolor/"
+    sources:
+      # CI / pack-flatpak-from-deb.sh copies the release .deb next to this manifest.
+      - type: file
+        path: qtmesheditor_amd64.deb
+      - type: file
+        path: qtmesheditor-launcher.sh
+      - type: file
+        path: qtmesh-launcher.sh
+      - type: file
+        path: io.github.fernandotonon.QtMeshEditor.desktop
+      - type: file
+        path: io.github.fernandotonon.QtMeshEditor.metainfo.xml
+      - type: dir
+        path: icons

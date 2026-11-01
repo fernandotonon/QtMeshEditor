@@ -85,9 +85,9 @@ Relauncher       → atomic rename swap (Windows: move aside old, move in new)
 
 Enum (`src/updater/InstallFlavor.h`):
 
-`Portable | Homebrew | WinGet | Snap | Flatpak | Debian | Docker | Unknown`
+`Portable | Homebrew | WinGet | Snap | Flatpak | Debian | Rpm | Docker | Unknown`
 
-Only **`Portable`** enables download/install. All others show `updateCommandHint()` (brew/winget/snap/apt/flatpak/docker).
+Only **`Portable`** enables download/install. All others show `updateCommandHint()` (brew/winget/snap/apt/dnf/flatpak/docker).
 
 ### Detection rules (canonical order)
 
@@ -96,7 +96,8 @@ Only **`Portable`** enables download/install. All others show `updateCommandHint
 | **Docker** | `/.dockerenv` exists (Linux). |
 | **Snap** | Path contains `/snap/qtmesheditor/` or `/snap/bin/qtmesheditor`. |
 | **Flatpak** | Path under `/var/lib/flatpak/` or `~/.local/share/flatpak/`. |
-| **Debian** | Binary in `/usr/bin` or `/bin` (apt `.deb` install). |
+| **Debian** | Binary in `/usr/bin`, `/bin`, or `/usr/share/qtmesheditor/` on a Debian-family host (apt `.deb`). |
+| **Rpm** | Same `/usr…` paths on Fedora / RHEL / openSUSE (`/etc/os-release` ID/`ID_LIKE`, #1081). |
 | **Homebrew** | macOS: `/Applications/Homebrew/…`, `Caskroom/qtmesheditor/`, or `.app/Contents/Resources/.brew` sentinel. |
 | **WinGet** | Registry uninstall key `FernandoTonon.QtMeshEditor`, or path under `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\WinGet`. |
 | **Portable** | macOS: `/Applications/QtMeshEditor.app`; Linux: `/opt/QtMeshEditor/`; Windows: zip layout / MSI registry `QtMeshEditor` without WinGet key. |

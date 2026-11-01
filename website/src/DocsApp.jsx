@@ -198,6 +198,16 @@ brew install qtmesheditor
 # Linux (Snap)
 sudo snap install qtmesheditor
 
+# Linux (Flatpak) — download the .flatpak from GitHub Releases
+flatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak
+# CLI: flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help
+
+# Fedora / RHEL (RPM from GitHub Releases)
+sudo dnf install ./qtmesheditor_amd64.rpm
+
+# Debian / Ubuntu (.deb from GitHub Releases)
+sudo apt install ./qtmesheditor_amd64.deb
+
 # Docker
 docker pull ghcr.io/fernandotonon/qtmesh`}</CodeBlock>
 
@@ -236,7 +246,7 @@ cmake --build build --target QtMeshEditor -j4
               <li><strong>Linux</strong> — <Code>.fbx</Code>, <Code>.glb</Code>/<Code>.gltf</Code>, <Code>.obj</Code>,
                   <Code>.dae</Code>, <Code>.stl</Code>, <Code>.ply</Code>, <Code>.mesh</Code>, <Code>.rsd</Code>, <Code>.tmd</Code>,
                   <Code>.scene.glb</Code>/<Code>.scene.gltf</Code> via <Code>.desktop</Code> + XDG MIME in
-                  <Code>.deb</Code> and Snap; postinstall runs <Code>update-mime-database</Code> and
+                  <Code>.deb</Code>, RPM, Snap, and Flatpak; postinstall runs <Code>update-mime-database</Code> and
                   <Code>update-desktop-database</Code>.</li>
             </ul>
             <p className={s.para}>

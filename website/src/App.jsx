@@ -106,10 +106,28 @@ function App() {
   const cliTabButtonRefs = useRef([]);
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
-  const recommendedInstall = useMemo(
-    () => installOptions.find((item) => item.platform === detectedPlatform) || null,
-    [detectedPlatform]
-  );
+  const recommendedInstall = useMemo(() => {
+    if (!detectedPlatform) {
+      return null;
+    }
+    if (detectedPlatform === 'Linux') {
+      const ua = (typeof navigator !== 'undefined' ? navigator.userAgent || '' : '').toLowerCase();
+      if (ua.includes('fedora') || ua.includes('rhel') || ua.includes('centos')) {
+        return (
+          installOptions.find((item) => item.platform === 'Fedora / RHEL') ||
+          installOptions.find((item) => item.method === 'Flatpak') ||
+          installOptions.find((item) => item.platform === 'Linux') ||
+          null
+        );
+      }
+      return (
+        installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+        installOptions.find((item) => item.platform === 'Linux') ||
+        null
+      );
+    }
+    return installOptions.find((item) => item.platform === detectedPlatform) || null;
+  }, [detectedPlatform]);
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
   const githubActionExample = useMemo(
     () => pipelineExamples.githubAction
@@ -355,7 +373,7 @@ function App() {
                     {hero.ctaSecondary}
                   </ButtonLink>
                 </div>
-                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Docker, or release binaries.</p>
+                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries.</p>
               </div>
 
               <ul className={styles.proofRow} aria-label="Product proof points">
@@ -659,7 +677,7 @@ function App() {
             id="install"
             eyebrow="Install"
             title="Install QtMeshEditor and start scanning"
-            subtitle="Choose your platform path: winget, Homebrew, snap, Docker, or release binaries."
+            subtitle="Choose your platform path: winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries."
           >
             <div className={styles.installPortalEntryActions}>
               <button

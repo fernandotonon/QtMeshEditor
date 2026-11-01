@@ -370,8 +370,13 @@ Split View|Skeleton Animation Controls
 |----------|---------|
 | **Windows** | `winget install FernandoTonon.QtMeshEditor` |
 | **macOS** | `brew tap fernandotonon/qtmesheditor && brew trust fernandotonon/qtmesheditor && brew install qtmesheditor` |
-| **Linux** | `sudo snap install qtmesheditor` |
+| **Linux (Snap)** | `sudo snap install qtmesheditor` |
+| **Linux (Flatpak)** | Download `io.github.fernandotonon.QtMeshEditor.flatpak` from [Releases](https://github.com/fernandotonon/QtMeshEditor/releases/latest), then `flatpak install --user ./io.github.fernandotonon.QtMeshEditor.flatpak` |
+| **Fedora / RHEL (RPM)** | `sudo dnf install ./qtmesheditor_amd64.rpm` (from [Releases](https://github.com/fernandotonon/QtMeshEditor/releases/latest)) |
+| **Debian / Ubuntu (.deb)** | `sudo apt install ./qtmesheditor_amd64.deb` (from [Releases](https://github.com/fernandotonon/QtMeshEditor/releases/latest)) |
 | **Docker** | `docker run --rm ghcr.io/fernandotonon/qtmesh --help` |
+
+Flatpak CLI: `flatpak run --command=qtmesh io.github.fernandotonon.QtMeshEditor --help`
 
 📥 [Download latest release](https://github.com/fernandotonon/QtMeshEditor/releases/latest) · 📖 [Website & docs](https://fernandotonon.github.io/QtMeshEditor/)
 

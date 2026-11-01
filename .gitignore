@@ -170,3 +170,9 @@ __pycache__/
 .venv-mocap/
 !docs/TRELLIS2.md
 !docs/trellis2-dependencies.md
+
+# Flatpak / RPM local build trees (#1081)
+.flatpak-build/
+.flatpak-repo/
+packaging/flatpak/qtmesheditor_amd64.deb
+*.flatpak

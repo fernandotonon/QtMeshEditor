@@ -3385,6 +3385,107 @@ jobs:
         exit 1
 
 ####################################################################
+# Fedora / RHEL RPM (from Linux .deb) — issue #1081
+####################################################################
+
+ rpm-publish:
+    needs: build-linux
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-binaries-${{ matrix.arch }}
+        path: .
+
+    - name: Install rpmbuild + deps
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y rpm python3-pil
+
+    - name: Build RPM from .deb
+      run: |
+        set -euo pipefail
+        chmod +x ./scripts/pack-rpm-from-deb.sh
+        ./scripts/pack-rpm-from-deb.sh "./qtmesheditor_${{ matrix.arch }}.deb" .
+        test -f "./qtmesheditor_${{ matrix.arch }}.rpm"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: linux-rpm-${{ matrix.arch }}
+        path: qtmesheditor_${{ matrix.arch }}.rpm
+
+    - uses: xresloader/upload-to-github-release@main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        file: qtmesheditor_${{ matrix.arch }}.rpm
+        update_latest_release: true
+        overwrite: false
+        verbose: true
+
+####################################################################
+# Flatpak bundle (from Linux amd64 .deb) — issue #1081
+####################################################################
+
+ flatpak-publish:
+    needs: build-linux
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    container:
+      # Matches org.freedesktop.Platform//24.08 in the manifest. Tags:
+      # https://github.com/orgs/flathub-infra/packages/container/package/flatpak-github-actions
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-binaries-amd64
+        path: .
+
+    - name: Stage .deb for Flatpak manifest
+      run: |
+        set -euo pipefail
+        test -f ./qtmesheditor_amd64.deb
+        cp ./qtmesheditor_amd64.deb ./packaging/flatpak/qtmesheditor_amd64.deb
+        # Builder image may lack dpkg-deb — read Version via ar+tar.
+        CTRL_DIR="$(mktemp -d)"
+        (cd "$CTRL_DIR" && ar x "$GITHUB_WORKSPACE/qtmesheditor_amd64.deb" control.tar.* \
+          && tar -xf control.tar.*)
+        VERSION="$(awk -F': ' '/^Version:/{print $2; exit}' "$CTRL_DIR/control" | sed 's/-.*//')"
+        rm -rf "$CTRL_DIR"
+        TODAY="$(date -u '+%Y-%m-%d')"
+        sed -i -E \
+          "s|<release version=\"[0-9.]+\" date=\"[0-9-]+\"/>|<release version=\"${VERSION}\" date=\"${TODAY}\"/>|" \
+          ./packaging/flatpak/io.github.fernandotonon.QtMeshEditor.metainfo.xml
+        echo "Building Flatpak for version ${VERSION}"
+
+    - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      with:
+        bundle: io.github.fernandotonon.QtMeshEditor.flatpak
+        manifest-path: packaging/flatpak/io.github.fernandotonon.QtMeshEditor.yml
+        cache-key: flatpak-builder-${{ github.sha }}
+        upload-artifact: true
+        artifact-name: linux-flatpak-amd64
+
+    - uses: xresloader/upload-to-github-release@main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        file: io.github.fernandotonon.QtMeshEditor.flatpak
+        update_latest_release: true
+        overwrite: false
+        verbose: true
+
+####################################################################
 # Docker Image Publish (after Linux .deb is built)
 ####################################################################
 

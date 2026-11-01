@@ -4,6 +4,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QIODevice>
+#include <QStringList>
 #include <QStandardPaths>
 
 #ifdef Q_OS_WIN
@@ -31,6 +33,30 @@ bool pathContains(const QString& path, QLatin1String needle)
 }
 
 #ifdef Q_OS_LINUX
+bool isRpmDistro()
+{
+    // Prefer /etc/os-release ID / ID_LIKE (Fedora, RHEL family, openSUSE).
+    QFile osRelease(QStringLiteral("/etc/os-release"));
+    if (osRelease.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QString text = QString::fromUtf8(osRelease.readAll()).toLower();
+        const QStringList rpmTokens = {
+            QStringLiteral("fedora"), QStringLiteral("rhel"), QStringLiteral("centos"),
+            QStringLiteral("rocky"),  QStringLiteral("alma"), QStringLiteral("suse"),
+            QStringLiteral("opensuse")};
+        for (const QString& line : text.split(QLatin1Char('\n'))) {
+            if (!line.startsWith(QLatin1String("id="))
+                && !line.startsWith(QLatin1String("id_like=")))
+                continue;
+            for (const QString& token : rpmTokens) {
+                if (line.contains(token))
+                    return true;
+            }
+        }
+    }
+    return QFile::exists(QStringLiteral("/etc/redhat-release"))
+        || QFile::exists(QStringLiteral("/etc/SuSE-release"));
+}
+
 Flavor detectLinux(const QString& path)
 {
     if (pathContains(path, QLatin1String("/snap/qtmesheditor/"))
@@ -43,8 +69,11 @@ Flavor detectLinux(const QString& path)
 
     const QFileInfo info(path);
     const QString dir = info.absolutePath();
-    if (dir == QStringLiteral("/usr/bin") || dir == QStringLiteral("/bin"))
-        return Flavor::Debian;
+    // .deb / .rpm launchers `exec` the real binary under /usr/share/qtmesheditor/,
+    // so applicationFilePath is usually that path — not /usr/bin/qtmesheditor.
+    if (dir == QStringLiteral("/usr/bin") || dir == QStringLiteral("/bin")
+        || pathContains(path, QLatin1String("/usr/share/qtmesheditor/")))
+        return isRpmDistro() ? Flavor::Rpm : Flavor::Debian;
 
     if (pathContains(path, QLatin1String("/opt/QtMeshEditor"))
         || pathContains(path, QLatin1String("/opt/qtmesheditor")))
@@ -133,6 +162,7 @@ QString toSlug(Flavor flavor)
     case Flavor::Snap: return QStringLiteral("snap");
     case Flavor::Flatpak: return QStringLiteral("flatpak");
     case Flavor::Debian: return QStringLiteral("debian");
+    case Flavor::Rpm: return QStringLiteral("rpm");
     case Flavor::Docker: return QStringLiteral("docker");
     case Flavor::Unknown: return QStringLiteral("unknown");
     }
@@ -148,6 +178,7 @@ QString displayName(Flavor flavor)
     case Flavor::Snap: return QStringLiteral("Snap");
     case Flavor::Flatpak: return QStringLiteral("Flatpak");
     case Flavor::Debian: return QStringLiteral("Debian package");
+    case Flavor::Rpm: return QStringLiteral("RPM package");
     case Flavor::Docker: return QStringLiteral("Docker");
     case Flavor::Unknown: return QStringLiteral("Unknown");
     }
@@ -172,6 +203,8 @@ QString updateCommandHint(Flavor flavor)
         return QStringLiteral("flatpak update io.github.fernandotonon.QtMeshEditor");
     case Flavor::Debian:
         return QStringLiteral("sudo apt update && sudo apt install qtmesheditor");
+    case Flavor::Rpm:
+        return QStringLiteral("sudo dnf upgrade qtmesheditor");
     case Flavor::Docker:
         return QStringLiteral("docker pull ghcr.io/fernandotonon/qtmesh");
     case Flavor::Portable:

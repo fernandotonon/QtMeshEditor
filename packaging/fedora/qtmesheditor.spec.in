@@ -1,0 +1,81 @@
+# Fedora / RHEL RPM — built from the Linux release .deb layout by
+# scripts/pack-rpm-from-deb.sh (does not rebuild Qt/Ogre from source).
+#
+# Install:
+#   sudo dnf install ./qtmesheditor-@VERSION@-1.@ARCH@.rpm
+# Or after a COPR publish:
+#   sudo dnf install qtmesheditor
+
+Name:           qtmesheditor
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        Free 3D asset tool for indie game developers
+License:        MIT
+URL:            https://github.com/fernandotonon/QtMeshEditor
+# Prebuilt payload staged by pack-rpm-from-deb.sh (no Source0 tarball).
+BuildArch:      @RPM_ARCH@
+AutoReqProv:    no
+# The .deb already bundles Qt 6.9 / Ogre / Assimp under /usr/lib/qtmesheditor.
+# Keep only host GL / XCB / secrets / pulse that Flatpak/Snap also leave to the OS.
+Requires:       libxcb
+Requires:       libX11
+Requires:       mesa-libGL
+Requires:       mesa-libEGL
+Requires:       libglvnd-glx
+Requires:       pulseaudio-libs
+Requires:       libsecret
+
+%description
+Merge Mixamo animations, convert between 40+ 3D formats, edit materials
+with AI assistance, and inspect skeletons and bone weights. Supports FBX,
+glTF, OBJ, Collada, STL and more. Includes CLI (qtmesh) for batch processing
+and an MCP server for AI agent integration.
+
+%prep
+# Nothing to unpack — files are staged into BUILDROOT by the pack script.
+
+%install
+rm -rf %{buildroot}
+mkdir -p %{buildroot}
+cp -a %{_builddir}/payload/. %{buildroot}/
+
+%files
+%defattr(-,root,root,-)
+/usr/bin/qtmesheditor
+/usr/bin/qtmesh
+/usr/lib/qtmesheditor
+/usr/share/qtmesheditor
+/usr/share/applications/qtmesheditor.desktop
+/usr/share/applications/qtmesheditor-url.desktop
+/usr/share/mime/packages/qtmesheditor-mimetypes.xml
+/usr/share/icons/hicolor/*/apps/qtmesheditor.png
+/usr/share/doc/qtmesheditor
+/usr/share/metainfo/io.github.fernandotonon.QtMeshEditor.metainfo.xml
+
+%post
+if command -v update-mime-database >/dev/null 2>&1; then
+  update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  gtk-update-icon-cache -f /usr/share/icons/hicolor >/dev/null 2>&1 || :
+fi
+if command -v xdg-mime >/dev/null 2>&1; then
+  xdg-mime default qtmesheditor-url.desktop x-scheme-handler/qtmesh >/dev/null 2>&1 || :
+fi
+
+%postun
+if [ "$1" = 0 ]; then
+  if command -v update-mime-database >/dev/null 2>&1; then
+    update-mime-database /usr/share/mime >/dev/null 2>&1 || :
+  fi
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications >/dev/null 2>&1 || :
+  fi
+fi
+
+%changelog
+* @CHANGELOG_DATE@ Fernando Tonon <tonon.fernando@hotmail.com> - @VERSION@-1
+- Package QtMeshEditor @VERSION@ for Fedora/RHEL from the Linux release .deb.

@@ -28,6 +28,10 @@ TEST(InstallFlavor, UpdateHintsMatchDocumentedCommands)
               QStringLiteral("winget upgrade FernandoTonon.QtMeshEditor"));
     EXPECT_EQ(InstallFlavor::updateCommandHint(Flavor::Snap),
               QStringLiteral("sudo snap refresh qtmesheditor"));
+    EXPECT_EQ(InstallFlavor::updateCommandHint(Flavor::Flatpak),
+              QStringLiteral("flatpak update io.github.fernandotonon.QtMeshEditor"));
+    EXPECT_EQ(InstallFlavor::updateCommandHint(Flavor::Rpm),
+              QStringLiteral("sudo dnf upgrade qtmesheditor"));
     EXPECT_TRUE(InstallFlavor::updateCommandHint(Flavor::Portable).isEmpty());
 }
 
@@ -38,7 +42,14 @@ TEST(InstallFlavor, LinuxDetectsSnapFlatpakDebianDockerPortable)
               Flavor::Snap);
     EXPECT_EQ(InstallFlavor::detect(QStringLiteral("/var/lib/flatpak/app/io.github.app/x/active/files/bin/QtMeshEditor")),
               Flavor::Flatpak);
-    EXPECT_EQ(InstallFlavor::detect(QStringLiteral("/usr/bin/QtMeshEditor")), Flavor::Debian);
+    // /usr/bin and the post-exec /usr/share path are Debian on Debian-family hosts
+    // and Rpm on Fedora/RHEL — accept either.
+    const Flavor usrBin = InstallFlavor::detect(QStringLiteral("/usr/bin/qtmesheditor"));
+    EXPECT_TRUE(usrBin == Flavor::Debian || usrBin == Flavor::Rpm);
+    const Flavor usrShare =
+        InstallFlavor::detect(QStringLiteral("/usr/share/qtmesheditor/qtmesheditor"));
+    EXPECT_TRUE(usrShare == Flavor::Debian || usrShare == Flavor::Rpm);
+    EXPECT_EQ(InstallFlavor::toSlug(Flavor::Rpm), QStringLiteral("rpm"));
     EXPECT_EQ(InstallFlavor::detect(QStringLiteral("/opt/QtMeshEditor/bin/QtMeshEditor")),
               Flavor::Portable);
 }

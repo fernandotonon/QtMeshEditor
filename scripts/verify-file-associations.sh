@@ -40,6 +40,14 @@ check_contains "$ROOT/scripts/register-windows-file-associations.ps1" "QtMeshEdi
 echo "=== Snap runtime deps ==="
 check_contains "$ROOT/snap/snapcraft.yaml" "libsecret-1-0"
 
+echo "=== Flatpak / Fedora packaging (#1081) ==="
+check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.yml" "id: io.github.fernandotonon.QtMeshEditor"
+check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.desktop" "Exec=qtmesheditor %F"
+check_contains "$ROOT/packaging/flatpak/io.github.fernandotonon.QtMeshEditor.metainfo.xml" "io.github.fernandotonon.QtMeshEditor"
+check_contains "$ROOT/packaging/fedora/qtmesheditor.spec.in" "Name:           qtmesheditor"
+check_contains "$ROOT/scripts/pack-flatpak-from-deb.sh" "flatpak-builder"
+check_contains "$ROOT/scripts/pack-rpm-from-deb.sh" "rpmbuild"
+
 echo "=== Qt launch handler ==="
 check_contains "$ROOT/src/AppLaunchHandler.h" "kServerName"
 check_contains "$ROOT/src/main.cpp" "AppLaunchHandler"
