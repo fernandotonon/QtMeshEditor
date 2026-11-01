@@ -399,6 +399,44 @@ TEST(AnimationRetargeter, FirstFrameRestTreatsFrameZeroAsRest)
         EXPECT_GT(std::fabs(out.back().rot[size_t(i)].Dot(tgt.bindRot[size_t(i)])), 1.0f - 1e-5f);
 }
 
+// A target whose rest spine LEANS forward a few degrees (normal on real rigs) must still walk on the level: aligning
+// the root path with the tilted hips->head frame leaked forward travel into height (Kimodo walks climbed 8 cm/m).
+TEST(AnimationRetargeter, RootPathStaysLevelOnALeaningRest)
+{
+    const RigDesc src = mixamoRig();
+    std::vector<std::string> n;
+    std::vector<Ogre::Vector3> wp;
+    std::vector<Ogre::Quaternion> wr;
+    const Ogre::Vector3 hip(kDefs[0].x, kDefs[0].y, kDefs[0].z);
+    const Ogre::Quaternion lean(Ogre::Degree(6.0f), Ogre::Vector3::UNIT_X);
+    for (const auto& d : kDefs) {
+        n.push_back(std::string("mixamorig:") + d.mixamo);
+        const std::string name = d.mixamo;
+        const bool lower = name == "Hips" || name.find("Leg") != std::string::npos || name.find("Foot") != std::string::npos;
+        const Ogre::Vector3 p(d.x, d.y, d.z);
+        wp.push_back(lower ? p : hip + lean * (p - hip));
+        wr.push_back(Ogre::Quaternion::IDENTITY);
+    }
+    const RigDesc tgt = rigFromWorld(n, wp, wr);
+    const int hips = src.indexOf("mixamorig:Hips");
+    std::vector<LocalPose> frames;
+    for (int f = 0; f < 5; ++f) {
+        LocalPose lp = Retarget::bindPose(src);
+        lp.pos[size_t(hips)] = src.bindPos[size_t(hips)] + Ogre::Vector3(0.0f, 0.0f, 0.5f * float(f));
+        frames.push_back(lp);
+    }
+    Retarget::Options opt;
+    opt.translation = Retarget::TranslationMode::Root;
+    const auto out = Retarget::retargetFrames(src, frames, tgt, Retarget::autoMap(src.names, tgt.names).map, opt);
+    ASSERT_EQ(out.size(), frames.size());
+    std::vector<Ogre::Quaternion> w;
+    std::vector<Ogre::Vector3> p0, p4;
+    Retarget::forwardKinematics(tgt, out.front(), w, p0);
+    Retarget::forwardKinematics(tgt, out.back(), w, p4);
+    EXPECT_NEAR(p4[size_t(hips)].y, p0[size_t(hips)].y, 1e-3f) << "2 m of travel must not change the hip height";
+    EXPECT_NEAR(p4[size_t(hips)].z - p0[size_t(hips)].z, 2.0f, 1e-2f);
+}
+
 TEST(AnimationRetargeter, RejectsBadInput)
 {
     const RigDesc src = mixamoRig();

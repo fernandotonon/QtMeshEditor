@@ -3,16 +3,22 @@
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
 #include "CharacterScene.h"
+#include "Clothing.h"
 #include "HairTint.h"
 #include "../Manager.h"
+#include "../ModelDownloader.h"
 #include "../SelectionSet.h"
 #include "../SentryReporter.h"
 #include "../UndoManager.h"
 
+#include <QApplication>
+#include <QColor>
+#include <QColorDialog>
 #include <QFileInfo>
 #include <QSettings>
 
 #include <QCoreApplication>
+#include <QMetaObject>
 #include <QUndoCommand>
 
 #include <OgreSceneNode.h>
@@ -190,7 +196,67 @@ QVariantList CharacterController::hairColourPresets() const
     return list;
 }
 
+QStringList CharacterController::topStyles() const { return CharacterGen::topStyleIds(); }
+QStringList CharacterController::bottomStyles() const { return CharacterGen::bottomStyleIds(); }
+
+QVariantList CharacterController::clothColours() const
+{
+    QVariantList list;
+    for (const QString& name : CharacterGen::clothColourNames()) {
+        CharacterGen::Rgb c{};
+        CharacterGen::parseClothColour(name, &c);
+        list.append(QVariantMap{{"name", name}, {"colour", QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name()}});
+    }
+    return list;
+}
+
+void CharacterController::setTopStyle(const QString& v)
+{
+    if (!CharacterGen::parseTopStyle(v, nullptr) || v.toLower() == m_topStyle) return;
+    m_topStyle = v.toLower();
+    emit clothesChanged();
+}
+
+void CharacterController::setBottomStyle(const QString& v)
+{
+    if (!CharacterGen::parseBottomStyle(v, nullptr) || v.toLower() == m_bottomStyle) return;
+    m_bottomStyle = v.toLower();
+    emit clothesChanged();
+}
+
+void CharacterController::setTopColour(const QString& v)
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseClothColour(v, &c)) return;
+    const QString hex = QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name();
+    if (hex == m_topColour) return;
+    m_topColour = hex;
+    emit clothesChanged();
+}
+
+void CharacterController::setBottomColour(const QString& v)
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseClothColour(v, &c)) return;
+    const QString hex = QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name();
+    if (hex == m_bottomColour) return;
+    m_bottomColour = hex;
+    emit clothesChanged();
+}
+
 QStringList CharacterController::skinNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Skin); }
+QString CharacterController::skinColourHex(const QString& name) const
+{
+    CharacterGen::Rgb c{};
+    if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
+    return QColor::fromRgbF(c[0], c[1], c[2]).name();
+}
+QString CharacterController::pickColour(const QString& initial) const
+{
+    const QColor c = QColorDialog::getColor(QColor(initial), QApplication::activeWindow(), QStringLiteral("Colour"),
+                                            QColorDialog::DontUseNativeDialog);
+    return c.isValid() ? c.name() : QString();
+}
 QStringList CharacterController::eyeNames() const { return CharacterGen::colourNames(CharacterGen::ColourKind::Eye); }
 
 QVariantList CharacterController::seedBody(int seed, double variety) const
@@ -216,7 +282,7 @@ bool CharacterController::hasCharacter() const
 QString CharacterController::shapeLabel(int m) const
 {
     static const char* k[] = {
-        "Weight (belly, chest)", "Torso fullness", "Waist and hips", "Belly depth", "Chest and waist", "Belly forward or flat",
+        "Weight (belly, chest)", "Hips and waist width", "Bust and hips balance", "Belly depth", "Waist width", "Hips depth",
         "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
         "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
         "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Age (face)", "Head shape 6",
@@ -229,7 +295,9 @@ QString CharacterController::shapeLabel(int m) const
 QString CharacterController::shapeHint(int m) const
 {
     if (m == 0) return tr("The biggest body change: overall weight, mostly belly and chest.");
-    if (m >= 1 && m < 8) return tr("Torso proportions: fullness, waist, hips, belly or chest.");
+    if (m == 1) return tr("Hips and waist width: negative = narrow hips and waist (more masculine), positive = wider hips and waist (more feminine).");
+    if (m == 2) return tr("Bust and hips balance: positive = a fuller, more forward bust with slimmer, flatter hips, negative = the opposite.");
+    if (m >= 3 && m < 8) return tr("Torso proportions: waist, hips, belly or chest.");
     if (m < 20) return tr("A smaller refinement of the torso and hips.");
     if (m == 20 || m == 21) return tr("Neck length and the size of the head.");
     if (m < 40) return tr("A subtle change of the head's shape.");
@@ -244,6 +312,36 @@ void CharacterController::setStatus(const QString& s, bool busy)
     QCoreApplication::processEvents();
 }
 
+void CharacterController::clearDownloadProgress()
+{
+    if (m_downloadProgress < 0.0 && m_downloadLabel.isEmpty()
+        && m_downloadBytesReceived == 0 && m_downloadBytesTotal == 0)
+        return;
+    m_downloadProgress = -1.0;
+    m_downloadLabel.clear();
+    m_downloadBytesReceived = 0;
+    m_downloadBytesTotal = 0;
+    emit downloadProgressChanged();
+}
+
+void CharacterController::onModelDownloadProgress(const QString& name, qint64 received, qint64 total)
+{
+    if (!m_watchingDownload) return;
+    // CharacterAssets labels look like "character body (MHR)" / "character head (ICT-FaceKit)".
+    if (!name.contains(QLatin1String("character"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("MHR"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("ICT"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("hairstyle"), Qt::CaseInsensitive)
+        && !name.contains(QLatin1String("MakeHuman"), Qt::CaseInsensitive))
+        return;
+    m_downloadLabel = name;
+    m_downloadBytesReceived = received;
+    m_downloadBytesTotal = total;
+    m_downloadProgress = (total > 0) ? double(received) / double(total) : 0.0;
+    emit downloadProgressChanged();
+    setStatus(tr("Downloading %1…").arg(name), true);
+}
+
 QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
                                       const QString& eye, bool replace)
 {
@@ -254,9 +352,25 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
     QString err;
 
-    {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is
-        if (!CharacterAssets::present()) setStatus(tr("Downloading character assets…"), true);
-        if (!CharacterAssets::ensureBlocking(&err)) {
+    {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is.
+        // Busy for EVERY ensureBlocking call — present() only checks body+head, but ensureBlocking can still fetch a
+        // missing licence/hair file or re-fetch a digest mismatch, and its nested event loop would otherwise leave
+        // Generate clickable (re-entrant generate()).
+        QMetaObject::Connection progressConn;
+        setStatus(CharacterAssets::present() ? tr("Checking character assets…")
+                                             : tr("Downloading character assets…"),
+                  true);
+        clearDownloadProgress();
+        m_watchingDownload = true;
+        if (auto* dl = ModelDownloader::instance()) {
+            progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
+                                   &CharacterController::onModelDownloadProgress);
+        }
+        const bool ok = CharacterAssets::ensureBlocking(&err);
+        m_watchingDownload = false;
+        if (progressConn) disconnect(progressConn);
+        clearDownloadProgress();
+        if (!ok) {
             setStatus(tr("Character assets unavailable: %1").arg(err), false);
             return err;
         }
@@ -286,6 +400,10 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
     p.eyelashes = m_eyelashes;
+    p.topStyle = m_topStyle;
+    p.bottomStyle = m_bottomStyle;
+    CharacterGen::parseClothColour(m_topColour, &p.topColour);
+    CharacterGen::parseClothColour(m_bottomColour, &p.bottomColour);
     if (seed >= 0) {
         p.bodyShape = randomCoefficients(uint32_t(seed) * 2u + 1u, m_assets->mhrShapes, float(variety), 16);
         p.faceIdentity = randomCoefficients(uint32_t(seed) * 2u + 2u, m_assets->ictIdentities, float(variety), 40);

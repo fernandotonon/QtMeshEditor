@@ -132,6 +132,8 @@ struct Mesh {
 };
 
 struct Rig {
+    /// Scene-name tag of the imported skeleton / mesh / node ("_dna" for a file import; a generated character sets "").
+    QString nameTag = QStringLiteral("_dna");
     Descriptor descriptor;
     BehaviorSummary behavior;
     std::vector<Joint> joints;             ///< ALL joints (the skeleton is not LOD-pruned here)

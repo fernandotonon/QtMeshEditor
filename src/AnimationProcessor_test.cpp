@@ -235,9 +235,12 @@ TEST(AnimationProcessorChannelTest, PositionKeyOffsetBoneDeltaMath) {
     EXPECT_NEAR(t.z, 3.0, 1e-4);
 }
 
-// Rotated T-pose bone: a 90-deg-about-Z bone at origin, key (1,0,0) → the delta
-// is rotated by the inverse T-pose rotation (Z by -90 deg) → (0,-1,0).
-TEST(AnimationProcessorChannelTest, PositionKeyRotatedBoneAppliesInverseRotation) {
+// Rotated T-pose bone: a 90-deg-about-Z bone at origin, key (1,0,0). Ogre applies a keyframe
+// translation in PARENT space (NodeAnimationTrack::applyToNode -> translate(), TS_PARENT), so the
+// stored delta is the key minus the bind position, NOT rotated by the bone's bind orientation.
+// The old inverse rotation turned root motion around on any rotated-bind root (a generated
+// character's 180-degree Hips came back from FBX/glTF walking backwards).
+TEST(AnimationProcessorChannelTest, PositionKeyRotatedBoneStaysInParentSpace) {
     auto ogreRoot = std::make_unique<Ogre::Root>();
     auto skeleton = Ogre::SkeletonManager::getSingleton().create(
         "PosRotSkel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
@@ -259,12 +262,19 @@ TEST(AnimationProcessorChannelTest, PositionKeyRotatedBoneAppliesInverseRotation
     Ogre::NodeAnimationTrack* track = anim->getNodeTrack(bone->getHandle());
     ASSERT_EQ(track->getNumKeyFrames(), 1u);
 
-    // expected = zRot.Inverse() * (1,0,0)
-    Ogre::Vector3 expected = zRot.Inverse() * Ogre::Vector3(1, 0, 0);
     Ogre::Vector3 t = track->getNodeKeyFrame(0)->getTranslate();
-    EXPECT_NEAR(t.x, expected.x, 1e-4);
-    EXPECT_NEAR(t.y, expected.y, 1e-4);
-    EXPECT_NEAR(t.z, expected.z, 1e-4);
+    EXPECT_NEAR(t.x, 1.0, 1e-4);
+    EXPECT_NEAR(t.y, 0.0, 1e-4);
+    EXPECT_NEAR(t.z, 0.0, 1e-4);
+
+    // And the property that matters: played back, the bone lands where the file put it.
+    skeleton->setBindingPose();
+    skeleton->reset();
+    anim->apply(skeleton.get(), 0.0f);
+    const Ogre::Vector3 p = bone->getPosition();
+    EXPECT_NEAR(p.x, 1.0, 1e-4);
+    EXPECT_NEAR(p.y, 0.0, 1e-4);
+    EXPECT_NEAR(p.z, 0.0, 1e-4);
 }
 
 // ---------------------------------------------------------------------------

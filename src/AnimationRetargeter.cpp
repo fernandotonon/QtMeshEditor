@@ -556,6 +556,27 @@ bool humanoidFrame(const Ogre::Vector3& hip, const Ogre::Vector3& head,
     return true;
 }
 
+// The humanoid frame with its up snapped to the nearest principal axis of the rig's space and its forward levelled
+// onto the plane under it. A rest spine is rarely exactly vertical (a few degrees of lean is normal); aligning the
+// ROOT PATH with the tilted frame would leak horizontal travel into height, so the path uses this level frame.
+Ogre::Quaternion levelFrame(const Ogre::Quaternion& frame)
+{
+    const Ogre::Vector3 tilted = frame * Ogre::Vector3::UNIT_Y;
+    Ogre::Vector3 up = Ogre::Vector3::UNIT_Y;
+    float best = -1.0f;
+    for (const Ogre::Vector3& axis : {Ogre::Vector3::UNIT_X, Ogre::Vector3::UNIT_Y, Ogre::Vector3::UNIT_Z}) {
+        const float d = tilted.dotProduct(axis);
+        if (std::fabs(d) > best) { best = std::fabs(d); up = d < 0.0f ? -axis : axis; }
+    }
+    Ogre::Vector3 fw = frame * Ogre::Vector3::UNIT_Z;
+    fw -= up * fw.dotProduct(up);
+    if (fw.length() < 1e-6f) return frame;
+    fw.normalise();
+    Ogre::Quaternion q;
+    q.FromAxes(up.crossProduct(fw), up, fw);
+    return q;
+}
+
 }  // namespace
 
 std::vector<LocalPose> retargetFrames(const RigDesc& source,
@@ -604,6 +625,7 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
     // (qs/qt · Y), so a Z-up source measures height along ITS Z.
     Ogre::Quaternion G = Ogre::Quaternion::IDENTITY;
     Ogre::Quaternion frameS = Ogre::Quaternion::IDENTITY, frameT = Ogre::Quaternion::IDENTITY;
+    Ogre::Quaternion Gpath = Ogre::Quaternion::IDENTITY;   // G without the rest poses' lean: aligns the root path
     {
         auto targetRole = [&](std::initializer_list<int> roles) -> int {
             for (int role : roles)
@@ -629,6 +651,8 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
                 G.normalise();
                 frameS = qs;
                 frameT = qt;
+                Gpath = levelFrame(qt) * levelFrame(qs).Inverse();
+                Gpath.normalise();
                 rep.globalAlignment = true;
             }
         }
@@ -774,7 +798,7 @@ std::vector<LocalPose> retargetFrames(const RigDesc& source,
             if (opt.translation != TranslationMode::None && s >= 0) {
                 if (t == rootT) {
                     const Ogre::Vector3 d = Sp[size_t(s)] - Ps[size_t(s)];
-                    const Ogre::Vector3 wp = Pt[size_t(t)] + (G * d) * k;
+                    const Ogre::Vector3 wp = Pt[size_t(t)] + (Gpath * d) * k;
                     lp.pos[size_t(t)] = prInv * (wp - pp);
                 } else if (opt.translation == TranslationMode::All) {
                     const int sp = source.parent[size_t(s)];

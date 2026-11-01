@@ -242,6 +242,8 @@ CharacterGen/SkinTexture.cpp
 CharacterGen/HairTint.cpp
 CharacterGen/EyeTexture.cpp
 CharacterGen/Eyelashes.cpp
+CharacterGen/LidClose.cpp
+CharacterGen/Clothing.cpp
 CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
@@ -250,6 +252,17 @@ BodyFromPhoto/BodyFromPhotoCLI.cpp
 BodyFromPhoto/SamBodyMotion.cpp
 BodyFromPhoto/SamBodyRetarget.cpp
 BodyFromPhoto/SamBodySequence.cpp
+AIMotion/MotionInterchange.cpp
+AIMotion/SomaSkeleton.cpp
+AIMotion/SomaRetarget.cpp
+AIMotion/KimodoPredictor.cpp
+AIMotion/AIMotionCLI.cpp
+AIMotion/MotionSceneApply.cpp
+AIMotion/KimodoController.cpp
+AIMotion/KimodoMath.cpp
+AIMotion/KimodoTextEncoder.cpp
+AIMotion/KimodoNative.cpp
+AIMotion/QtMeshT2M.cpp
 DNA/DnaRigLogic.cpp
 DNA/DnaArkitMap.cpp
 DNA/DnaFaceBake.cpp
@@ -1019,6 +1032,15 @@ endif()
 # binary. On Linux/Windows that is already the shared runtime output dir; on
 # macOS it must be copied into the bundle's Contents/MacOS (where the
 # codesign loop signs every executable).
+# Native Kimodo post-processing (vendored NVIDIA MotionCorrection, cmake/KimodoMotionCorrection.cmake). Its licence
+# notices sit next to the binary; on macOS they are copied into the bundle like the QuadriFlow helper's.
+target_link_libraries(${CMAKE_PROJECT_NAME} qtmesh_kimodo_mc)
+if(APPLE)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${QTMESH_KIMODO_MC_LICENSES}" "$<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>"
+        COMMENT "Copying the Kimodo MotionCorrection licence notices into the app bundle")
+endif()
+
 if(TARGET qtmesh_quadriflow)
     add_dependencies(${CMAKE_PROJECT_NAME} qtmesh_quadriflow)
     if(APPLE)
@@ -1167,6 +1189,7 @@ if(BUILD_TESTS)
     endif()
 
     # Link llama.cpp for tests if enabled (mtmd for the captioner where present)
+    target_link_libraries(UnitTests qtmesh_kimodo_mc)
     if(ENABLE_LOCAL_LLM)
         target_link_libraries(UnitTests llama ggml)
         if(QTMESH_HAVE_MTMD)

@@ -42,6 +42,8 @@ Rgb colourFor(Surface s, const Params& p)
         case Surface::Lashes: return p.lash;
         case Surface::Eye: return {1.0f, 1.0f, 1.0f};
         case Surface::Hair: return {1.0f, 1.0f, 1.0f};
+        case Surface::ClothTop: return p.topColour;
+        case Surface::ClothBottom: return p.bottomColour;
     }
     return p.skin;
 }
@@ -56,6 +58,8 @@ const char* surfaceName(Surface s)
         case Surface::Lashes: return "lashes";
         case Surface::Eye: return "eye";
         case Surface::Hair: return "hair";
+        case Surface::ClothTop: return "cloth_top";
+        case Surface::ClothBottom: return "cloth_bottom";
     }
     return "skin";
 }

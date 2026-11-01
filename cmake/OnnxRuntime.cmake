@@ -5,12 +5,14 @@
 # pattern of cmake/Libsodium.cmake, but consumes a prebuilt binary instead of
 # building from source.
 #
-# macOS uses the universal2 archive (covers arm64 + x86_64) so there is no
-# per-arch selection trap (the lesson from libsodium being built x86_64). CoreML
-# execution provider ships inside that archive; the CPU EP is always present.
+# macOS arm64 uses the osx-arm64 archive. ONNX Runtime stopped publishing the
+# universal2 / x86_64 macOS archives after 1.23.2, so an Intel or universal
+# macOS build stays on the 1.23.2 universal2 archive (QTMESH_ONNX_MAC_LEGACY_VERSION).
+# The CoreML execution provider ships inside both; the CPU EP is always present.
+# 1.31 runs the same graphs markedly faster on Arm (Kimodo denoiser: 226 -> 88 ms/call).
 #
 # Linux x64 GPU: pass -DQTMESH_ONNX_GPU=ON (auto-defaults ON when nvidia-smi is
-# found outside CI) to fetch onnxruntime-linux-x64-gpu-*.tgz. The CUDA provider
+# found outside CI) to fetch onnxruntime-linux-x64-gpu_cuda12-*.tgz. The CUDA provider
 # .so must ship next to the binary AND cuDNN 9 + CUDA 12 must be on the system.
 # Windows (MSVC and MinGW) uses the official win-x64 archive. The DLL exports a
 # plain C ABI (x64: no stdcall decoration), so MinGW links it too — via the
@@ -24,7 +26,12 @@ if(TARGET qtmesh_onnx)
     return()
 endif()
 
-set(QTMESH_ONNX_VERSION "1.20.1" CACHE STRING "ONNX Runtime release version")
+# Not a cache variable: the archive digests below belong to exactly this version, and a
+# cached value would survive an upgrade in an existing build directory (old archive +
+# new digest -> FetchContent verification failure). Drop any entry an older configure left.
+unset(QTMESH_ONNX_VERSION CACHE)
+set(QTMESH_ONNX_VERSION "1.31.1")
+set(QTMESH_ONNX_MAC_LEGACY_VERSION "1.23.2")
 set(QTMESH_ONNX_BASE_URL
     "https://github.com/microsoft/onnxruntime/releases/download/v${QTMESH_ONNX_VERSION}")
 
@@ -42,10 +49,22 @@ option(QTMESH_ONNX_GPU
 
 # Select the archive + its SHA256 for this platform.
 if(APPLE)
-    set(_ort_archive "onnxruntime-osx-universal2-${QTMESH_ONNX_VERSION}.tgz")
-    set(_ort_sha256  "da4349e01a7e997f5034563183c7183d069caadc1d95f499b560961787813efd")
-    set(_ort_libname "libonnxruntime.${QTMESH_ONNX_VERSION}.dylib")
     set(_ort_fetch_name "qtmesh_onnxruntime")
+    if(CMAKE_OSX_ARCHITECTURES STREQUAL "arm64"
+       OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64"))
+        set(_ort_archive "onnxruntime-osx-arm64-${QTMESH_ONNX_VERSION}.tgz")
+        set(_ort_sha256  "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f")
+    else()
+        message(STATUS "ONNX Runtime: no ${QTMESH_ONNX_VERSION} archive for Intel/universal macOS; "
+                       "using ${QTMESH_ONNX_MAC_LEGACY_VERSION} universal2")
+        set(QTMESH_ONNX_VERSION "${QTMESH_ONNX_MAC_LEGACY_VERSION}")
+        set(QTMESH_ONNX_BASE_URL
+            "https://github.com/microsoft/onnxruntime/releases/download/v${QTMESH_ONNX_VERSION}")
+        set(_ort_archive "onnxruntime-osx-universal2-${QTMESH_ONNX_VERSION}.tgz")
+        set(_ort_sha256  "49ae8e3a66ccb18d98ad3fe7f5906b6d7887df8a5edd40f49eb2b14e20885809")
+        set(_ort_fetch_name "qtmesh_onnxruntime_universal2")
+    endif()
+    set(_ort_libname "libonnxruntime.${QTMESH_ONNX_VERSION}.dylib")
 elseif(UNIX)
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
         if(QTMESH_ONNX_GPU)
@@ -53,16 +72,16 @@ elseif(UNIX)
             set(QTMESH_ONNX_GPU OFF CACHE BOOL "" FORCE)
         endif()
         set(_ort_archive "onnxruntime-linux-aarch64-${QTMESH_ONNX_VERSION}.tgz")
-        set(_ort_sha256  "ae4fedbdc8c18d688c01306b4b50c63de3445cdf2dbd720e01a2fa3810b8106a")
+        set(_ort_sha256  "5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78")
         set(_ort_fetch_name "qtmesh_onnxruntime")
     else()
         if(QTMESH_ONNX_GPU)
-            set(_ort_archive "onnxruntime-linux-x64-gpu-${QTMESH_ONNX_VERSION}.tgz")
-            set(_ort_sha256  "6bfb87c6ebe55367a94509b8ef062239e188dccf8d5caac8d6909b2344893bf0")
+            set(_ort_archive "onnxruntime-linux-x64-gpu_cuda12-${QTMESH_ONNX_VERSION}.tgz")
+            set(_ort_sha256  "57cd51f677eca19a269cdba31b0c16c15d73a8feea41f170aa8b750447ab1f70")
             set(_ort_fetch_name "qtmesh_onnxruntime_gpu")
         else()
             set(_ort_archive "onnxruntime-linux-x64-${QTMESH_ONNX_VERSION}.tgz")
-            set(_ort_sha256  "67db4dc1561f1e3fd42e619575c82c601ef89849afc7ea85a003abbac1a1a105")
+            set(_ort_sha256  "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9")
             set(_ort_fetch_name "qtmesh_onnxruntime")
         endif()
     endif()
@@ -73,7 +92,7 @@ elseif(WIN32)
         set(QTMESH_ONNX_GPU OFF CACHE BOOL "" FORCE)
     endif()
     set(_ort_archive "onnxruntime-win-x64-${QTMESH_ONNX_VERSION}.zip")
-    set(_ort_sha256  "78d447051e48bd2e1e778bba378bec4ece11191c9e538cf7b2c4a4565e8f5581")
+    set(_ort_sha256  "5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c")
     set(_ort_fetch_name "qtmesh_onnxruntime")
     set(_ort_libname "onnxruntime.dll")
 else()

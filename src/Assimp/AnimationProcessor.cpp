@@ -302,16 +302,20 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     };
 
     // Process the position keys.
-    // Ogre applies translation keyframes in bone-local space (TS_LOCAL):
-    //   mPosition += mOrientation * delta
-    // So we must store the delta in bone-local space by pre-multiplying with the
-    // inverse of the bone's T-pose orientation.
+    // Ogre applies translation keyframes in PARENT space:
+    // NodeAnimationTrack::applyToNode calls node->translate(delta), whose
+    // default is TS_PARENT (mPosition += delta). The delta is therefore the key
+    // minus the bind position, NOT rotated into bone-local space. Rotating it
+    // by the inverse bind orientation (what this used to do) was invisible on
+    // Mixamo hips (identity bind) but turned root motion around on any bone
+    // with a rotated bind: a generated character's Hips carry its 180-degree
+    // yaw, so its walk came back from FBX/glTF moving backwards. Both exporters
+    // write bindPos + translate, which is the inverse of this.
     for(auto i = 0u; i < nodeAnim->mNumPositionKeys; i++) {
         aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
         Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
-        // Map into the Ogre bind space first (#936 re-rooted roots), then
-        // compute the delta in parent-local space and rotate it bone-local.
-        position = boneTPoseInverseRotation * (mapPos(position) - boneTPosePosition);
+        // Map into the Ogre bind space first (#936 re-rooted roots), then take the parent-space delta.
+        position = mapPos(position) - boneTPosePosition;
 
         keyframes[positionKey.mTime] = std::make_tuple(
             position,

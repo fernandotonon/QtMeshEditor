@@ -292,7 +292,7 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
 
     // ---- skeleton (bone handle == DNA joint index) --------------------------
     auto& skelMgr = Ogre::SkeletonManager::getSingleton();
-    const std::string skelName = (baseName + QStringLiteral("_dna_skeleton")).toStdString();
+    const std::string skelName = (baseName + rig.nameTag + QStringLiteral("_skeleton")).toStdString();
     if (skelMgr.resourceExists(skelName))
         skelMgr.remove(skelName);
     Ogre::SkeletonPtr skel = skelMgr.create(
@@ -376,7 +376,7 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
     if (rep.skippedFaces > 0)
         rep.warnings << QStringLiteral("%1 faces with invalid indices were dropped.").arg(rep.skippedFaces);
 
-    const std::string meshName = (baseName + QStringLiteral("_dna")).toStdString();
+    const std::string meshName = (baseName + (rig.nameTag.isEmpty() ? QStringLiteral("_mesh") : rig.nameTag)).toStdString();
     // No skeleton name: the skeleton is a manual resource, bound below.
     Ogre::MeshPtr mesh = PartOpsMesh::buildMesh(subs, meshName, QString(), names, /*recomputeNormals=*/false);
     if (!mesh)
@@ -440,7 +440,7 @@ Ogre::SceneNode* importRigImpl(const Rig& rig, const QString& baseName,
         }
     }
 
-    Ogre::SceneNode* node = mgr->addSceneNode(baseName + QStringLiteral("_dna_node"));
+    Ogre::SceneNode* node = mgr->addSceneNode(baseName + rig.nameTag + QStringLiteral("_node"));
     if (!node)
         return fail(error, QStringLiteral("Failed to create the scene node."));
     mgr->createEntity(node, mesh);

@@ -12,6 +12,9 @@ cask "qtmesheditor" do
     strategy :github_latest
   end
 
+  # ONNX Runtime 1.31 (linked at launch) needs macOS 14; Info.plist gates the same.
+  depends_on macos: ">= :sonoma"
+
   app "QtMeshEditor.app"
 
   # CLI access: GUI launcher + the `qtmesh` pipeline alias.

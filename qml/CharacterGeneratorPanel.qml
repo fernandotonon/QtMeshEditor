@@ -18,6 +18,7 @@ Column {
     readonly property var headModes: [20, 21, 22, 23, 24, 25, 26, 27]
     property var coeffs: new Array(45).fill(0)
     property bool live: true
+    property string customSkin: ""   // #rrggbb picked by hand; wins over the named skin
     function reseed() { coeffs = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0); liveUpdate() }
     // every coefficient is sent, zeros included: the sliders are authoritative (a zero must not fall back to the seed's random value)
     function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
@@ -25,7 +26,7 @@ Column {
     function generate(replace) {
         seed = parseInt(seedField.text) || 0   // take the seed as typed even if the field has not lost focus yet
         CharacterController.generate(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, bodyString(), "",
-                                     pick(skinBox, CharacterController.skinNames), pick(eyeBox, CharacterController.eyeNames), replace)
+                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), pick(eyeBox, CharacterController.eyeNames), replace)
     }
     // live preview: swap the character this panel made (merged into one undo step) once a slider is released
     function liveUpdate() { if (live && CharacterController.hasCharacter()) generate(true) }
@@ -91,6 +92,27 @@ Column {
         background: Rectangle { color: AnimationControlController.buttonColor; border.color: AnimationControlController.borderColor; radius: 3 }
     }
 
+    // a colour chip that opens the picker when clicked
+    component ColourSwatch: Rectangle {
+        id: chip
+        property string colour: "#ffffff"
+        property string tip: "Pick a colour"
+        signal picked(string value)
+        width: 22; height: 22; radius: 3; color: colour; border.color: AnimationControlController.borderColor
+        HoverHandler { id: chipHover; cursorShape: Qt.PointingHandCursor }
+        ToolTip.visible: chipHover.hovered; ToolTip.delay: 400; ToolTip.text: tip
+        function choose() { var v = CharacterController.pickColour(chip.colour); if (v !== "") chip.picked(v) }
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: tip
+        Accessible.onPressAction: choose()
+        Keys.onReturnPressed: choose()
+        Keys.onEnterPressed: choose()
+        Keys.onSpacePressed: choose()
+        border.width: activeFocus ? 2 : 1
+        MouseArea { anchors.fill: parent; onClicked: chip.choose() }
+    }
+
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
 
     Row {
@@ -104,7 +126,15 @@ Column {
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Skin" }
-        ThemedComboBox { id: skinBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.skinNames); onCurrentIndexChanged: sec.liveUpdate() }
+        ThemedComboBox {
+            id: skinBox; width: sec.width - 60 - 26; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.skinNames)
+            onActivated: { sec.customSkin = ""; sec.liveUpdate() }
+        }
+        ColourSwatch {
+            colour: sec.customSkin !== "" ? sec.customSkin : (CharacterController.skinColourHex(sec.pick(skinBox, CharacterController.skinNames)) || "#c68863")
+            tip: "Pick a custom skin colour"
+            onPicked: function(value) { sec.customSkin = value; sec.liveUpdate() }
+        }
     }
     Row {
         spacing: 4
@@ -152,7 +182,10 @@ Column {
         visible: CharacterController.hairNames.length > 0
         spacing: 4
         Label { width: 52; height: 22; text: "" }
-        Rectangle { width: 22; height: 22; radius: 3; color: CharacterController.hairColour; border.color: AnimationControlController.borderColor }
+        ColourSwatch {
+            colour: CharacterController.hairColour; tip: "Pick a custom hair colour"
+            onPicked: function(value) { CharacterController.hairColour = value; sec.liveUpdate() }
+        }
         Field {
             id: hairHex
             width: 80
@@ -161,6 +194,82 @@ Column {
             onEditingFinished: { CharacterController.hairColour = text; text = Qt.binding(function() { return CharacterController.hairColour }); sec.liveUpdate() }
         }
         Label { height: 22; text: "any #rrggbb" ; opacity: 0.6 }
+    }
+    // one garment slot: a style picker and a colour row (swatches + a hex field)
+    component ClothesRow: Column {
+        id: slot
+        required property string title
+        required property var styles
+        required property string style
+        required property string colour
+        signal styleChosen(string id)
+        signal colourChosen(string value)
+        width: sec.width
+        spacing: 4
+        Row {
+            spacing: 4
+            Label { width: 52; height: 22; text: slot.title }
+            ThemedComboBox {
+                width: sec.width - 60; height: 22; font.pixelSize: 11
+                model: slot.styles
+                currentIndex: Math.max(0, slot.styles.indexOf(slot.style))
+                onActivated: slot.styleChosen(slot.styles[currentIndex])
+            }
+        }
+        Row {
+            visible: slot.style !== "none"
+            spacing: 4
+            Label { width: 52; height: 22; text: "" }
+            Flow {
+                width: sec.width - 60
+                spacing: 4
+                Repeater {
+                    model: CharacterController.clothColours
+                    delegate: Rectangle {
+                        id: chip
+                        required property var modelData
+                        width: 18; height: 18; radius: 3
+                        color: modelData.colour
+                        border.width: slot.colour === modelData.colour ? 2 : 1
+                        border.color: slot.colour === modelData.colour ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.name
+                        HoverHandler { id: chipHover }
+                        ToolTip.visible: chipHover.hovered; ToolTip.delay: 400; ToolTip.text: modelData.name
+                        MouseArea { anchors.fill: parent; onClicked: slot.colourChosen(chip.modelData.colour) }
+                    }
+                }
+            }
+        }
+        Row {
+            visible: slot.style !== "none"
+            spacing: 4
+            Label { width: 52; height: 22; text: "" }
+            ColourSwatch { colour: slot.colour; tip: "Pick a custom colour"; onPicked: function(value) { slot.colourChosen(value) } }
+            Field {
+                width: 80
+                text: slot.colour
+                maximumLength: 7
+                onEditingFinished: { slot.colourChosen(text); text = Qt.binding(function() { return slot.colour }) }
+            }
+            Label { height: 22; text: "any #rrggbb"; opacity: 0.6 }
+        }
+    }
+    ClothesRow {
+        title: "Top"
+        styles: CharacterController.topStyles
+        style: CharacterController.topStyle
+        colour: CharacterController.topColour
+        onStyleChosen: function(id) { CharacterController.topStyle = id; sec.liveUpdate() }
+        onColourChosen: function(value) { CharacterController.topColour = value; sec.liveUpdate() }
+    }
+    ClothesRow {
+        title: "Bottom"
+        styles: CharacterController.bottomStyles
+        style: CharacterController.bottomStyle
+        colour: CharacterController.bottomColour
+        onStyleChosen: function(id) { CharacterController.bottomStyle = id; sec.liveUpdate() }
+        onColourChosen: function(value) { CharacterController.bottomColour = value; sec.liveUpdate() }
     }
     component ShapeSlider: Row {
         id: row
@@ -218,13 +327,43 @@ Column {
         enabled: !CharacterController.busy
         onClicked: sec.generate(false)
     }
+    // First-use asset download (~40 MB across body/head/licences/hair). Bound to
+    // CharacterController so the nested ModelFetch event loop can paint it.
+    Column {
+        width: sec.width
+        spacing: 2
+        visible: CharacterController.downloadProgress >= 0
+        Note {
+            text: {
+                var label = CharacterController.downloadLabel || "character assets"
+                var r = CharacterController.downloadBytesReceived
+                var t = CharacterController.downloadBytesTotal
+                if (t > 0)
+                    return "Downloading " + label + " — " + Math.round(r / 1048576) + " / " + Math.round(t / 1048576) + " MB"
+                return "Downloading " + label + "…"
+            }
+            opacity: 1.0
+        }
+        Rectangle {
+            width: sec.width; height: 8; radius: 3
+            color: AnimationControlController.inputColor
+            border.color: AnimationControlController.borderColor; border.width: 1
+            Rectangle {
+                anchors.left: parent.left; anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.margins: 1
+                width: Math.max(0, (parent.width - 2) * Math.min(1, Math.max(0, CharacterController.downloadProgress)))
+                radius: 2
+                color: AnimationControlController.highlightColor
+            }
+        }
+    }
     Note {
-        visible: CharacterController.status !== ""
+        visible: CharacterController.status !== "" && CharacterController.downloadProgress < 0
         text: CharacterController.status
         opacity: 1.0
     }
     Note {
-        visible: !CharacterController.assetsPresent
+        visible: !CharacterController.assetsPresent && CharacterController.downloadProgress < 0
         text: "The character data (~40 MB) downloads on first use."
     }
 }

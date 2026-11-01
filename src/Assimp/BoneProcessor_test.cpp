@@ -188,6 +188,34 @@ TEST_F(BoneProcessorTest, BakeZupToYupRotatesOnlyRootBones)
     EXPECT_EQ(child->getOrientation(), Ogre::Quaternion::IDENTITY);
 }
 
+// Root translation keys are parent-space deltas (AnimationProcessor), so baking the root's bind
+// must turn them too, while a child's keys (parent-relative to an unbaked parent) stay as they are.
+// Played back, the root then travels along the BAKED axis: Z-up travel +Z becomes Y-up travel.
+TEST_F(BoneProcessorTest, BakeRootRotationTurnsRootTranslationKeys)
+{
+    Ogre::SkeletonPtr skeleton = Ogre::SkeletonManager::getSingleton().create(
+        "BakeRootKeysSkeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+    ASSERT_TRUE(skeleton);
+    Ogre::Bone* root = skeleton->createBone("Root");
+    Ogre::Bone* child = skeleton->createBone("Child");
+    root->addChild(child);
+    skeleton->setBindingPose();
+
+    Ogre::Animation* anim = skeleton->createAnimation("Move", 1.0f);
+    anim->createNodeTrack(root->getHandle(), root)->createNodeKeyFrame(0.0f)->setTranslate(Ogre::Vector3(0, 0, 1));
+    anim->createNodeTrack(child->getHandle(), child)->createNodeKeyFrame(0.0f)->setTranslate(Ogre::Vector3(0, 0, 1));
+
+    const Ogre::Quaternion rx90(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
+    BoneProcessor::bakeRootRotation(skeleton, rx90);
+
+    const Ogre::Vector3 r = anim->getNodeTrack(root->getHandle())->getNodeKeyFrame(0)->getTranslate();
+    const Ogre::Vector3 expected = rx90 * Ogre::Vector3(0, 0, 1);   // (0, -1, 0)
+    EXPECT_NEAR(r.x, expected.x, 1e-5);
+    EXPECT_NEAR(r.y, expected.y, 1e-5);
+    EXPECT_NEAR(r.z, expected.z, 1e-5);
+    EXPECT_EQ(anim->getNodeTrack(child->getHandle())->getNodeKeyFrame(0)->getTranslate(), Ogre::Vector3(0, 0, 1));
+}
+
 TEST_F(BoneProcessorTest, AnimationOnlyHierarchyCreatesAnimatedBonesAndLeafChildren)
 {
     mockScene.mNumMeshes = 0;

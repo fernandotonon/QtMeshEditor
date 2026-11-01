@@ -255,6 +255,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/EyeTexture_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Eyelashes.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Eyelashes_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/LidClose.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/LidClose_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel_test.cpp
@@ -266,6 +270,24 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodySequence.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionInterchange.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaSkeleton.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaRetarget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/AIMotionCLI.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionSceneApply.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoMath.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoTextEncoder.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoNative.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/QtMeshT2M.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/MotionInterchange_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/SomaSkeleton_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoPredictor_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoMath_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoNative_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/QtMeshT2M_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor_test.cpp
@@ -692,6 +714,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         qtmesh_updater
     )
 
+    list(APPEND TEST_SUPPORT_LIBRARIES qtmesh_kimodo_mc)
     if(ENABLE_LOCAL_LLM)
         list(APPEND TEST_SUPPORT_LIBRARIES llama ggml)
         # ImageCaptioner.cpp (in the test-common lib) uses mtmd under

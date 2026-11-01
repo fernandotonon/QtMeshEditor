@@ -3,6 +3,8 @@
 
 #include <QString>
 
+#include <functional>
+
 // #1037: the ONE blocking "make sure this model file is on disk" primitive.
 //
 // Twenty consumers each hand-rolled the same ~25 lines around
@@ -36,11 +38,15 @@ struct Request {
     QString label;           ///< ModelDownloader model name — the signal filter
     int timeoutMs = 300000;  ///< 5 min default; large models pass more
     QString expectedSha256;  ///< optional (#1029); empty = no integrity check
+    /// Optional: polled every 200 ms while waiting; returning true cancels the transfer (multi-GB models must
+    /// stop on a user's Cancel/Stop, not after the file finishes).
+    std::function<bool()> cancelled;
 };
 
 struct Outcome {
     bool ok = false;
     bool timedOut = false;
+    bool cancelled = false;  ///< Request::cancelled fired; the transfer was stopped
     /// #1025: the destination existed but did not match `expectedSha256`; it was
     /// deleted and fetched again (ok tells whether the re-fetch succeeded).
     bool replacedCorrupt = false;

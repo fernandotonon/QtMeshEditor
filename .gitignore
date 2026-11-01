@@ -93,6 +93,7 @@ website/node_modules/
 docs/*
 !docs/AUTO_UPDATER_DESIGN.md
 !docs/AI_MODELS.md
+!docs/KIMODO.md
 !docs/IMAGE_TO_3D_SPIKE_764.md
 !docs/IMAGE_TO_3D_QUALITY.md
 !docs/TRIPOSG_EXPORT_NOTES.md
@@ -165,6 +166,7 @@ __pycache__/
 !docs/img/twist_bar_90_dqs_vp.png
 !docs/MOCAP_SPIKE.md
 .mocap_work/
+.character_work/
 .venv-mocap/
 !docs/TRELLIS2.md
 !docs/trellis2-dependencies.md
