@@ -9,6 +9,8 @@
 #include "BackgroundRemover.h"
 #include "OnnxRuntimeSettings.h"
 #include "TripoSGPredictor.h" // Backend::TripoSG dispatch
+#include "TripoSplatPredictor.h" // Backend::TripoSplat dispatch
+#include "SplatToMesh.h"
 #include "Trellis2Predictor.h" // Backend::Trellis2 dispatch (no ONNX needed)
 #include "Trellis2Bake.h"      // game-ready simplify + detail-normal bake (all backends)
 
@@ -318,6 +320,166 @@ MeshGenPredictor::Result fail(const QString& msg)
 
 } // namespace
 
+// Steps (5) + (5b), shared by every backend that colours its mesh from a
+// 3D colour field (TripoSR's decoder, TripoSplat's splats): bake the diffuse
+// through `sampler` (xatlas unwrap + per-texel queries), optionally AI-fill
+// the atlas gutter, then bake the dense pre-simplify source's relief into a
+// detail normal map on the same atlas. A failed bake degrades to a warning;
+// returns false only when the caller cancelled.
+bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
+                                            const MeshGenBaker::ColorSampler& sampler,
+                                            const Options& opts,
+                                            const ProgressFn& progress,
+                                            int chunkPoints,
+                                            bool gameReady,
+                                            const std::vector<float>& srcPos,
+                                            const std::vector<uint32_t>& srcIdx)
+{
+    MeshGenBaker::Options bakeOpts;
+    bakeOpts.textureSize = opts.textureSize;
+    bakeOpts.chunkPoints = chunkPoints;
+    // The baker owns the Bake stage's progress (it knows the true texel
+    // total); the sampler only cancellation-checks.
+    if (progress)
+        bakeOpts.progress = [&](int done, int total) {
+            return progress(Stage::Bake, done, total);
+        };
+    const MeshGenBaker::Result baked =
+        MeshGenBaker::bake(out.positions, out.indices, sampler, bakeOpts);
+    if (baked.cancelled)
+        return false;
+    if (!baked.ok) {
+        out.warning = QStringLiteral("texture bake failed (%1) — using "
+                                     "vertex colours").arg(baked.error);
+        return true;
+    }
+    out.positions     = baked.positions;   // re-indexed along UV seams
+    out.indices       = baked.indices;
+    out.uvs           = baked.uvs;
+    out.texture       = baked.texture;
+    out.vertexCount   = baked.vertexCount;
+    out.triangleCount = baked.triangleCount;
+
+    // #1017: AI-fill the atlas gutter. The baker's dilation pass smears
+    // chart-border colour outward so filtering does not drag the clear
+    // colour into a seam, but it does not CONTINUE the texture — inpainting
+    // the uncovered texels does. Coverage is sized to the baked texture, NOT
+    // to Options::textureSize (xatlas picks its own atlas dims).
+    if (opts.inpaintSeams && !baked.coverage.empty() && TextureInpaint::isAvailable()) {
+        const QImage mask = TextureInpaint::maskFromCoverage(
+            baked.coverage, out.texture.width(), out.texture.height());
+        const QString model = TextureInpaint::ensureModelBlocking();
+        if (!mask.isNull() && !model.isEmpty()) {
+            const TextureInpaint::Result ip =
+                TextureInpaint::inpaint(out.texture, mask, model);
+            if (ip.ok && !ip.image.isNull())
+                out.texture = ip.image;
+            else
+                // A seam fill is a refinement; never fail a whole generation
+                // over it.
+                out.warning = QStringLiteral("seam inpaint skipped (%1)").arg(ip.error);
+        } else if (model.isEmpty()) {
+            out.warning = QStringLiteral("seam inpaint skipped (LaMa model unavailable)");
+        }
+    }
+
+    // (5b) Detail normal map (game-ready path only): the dense source's
+    // smooth normals in the simplified target's tangent frame — what keeps a
+    // hard simplification from reading as a blob.
+    if (gameReady && opts.bakeNormalMap && !out.uvs.empty() && !out.texture.isNull()) {
+        Trellis2Bake::BakeOptions nbo;
+        if (progress)
+            nbo.progress = [&](int done, int total) {
+                return progress(Stage::Bake, done, total);
+            };
+        const Trellis2Bake::NormalBakeResult nb = Trellis2Bake::bakeDetailNormal(
+            out.positions, out.indices, out.uvs, out.texture.width(),
+            out.texture.height(), srcPos, srcIdx, nbo);
+        if (nb.cancelled)
+            return false;
+        if (nb.ok) {
+            out.normalMap = nb.normalMap;
+        } else {
+            if (!out.warning.isEmpty())
+                out.warning += QStringLiteral(" ");
+            out.warning += QStringLiteral("detail-normal bake failed (%1).").arg(nb.error);
+        }
+    }
+    return true;
+}
+
+MeshGenPredictor::Result MeshGenPredictor::predictTripoSplat(const QImage& image,
+                                                         const Options& opts,
+                                                         const ProgressFn& progress)
+{
+    TripoSplatPredictor::Options so;
+    so.flowSteps        = opts.splatFlowSteps;
+    so.guidanceScale    = opts.splatGuidance;
+    so.seed             = opts.seed;
+    so.numGaussians     = opts.numGaussians;
+    so.mattingQuality   = opts.mattingQuality;
+    so.meshResolution   = opts.sdfResolution;
+    so.smoothMesh       = opts.smoothMesh;
+    so.smoothIterations = opts.smoothIterations;
+    TripoSplatPredictor::Output gen = TripoSplatPredictor::predict(image, so, progress);
+    Result r = std::move(gen.mesh);
+    if (!r.ok)
+        return r;
+
+    if (!opts.splatPlyPath.isEmpty()) {
+        QString err;
+        if (SplatToMesh::writePly(opts.splatPlyPath, gen.splatsModelFrame, &err)) {
+            r.splatPlyPath = opts.splatPlyPath;
+        } else {
+            if (!r.warning.isEmpty())
+                r.warning += QStringLiteral(" ");
+            r.warning += QStringLiteral("could not write the splat .ply (%1).").arg(err);
+        }
+    }
+
+    // Game-ready simplification, keeping the dense mesh as the detail-normal
+    // bake source (the TripoSR recipe).
+    std::vector<float>    srcPos;
+    std::vector<uint32_t> srcIdx;
+    const bool gameReady = applyGameReady(r, opts.targetTriangles,
+                                          opts.targetTrianglesStrict, &srcPos, &srcIdx);
+    if (!r.error.isEmpty())
+        return r;   // strict budget unreachable — see applyGameReady
+
+    // Colour comes from the splats themselves: the nearest Gaussians' SH-DC
+    // colour, baked into the diffuse texture (or per vertex when the bake is
+    // off). The splat positions were rotated into the mesh's frame.
+    const SplatToMesh::ColorField field(gen.splatPositionsEditor, gen.splatColors,
+                                        gen.splatsModelFrame.opacity,
+                                        2.0f * gen.voxelSize);
+    const MeshGenBaker::ColorSampler sampler =
+        [&](const float* pts, size_t count, float* rgb) {
+            field.sample(pts, count, rgb);
+            return !progress || progress(Stage::Bake, 0, 0);   // cancel check only
+        };
+    if (opts.bakeTexture
+        && !bakeTextureAndDetail(r, sampler, opts, progress, 262144, gameReady,
+                                 srcPos, srcIdx))
+        return fail(QStringLiteral("cancelled"));
+    if (r.uvs.empty() && opts.vertexColor) {
+        r.colors.assign(r.positions.size(), 0.8f);
+        field.sample(r.positions.data(), r.positions.size() / 3, r.colors.data());
+    }
+
+    // MeshGenBuilder turns every non-TripoSR result 180 degrees about Y.
+    // TripoSplat's mesh already faces +Z, so pre-turn it to cancel that.
+    for (size_t v = 0; v + 2 < r.positions.size(); v += 3) {
+        r.positions[v] = -r.positions[v];
+        r.positions[v + 2] = -r.positions[v + 2];
+    }
+    r.bakeTripoSROrientation = false;
+    // The geometry carries the relief (and the detail normal, when
+    // simplified); a normal/roughness guess from the atlas only adds seam
+    // speckle — see Result::synthesizePbrMaps.
+    r.synthesizePbrMaps = false;
+    return r;
+}
+
 MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
                                                    const QString& encoderModelPath,
                                                    const QString& decoderModelPath,
@@ -332,6 +494,10 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
     // `--model pixal3d` for the latter and everything downstream is shared.
     if (isTrellisRuntime(opts.backend))
         return predictTrellis2(image, opts, progress);
+
+    // ---- Backend dispatch: TripoSplat (Gaussians -> mesh) ---------------------
+    if (opts.backend == Backend::TripoSplat)
+        return predictTripoSplat(image, opts, progress);
 
     // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------
     if (opts.backend == Backend::TripoSG) {
@@ -620,96 +786,17 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
         if (!out.error.isEmpty())
             return out;   // strict budget unreachable — see applyGameReady
 
-        // ---- (5) Colour: baked texture (preferred) or per-vertex ---------------
-        if (wantColor && out.vertexCount > 0 && opts.bakeTexture) {
-            MeshGenBaker::Options bakeOpts;
-            bakeOpts.textureSize = opts.textureSize;
-            bakeOpts.chunkPoints = chunk;
-            // The baker owns the Bake stage's progress (it knows the true
-            // texel total); the sampler only cancellation-checks.
-            if (progress)
-                bakeOpts.progress = [&](int done, int total) {
-                    return progress(Stage::Bake, done, total);
-                };
-            const MeshGenBaker::Result baked = MeshGenBaker::bake(
-                out.positions, out.indices,
-                [&](const float* pts, size_t count, float* rgb) {
-                    return sampleBuffer(pts, count, nullptr, rgb,
-                                        Stage::Bake, /*report=*/false);
-                },
-                bakeOpts);
-            if (baked.ok) {
-                out.positions     = baked.positions;   // re-indexed along UV seams
-                out.indices       = baked.indices;
-                out.uvs           = baked.uvs;
-                out.texture       = baked.texture;
-                out.vertexCount   = baked.vertexCount;
-                out.triangleCount = baked.triangleCount;
-
-                // #1017: AI-fill the atlas gutter. The baker's dilation pass
-                // smears chart-border colour outward so filtering does not
-                // drag the clear colour into a seam, but it does not CONTINUE
-                // the texture — inpainting the uncovered texels does.
-                // Coverage is sized to the baked texture, NOT to
-                // Options::textureSize (xatlas picks its own atlas dims).
-                if (opts.inpaintSeams && !baked.coverage.empty()
-                    && TextureInpaint::isAvailable()) {
-                    const QImage mask = TextureInpaint::maskFromCoverage(
-                        baked.coverage, out.texture.width(),
-                        out.texture.height());
-                    const QString model = TextureInpaint::ensureModelBlocking();
-                    if (!mask.isNull() && !model.isEmpty()) {
-                        const TextureInpaint::Result ip =
-                            TextureInpaint::inpaint(out.texture, mask, model);
-                        if (ip.ok && !ip.image.isNull())
-                            out.texture = ip.image;
-                        else
-                            // A seam fill is a refinement; never fail a whole
-                            // generation over it.
-                            out.warning = QStringLiteral(
-                                "seam inpaint skipped (%1)").arg(ip.error);
-                    } else if (model.isEmpty()) {
-                        out.warning = QStringLiteral(
-                            "seam inpaint skipped (LaMa model unavailable)");
-                    }
-                }
-            } else if (baked.cancelled) {
-                return fail(QStringLiteral("cancelled"));
-            } else {
-                out.warning = QStringLiteral("texture bake failed (%1) — using "
-                                             "vertex colours").arg(baked.error);
-            }
-        }
-
-        // ---- (5b) Detail normal map (game-ready path only) ---------------------
-        // Bake the dense source's smooth normals into the SAME atlas the
-        // diffuse bake produced, expressed in the simplified target's tangent
-        // frame. This is what preserves the perceived detail after a hard
-        // simplification. Skipped when there's no baked diffuse to share an
-        // unwrap with (vertex-colour mode carries no UVs).
-        if (gameReady && opts.bakeNormalMap && !out.uvs.empty()
-            && !out.texture.isNull()) {
-            Trellis2Bake::BakeOptions nbo;
-            if (progress)
-                nbo.progress = [&](int done, int total) {
-                    return progress(Stage::Bake, done, total);
-                };
-            const Trellis2Bake::NormalBakeResult nb =
-                Trellis2Bake::bakeDetailNormal(
-                    out.positions, out.indices, out.uvs,
-                    out.texture.width(), out.texture.height(),
-                    gameReadySrcPos, gameReadySrcIdx, nbo);
-            if (nb.cancelled)
-                return fail(QStringLiteral("cancelled"));
-            if (nb.ok) {
-                out.normalMap = nb.normalMap;
-            } else {
-                if (!out.warning.isEmpty())
-                    out.warning += QStringLiteral(" ");
-                out.warning += QStringLiteral(
-                    "detail-normal bake failed (%1).").arg(nb.error);
-            }
-        }
+        // ---- (5)+(5b) Colour bake + detail normal (shared with TripoSplat) ----
+        if (wantColor && out.vertexCount > 0 && opts.bakeTexture
+            && !bakeTextureAndDetail(
+                   out,
+                   [&](const float* pts, size_t count, float* rgb) {
+                       return sampleBuffer(pts, count, nullptr, rgb,
+                                           Stage::Bake, /*report=*/false);
+                   },
+                   opts, progress, chunk, gameReady, gameReadySrcPos,
+                   gameReadySrcIdx))
+            return fail(QStringLiteral("cancelled"));
 
         // ---- (6) Per-vertex colour (bake disabled or fell back) ---------------
         if (wantColor && out.vertexCount > 0 && out.uvs.empty()) {

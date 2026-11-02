@@ -166,3 +166,87 @@ TEST(MeshGenBakerTest, PublishesPreDilationCoverageForSeamFill)
         static_cast<int>(std::count(grown.begin(), grown.end(), uint8_t{1}));
     EXPECT_GE(grownCount, covered);   // dilation never shrinks
 }
+
+namespace {
+
+// UV sphere: `rings` x `segs` quads, radius r (no pole fans — rings of quads).
+void uvSphere(float r, int rings, int segs, std::vector<float>& pos, std::vector<uint32_t>& idx)
+{
+    pos.clear();
+    idx.clear();
+    for (int i = 0; i <= rings; ++i) {
+        const float th = 3.14159265f * (0.05f + 0.9f * float(i) / rings);
+        for (int j = 0; j < segs; ++j) {
+            const float ph = 2.0f * 3.14159265f * float(j) / segs;
+            pos.insert(pos.end(), {r * std::sin(th) * std::cos(ph), r * std::cos(th),
+                                   r * std::sin(th) * std::sin(ph)});
+        }
+    }
+    for (int i = 0; i < rings; ++i)
+        for (int j = 0; j < segs; ++j) {
+            const uint32_t a = uint32_t(i * segs + j), b = uint32_t(i * segs + (j + 1) % segs);
+            const uint32_t c = a + uint32_t(segs), d = b + uint32_t(segs);
+            idx.insert(idx.end(), {a, c, b, b, c, d});
+        }
+}
+
+} // namespace
+
+// xatlas ignores faces whose 3D area is below FLT_EPSILON in ABSOLUTE units
+// and parks them at UV (0,0). A generated mesh is ~1 unit across, so its
+// smaller faces fell under that (2054 vertices at (0,0) on a 1024^3 goblin).
+// The baker unwraps a scaled copy; nothing may be left unparametrized.
+TEST(MeshGenBakerTest, TinyMeshFacesAreAllCharted)
+{
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    uvSphere(0.002f, 24, 48, pos, idx);   // mean face area ~1e-8 < FLT_EPSILON
+    MeshGenBaker::Options opts;
+    opts.textureSize = 256;
+    const auto r = MeshGenBaker::bake(pos, idx, posColorSampler, opts);
+    ASSERT_TRUE(r.ok) << qPrintable(r.error);
+    int parked = 0;
+    for (int v = 0; v < r.vertexCount; ++v)
+        if (r.uvs[2 * size_t(v)] == 0.0f && r.uvs[2 * size_t(v) + 1] == 0.0f)
+            ++parked;
+    EXPECT_EQ(parked, 0);
+    // Output positions are the ORIGINAL (unscaled) ones.
+    float maxAbs = 0.0f;
+    for (float p : r.positions)
+        maxAbs = std::max(maxAbs, std::abs(p));
+    EXPECT_LE(maxAbs, 0.0021f);
+}
+
+TEST(MeshGenBakerTest, TangentsFollowUAndHandedness)
+{
+    // Quad in XY with U along +X and V along +Y.
+    const std::vector<float> uv{0, 0, 1, 0, 1, 1, 0, 1};
+    const std::vector<float> n{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const auto t = MeshGenBaker::computeTangents(kQuadPos, kQuadIdx, uv, n);
+    ASSERT_EQ(t.size(), 16u);
+    for (int v = 0; v < 4; ++v) {
+        EXPECT_NEAR(t[4 * v + 0], 1.0f, 1e-5f);
+        EXPECT_NEAR(t[4 * v + 1], 0.0f, 1e-5f);
+        EXPECT_NEAR(t[4 * v + 2], 0.0f, 1e-5f);
+        EXPECT_FLOAT_EQ(t[4 * v + 3], 1.0f);   // n x t = +Y = bitangent
+    }
+    // Mirrored V flips the handedness.
+    const std::vector<float> uvMirror{0, 1, 1, 1, 1, 0, 0, 0};
+    const auto m = MeshGenBaker::computeTangents(kQuadPos, kQuadIdx, uvMirror, n);
+    EXPECT_FLOAT_EQ(m[3], -1.0f);
+}
+
+TEST(MeshGenBakerTest, TangentsNeverZeroOnDegenerateUv)
+{
+    // Every UV collapsed to one point: no usable gradient anywhere. Ogre's
+    // builder leaves (0,0,0) here, which normal mapping renders black.
+    const std::vector<float> uv(8, 0.25f);
+    const std::vector<float> n{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const auto t = MeshGenBaker::computeTangents(kQuadPos, kQuadIdx, uv, n);
+    for (int v = 0; v < 4; ++v) {
+        const float len = std::sqrt(t[4 * v] * t[4 * v] + t[4 * v + 1] * t[4 * v + 1]
+                                    + t[4 * v + 2] * t[4 * v + 2]);
+        EXPECT_NEAR(len, 1.0f, 1e-5f);
+        EXPECT_NEAR(t[4 * v + 2], 0.0f, 1e-5f);   // perpendicular to the normal
+    }
+}

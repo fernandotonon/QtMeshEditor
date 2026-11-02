@@ -296,6 +296,8 @@ ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/MeshGenPredictor.cpp
 ImageTo3D/GameReadyPresets.cpp
 ImageTo3D/TripoSGPredictor.cpp
+ImageTo3D/TripoSplatPredictor.cpp
+ImageTo3D/SplatToMesh.cpp
 ImageTo3D/Trellis2Interchange.cpp
 ImageTo3D/Trellis2Bake.cpp
 ImageTo3D/Trellis2Predictor.cpp

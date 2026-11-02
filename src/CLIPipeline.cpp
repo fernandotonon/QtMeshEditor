@@ -83,6 +83,7 @@
 #include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
+#include "ImageTo3D/TripoSplatPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
@@ -13254,6 +13255,12 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int textureSize = 1024;
     int flowSteps = 25;         // TripoSG rectified-flow steps
     float guidance = 7.0f;      // TripoSG CFG scale (0 disables CFG)
+    bool resolutionSet = false; // TripoSplat has its own grid/target defaults
+    bool flowStepsSet = false;  // TripoSplat keeps its own 20 / 3.0 defaults
+    bool guidanceSet = false;   //   unless these are passed explicitly
+    int numGaussians = 262144;  // TripoSplat splat count
+    QString splatOut;           // TripoSplat .ply side output ("" = default)
+    bool writeSplats = true;
     unsigned seed = 42;         // TRELLIS.2 generation seed
     QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
     int targetTris = 0;         // game-ready simplification target (all backends)
@@ -13303,9 +13310,25 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--keep-degenerates") { removeDegenerates = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
+        if (arg == "--no-splats") { writeSplats = false; continue; }
+        if (arg == "--splat-out") {
+            if (i + 1 >= argc) { err() << "Error: --splat-out requires a .ply path." << Qt::endl; return 2; }
+            splatOut = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--gaussians") {
+            if (i + 1 >= argc) { err() << "Error: --gaussians requires a number." << Qt::endl; return 2; }
+            bool okNum = false;
+            numGaussians = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            if (!okNum || numGaussians < 32768 || numGaussians > 262144) {
+                err() << "Error: --gaussians must be in [32768..262144]." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--backend") {
             if (i + 1 >= argc) {
-                err() << "Error: --backend requires trellis2, pixal3d, triposr or triposg." << Qt::endl;
+                err() << "Error: --backend requires trellis2, pixal3d, triposr, triposg or triposplat." << Qt::endl;
                 return 2;
             }
             const QString b = QString::fromLocal8Bit(argv[++i]).toLower();
@@ -13315,7 +13338,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 backend = MeshGenPredictor::Backend::Trellis2;
             else if (b == "pixal3d" || b == "pixal")
                 backend = MeshGenPredictor::Backend::Pixal3D;
-            else { err() << "Error: --backend must be trellis2, pixal3d, triposr or triposg." << Qt::endl; return 2; }
+            else if (b == "triposplat" || b == "splat")
+                backend = MeshGenPredictor::Backend::TripoSplat;
+            else { err() << "Error: --backend must be trellis2, pixal3d, triposr, triposg or triposplat." << Qt::endl; return 2; }
             backendSet = true;
             continue;
         }
@@ -13411,6 +13436,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             }
             bool okNum = false;
             flowSteps = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            flowStepsSet = true;
             if (!okNum || flowSteps < 1 || flowSteps > 200) {
                 err() << "Error: --flow-steps must be an integer in [1..200]." << Qt::endl;
                 return 2;
@@ -13424,6 +13450,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             }
             bool okNum = false;
             guidance = QString::fromLocal8Bit(argv[++i]).toFloat(&okNum);
+            guidanceSet = true;
             if (!okNum || guidance < 0.0f || guidance > 30.0f) {
                 err() << "Error: --guidance must be in [0..30]." << Qt::endl;
                 return 2;
@@ -13469,6 +13496,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             }
             bool okNum = false;
             resolution = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            resolutionSet = true;
             if (!okNum || resolution < 16 || resolution > 1024) {
                 err() << "Error: --resolution must be an integer in [16..1024]." << Qt::endl;
                 return 2;
@@ -13567,7 +13595,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--no-color] [--remove-bg] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] [--keep-degenerates] "
-                 "[--backend trellis2|pixal3d|triposr|triposg] [--flow-steps 25] [--guidance 7.0] "
+                 "[--backend trellis2|pixal3d|triposr|triposg|triposplat] [--flow-steps 25] [--guidance 7.0] "
+                 "[--gaussians 262144] [--splat-out file.ply] [--no-splats] "
                  "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
@@ -13670,8 +13699,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
 
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
+    const bool useSplat = (backend == MeshGenPredictor::Backend::TripoSplat);
     const QString backendName =
-        backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")
+        useSplat ? QStringLiteral("triposplat")
+        : backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")
         : useTrellis2 ? QStringLiteral("trellis2")
         : (useSG ? QStringLiteral("triposg") : QStringLiteral("triposr"));
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
@@ -13684,6 +13715,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (useTrellis2) {
         if (!Trellis2Predictor::runtimeAvailable()) {
             err() << "Error: " << Trellis2Predictor::runtimeDescription() << Qt::endl;
+            return 1;
+        }
+    } else if (useSplat) {
+        QString dlErr;
+        if (!TripoSplatPredictor::ensureModelsBlocking(&dlErr)) {
+            err() << "Error: TripoSplat models unavailable: " << dlErr << Qt::endl;
+            err() << "  (looked for models in: " << TripoSplatPredictor::modelDir()
+                  << ")" << Qt::endl;
             return 1;
         }
     } else if (useSG) {
@@ -13753,6 +13792,26 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.texVolumeRes       = texVolumeRes;
     opts.pixal3dFovDeg      = pixalFovDeg;
     opts.pixal3dNoNaf       = pixalNoNaf;
+    if (useSplat) {
+        // TripoSplat defaults (see TripoSplatPredictor::kDefault*): a 1024^3
+        // splat->mesh grid simplified to a game-ready budget with a detail
+        // normal map. Any explicit --resolution / --target-tris /
+        // --texture-size / --game-preset wins.
+        if (!resolutionSet)
+            opts.sdfResolution = TripoSplatPredictor::kDefaultMeshResolution;
+        if (!targetTrisSet && gamePreset.isEmpty())
+            opts.targetTriangles = TripoSplatPredictor::kDefaultTargetTriangles;
+        if (!textureSizeSet && gamePreset.isEmpty())
+            opts.textureSize = TripoSplatPredictor::kDefaultTextureSize;
+        if (flowStepsSet) opts.splatFlowSteps = flowSteps;
+        if (guidanceSet)  opts.splatGuidance  = guidance;
+        opts.numGaussians = numGaussians;
+        if (writeSplats)
+            opts.splatPlyPath = !splatOut.isEmpty()
+                ? QFileInfo(splatOut).absoluteFilePath()
+                : QFileInfo(outputPath).absolutePath() + "/"
+                      + QFileInfo(outputPath).completeBaseName() + "_splats.ply";
+    }
     if (useTrellis2) {
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the
                                         // predictor skips it when the input
@@ -13853,7 +13912,11 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  .arg(res.sourceInterchangePath.isEmpty()
                           ? QString()
                           : QStringLiteral("Kept full-res source: %1\n")
-                                .arg(QFileInfo(res.sourceInterchangePath).fileName())));
+                                .arg(QFileInfo(res.sourceInterchangePath).fileName()))
+             + (res.splatPlyPath.isEmpty()
+                    ? QString()
+                    : QStringLiteral("Wrote Gaussian splats: %1\n")
+                          .arg(QFileInfo(res.splatPlyPath).fileName())));
     return 0;
 }
 

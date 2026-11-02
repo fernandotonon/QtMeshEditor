@@ -319,6 +319,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenPredictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/GameReadyPresets.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/TripoSGPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/TripoSplatPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/SplatToMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Interchange.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Bake.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Predictor.cpp

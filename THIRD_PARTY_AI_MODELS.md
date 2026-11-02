@@ -130,6 +130,40 @@ For a one-page overview of every model and what it does in the app, see
   `scripts/upload-triposr-models.sh`). First use downloads them; if ever absent the
   feature reports a clean "not yet hosted" state (no crash) — the RigNet precedent.
 
+## TripoSplat — image-to-3D Gaussian splats (native ONNX backend)
+
+- **Model:** VAST-AI TripoSplat — *"Generative 3D Gaussians with Learned
+  Density Control"* (arXiv 2605.16355). One image → up to 262,144 3D Gaussians.
+  Code https://github.com/VAST-AI-Research/TripoSplat — **MIT**; weights
+  https://huggingface.co/VAST-AI/TripoSplat — **MIT** (pinned rev
+  `56a96e603204ec410c4da60c13ea4fa09a2169a9`, code `d8db9e01`).
+- **Bundled third-party weights** inside the checkpoint set:
+  - **DINOv3 ViT-H** image encoder (`dino_v3_vit_h.safetensors`) — Meta's
+    **DINOv3 License**: commercial use permitted; §1.b.i requires a copy of the
+    licence with any redistribution of the weights or derivatives. Our
+    `triposplat_dinov3.onnx` is such a derivative, so `LICENSE-DINOv3.txt` is
+    hosted next to it and downloaded with the models. Not MIT — the stack must
+    not be described as "entirely MIT".
+  - **FLUX.2 VAE** encoder (`flux2-vae.safetensors`) — **Apache-2.0** (Black
+    Forest Labs released the FLUX.2 autoencoder separately under Apache-2.0;
+    the FLUX.2 [dev] *model* is non-commercial and is NOT used).
+  - Upstream's **BiRefNet** matte (`birefnet.safetensors`, MIT) is not used or
+    hosted: QtMeshEditor mattes with its own `BackgroundRemover`.
+- **Runtime:** native C++ over ONNX Runtime, no Python
+  (`src/ImageTo3D/TripoSplatPredictor.{h,cpp}`): five graphs exported by
+  `scripts/export-triposplat-onnx.py` (offline developer tool, not shipped);
+  parity checked with `scripts/verify_triposplat_native.py` (C++ vs the
+  numpy+ORT replay: 262,144 splats within 3e-6 position / 3e-4 opacity; the
+  replay itself matches upstream's sampler, corr 0.996 under fp16 MPS).
+  Gaussians → mesh is QtMeshEditor-native (`SplatToMesh`).
+- **Hosted** on `fernandotonon/QtMeshEditor-models` under `triposplat/`
+  (~6.1 GB fp32: `triposplat_{dinov3,vae,flow,octree,gs}.onnx` + `.onnx.data`,
+  `LICENSE-TripoSplat.txt`, `LICENSE-DINOv3.txt`), uploaded with
+  `scripts/upload-triposplat-models.sh`. Every file's SHA-256 is pinned in
+  `TripoSplatPredictor.cpp` and verified on download and on an existing file
+  (default hosting only). Overrides: `QTMESH_TRIPOSPLAT_MODEL_BASE_URL` /
+  QSettings `ai/triposplatModelBaseUrl`; `QTMESH_TRIPOSPLAT_NO_DOWNLOAD`.
+
 ## TRELLIS.2 — image-to-3D generation, sidecar backend (default when installed)
 
 - **Model:** Microsoft TRELLIS.2 — sparse-voxel "O-Voxel" flexible-dual-grid

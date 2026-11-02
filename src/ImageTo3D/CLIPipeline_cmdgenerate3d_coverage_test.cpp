@@ -319,3 +319,29 @@ TEST(CLIPipelineCmdGenerate3dCoverage, ListGamePresetsNeedsNoImage)
     Gen3dArgv a({"generate3d", "--list-game-presets"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 0);
 }
+
+// ── TripoSplat backend arguments ────────────────────────────────────────────
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TripoSplatBackendIsAccepted)
+{
+    // Valid backend + missing image: gets past argument parsing (exit 1 =
+    // image not found, not 2 = usage error).
+    Gen3dArgv args({"generate3d", kMissingImage, "--backend", "triposplat"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, GaussiansValidated)
+{
+    Gen3dArgv missing({"generate3d", kMissingImage, "--backend", "triposplat", "--gaussians"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    Gen3dArgv low({"generate3d", kMissingImage, "--gaussians", "1000"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(low.argc(), low.argv()), 2);
+    Gen3dArgv high({"generate3d", kMissingImage, "--gaussians", "999999"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(high.argc(), high.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, SplatOutRequiresValue)
+{
+    Gen3dArgv args({"generate3d", kMissingImage, "--backend", "triposplat", "--splat-out"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+}

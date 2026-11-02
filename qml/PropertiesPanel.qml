@@ -2477,8 +2477,9 @@ Rectangle {
             Row {
                 spacing: 6
                 // Marching-cubes grid — local ONNX backends only (TRELLIS.2's
-                // resolution comes from its Quality preset instead).
-                visible: !mgBackendCombo.t2Selected
+                // resolution comes from its Quality preset instead; TripoSplat
+                // meshes its splats on a fixed 1024³ grid).
+                visible: !mgBackendCombo.t2Selected && !mgBackendCombo.splatSelected
                 Text {
                     text: "Resolution"
                     color: PropertiesPanelController.textColor
@@ -2525,7 +2526,7 @@ Rectangle {
                     // these rather than a positional currentIndex — the list
                     // previously hardcoded `currentIndex === 0/2` in 14 places,
                     // so inserting an entry silently rewired all of them.
-                    readonly property var backendIds: ["trellis2", "pixal3d", "triposr", "triposg"]
+                    readonly property var backendIds: ["trellis2", "pixal3d", "triposr", "triposg", "triposplat"]
                     readonly property string backendId: backendIds[currentIndex]
                     // Pixal3D rides the SAME trellis-cli runtime as TRELLIS.2,
                     // so every trellis-only control applies to both.
@@ -2533,10 +2534,12 @@ Rectangle {
                                                     || backendId === "pixal3d"
                     readonly property bool pxSelected: backendId === "pixal3d"
                     readonly property bool sgSelected: backendId === "triposg"
+                    readonly property bool splatSelected: backendId === "triposplat"
                     model: ["TRELLIS.2 (high quality" + (t2Ready ? ")" : ", needs runtime)"),
                             "Pixal3D" + (t2Ready ? "" : " (needs runtime)"),
                             "TripoSR (fast, textured)",
-                            "TripoSG (best geometry)"]
+                            "TripoSG (best geometry)",
+                            "TripoSplat (Gaussians, detailed)"]
                     currentIndex: t2Ready ? 0 : 2
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
@@ -2545,6 +2548,18 @@ Rectangle {
                             mgQualityCombo.currentIndex = 0
                     }
                 }
+            }
+            // TripoSplat: what to expect (it is a long CPU run) and where the
+            // raw Gaussians go.
+            Text {
+                visible: mgBackendCombo.splatSelected
+                text: "  Generates 262k 3D Gaussians, meshes them on a 1024³ grid and bakes "
+                    + "their colours (~6 GB download once; ~25 min on CPU). The raw "
+                    + "splats are also saved as a .ply (generated_splats/)."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
             }
             // Runtime hint when TRELLIS.2 is selected but not installed.
             Text {
@@ -2648,7 +2663,9 @@ Rectangle {
             }
             Row {
                 spacing: 6
-                visible: mgBackendCombo.t2Selected
+                // TRELLIS.2 and TripoSplat bake a texture whose size is chosen
+                // here (TripoSplat: 2048 default, its splat colour is dense).
+                visible: mgBackendCombo.t2Selected || mgBackendCombo.splatSelected
                 Text {
                     text: "Texture"
                     color: PropertiesPanelController.textColor
@@ -2724,8 +2741,9 @@ Rectangle {
                 spacing: 6
                 property bool isSG: mgBackendCombo.sgSelected
                 // The TRELLIS.2 sidecar manages its own weights — the local
-                // tier picker doesn't apply, so the row hides entirely.
-                visible: !mgBackendCombo.t2Selected
+                // tier picker doesn't apply, so the row hides entirely (and
+                // TripoSplat ships a single fp32 set).
+                visible: !mgBackendCombo.t2Selected && !mgBackendCombo.splatSelected
                 Text {
                     text: "Model"
                     color: PropertiesPanelController.textColor
@@ -2777,7 +2795,7 @@ Rectangle {
                 id: mgRefine
                 text: "Refine surface (re-project)"
                 checked: true
-                visible: !mgBackendCombo.t2Selected
+                visible: !mgBackendCombo.t2Selected && !mgBackendCombo.splatSelected
             }
             // ---- Colour / texture stages, in execution order ----------------
             // TripoSG (geometry-only) gets its colour SOLELY from the AI
@@ -2796,7 +2814,8 @@ Rectangle {
             InspectorCheck {
                 id: mgAiTexture
                 text: "Generate texture (AI, front photo + generated back)"
-                visible: !parent.t2Selected
+                // TripoSplat colours come from its own Gaussians.
+                visible: !parent.t2Selected && !mgBackendCombo.splatSelected
                 checked: parent.sgSelected
                 enabled: !MeshGenController.busy
                     && MaterialEditorQML.stableDiffusionEnabled
@@ -2864,12 +2883,13 @@ Rectangle {
                     // path and so emit the same progress stages.
                     var t2 = mgBackendCombo.t2Selected
                     var sg = mgBackendCombo.sgSelected
+                    var splat = mgBackendCombo.splatSelected
                     var steps = [{ key: "prep", label: "Prepare models" }]
                     // The worker only posts a "background" stage on the TripoSR
                     // path; TripoSG/TRELLIS.2 remove the bg inside their
                     // predict() dispatch without a discrete progress event, so
                     // a "background" row there would never resolve.
-                    if (mgRemoveBg.checked && !sg && !t2)
+                    if (mgRemoveBg.checked && !sg && !t2 && !splat)
                         steps.push({ key: "background", label: "Remove background" })
                     steps.push({ key: "encode",
                                  label: t2 ? "Prepare subject + load model"
@@ -2878,15 +2898,20 @@ Rectangle {
                         steps.push({ key: "denoise", label: "Denoise (flow steps)" })
                     if (t2)
                         steps.push({ key: "denoise", label: "Generate (TRELLIS.2)" })
+                    if (splat)
+                        steps.push({ key: "denoise", label: "Generate splats (flow steps)" })
                     steps.push({ key: "decode",
                                  label: t2 ? "Transfer + optimize mesh"
-                                           : "Reconstruct 3D" })
-                    if (mgRefine.checked && !t2)
+                                           : splat ? "Place + decode Gaussians"
+                                                   : "Reconstruct 3D" })
+                    if (splat)
+                        steps.push({ key: "refine", label: "Splats → mesh" })
+                    else if (mgRefine.checked && !t2)
                         steps.push({ key: "refine", label: "Refine surface" })
                     // AI texture requested + available? (TripoSG's ONLY colour
                     // source; optional extra for TripoSR. TRELLIS.2 never needs
                     // it — its PBR attributes are baked natively.)
-                    var aiTex = mgAiTexture.checked && !t2
+                    var aiTex = mgAiTexture.checked && !t2 && !splat
                         && MaterialEditorQML.stableDiffusionEnabled
 
                     // Colour stages. For TripoSG we do NOT bake colour at build
@@ -2940,6 +2965,8 @@ Rectangle {
                         "target_tris": mgT2Mesh.triValue,
                         "game_preset": mgT2Mesh.presetId
                     }
+                    if (splat)
+                        genOptions["texture_size"] = mgT2Tex.sizeValue
                     if (t2) {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue

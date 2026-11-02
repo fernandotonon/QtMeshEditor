@@ -198,6 +198,9 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     const QString triposgBase = resolveBaseUrl(
         "ai/triposgModelBaseUrl", "QTMESH_TRIPOSG_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposg/");
+    const QString triposplatBase = resolveBaseUrl(
+        "ai/triposplatModelBaseUrl", "QTMESH_TRIPOSPLAT_MODEL_BASE_URL",
+        "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposplat/");
     const QString unirigBase = resolveBaseUrl(
         "ai/unirigModelBaseUrl", "QTMESH_UNIRIG_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/unirig/");
@@ -396,6 +399,25 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
             file(QStringLiteral("triposg"), QStringLiteral("triposg_vae_decoder.onnx"), triposgBase, QStringLiteral("TripoSG triposg_vae_decoder.onnx")),
             file(QStringLiteral("triposg"), QStringLiteral("triposg_dit_step_int8.onnx"), triposgBase, QStringLiteral("TripoSG triposg_dit_step_int8.onnx")),
         }};
+    {
+        // TripoSplat: five graphs, each a small proto + its .onnx.data weights.
+        QList<FileSpec> files;
+        for (const char* g : {"dinov3", "vae", "flow", "octree", "gs"}) {
+            for (const char* ext : {".onnx", ".onnx.data"}) {
+                const QString name = QStringLiteral("triposplat_%1%2")
+                                         .arg(QLatin1String(g), QLatin1String(ext));
+                files << file(QStringLiteral("triposplat"), name, triposplatBase,
+                              QStringLiteral("TripoSplat %1").arg(name));
+            }
+        }
+        out << ModelSpec{
+            QStringLiteral("triposplat"), tr("TripoSplat"), tr("Image to 3D"),
+            tr("VAST-AI TripoSplat (MIT): generates up to 262k 3D Gaussians from one image; "
+               "QtMeshEditor meshes and textures them and keeps the raw splats as a .ply. "
+               "Includes Meta's DINOv3 image encoder (DINOv3 License; its text is downloaded with the models)."),
+            QStringLiteral("~6.1 GB"), onnxAvailable ? QString() : tr("Requires an ONNX-enabled build"),
+            onnxAvailable, files};
+    }
     out << ModelSpec{
         QStringLiteral("unirig"), tr("UniRig Auto-Rigging"), tr("Rigging"),
         tr("Encoder, decoder, and embedding ONNX models used for learned auto-rig joint prediction."),

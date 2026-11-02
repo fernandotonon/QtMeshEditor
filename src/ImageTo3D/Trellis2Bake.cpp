@@ -1,4 +1,5 @@
 #include "Trellis2Bake.h"
+#include "MeshGenBaker.h"   // computeTangents (shared tangent basis)
 #include "MeshRefine.h"
 #include "MarchingCubes.h"
 #include <array>
@@ -2411,64 +2412,11 @@ BakeResult bake(const std::vector<float>& targetPositions,
     }
     std::vector<float> tTangent;    // xyzw per vertex (w = handedness)
     if (opts.bakeNormalMap) {
-        std::vector<float> tan1(r.positions.size(), 0.0f);
-        std::vector<float> tan2(r.positions.size(), 0.0f);
-        for (size_t t = 0; t + 2 < r.indices.size(); t += 3) {
-            const uint32_t i0 = r.indices[t], i1 = r.indices[t + 1],
-                           i2 = r.indices[t + 2];
-            const float* p0 = &r.positions[i0 * 3];
-            const float* p1 = &r.positions[i1 * 3];
-            const float* p2 = &r.positions[i2 * 3];
-            const float* u0 = &r.uvs[i0 * 2];
-            const float* u1 = &r.uvs[i1 * 2];
-            const float* u2 = &r.uvs[i2 * 2];
-            float e1[3], e2[3];
-            sub3(p1, p0, e1);
-            sub3(p2, p0, e2);
-            const float du1 = u1[0] - u0[0], dv1 = u1[1] - u0[1];
-            const float du2 = u2[0] - u0[0], dv2 = u2[1] - u0[1];
-            const float det = du1 * dv2 - du2 * dv1;
-            if (std::fabs(det) < 1e-20f)
-                continue;
-            const float rd = 1.0f / det;
-            const float sdir[3] = {(e1[0] * dv2 - e2[0] * dv1) * rd,
-                                   (e1[1] * dv2 - e2[1] * dv1) * rd,
-                                   (e1[2] * dv2 - e2[2] * dv1) * rd};
-            const float tdir[3] = {(e2[0] * du1 - e1[0] * du2) * rd,
-                                   (e2[1] * du1 - e1[1] * du2) * rd,
-                                   (e2[2] * du1 - e1[2] * du2) * rd};
-            for (uint32_t i : {i0, i1, i2}) {
-                for (int k = 0; k < 3; ++k) {
-                    tan1[i * 3 + k] += sdir[k];
-                    tan2[i * 3 + k] += tdir[k];
-                }
-            }
-        }
-        tTangent.resize(static_cast<size_t>(r.vertexCount) * 4);
-        for (int v = 0; v < r.vertexCount; ++v) {
-            const float* n = &tNormals[static_cast<size_t>(v) * 3];
-            const float* t1 = &tan1[static_cast<size_t>(v) * 3];
-            float t[3] = {t1[0] - n[0] * dot3(n, t1),
-                          t1[1] - n[1] * dot3(n, t1),
-                          t1[2] - n[2] * dot3(n, t1)};
-            if (len3(t) < 1e-12f) {
-                // Degenerate UV — pick any tangent orthogonal to n.
-                const float up[3] = {0.0f,
-                                     std::fabs(n[1]) < 0.9f ? 1.0f : 0.0f,
-                                     std::fabs(n[1]) < 0.9f ? 0.0f : 1.0f};
-                cross3(up, n, t);
-            }
-            normalize3(t);
-            float bc[3];
-            cross3(n, t, bc);
-            const float wsign =
-                dot3(bc, &tan2[static_cast<size_t>(v) * 3]) < 0.0f ? -1.0f
-                                                                   : 1.0f;
-            tTangent[static_cast<size_t>(v) * 4 + 0] = t[0];
-            tTangent[static_cast<size_t>(v) * 4 + 1] = t[1];
-            tTangent[static_cast<size_t>(v) * 4 + 2] = t[2];
-            tTangent[static_cast<size_t>(v) * 4 + 3] = wsign;
-        }
+        // Same tangent basis the builder ships (MeshGenBaker::computeTangents,
+        // UV-area weighted): an unweighted sum let sub-texel slivers dominate
+        // the frame at their vertices, so the bake and the renderer disagreed
+        // there and the detail normal rendered as dark speckle.
+        tTangent = MeshGenBaker::computeTangents(r.positions, r.indices, r.uvs, tNormals);
     }
 
     // ---- 3. source closest-point accelerator (built above) -------------------
@@ -2939,58 +2887,9 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
     const std::vector<float> sNormals = smoothNormalField(
         smoothNormalsWelded(sourcePositions, sourceIndices),
         sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);
-    std::vector<float> tan1(targetPositions.size(), 0.0f);
-    std::vector<float> tan2(targetPositions.size(), 0.0f);
-    for (size_t t = 0; t + 2 < targetIndices.size(); t += 3) {
-        const uint32_t i0 = targetIndices[t], i1 = targetIndices[t + 1],
-                       i2 = targetIndices[t + 2];
-        const float* p0 = &targetPositions[i0 * 3];
-        const float* p1 = &targetPositions[i1 * 3];
-        const float* p2 = &targetPositions[i2 * 3];
-        const float* u0 = &targetUvs[i0 * 2];
-        const float* u1 = &targetUvs[i1 * 2];
-        const float* u2 = &targetUvs[i2 * 2];
-        float e1[3], e2[3];
-        sub3(p1, p0, e1);
-        sub3(p2, p0, e2);
-        const float du1 = u1[0] - u0[0], dv1 = u1[1] - u0[1];
-        const float du2 = u2[0] - u0[0], dv2 = u2[1] - u0[1];
-        const float det = du1 * dv2 - du2 * dv1;
-        if (std::fabs(det) < 1e-20f)
-            continue;
-        const float rd = 1.0f / det;
-        const float sdir[3] = {(e1[0] * dv2 - e2[0] * dv1) * rd,
-                               (e1[1] * dv2 - e2[1] * dv1) * rd,
-                               (e1[2] * dv2 - e2[2] * dv1) * rd};
-        const float tdir[3] = {(e2[0] * du1 - e1[0] * du2) * rd,
-                               (e2[1] * du1 - e1[1] * du2) * rd,
-                               (e2[2] * du1 - e1[2] * du2) * rd};
-        for (uint32_t i : {i0, i1, i2}) {
-            for (int k = 0; k < 3; ++k) {
-                tan1[i * 3 + k] += sdir[k];
-                tan2[i * 3 + k] += tdir[k];
-            }
-        }
-    }
-    std::vector<float> tTangent(nv * 4);
-    for (size_t v = 0; v < nv; ++v) {
-        const float* n = &tNormals[v * 3];
-        const float* t1 = &tan1[v * 3];
-        float t[3] = {t1[0] - n[0] * dot3(n, t1), t1[1] - n[1] * dot3(n, t1),
-                      t1[2] - n[2] * dot3(n, t1)};
-        if (len3(t) < 1e-12f) {
-            const float up[3] = {0.0f, std::fabs(n[1]) < 0.9f ? 1.0f : 0.0f,
-                                 std::fabs(n[1]) < 0.9f ? 0.0f : 1.0f};
-            cross3(up, n, t);
-        }
-        normalize3(t);
-        float bc[3];
-        cross3(n, t, bc);
-        tTangent[v * 4 + 0] = t[0];
-        tTangent[v * 4 + 1] = t[1];
-        tTangent[v * 4 + 2] = t[2];
-        tTangent[v * 4 + 3] = dot3(bc, &tan2[v * 3]) < 0.0f ? -1.0f : 1.0f;
-    }
+    // The basis the builder ships (see the TRELLIS bake above for why).
+    const std::vector<float> tTangent =
+        MeshGenBaker::computeTangents(targetPositions, targetIndices, targetUvs, tNormals);
 
     TriangleGrid grid;
     grid.build(sourcePositions, sourceIndices);
