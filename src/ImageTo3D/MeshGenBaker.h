@@ -80,6 +80,23 @@ Result bake(const std::vector<float>& positions,
             const ColorSampler& sampler,
             const Options& opts = {});
 
+// Per-vertex tangents (Nx4: xyz + handedness in w, the layout
+// Ogre::Mesh::buildTangentVectors(..., storeParityInW=true) produces and RTSS
+// normal mapping reads). Unlike Ogre's builder this never leaves a vertex
+// with a zero tangent: Ogre skips any triangle whose UV area is below float
+// epsilon (~0.6 texel^2 in a 2k atlas), and a vertex whose triangles are all
+// that small gets tangent (0,0,0), which the normal-mapping shader turns into
+// a black pixel — the dark speckle measured on simplified generations (459
+// such vertices at 512^3, 2120 at 1024^3). Here face tangents accumulate in
+// double precision weighted by UV area, are Gram-Schmidt'd against the
+// vertex normal, and a vertex still without one gets any unit vector
+// perpendicular to its normal (its detail-normal texels are near flat, so
+// the choice is invisible).
+std::vector<float> computeTangents(const std::vector<float>& positions,
+                                   const std::vector<uint32_t>& indices,
+                                   const std::vector<float>& uvs,
+                                   const std::vector<float>& normals);
+
 } // namespace MeshGenBaker
 
 #endif // MESH_GEN_BAKER_H

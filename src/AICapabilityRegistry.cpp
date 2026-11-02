@@ -26,7 +26,7 @@ const std::vector<CapDef> kCapDefs = {
     {"rigging",        "Rigging & skinning",    "auto-rig a static mesh (humanoid/biped/quadruped/generic/vehicle templates or UniRig), compute skin weights, ARKit face blendshapes, remove skeleton"},
     {"segmentation",   "Part segmentation",     "AI part segmentation, split/explode/join mesh parts"},
     {"mesh_deform",    "Mesh deformation",      "lattice (free-form) deformer: box a mesh with control points and bend/squash/stretch it, apply a saved lattice"},
-    {"generation_3d",  "Image/prompt → 3D",     "generate a NEW 3D mesh from a 2D image file (png/jpg) or a text prompt (TripoSR/TripoSG/TRELLIS.2) — not for existing meshes, those are load_mesh"},
+    {"generation_3d",  "Image/prompt → 3D",     "generate a NEW 3D mesh from a 2D image file (png/jpg) or a text prompt (TripoSR/TripoSG/TRELLIS.2/TripoSplat Gaussians) — not for existing meshes, those are load_mesh"},
     {"animation",      "Skeletal animation",    "list/play/edit animations and keyframes, merge/resample/simplify/trim/bake, isometric sprites, VAT"},
     {"motion_ai",      "AI motion",             "text-to-motion generation, in-betweening, arm-space, foot pinning"},
     {"morph_pose",     "Morph targets & poses", "morph target weights and keyframes, pose library"},

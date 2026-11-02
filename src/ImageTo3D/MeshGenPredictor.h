@@ -2,6 +2,7 @@
 #define MESH_GEN_PREDICTOR_H
 
 #include "BackgroundRemover.h"
+#include "MeshGenBaker.h"   // ColorSampler (shared colour bake)
 #include <QImage>
 #include <QString>
 #include <cstdint>
@@ -67,7 +68,11 @@ public:
     // as an alternative conditioning path. Same samplers and byte-identical
     // decoders; only the four flow models differ, so one model directory serves
     // both families (flow weights take a `pixal3d_` prefix, decoders are shared).
-    enum class Backend { TripoSR, TripoSG, Trellis2, Pixal3D };
+    // TripoSplat = VAST-AI TripoSplat (MIT code+weights): generates 3D
+    // Gaussians natively over ONNX; TripoSplatPredictor + SplatToMesh turn
+    // them into a closed mesh, and the splat colours are baked into the
+    // diffuse texture. Can also write the raw splats as a 3DGS .ply.
+    enum class Backend { TripoSR, TripoSG, Trellis2, Pixal3D, TripoSplat };
 
     // True for the backends served by the trellis-cli runtime. Both share the
     // Trellis2Predictor path, the game-ready pass and the native PBR bake —
@@ -144,6 +149,17 @@ public:
         Backend backend = Backend::TripoSR;
         int   flowSteps = 25;
         float guidanceScale = 7.0f;
+
+        // ---- TripoSplat-only options (Backend::TripoSplat) -------------------
+        // Its own sampler defaults (the TripoSG ones above do not fit it):
+        // 20 Euler steps with guidance 3 is the reference setting. Guidance
+        // must stay > 1 — without it some seeds come out as fragments.
+        int   splatFlowSteps = 20;
+        float splatGuidance  = 3.0f;
+        int   numGaussians   = 262144;   // 32768..262144
+        // When set, the generated Gaussians are also written here as a
+        // standard 3DGS .ply (opens in SuperSplat / SparkJS).
+        QString splatPlyPath;
 
         // ---- TRELLIS.2-only options (Backend::Trellis2) -----------------------
         unsigned seed = 42;                 // deterministic generation seed
@@ -237,6 +253,17 @@ public:
         // Phase 9: the preserved full-resolution generation (QTM3D interchange)
         // so textures/LODs can be re-baked later without re-running inference.
         QString sourceInterchangePath;
+        // False = MeshGenBuilder must NOT guess normal/roughness maps from
+        // the baked diffuse (#404 PbrMapSynth). The guess runs on the UV
+        // atlas, and the atlas of a dense marching-cubes mesh is thousands
+        // of tiny charts: the model reads every chart border as an edge and
+        // draws a ridge there, which renders as dark speckle along every UV
+        // seam (measured on TripoSplat goblins at 512^3). Real baked maps
+        // (normalMap & co.) are still bound.
+        bool synthesizePbrMaps = true;
+        // TripoSplat: the .ply written for Options::splatPlyPath (empty if
+        // none was requested or the write failed — see warning).
+        QString splatPlyPath;
     };
 
     // True only when built with ENABLE_ONNX. (Model presence is checked per call.)
@@ -310,6 +337,18 @@ public:
     static std::vector<float> buildGridPoints(int resolution, float radius);
 
 private:
+    // Colour bake + detail normal shared by the colour-field backends
+    // (TripoSR, TripoSplat). Returns false only when cancelled.
+    static bool bakeTextureAndDetail(Result& out,
+                                     const MeshGenBaker::ColorSampler& sampler,
+                                     const Options& opts,
+                                     const ProgressFn& progress,
+                                     int chunkPoints,
+                                     bool gameReady,
+                                     const std::vector<float>& srcPos,
+                                     const std::vector<uint32_t>& srcIdx);
+    static Result predictTripoSplat(const QImage& image, const Options& opts,
+                                    const ProgressFn& progress);
     // The per-backend implementation; predict() wraps it with the
     // Options::maxTextureSize cap so every backend's images obey it.
     static Result predictImpl(const QImage& image,

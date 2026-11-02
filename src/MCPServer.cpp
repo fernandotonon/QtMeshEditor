@@ -70,6 +70,7 @@
 #include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
 #include "ImageTo3D/TripoSGPredictor.h"
+#include "ImageTo3D/TripoSplatPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "OgreWidget.h"
@@ -3394,9 +3395,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.backend = MeshGenPredictor::Backend::TripoSR;
         else if (b == "pixal3d" || b == "pixal")
             opts.backend = MeshGenPredictor::Backend::Pixal3D;
+        else if (b == "triposplat" || b == "splat")
+            opts.backend = MeshGenPredictor::Backend::TripoSplat;
         else if (!b.isEmpty())
             return makeErrorResult(
-                "'backend' must be 'trellis2', 'pixal3d', 'triposr' or 'triposg'.");
+                "'backend' must be 'trellis2', 'pixal3d', 'triposr', 'triposg' or 'triposplat'.");
     }
     if (args.contains("pixal_fov")) {
         const double f = args["pixal_fov"].toDouble(0.0);
@@ -3463,6 +3466,45 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 opts.textureSize = gp->maxTextureSize;
         }
     }
+    // TripoSplat defaults (TripoSplatPredictor::kDefault*): 1024^3 splat->mesh
+    // grid, simplified to a game-ready budget with a detail normal map. Any
+    // explicit resolution / target_tris / texture_size / game_preset wins.
+    const bool useSplat = opts.backend == MeshGenPredictor::Backend::TripoSplat;
+    if (useSplat) {
+        if (!args.contains("resolution"))
+            opts.sdfResolution = TripoSplatPredictor::kDefaultMeshResolution;
+        if (!args.contains("target_tris") && !gamePreset)
+            opts.targetTriangles = TripoSplatPredictor::kDefaultTargetTriangles;
+        if (!args.contains("texture_size") && !gamePreset)
+            opts.textureSize = TripoSplatPredictor::kDefaultTextureSize;
+        if (args.contains("gaussians")) {
+            // toInt() returns the default for 32768.5 or "abc" — validate the
+            // value itself, not what it coerces to.
+            const QJsonValue g = args["gaussians"];
+            const double gv = g.toDouble(-1.0);
+            if (!g.isDouble() || gv != std::floor(gv) || gv < 32768.0 || gv > 262144.0)
+                return makeErrorResult("'gaussians' must be an integer in [32768, 262144].");
+            opts.numGaussians = static_cast<int>(gv);
+        }
+        // The raw Gaussians as a 3DGS .ply: an explicit splat_output, else
+        // <output>_splats.ply beside the mesh (only when an output is given).
+        const QString splatOut = args.value("splat_output").toString();
+        const QString meshOut = args.value("output").toString();
+        if (!splatOut.isEmpty())
+            opts.splatPlyPath = QFileInfo(splatOut).absoluteFilePath();
+        else if (!meshOut.isEmpty())
+            opts.splatPlyPath = QFileInfo(meshOut).absolutePath() + "/"
+                + QFileInfo(meshOut).completeBaseName() + "_splats.ply";
+        // The .ply must not overwrite the mesh export or the input image.
+        if (!opts.splatPlyPath.isEmpty()
+            && ((!meshOut.isEmpty()
+                 && opts.splatPlyPath == QFileInfo(meshOut).absoluteFilePath())
+                || opts.splatPlyPath == QFileInfo(imagePath).absoluteFilePath()))
+            return makeErrorResult(QStringLiteral(
+                "'splat_output' %1 collides with 'output' or the input image.")
+                .arg(opts.splatPlyPath));
+    }
+
     // Baking a texture on a FULL-DENSITY generation produces an unusable
     // atlas. xatlas cuts a chart wherever it cannot flatten the surface, so an
     // organic mesh at native density fragments into thousands of tiny islands
@@ -3493,15 +3535,23 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         opts.flowSteps = args["flow_steps"].toInt(25);
         if (opts.flowSteps < 1 || opts.flowSteps > 200)
             return makeErrorResult("'flow_steps' must be between 1 and 200.");
+        if (useSplat) {
+            if (opts.flowSteps > 100)
+                return makeErrorResult("'flow_steps' must be between 1 and 100 for triposplat.");
+            opts.splatFlowSteps = opts.flowSteps;
+        }
     }
     if (args.contains("guidance")) {
         opts.guidanceScale = static_cast<float>(args["guidance"].toDouble(7.0));
         if (opts.guidanceScale < 0.0f || opts.guidanceScale > 30.0f)
             return makeErrorResult("'guidance' must be between 0 and 30.");
+        if (useSplat)
+            opts.splatGuidance = opts.guidanceScale;
     }
 
     const QString backendName =
-        opts.backend == MeshGenPredictor::Backend::Trellis2 ? QStringLiteral("trellis2")
+        useSplat ? QStringLiteral("triposplat")
+        : opts.backend == MeshGenPredictor::Backend::Trellis2 ? QStringLiteral("trellis2")
         : opts.backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")
         : opts.backend == MeshGenPredictor::Backend::TripoSG ? QStringLiteral("triposg")
                                                              : QStringLiteral("triposr");
@@ -3530,6 +3580,18 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.trellis2SourceKeepDir = QFileInfo(outPath).absolutePath();
             opts.trellis2SourceKeepBaseName = QFileInfo(outPath).completeBaseName();
         }
+    } else if (useSplat) {
+        // First use downloads ~6 GB: Stop must reach the transfer, not wait
+        // for it (the downloader's nested loop delivers the click).
+        m_toolCancelRequested = false;
+        QString dlErr;
+        const bool ok = TripoSplatPredictor::ensureModelsBlocking(
+            &dlErr, [this]() { return m_toolCancelRequested; });
+        if (m_toolCancelRequested)
+            return makeErrorResult(QStringLiteral("cancelled"));
+        if (!ok)
+            return makeErrorResult(QStringLiteral("TripoSplat models unavailable: %1")
+                                       .arg(dlErr));
     } else if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
         // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
         // geometry, no ARM speed win); 'quality' still selects the TripoSR
@@ -3669,6 +3731,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Phase 9 (trellis2): the preserved full-resolution generation.
     if (!res.sourceInterchangePath.isEmpty())
         result["sourcePath"] = res.sourceInterchangePath;
+    if (!res.splatPlyPath.isEmpty())
+        result["splatPath"] = res.splatPlyPath;
     // Surface non-fatal degradations (bake fell back to vertex colours, …) so
     // the MCP caller can tell a textured result from a fallback one.
     // Join the predictor's own warning with the atlas-density note so a
@@ -13374,12 +13438,14 @@ QJsonArray MCPServer::buildToolsList()
         props["remove_degenerates"] = QJsonObject{{"type", "boolean"}, {"description", "Drop zero-area, repeated-index and duplicate triangles from the result. Default true."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};
         props["generate_pbr"] = QJsonObject{{"type", "boolean"}, {"description", "Synthesize normal + roughness maps from the baked diffuse (#404 PBRify) and bind them into the material — the polished-surface look (default true; requires bake_texture; fails soft to diffuse-only if the models are unavailable)."}};
-        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "pixal3d", "triposr", "triposg"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. trellis2 = Microsoft TRELLIS.2-4B (MIT) via the same trellis-cli runtime — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; pixal3d = TencentARC Pixal3D (MIT), a TRELLIS.2 fork that swaps the global DINOv3 cross-attention for view-aligned projection conditioning — an alternative to trellis2, same runtime, but needs its own pixal3d_* flow weights and has no res-512 texture flow (use resolution 1024 for textures); triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
+        props["backend"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"trellis2", "pixal3d", "triposr", "triposg", "triposplat"}}, {"description", "Generation backend. DEFAULT: trellis2 when its runtime is installed on this machine, else triposr. triposplat = VAST-AI TripoSplat (MIT): generates up to 262,144 3D Gaussians natively (no Python, CPU; ~13 min at flow_steps 10, ~25 min at the default 20), meshes them on a 1024^3 grid, simplifies to target_tris (default 150000) with a detail normal map and bakes the splat colours; also writes the raw splats as a 3DGS .ply (splat_output, default <output>_splats.ply) — the representation its demos render. Guidance must stay > 1 for it. Includes Meta's DINOv3 image encoder (DINOv3 License). trellis2 = Microsoft TRELLIS.2-4B (MIT) via the same trellis-cli runtime — highest quality, real PBR (base color/metallic/roughness) baked natively by QtMeshEditor WITHOUT NVIDIA nvdiffrast/nvdiffrec; pixal3d = TencentARC Pixal3D (MIT), a TRELLIS.2 fork that swaps the global DINOv3 cross-attention for view-aligned projection conditioning — an alternative to trellis2, same runtime, but needs its own pixal3d_* flow weights and has no res-512 texture flow (use resolution 1024 for textures); triposr = fast local single-pass LRM with color; triposg = 1.5B rectified-flow model — higher-fidelity GEOMETRY, slower, geometry-only."}};
         props["pixal_fov"] = QJsonObject{{"type", "number"}, {"description", "pixal3d only: horizontal field of view of the input image in DEGREES, which fixes the projection camera. Omit to use Pixal3D's own training value (49.13) — guessing mis-places the camera the whole backend depends on."}};
         props["no_naf"] = QJsonObject{{"type", "boolean"}, {"description", "pixal3d only: skip the NAF guided upsampler (removes the pixal3d_naf.gguf dependency, but the shape and texture stages lose their high-frequency projection branch). Default false."}};
-        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "TripoSG rectified-flow Euler steps 1..200 (default 25; 50 = reference quality, 10 = fast preview). Ignored by the other backends."}};
-        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "TripoSG classifier-free-guidance scale 0..30 (default 7; 0 disables CFG and halves DiT cost). Ignored by the other backends."}};
-        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 only: deterministic generation seed (default 42)."}};
+        props["flow_steps"] = QJsonObject{{"type", "integer"}, {"description", "Flow-matching Euler steps. TripoSG: 1..200 (default 25; 50 = reference quality, 10 = fast preview). triposplat: 1..100 (default 20 = reference; 10 measured as reliable at half the time). Ignored by the other backends."}};
+        props["guidance"] = QJsonObject{{"type", "number"}, {"description", "Classifier-free-guidance scale 0..30. TripoSG: default 7 (0 disables CFG and halves DiT cost). triposplat: default 3; keep it above 1 — without guidance some seeds come out as scattered fragments. Ignored by the other backends."}};
+        props["seed"] = QJsonObject{{"type", "integer"}, {"description", "trellis2 / triposplat: deterministic generation seed (default 42)."}};
+        props["gaussians"] = QJsonObject{{"type", "integer"}, {"description", "triposplat only: number of Gaussians 32768..262144 (default 262144; rounded to a multiple of 32). Fewer = coarser splats and mesh."}};
+        props["splat_output"] = QJsonObject{{"type", "string"}, {"description", "triposplat only: where to write the generated Gaussians as a standard 3DGS .ply (opens in SuperSplat/SparkJS). Default: <output>_splats.ply when 'output' is set."}};
         props["preset"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fast", "balanced", "high"}}, {"description", "trellis2 only: quality preset (default balanced). fast = 512 pipeline, balanced = 1024 cascade, high = 1536 cascade (more VRAM/time)."}};
         {
             QJsonArray presetEnum;

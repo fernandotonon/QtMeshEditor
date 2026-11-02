@@ -3,6 +3,7 @@
 #include "AppStorage.h"
 #include "Manager.h"
 #include "AIAssistManager.h"   // #404 PBR map synthesis (normal + roughness)
+#include "MeshGenBaker.h"
 #include "MeshImporterExporter.h"  // applyNormalMapsToEntity (tangents + RTSS)
 #include "RTShaderHelper.h"    // canonical-slot FFP wiring + RTSS normal map
 
@@ -116,10 +117,20 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     size_t offset = 0;
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
     offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
+    // Tangents for normal mapping, computed here instead of by Ogre's
+    // buildTangentVectors, which leaves zero tangents (black speckle) on
+    // vertices whose triangles are all sub-texel in UV — see
+    // MeshGenBaker::computeTangents.
+    std::vector<float> tangents;
     if (hasUv)
+        tangents = MeshGenBaker::computeTangents(result.positions, result.indices,
+                                                 result.uvs, normals);
+    if (hasUv) {
         offset += decl->addElement(0, offset, Ogre::VET_FLOAT2,
                                    Ogre::VES_TEXTURE_COORDINATES, 0).getSize();
-    else if (hasColor)
+        offset += decl->addElement(0, offset, Ogre::VET_FLOAT4,
+                                   Ogre::VES_TANGENT).getSize();
+    } else if (hasColor)
         offset += decl->addElement(0, offset, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE).getSize();
 
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
@@ -183,6 +194,13 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
                 uv[0] = result.uvs[2*i+0];
                 uv[1] = result.uvs[2*i+1];
                 p += 2 * sizeof(float);
+                // Rotated with the same orientation as the normal; the
+                // rotation is proper, so the handedness (w) is unchanged.
+                float* tg = reinterpret_cast<float*>(p);
+                float tx = tangents[4*i+0], ty = tangents[4*i+1], tz = tangents[4*i+2];
+                orient(tx, ty, tz);
+                tg[0] = tx; tg[1] = ty; tg[2] = tz; tg[3] = tangents[4*i+3];
+                p += 4 * sizeof(float);
             } else if (hasColor) {
                 Ogre::ColourValue cv(result.colors[3*i+0], result.colors[3*i+1],
                                      result.colors[3*i+2], 1.0f);
@@ -355,7 +373,7 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             // Synthesize ONLY the maps the predictor didn't bake for real:
             // TRELLIS.2 provides all three; the game-ready TripoSR path bakes
             // a real detail normal but still wants the #404 roughness guess.
-            if (opts.generatePbrMaps
+            if (opts.generatePbrMaps && result.synthesizePbrMaps
                 && (normalPath.isEmpty() || roughnessPath.isEmpty())) {
                 PbrMapSynth::Options po;
                 po.generateHeight = false;

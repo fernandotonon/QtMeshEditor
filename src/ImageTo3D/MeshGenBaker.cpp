@@ -44,10 +44,35 @@ Result bake(const std::vector<float>& positions,
     const int texSize = std::clamp(opts.textureSize, 64, 8192);
 
     // ---- 1. xatlas unwrap ---------------------------------------------------
+    // xatlas IGNORES every face whose 3D area is <= FLT_EPSILON (1.19e-7)
+    // in ABSOLUTE units, and parks it at UV (0,0) outside every chart. A
+    // generated mesh is ~1 unit across, so at 150k triangles (mean area
+    // ~1e-5) ordinary small faces fall under that: measured 2054 vertices at
+    // (0,0) on a 1024^3 TripoSplat goblin. Those faces get no texture and an
+    // arbitrary tangent frame — the dark speckle after a GLB round trip.
+    // Charting and packing are scale-invariant (texels per unit is derived
+    // from the requested resolution), and the output maps back to the
+    // ORIGINAL positions through xref, so unwrap a copy scaled to a ~1000
+    // unit diagonal.
+    float lo[3] = {positions[0], positions[1], positions[2]};
+    float hi[3] = {positions[0], positions[1], positions[2]};
+    for (size_t v = 0; v < nv; ++v)
+        for (int a = 0; a < 3; ++a) {
+            lo[a] = std::min(lo[a], positions[3 * v + a]);
+            hi[a] = std::max(hi[a], positions[3 * v + a]);
+        }
+    const float diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0])
+                                 + (hi[1] - lo[1]) * (hi[1] - lo[1])
+                                 + (hi[2] - lo[2]) * (hi[2] - lo[2]));
+    const float unwrapScale = diag > 0.0f ? 1000.0f / diag : 1.0f;
+    std::vector<float> unwrapPositions(positions.size());
+    for (size_t i = 0; i < positions.size(); ++i)
+        unwrapPositions[i] = positions[i] * unwrapScale;
+
     xatlas::Atlas* atlas = xatlas::Create();
     xatlas::MeshDecl decl;
     decl.vertexCount          = static_cast<uint32_t>(nv);
-    decl.vertexPositionData   = positions.data();
+    decl.vertexPositionData   = unwrapPositions.data();
     decl.vertexPositionStride = sizeof(float) * 3;
     decl.indexCount           = static_cast<uint32_t>(indices.size());
     decl.indexData            = indices.data();
@@ -228,6 +253,87 @@ Result bake(const std::vector<float>& positions,
     r.texture = std::move(tex);
     r.ok = true;
     return r;
+}
+
+std::vector<float> computeTangents(const std::vector<float>& positions,
+                                   const std::vector<uint32_t>& indices,
+                                   const std::vector<float>& uvs,
+                                   const std::vector<float>& normals)
+{
+    const size_t nv = positions.size() / 3;
+    std::vector<double> t(nv * 3, 0.0), b(nv * 3, 0.0);
+    if (uvs.size() >= nv * 2) {
+        for (size_t f = 0; f + 2 < indices.size(); f += 3) {
+            const uint32_t i0 = indices[f], i1 = indices[f + 1], i2 = indices[f + 2];
+            if (i0 >= nv || i1 >= nv || i2 >= nv)
+                continue;
+            double e1[3], e2[3];
+            for (int a = 0; a < 3; ++a) {
+                e1[a] = double(positions[3 * i1 + a]) - positions[3 * i0 + a];
+                e2[a] = double(positions[3 * i2 + a]) - positions[3 * i0 + a];
+            }
+            const double du1 = double(uvs[2 * i1]) - uvs[2 * i0];
+            const double dv1 = double(uvs[2 * i1 + 1]) - uvs[2 * i0 + 1];
+            const double du2 = double(uvs[2 * i2]) - uvs[2 * i0];
+            const double dv2 = double(uvs[2 * i2 + 1]) - uvs[2 * i0 + 1];
+            const double r = du1 * dv2 - du2 * dv1;   // 2 x signed UV area
+            if (r == 0.0 || !std::isfinite(r))
+                continue;
+            double ft[3], fb[3], lt = 0.0, lb = 0.0;
+            for (int a = 0; a < 3; ++a) {
+                ft[a] = (e1[a] * dv2 - e2[a] * dv1) / r;
+                fb[a] = (e2[a] * du1 - e1[a] * du2) / r;
+                lt += ft[a] * ft[a];
+                lb += fb[a] * fb[a];
+            }
+            lt = std::sqrt(lt);
+            lb = std::sqrt(lb);
+            if (!(lt > 0.0) || !(lb > 0.0) || !std::isfinite(lt) || !std::isfinite(lb))
+                continue;
+            // Unit directions weighted by UV area, as Ogre does, so a sliver
+            // cannot dominate its neighbours.
+            const double w = std::abs(r) * 0.5;
+            for (uint32_t v : {i0, i1, i2})
+                for (int a = 0; a < 3; ++a) {
+                    t[3 * v + a] += ft[a] / lt * w;
+                    b[3 * v + a] += fb[a] / lb * w;
+                }
+        }
+    }
+    std::vector<float> out(nv * 4);
+    for (size_t v = 0; v < nv; ++v) {
+        double n[3] = {0.0, 0.0, 1.0};
+        if (normals.size() >= 3 * (v + 1)) {
+            const double len = std::sqrt(double(normals[3 * v]) * normals[3 * v]
+                                         + double(normals[3 * v + 1]) * normals[3 * v + 1]
+                                         + double(normals[3 * v + 2]) * normals[3 * v + 2]);
+            if (len > 0.0)
+                for (int a = 0; a < 3; ++a)
+                    n[a] = normals[3 * v + a] / len;
+        }
+        double tv[3] = {t[3 * v], t[3 * v + 1], t[3 * v + 2]};
+        double d = tv[0] * n[0] + tv[1] * n[1] + tv[2] * n[2];
+        for (int a = 0; a < 3; ++a)
+            tv[a] -= n[a] * d;
+        double len = std::sqrt(tv[0] * tv[0] + tv[1] * tv[1] + tv[2] * tv[2]);
+        if (!(len > 1e-12)) {
+            // No usable UV gradient: any direction perpendicular to n.
+            const double ax[3] = {std::abs(n[0]) < 0.9 ? 1.0 : 0.0,
+                                  std::abs(n[0]) < 0.9 ? 0.0 : 1.0, 0.0};
+            d = ax[0] * n[0] + ax[1] * n[1] + ax[2] * n[2];
+            for (int a = 0; a < 3; ++a)
+                tv[a] = ax[a] - n[a] * d;
+            len = std::sqrt(tv[0] * tv[0] + tv[1] * tv[1] + tv[2] * tv[2]);
+        }
+        for (int a = 0; a < 3; ++a)
+            out[4 * v + a] = float(tv[a] / len);
+        // Handedness: does (n x t) point along the accumulated bitangent?
+        const double c[3] = {n[1] * tv[2] - n[2] * tv[1], n[2] * tv[0] - n[0] * tv[2],
+                             n[0] * tv[1] - n[1] * tv[0]};
+        const double hb = c[0] * b[3 * v] + c[1] * b[3 * v + 1] + c[2] * b[3 * v + 2];
+        out[4 * v + 3] = hb < 0.0 ? -1.0f : 1.0f;
+    }
+    return out;
 }
 
 } // namespace MeshGenBaker

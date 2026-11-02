@@ -1,4 +1,5 @@
 #include "AIModelCatalog.h"
+#include "ImageTo3D/TripoSplatPredictor.h"
 #include "AppStorage.h"
 
 #include "ModelDownloader.h"
@@ -198,6 +199,9 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
     const QString triposgBase = resolveBaseUrl(
         "ai/triposgModelBaseUrl", "QTMESH_TRIPOSG_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposg/");
+    const QString triposplatBase = resolveBaseUrl(
+        "ai/triposplatModelBaseUrl", "QTMESH_TRIPOSPLAT_MODEL_BASE_URL",
+        "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposplat/");
     const QString unirigBase = resolveBaseUrl(
         "ai/unirigModelBaseUrl", "QTMESH_UNIRIG_MODEL_BASE_URL",
         "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/unirig/");
@@ -396,6 +400,30 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
             file(QStringLiteral("triposg"), QStringLiteral("triposg_vae_decoder.onnx"), triposgBase, QStringLiteral("TripoSG triposg_vae_decoder.onnx")),
             file(QStringLiteral("triposg"), QStringLiteral("triposg_dit_step_int8.onnx"), triposgBase, QStringLiteral("TripoSG triposg_dit_step_int8.onnx")),
         }};
+    {
+        // TripoSplat: five graphs (each a small proto + its .onnx.data
+        // weights) plus the licence texts that must travel with them (the
+        // DINOv3 License requires a copy with the derived encoder graph).
+        // Pinned digests are verified when downloading from our own hosting.
+        QList<FileSpec> files;
+        QStringList names = TripoSplatPredictor::modelFiles();
+        names << TripoSplatPredictor::licenseFiles();
+        const bool ownHosting = TripoSplatPredictor::isDefaultHosting(triposplatBase);
+        for (const QString& name : names) {
+            FileSpec f = file(QStringLiteral("triposplat"), name, triposplatBase,
+                              QStringLiteral("TripoSplat %1").arg(name));
+            if (ownHosting)
+                f.sha256 = TripoSplatPredictor::expectedSha256(name);
+            files << f;
+        }
+        out << ModelSpec{
+            QStringLiteral("triposplat"), tr("TripoSplat"), tr("Image to 3D"),
+            tr("VAST-AI TripoSplat (MIT): generates up to 262k 3D Gaussians from one image; "
+               "QtMeshEditor meshes and textures them and keeps the raw splats as a .ply. "
+               "Includes Meta's DINOv3 image encoder (DINOv3 License; its text is downloaded with the models)."),
+            QStringLiteral("~6.1 GB"), onnxAvailable ? QString() : tr("Requires an ONNX-enabled build"),
+            onnxAvailable, files};
+    }
     out << ModelSpec{
         QStringLiteral("unirig"), tr("UniRig Auto-Rigging"), tr("Rigging"),
         tr("Encoder, decoder, and embedding ONNX models used for learned auto-rig joint prediction."),
@@ -848,7 +876,7 @@ void AIModelCatalog::startNextQueuedFile()
     }
 
     QDir().mkpath(QFileInfo(f.path).absolutePath());
-    ModelDownloader::instance()->startDownload(f.url, f.path, f.label);
+    ModelDownloader::instance()->startDownload(f.url, f.path, f.label, f.sha256);
 }
 
 void AIModelCatalog::setBusy(bool busy)

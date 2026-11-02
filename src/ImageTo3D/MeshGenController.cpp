@@ -5,6 +5,7 @@
 #include "MeshGenPredictor.h"
 #include "GameReadyPresets.h"
 #include "TripoSGPredictor.h"
+#include "TripoSplatPredictor.h"
 #include "Trellis2Predictor.h"
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
@@ -22,7 +23,10 @@
 #include <QByteArray>
 #include <QApplication>
 #include <QFileDialog>
+#include <QDateTime>
 #include <QDir>
+
+#include <algorithm>
 #include <QFileInfo>
 #include <QStandardPaths>
 #include <QImage>
@@ -635,7 +639,10 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         backend = MeshGenPredictor::Backend::Trellis2;
     else if (backendStr.startsWith(QLatin1String("pixal")))
         backend = MeshGenPredictor::Backend::Pixal3D;
+    else if (backendStr == QLatin1String("triposplat"))
+        backend = MeshGenPredictor::Backend::TripoSplat;
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
+    const bool useSplat = (backend == MeshGenPredictor::Backend::TripoSplat);
     // Pixal3D shares the trellis-cli runtime, so every useT2 gate applies.
     const bool useT2 = MeshGenPredictor::isTrellisRuntime(backend);
     const int flowSteps = options.contains(QLatin1String("flow_steps"))
@@ -716,6 +723,23 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             wantBestMatte ? BackgroundRemover::Quality::Best
                           : BackgroundRemover::Quality::Fast,
             &ensuredQ);
+    } else if (useSplat) {
+        QString dlErr;
+        emit statusMessage(tr("Checking TripoSplat models (~6 GB on first use)…"));
+        if (!TripoSplatPredictor::ensureModelsBlocking(&dlErr)) {
+            setBusy(false);
+            emit error(tr("TripoSplat models unavailable: %1").arg(dlErr));
+            return;
+        }
+        // TripoSplat mattes any input without real alpha (its model is
+        // trained on a subject over black), on the WORKER — which can only
+        // read models already on disk, so ensure the matte here.
+        matteEnsured = true;
+        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(
+            wantBestMatte ? BackgroundRemover::Quality::Best
+                          : BackgroundRemover::Quality::Fast,
+            &ensuredQ);
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -786,7 +810,9 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // connection so the GUI thread updates the bar.
     m_pending->worker = std::thread([this, image, res, rembg, wantBestMatte,
                                      wantSmooth, wantRefine, wantBake,
-                                     textureSize, useSG, useT2, flowSteps,
+                                     textureSize, useSG, useT2, useSplat,
+                                     flowStepsSet = options.contains(QLatin1String("flow_steps")),
+                                     flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
                                      t2TargetTrisStrict, t2MaxTexture,
                                      t2Supersample, wantClean,
@@ -800,7 +826,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // worker started), so this thread only reads files — no event loop
         // needed. (The encode stage is reported by the predictor itself.)
         QImage subject = image;
-        if (rembg && !useSG && !useT2) {
+        if (rembg && !useSG && !useT2 && !useSplat) {
             // TripoSR path: composite over gray-128 (its training background).
             // The TripoSG path leaves removal to the predictor dispatch, which
             // composites over WHITE per its reference pipeline.
@@ -852,6 +878,26 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.targetTrianglesStrict = t2TargetTrisStrict;
         opts.maxTextureSize  = t2MaxTexture;
         opts.bakeNormalMap   = m_generatePbr;
+        if (useSplat) {
+            // TripoSplat defaults (TripoSplatPredictor::kDefault*): 1024^3
+            // grid, a 150k game-ready target unless the picker set one, and
+            // the raw Gaussians kept as a .ply beside the generated textures.
+            opts.sdfResolution = TripoSplatPredictor::kDefaultMeshResolution;
+            if (opts.targetTriangles <= 0)
+                opts.targetTriangles = TripoSplatPredictor::kDefaultTargetTriangles;
+            opts.seed = t2Seed;
+            if (flowStepsSet)
+                opts.splatFlowSteps = std::clamp(flowSteps, 1, 100);
+            const QString dir = QDir(AppStorage::persistentRoot())
+                                    .filePath(QStringLiteral("generated_splats"));
+            QDir().mkpath(dir);
+            // Unique per run (each costs ~25 min): a re-run with another seed,
+            // or a same-named photo from another folder, must not replace it.
+            opts.splatPlyPath = QDir(dir).filePath(
+                QStringLiteral("%1_%2_splats.ply")
+                    .arg(imageStem)
+                    .arg(QDateTime::currentMSecsSinceEpoch()));
+        }
         if (useT2) {
             opts.seed            = t2Seed;
             opts.trellis2Preset  = t2Preset;
@@ -981,6 +1027,7 @@ void MeshGenController::buildOnMainThread()
             out["entityName"] = QString::fromStdString(obj->getName());
     }
     if (!r.warning.isEmpty()) out["warning"] = r.warning;
+    if (!r.splatPlyPath.isEmpty()) out["splatPath"] = r.splatPlyPath;
     emit statusMessage(!r.warning.isEmpty()
                            ? tr("Generated %1 verts, %2 tris (%3)")
                                  .arg(r.vertexCount).arg(r.triangleCount).arg(r.warning)
