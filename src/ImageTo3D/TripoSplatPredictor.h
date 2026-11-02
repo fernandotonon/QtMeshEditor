@@ -7,6 +7,7 @@
 #include <QImage>
 #include <QString>
 
+#include <functional>
 #include <vector>
 
 // TripoSplat single-image -> 3D Gaussians backend (`--backend triposplat`).
@@ -88,9 +89,20 @@ public:
     static QString modelDir();
     static QStringList modelFiles();          // every file the runtime needs
     static bool modelsPresent();
-    // Download any missing file (blocking; call on a thread with an event loop
-    // — i.e. NOT a worker thread). Returns true when everything is present.
-    static bool ensureModelsBlocking(QString* error = nullptr);
+    // Download any missing file and verify every graph against its pinned
+    // SHA-256 (default hosting; skipped while a marker records an earlier
+    // verification at the same size + mtime), plus the licence texts that
+    // must travel with the weights. Blocking — call on a thread with an event
+    // loop (NOT a worker). `cancelled` is polled during multi-GB transfers.
+    static bool ensureModelsBlocking(QString* error = nullptr,
+                                     const std::function<bool()>& cancelled = {});
+    // Resolved download base (QSettings ai/triposplatModelBaseUrl ->
+    // QTMESH_TRIPOSPLAT_MODEL_BASE_URL -> the hosted repo), ending in '/'.
+    static QString baseUrl();
+    static bool isDefaultHosting(const QString& base);
+    // Pinned SHA-256 of a hosted file ("" for an unknown name).
+    static QString expectedSha256(const QString& fileName);
+    static QStringList licenseFiles();
 
     // Full pipeline: matte (if needed) -> prepare -> generate -> mesh.
     static Output predict(const QImage& image, const Options& opts = {},

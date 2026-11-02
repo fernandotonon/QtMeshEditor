@@ -6,7 +6,10 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QDateTime>
+#include <QFile>
 #include <QPainter>
+#include <QSettings>
 #include <QThread>
 
 #include <algorithm>
@@ -113,6 +116,40 @@ bool TripoSplatPredictor::modelsPresent()
         if (!QFileInfo::exists(dir.filePath(f)))
             return false;
     return true;
+}
+
+QString TripoSplatPredictor::baseUrl()
+{
+    QString base = QSettings().value(QString::fromLatin1(kBaseUrlSettingsKey)).toString();
+    if (base.isEmpty()) {
+        const QByteArray env = qgetenv("QTMESH_TRIPOSPLAT_MODEL_BASE_URL");
+        base = env.isEmpty() ? QString::fromLatin1(kDefaultModelBaseUrl)
+                             : QString::fromUtf8(env);
+    }
+    if (!base.endsWith(QLatin1Char('/')))
+        base += QLatin1Char('/');
+    return base;
+}
+
+bool TripoSplatPredictor::isDefaultHosting(const QString& base)
+{
+    return base == QLatin1String(kDefaultModelBaseUrl);
+}
+
+QString TripoSplatPredictor::expectedSha256(const QString& fileName)
+{
+    for (const Digest& d : kDigests)
+        if (fileName == QLatin1String(d.file))
+            return QString::fromLatin1(d.sha256);
+    return {};
+}
+
+QStringList TripoSplatPredictor::licenseFiles()
+{
+    QStringList out;
+    for (const char* lic : kLicenseFiles)
+        out << QLatin1String(lic);
+    return out;
 }
 
 // ---- Pure helpers ---------------------------------------------------------------
@@ -274,7 +311,7 @@ TripoSplatPredictor::Output TripoSplatPredictor::meshSplats(
 #ifndef ENABLE_ONNX
 
 bool TripoSplatPredictor::isAvailable() { return false; }
-bool TripoSplatPredictor::ensureModelsBlocking(QString* error)
+bool TripoSplatPredictor::ensureModelsBlocking(QString* error, const std::function<bool()>&)
 {
     if (error)
         *error = QStringLiteral("TripoSplat needs an ONNX-enabled build "
@@ -294,39 +331,66 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
 
 bool TripoSplatPredictor::isAvailable() { return true; }
 
-bool TripoSplatPredictor::ensureModelsBlocking(QString* error)
+bool TripoSplatPredictor::ensureModelsBlocking(QString* error,
+                                               const std::function<bool()>& cancelled)
 {
     // The import hook meshes an existing .ply and needs no model.
-    if (modelsPresent() || !qEnvironmentVariableIsEmpty("QTMESH_TRIPOSPLAT_IMPORT"))
+    if (!qEnvironmentVariableIsEmpty("QTMESH_TRIPOSPLAT_IMPORT"))
         return true;
-    if (!qEnvironmentVariableIsEmpty("QTMESH_TRIPOSPLAT_NO_DOWNLOAD")) {
+    const QString base = baseUrl();
+    const bool defaultHosting = base == QLatin1String(kDefaultModelBaseUrl);
+    const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_TRIPOSPLAT_NO_DOWNLOAD");
+    const QDir dir(modelDir());
+    QDir().mkpath(dir.absolutePath());
+
+    // Licence texts FIRST, before any early return: the DINOv3 License must
+    // travel with the weights even when the graphs arrived another way (the
+    // Model Catalog, an earlier run whose best-effort licence fetch failed).
+    for (const char* lic : kLicenseFiles) {
+        const QString dest = dir.filePath(QLatin1String(lic));
+        if (QFileInfo::exists(dest) || noDownload)
+            continue;
+        ModelFetch::Request req;
+        req.url = base + QLatin1String(lic);
+        req.destination = dest;
+        req.label = QStringLiteral("TripoSplat licence");
+        req.timeoutMs = 60000;
+        req.cancelled = cancelled;
+        ModelFetch::ensureBlocking(req);   // best effort, small
+    }
+
+    // Fast path: every graph present AND already verified at its current
+    // size + mtime (marker written after a full verification pass), so 6 GB
+    // is not re-hashed on every call. A file replaced or touched since then
+    // fails the marker and goes through the digest check again.
+    const QString marker = dir.filePath(QStringLiteral(".verified"));
+    auto fingerprint = [&]() {
+        QStringList lines;
+        for (const QString& f : modelFiles()) {
+            const QFileInfo fi(dir.filePath(f));
+            if (!fi.exists())
+                return QString();
+            lines << QStringLiteral("%1 %2 %3 %4")
+                         .arg(f).arg(fi.size())
+                         .arg(fi.lastModified().toMSecsSinceEpoch())
+                         .arg(expectedSha256(f));
+        }
+        return lines.join(QLatin1Char('\n'));
+    };
+    if (modelsPresent()) {
+        QFile m(marker);
+        const QString fp = fingerprint();
+        if (!defaultHosting
+            || (m.open(QIODevice::ReadOnly) && QString::fromUtf8(m.readAll()) == fp))
+            return true;
+    }
+    if (noDownload && !modelsPresent()) {
         if (error)
             *error = QStringLiteral("TripoSplat models are not downloaded "
                                     "(QTMESH_TRIPOSPLAT_NO_DOWNLOAD is set).");
         return false;
     }
-    QString base = QSettings().value(QString::fromLatin1(kBaseUrlSettingsKey)).toString();
-    if (base.isEmpty()) {
-        const QByteArray env = qgetenv("QTMESH_TRIPOSPLAT_MODEL_BASE_URL");
-        base = env.isEmpty() ? QString::fromLatin1(kDefaultModelBaseUrl)
-                             : QString::fromUtf8(env);
-    }
-    if (!base.endsWith('/'))
-        base += '/';
-    const bool defaultHosting = base == QLatin1String(kDefaultModelBaseUrl);
-    const QDir dir(modelDir());
-    QDir().mkpath(dir.absolutePath());
-    for (const char* lic : kLicenseFiles) {   // best effort, small
-        const QString dest = dir.filePath(QLatin1String(lic));
-        if (!QFileInfo::exists(dest)) {
-            ModelFetch::Request req;
-            req.url = base + QLatin1String(lic);
-            req.destination = dest;
-            req.label = QStringLiteral("TripoSplat licence");
-            req.timeoutMs = 60000;
-            ModelFetch::ensureBlocking(req);
-        }
-    }
+
     for (const QString& f : modelFiles()) {
         const QString dest = dir.filePath(f);
         ModelFetch::Request req;
@@ -334,24 +398,30 @@ bool TripoSplatPredictor::ensureModelsBlocking(QString* error)
         req.destination = dest;
         req.label = QStringLiteral("TripoSplat %1").arg(f);
         req.timeoutMs = 3600000;
+        req.cancelled = cancelled;
         if (defaultHosting)
-            for (const Digest& d : kDigests)
-                if (f == QLatin1String(d.file))
-                    req.expectedSha256 = QString::fromLatin1(d.sha256);
-        // An existing file is verified (and re-fetched if corrupt) only when
-        // a digest is known; otherwise presence is enough.
+            req.expectedSha256 = expectedSha256(f);
+        // Without a digest (a mirror override) presence is all we can check.
         if (QFileInfo::exists(dest) && req.expectedSha256.isEmpty())
             continue;
         const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
         if (!fo.ok) {
             if (error)
-                *error = fo.error.isEmpty()
-                    ? QStringLiteral("TripoSplat model download failed (%1).").arg(f)
-                    : fo.error;
+                *error = fo.cancelled ? QStringLiteral("cancelled")
+                       : fo.error.isEmpty()
+                           ? QStringLiteral("TripoSplat model download failed (%1).").arg(f)
+                           : fo.error;
             return false;
         }
     }
-    return modelsPresent();
+    if (!modelsPresent())
+        return false;
+    if (defaultHosting) {
+        QFile m(marker);
+        if (m.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            m.write(fingerprint().toUtf8());
+    }
+    return true;
 }
 
 namespace {

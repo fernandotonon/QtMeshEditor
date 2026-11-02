@@ -13261,6 +13261,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     int numGaussians = 262144;  // TripoSplat splat count
     QString splatOut;           // TripoSplat .ply side output ("" = default)
     bool writeSplats = true;
+    bool splatOptionGiven = false;  // --gaussians / --splat-out / --no-splats
     unsigned seed = 42;         // TRELLIS.2 generation seed
     QString preset = QStringLiteral("balanced");  // TRELLIS.2 fast|balanced|high
     int targetTris = 0;         // game-ready simplification target (all backends)
@@ -13310,16 +13311,24 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--keep-degenerates") { removeDegenerates = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
-        if (arg == "--no-splats") { writeSplats = false; continue; }
+        if (arg == "--no-splats") { writeSplats = false; splatOptionGiven = true; continue; }
         if (arg == "--splat-out") {
-            if (i + 1 >= argc) { err() << "Error: --splat-out requires a .ply path." << Qt::endl; return 2; }
+            // An option token is not a file name: `--splat-out --no-splats`
+            // must not write splats to a file called "--no-splats".
+            if (i + 1 >= argc || QString::fromLocal8Bit(argv[i + 1]).startsWith('-')
+                || QString::fromLocal8Bit(argv[i + 1]).trimmed().isEmpty()) {
+                err() << "Error: --splat-out requires a .ply path." << Qt::endl;
+                return 2;
+            }
             splatOut = QString::fromLocal8Bit(argv[++i]);
+            splatOptionGiven = true;
             continue;
         }
         if (arg == "--gaussians") {
             if (i + 1 >= argc) { err() << "Error: --gaussians requires a number." << Qt::endl; return 2; }
             bool okNum = false;
             numGaussians = QString::fromLocal8Bit(argv[++i]).toInt(&okNum);
+            splatOptionGiven = true;
             if (!okNum || numGaussians < 32768 || numGaussians > 262144) {
                 err() << "Error: --gaussians must be in [32768..262144]." << Qt::endl;
                 return 2;
@@ -13700,6 +13709,28 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 
     const bool useSG = (backend == MeshGenPredictor::Backend::TripoSG);
     const bool useSplat = (backend == MeshGenPredictor::Backend::TripoSplat);
+    if (!useSplat && splatOptionGiven) {
+        err() << "Error: --gaussians / --splat-out / --no-splats apply to "
+                 "--backend triposplat only." << Qt::endl;
+        return 2;
+    }
+    if (useSplat && flowStepsSet && flowSteps > 100) {
+        err() << "Error: --flow-steps must be in [1..100] for triposplat." << Qt::endl;
+        return 2;
+    }
+    if (useSplat && writeSplats) {
+        // The .ply must not overwrite the mesh export or the input image.
+        const QString splatPath = !splatOut.isEmpty()
+            ? QFileInfo(splatOut).absoluteFilePath()
+            : QFileInfo(outputPath).absolutePath() + "/"
+                  + QFileInfo(outputPath).completeBaseName() + "_splats.ply";
+        if (splatPath == QFileInfo(outputPath).absoluteFilePath()
+            || splatPath == fi.absoluteFilePath()) {
+            err() << "Error: the splat .ply path " << splatPath
+                  << " collides with the mesh output or the input image." << Qt::endl;
+            return 2;
+        }
+    }
     const QString backendName =
         useSplat ? QStringLiteral("triposplat")
         : backend == MeshGenPredictor::Backend::Pixal3D ? QStringLiteral("pixal3d")

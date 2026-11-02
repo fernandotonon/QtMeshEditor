@@ -47,6 +47,9 @@ private:
         QString path;
         QString url;
         QString label;
+        // Optional SHA-256 the downloader verifies before accepting the file
+        // (empty = no check). Set only for the project's own hosting.
+        QString sha256;
     };
 
     struct ModelSpec {

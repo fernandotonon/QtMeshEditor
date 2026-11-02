@@ -23,6 +23,7 @@
 #include <QByteArray>
 #include <QApplication>
 #include <QFileDialog>
+#include <QDateTime>
 #include <QDir>
 
 #include <algorithm>
@@ -890,7 +891,12 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             const QString dir = QDir(AppStorage::persistentRoot())
                                     .filePath(QStringLiteral("generated_splats"));
             QDir().mkpath(dir);
-            opts.splatPlyPath = QDir(dir).filePath(imageStem + QStringLiteral("_splats.ply"));
+            // Unique per run (each costs ~25 min): a re-run with another seed,
+            // or a same-named photo from another folder, must not replace it.
+            opts.splatPlyPath = QDir(dir).filePath(
+                QStringLiteral("%1_%2_splats.ply")
+                    .arg(imageStem)
+                    .arg(QDateTime::currentMSecsSinceEpoch()));
         }
         if (useT2) {
             opts.seed            = t2Seed;

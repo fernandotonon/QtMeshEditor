@@ -1,4 +1,5 @@
 #include "AIModelCatalog.h"
+#include "ImageTo3D/TripoSplatPredictor.h"
 #include "AppStorage.h"
 
 #include "ModelDownloader.h"
@@ -400,15 +401,20 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
             file(QStringLiteral("triposg"), QStringLiteral("triposg_dit_step_int8.onnx"), triposgBase, QStringLiteral("TripoSG triposg_dit_step_int8.onnx")),
         }};
     {
-        // TripoSplat: five graphs, each a small proto + its .onnx.data weights.
+        // TripoSplat: five graphs (each a small proto + its .onnx.data
+        // weights) plus the licence texts that must travel with them (the
+        // DINOv3 License requires a copy with the derived encoder graph).
+        // Pinned digests are verified when downloading from our own hosting.
         QList<FileSpec> files;
-        for (const char* g : {"dinov3", "vae", "flow", "octree", "gs"}) {
-            for (const char* ext : {".onnx", ".onnx.data"}) {
-                const QString name = QStringLiteral("triposplat_%1%2")
-                                         .arg(QLatin1String(g), QLatin1String(ext));
-                files << file(QStringLiteral("triposplat"), name, triposplatBase,
+        QStringList names = TripoSplatPredictor::modelFiles();
+        names << TripoSplatPredictor::licenseFiles();
+        const bool ownHosting = TripoSplatPredictor::isDefaultHosting(triposplatBase);
+        for (const QString& name : names) {
+            FileSpec f = file(QStringLiteral("triposplat"), name, triposplatBase,
                               QStringLiteral("TripoSplat %1").arg(name));
-            }
+            if (ownHosting)
+                f.sha256 = TripoSplatPredictor::expectedSha256(name);
+            files << f;
         }
         out << ModelSpec{
             QStringLiteral("triposplat"), tr("TripoSplat"), tr("Image to 3D"),
@@ -870,7 +876,7 @@ void AIModelCatalog::startNextQueuedFile()
     }
 
     QDir().mkpath(QFileInfo(f.path).absolutePath());
-    ModelDownloader::instance()->startDownload(f.url, f.path, f.label);
+    ModelDownloader::instance()->startDownload(f.url, f.path, f.label, f.sha256);
 }
 
 void AIModelCatalog::setBusy(bool busy)

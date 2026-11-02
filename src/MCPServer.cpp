@@ -3478,9 +3478,13 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (!args.contains("texture_size") && !gamePreset)
             opts.textureSize = TripoSplatPredictor::kDefaultTextureSize;
         if (args.contains("gaussians")) {
-            opts.numGaussians = args["gaussians"].toInt(262144);
-            if (opts.numGaussians < 32768 || opts.numGaussians > 262144)
-                return makeErrorResult("'gaussians' must be in [32768, 262144].");
+            // toInt() returns the default for 32768.5 or "abc" — validate the
+            // value itself, not what it coerces to.
+            const QJsonValue g = args["gaussians"];
+            const double gv = g.toDouble(-1.0);
+            if (!g.isDouble() || gv != std::floor(gv) || gv < 32768.0 || gv > 262144.0)
+                return makeErrorResult("'gaussians' must be an integer in [32768, 262144].");
+            opts.numGaussians = static_cast<int>(gv);
         }
         // The raw Gaussians as a 3DGS .ply: an explicit splat_output, else
         // <output>_splats.ply beside the mesh (only when an output is given).
@@ -3491,6 +3495,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         else if (!meshOut.isEmpty())
             opts.splatPlyPath = QFileInfo(meshOut).absolutePath() + "/"
                 + QFileInfo(meshOut).completeBaseName() + "_splats.ply";
+        // The .ply must not overwrite the mesh export or the input image.
+        if (!opts.splatPlyPath.isEmpty()
+            && ((!meshOut.isEmpty()
+                 && opts.splatPlyPath == QFileInfo(meshOut).absoluteFilePath())
+                || opts.splatPlyPath == QFileInfo(imagePath).absoluteFilePath()))
+            return makeErrorResult(QStringLiteral(
+                "'splat_output' %1 collides with 'output' or the input image.")
+                .arg(opts.splatPlyPath));
     }
 
     // Baking a texture on a FULL-DENSITY generation produces an unusable
@@ -3523,8 +3535,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         opts.flowSteps = args["flow_steps"].toInt(25);
         if (opts.flowSteps < 1 || opts.flowSteps > 200)
             return makeErrorResult("'flow_steps' must be between 1 and 200.");
-        if (useSplat)
-            opts.splatFlowSteps = std::min(opts.flowSteps, 100);
+        if (useSplat) {
+            if (opts.flowSteps > 100)
+                return makeErrorResult("'flow_steps' must be between 1 and 100 for triposplat.");
+            opts.splatFlowSteps = opts.flowSteps;
+        }
     }
     if (args.contains("guidance")) {
         opts.guidanceScale = static_cast<float>(args["guidance"].toDouble(7.0));
@@ -3566,8 +3581,15 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.trellis2SourceKeepBaseName = QFileInfo(outPath).completeBaseName();
         }
     } else if (useSplat) {
+        // First use downloads ~6 GB: Stop must reach the transfer, not wait
+        // for it (the downloader's nested loop delivers the click).
+        m_toolCancelRequested = false;
         QString dlErr;
-        if (!TripoSplatPredictor::ensureModelsBlocking(&dlErr))
+        const bool ok = TripoSplatPredictor::ensureModelsBlocking(
+            &dlErr, [this]() { return m_toolCancelRequested; });
+        if (m_toolCancelRequested)
+            return makeErrorResult(QStringLiteral("cancelled"));
+        if (!ok)
             return makeErrorResult(QStringLiteral("TripoSplat models unavailable: %1")
                                        .arg(dlErr));
     } else if (opts.backend == MeshGenPredictor::Backend::TripoSG) {

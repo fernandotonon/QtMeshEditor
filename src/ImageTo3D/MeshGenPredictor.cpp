@@ -348,9 +348,15 @@ bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
         MeshGenBaker::bake(out.positions, out.indices, sampler, bakeOpts);
     if (baked.cancelled)
         return false;
+    // Warnings APPEND: the result may already carry the matte / .ply ones.
+    auto warn = [&out](const QString& w) {
+        if (!out.warning.isEmpty())
+            out.warning += QStringLiteral(" ");
+        out.warning += w;
+    };
     if (!baked.ok) {
-        out.warning = QStringLiteral("texture bake failed (%1) — using "
-                                     "vertex colours").arg(baked.error);
+        warn(QStringLiteral("texture bake failed (%1) — using vertex colours")
+                 .arg(baked.error));
         return true;
     }
     out.positions     = baked.positions;   // re-indexed along UV seams
@@ -377,9 +383,9 @@ bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
             else
                 // A seam fill is a refinement; never fail a whole generation
                 // over it.
-                out.warning = QStringLiteral("seam inpaint skipped (%1)").arg(ip.error);
+                warn(QStringLiteral("seam inpaint skipped (%1)").arg(ip.error));
         } else if (model.isEmpty()) {
-            out.warning = QStringLiteral("seam inpaint skipped (LaMa model unavailable)");
+            warn(QStringLiteral("seam inpaint skipped (LaMa model unavailable)"));
         }
     }
 
@@ -397,13 +403,10 @@ bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
             out.texture.height(), srcPos, srcIdx, nbo);
         if (nb.cancelled)
             return false;
-        if (nb.ok) {
+        if (nb.ok)
             out.normalMap = nb.normalMap;
-        } else {
-            if (!out.warning.isEmpty())
-                out.warning += QStringLiteral(" ");
-            out.warning += QStringLiteral("detail-normal bake failed (%1).").arg(nb.error);
-        }
+        else
+            warn(QStringLiteral("detail-normal bake failed (%1).").arg(nb.error));
     }
     return true;
 }
@@ -457,7 +460,9 @@ MeshGenPredictor::Result MeshGenPredictor::predictTripoSplat(const QImage& image
             field.sample(pts, count, rgb);
             return !progress || progress(Stage::Bake, 0, 0);   // cancel check only
         };
-    if (opts.bakeTexture
+    // Colour output is the --no-color / vertex_color switch, as for TripoSR:
+    // off means a geometry-only asset, so no bake and no vertex colours.
+    if (opts.vertexColor && opts.bakeTexture
         && !bakeTextureAndDetail(r, sampler, opts, progress, 262144, gameReady,
                                  srcPos, srcIdx))
         return fail(QStringLiteral("cancelled"));
