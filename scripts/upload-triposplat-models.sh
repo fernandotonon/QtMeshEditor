@@ -18,13 +18,13 @@
 #   LICENSE-DINOv3.txt     — Meta DINOv3 License; sec. 1.b.i requires a copy
 #                            with any redistribution of DINOv3 weights or
 #                            derivatives (triposplat_dinov3.onnx is one).
-#   (the FLUX.2 VAE encoder inside triposplat_vae.onnx is Apache-2.0)
+#   LICENSE-Apache-2.0.txt — Apache-2.0 for the FLUX.2 VAE encoder inside
+#                            triposplat_vae.onnx (Black Forest Labs).
 #
 # Prereqs:
 #   pip install -U "huggingface_hub[cli]" && hf auth login
 #   scripts/export-triposplat-onnx.py already run -> OUT_DIR holds the graphs
-#   LIC_DIR holds LICENSE-TripoSplat.txt (upstream repo LICENSE) and
-#   LICENSE-DINOv3.txt (github.com/facebookresearch/dinov3 LICENSE.md)
+#   LIC_DIR holds LICENSE-TripoSplat.txt, LICENSE-DINOv3.txt, LICENSE-Apache-2.0.txt
 #
 # Usage:
 #   OUT_DIR=~/triposplat_eval/onnx LIC_DIR=~/triposplat_eval/licenses \
@@ -33,12 +33,14 @@
 # Big HF transfers drop connections routinely: each upload is retried (the CLI resumes).
 set -euo pipefail
 
-AGG="${AGG:-fernandotonon/QtMeshEditor-models}"
+# REPO is the legacy override name (pre-dedicated-mirror); honour it as AGG.
+AGG="${AGG:-${REPO:-fernandotonon/QtMeshEditor-models}}"
 DED="${DED:-fernandotonon/QtMeshEditor-triposplat-onnx}"
 OUT_DIR="${OUT_DIR:?set OUT_DIR to the exported graphs}"
 LIC_DIR="${LIC_DIR:?set LIC_DIR to the licence texts}"
 HFCLI="${HFCLI:-hf}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+LICENSES=(LICENSE-TripoSplat.txt LICENSE-DINOv3.txt LICENSE-Apache-2.0.txt)
 
 # Refuse to upload files that do not match the digests the app pins.
 expected() {
@@ -60,8 +62,15 @@ for g in dinov3 vae flow octree gs; do
         FILES+=("$f")
     done
 done
-for l in LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
-    [ -f "$LIC_DIR/$l" ] || { echo "!! missing $LIC_DIR/$l"; exit 1; }
+resolve_lic() {
+    local l="$1"
+    if [ -f "$LIC_DIR/$l" ]; then echo "$LIC_DIR/$l"
+    elif [ -f "$HERE/$l" ]; then echo "$HERE/$l"
+    else return 1
+    fi
+}
+for l in "${LICENSES[@]}"; do
+    resolve_lic "$l" >/dev/null || { echo "!! missing $l (looked in LIC_DIR and scripts/)"; exit 1; }
 done
 [ -f "$HERE/triposplat_model_card.md" ] || { echo "!! missing $HERE/triposplat_model_card.md"; exit 1; }
 
@@ -78,7 +87,6 @@ create_ded() {
     if "$HFCLI" repo create "$DED" --repo-type model --exist-ok 2>/dev/null; then
         return 0
     fi
-    # Older CLI: name only (no owner/ prefix), -y to skip the prompt.
     local name="${DED##*/}"
     huggingface-cli repo create "$name" --type model -y 2>/dev/null || true
 }
@@ -87,27 +95,34 @@ create_ded
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-# Licence texts live next to the graphs in both repos.
-cp "$LIC_DIR/LICENSE-TripoSplat.txt" "$LIC_DIR/LICENSE-DINOv3.txt" "$STAGE/"
+mkdir -p "$STAGE/triposplat"
+for l in "${LICENSES[@]}"; do
+    src=$(resolve_lic "$l")
+    cp "$src" "$STAGE/triposplat/$l"
+    cp "$src" "$STAGE/$l"
+done
 for f in "${FILES[@]}"; do
+    ln -s "$OUT_DIR/$f" "$STAGE/triposplat/$f"
     ln -s "$OUT_DIR/$f" "$STAGE/$f"
 done
+cp "$HERE/triposplat_model_card.md" "$STAGE/README.md"
 
-for f in "${FILES[@]}" LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
-    echo ">> $f -> $AGG:triposplat/$f"
-    retry "$HFCLI" upload "$AGG" "$STAGE/$f" "triposplat/$f" \
-        --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License for the image encoder)"
+# One commit per repo so a client never sees a new .onnx next to old .onnx.data,
+# and the DINOv3 / Apache licence texts land with the weights they cover.
+echo ">> atomic upload -> $AGG:triposplat/"
+retry "$HFCLI" upload "$AGG" "$STAGE/triposplat" triposplat \
+    --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License; Apache-2.0 VAE)"
+
+echo ">> atomic upload -> $DED/ (+ README)"
+# Stage dedicated repo root: graphs + licences + card (no nested triposplat/).
+DED_STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE" "$DED_STAGE"' EXIT
+for f in "${FILES[@]}" "${LICENSES[@]}"; do
+    ln -s "$STAGE/$f" "$DED_STAGE/$f"
 done
-
-for f in "${FILES[@]}" LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
-    echo ">> $f -> $DED:$f"
-    retry "$HFCLI" upload "$DED" "$STAGE/$f" "$f" \
-        --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License for the image encoder)"
-done
-
-echo ">> model card -> $DED:README.md"
-retry "$HFCLI" upload "$DED" "$HERE/triposplat_model_card.md" README.md \
-    --commit-message "Model card"
+cp "$STAGE/README.md" "$DED_STAGE/README.md"
+retry "$HFCLI" upload "$DED" "$DED_STAGE" . \
+    --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License; Apache-2.0 VAE)"
 
 echo "done. Verify:"
 echo "  curl -sIL https://huggingface.co/$AGG/resolve/main/triposplat/triposplat_octree.onnx | grep -i -m1 '^HTTP'"

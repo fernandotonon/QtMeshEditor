@@ -1,7 +1,7 @@
 ---
 license: other
-license_name: mit-and-dinov3
-license_link: https://huggingface.co/fernandotonon/QtMeshEditor-triposplat-onnx/blob/main/LICENSE-TripoSplat.txt
+license_name: mit-dinov3-apache-2.0
+license_link: https://huggingface.co/fernandotonon/QtMeshEditor-triposplat-onnx#licence--read-before-using
 library_name: onnx
 pipeline_tag: image-to-3d
 tags:
@@ -41,7 +41,9 @@ arg), local inference via ONNX Runtime. No Python at runtime.
 | `triposplat_flow.onnx` + `.onnx.data` | one DiT flow step: `latent[B,8192,16]`, `camera[B,1,5]`, `t[B]` (×1000), features → `v_latent`, `v_camera` | MIT |
 | `triposplat_octree.onnx` + `.onnx.data` | octree density logits: parent cell centres + level + latent → `logits[1,L,8]` | MIT |
 | `triposplat_gs.onnx` + `.onnx.data` | Gaussian decoder: leaf points + latent → xyz / SH-DC / opacity / scale / rotation (32 Gaussians per point) | MIT |
-| `LICENSE-TripoSplat.txt`, `LICENSE-DINOv3.txt` | licence texts — **DINOv3 §1.b.i requires a copy with any redistribution of DINOv3 weights or derivatives** | |
+| `LICENSE-TripoSplat.txt` | MIT (VAST-AI TripoSplat) | |
+| `LICENSE-DINOv3.txt` | DINOv3 License — **§1.b.i requires a copy with any redistribution of DINOv3 weights or derivatives** | |
+| `LICENSE-Apache-2.0.txt` | Apache-2.0 for the FLUX.2 VAE encoder | |
 
 ~6.1 GB total (fp32). Every graph ships a small `.onnx` proto next to an
 `.onnx.data` external-weights file; both must sit side by side or ONNX Runtime
@@ -78,14 +80,12 @@ graph per process (`--only`) on a ≤24 GB machine.
 
 ## Licence — read before using
 
-* TripoSplat code + most of the converted weights are **MIT**
-  (`LICENSE-TripoSplat.txt`). Credit: VAST-AI-Research.
-* `triposplat_dinov3.onnx*` is a derivative of Meta's **DINOv3** weights and is
-  distributed under the **DINOv3 License** (`LICENSE-DINOv3.txt`). Commercial
-  use is permitted; the licence is **not** MIT — do not describe the whole
-  stack as "entirely MIT".
-* The FLUX.2 VAE encoder inside `triposplat_vae.onnx*` is **Apache-2.0**
-  (Black Forest Labs released the FLUX.2 autoencoder separately under
-  Apache-2.0; the FLUX.2 [dev] *model* is non-commercial and is **not** used).
+Three licence texts ship next to the graphs:
+
+| file | covers |
+|---|---|
+| [`LICENSE-TripoSplat.txt`](LICENSE-TripoSplat.txt) | MIT — TripoSplat code + most converted weights (VAST-AI-Research) |
+| [`LICENSE-DINOv3.txt`](LICENSE-DINOv3.txt) | Meta **DINOv3 License** for `triposplat_dinov3.onnx*` (commercial OK; **not** MIT — do not call the stack "entirely MIT") |
+| [`LICENSE-Apache-2.0.txt`](LICENSE-Apache-2.0.txt) | Apache-2.0 for the FLUX.2 VAE encoder inside `triposplat_vae.onnx*` (Black Forest Labs released the AE under Apache-2.0; the FLUX.2 [dev] *model* is non-commercial and is **not** used) |
 
 Not affiliated with or endorsed by VAST-AI-Research, Meta, or Black Forest Labs.

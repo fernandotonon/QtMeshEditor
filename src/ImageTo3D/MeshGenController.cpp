@@ -726,20 +726,40 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     } else if (useSplat) {
         QString dlErr;
         emit statusMessage(tr("Checking TripoSplat models (~6 GB on first use)…"));
-        if (!TripoSplatPredictor::ensureModelsBlocking(&dlErr)) {
+        // Forward Stop into ModelFetch's 200 ms cancel poll — without this the
+        // ~6 GB first-use download ignores m_cancel until every graph finishes.
+        if (!TripoSplatPredictor::ensureModelsBlocking(
+                &dlErr, [this]() { return m_cancel.load(); })) {
             setBusy(false);
-            emit error(tr("TripoSplat models unavailable: %1").arg(dlErr));
+            if (m_cancel.load() || dlErr == QLatin1String("cancelled"))
+                emit statusMessage(tr("Cancelled."));
+            else
+                emit error(tr("TripoSplat models unavailable: %1").arg(dlErr));
             return;
         }
-        // TripoSplat mattes any input without real alpha (its model is
-        // trained on a subject over black), on the WORKER — which can only
-        // read models already on disk, so ensure the matte here.
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
+        // TripoSplat mattes on the WORKER — which can only read models already
+        // on disk, so ensure the matte here. Always cache Fast as well so a
+        // Best inference failure can fall back to U²-Net without a download.
         matteEnsured = true;
         BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
         BackgroundRemover::resolveModelBlocking(
             wantBestMatte ? BackgroundRemover::Quality::Best
                           : BackgroundRemover::Quality::Fast,
             &ensuredQ);
+        if (wantBestMatte)
+            BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
+                                                    nullptr);
+        // Best matte is ~930 MB; honour a Stop that arrived during the fetch.
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).

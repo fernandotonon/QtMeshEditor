@@ -67,7 +67,11 @@ constexpr Digest kDigests[] = {
 // Licence texts that must travel with the weights: the DINOv3 License
 // (sec. 1.b.i) requires a copy with any redistribution of DINOv3 weights or
 // derivatives — the dinov3 graph is one.
-const char* const kLicenseFiles[] = {"LICENSE-TripoSplat.txt", "LICENSE-DINOv3.txt"};
+const char* const kLicenseFiles[] = {
+    "LICENSE-TripoSplat.txt",
+    "LICENSE-DINOv3.txt",
+    "LICENSE-Apache-2.0.txt",   // FLUX.2 VAE encoder inside triposplat_vae.onnx
+};
 
 MeshGenPredictor::Result failResult(const QString& msg)
 {
@@ -590,10 +594,23 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
     // — the model is trained on a cut-out over black.
     QString warning;
     QImage subject = image;
-    const bool needMatte = opts.removeBackground || !hasRealAlpha(image);
+    const bool hadAlpha = hasRealAlpha(image);
+    const bool needMatte = opts.removeBackground || !hadAlpha;
     if (!draws.fixture() && needMatte) {
         if (!report(Stage::Encode, 0, 2))
             return fail(QStringLiteral("cancelled"));
+        // BackgroundRemover reads RGB and ignores the source alpha. Flatten
+        // onto black first so any RGB that sat under transparent pixels cannot
+        // reappear in the rematte (a cutout PNG with "hidden" backdrop).
+        QImage matteInput = image;
+        if (hadAlpha) {
+            matteInput = QImage(image.size(), QImage::Format_RGB888);
+            matteInput.fill(Qt::black);
+            QPainter p(&matteInput);
+            p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            p.drawImage(0, 0, image);
+            p.end();
+        }
         const bool onMainThread = QCoreApplication::instance()
             && QThread::currentThread() == QCoreApplication::instance()->thread();
         BackgroundRemover::Quality usedQ = opts.mattingQuality;
@@ -611,7 +628,7 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
         bg.foregroundRatio = 0.0f;   // prepareImage does upstream's own crop
         bg.quality = usedQ;
         BackgroundRemover::Result cut =
-            BackgroundRemover::removeBackground(image, model, bg);
+            BackgroundRemover::removeBackground(matteInput, model, bg);
         // Best (BiRefNet) used to hard-fail under CoreML and silently leave
         // the room in the mesh — CPU-only is fixed in BackgroundRemover, but
         // still fall back to U²-Net if Best fails for any other reason.
@@ -621,7 +638,7 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
             usedQ = BackgroundRemover::Quality::Fast;
             bg.quality = usedQ;
             model = BackgroundRemover::modelPath(usedQ);
-            cut = BackgroundRemover::removeBackground(image, model, bg);
+            cut = BackgroundRemover::removeBackground(matteInput, model, bg);
         }
         if (cut.ok && cut.usedModel) {
             subject = cut.image;

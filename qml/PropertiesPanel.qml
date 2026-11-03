@@ -2488,19 +2488,14 @@ Rectangle {
                     id: mgResCombo
                     width: 150
                     enabled: !MeshGenController.busy
-                    // TripoSplat's recommended default is 1024 (matches splat
-                    // spacing); TripoSR/TripoSG stay on 256. Labels flip with
-                    // the backend so the marked "default" matches what the
-                    // combo snaps to.
-                    model: mgBackendCombo.splatSelected
-                           ? ["128 (fast)", "192", "256", "320",
-                              "384", "448", "512",
-                              "640 (~1 GB)", "768 (~1.7 GB)",
-                              "1024 (default, ~4 GB)"]
-                           : ["128 (fast)", "192", "256 (default)", "320",
-                              "384", "448", "512 (slow, detailed)",
-                              "640 (~1 GB)", "768 (~1.7 GB)",
-                              "1024 (~4 GB, very slow)"]
+                    // Stable model list: swapping the array on backend change
+                    // resets ComboBox.currentIndex to 0 on Qt 6.8, which would
+                    // leave TripoSplat at 128 after we snap to 1024. Labels
+                    // name both defaults; the backend handler sets the index.
+                    model: ["128 (fast)", "192", "256 (TripoSR default)", "320",
+                            "384", "448", "512",
+                            "640 (~1 GB)", "768 (~1.7 GB)",
+                            "1024 (TripoSplat default, ~4 GB)"]
                     currentIndex: 2
                     readonly property var resValues: [128, 192, 256, 320, 384, 448, 512,
                                                       640, 768, 1024]
