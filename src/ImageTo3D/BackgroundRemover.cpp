@@ -71,16 +71,19 @@ bool BackgroundRemover::modelPresent(Quality q)
     return QFileInfo::exists(modelPath(q));
 }
 
-QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual)
+QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual,
+                                                const std::function<bool()>& cancelled)
 {
     if (actual) *actual = wanted;
-    QString path = ensureModelBlocking(wanted);
+    QString path = ensureModelBlocking(wanted, cancelled);
     if (!path.isEmpty() || wanted == Quality::Fast)
         return path;
     // Best asked for but unavailable: fall back rather than refuse to cut out a
     // subject at all. BiRefNet is ~930 MB, so "not downloaded yet" is a normal
     // state, not an error.
-    path = ensureModelBlocking(Quality::Fast);
+    if (cancelled && cancelled())
+        return {};
+    path = ensureModelBlocking(Quality::Fast, cancelled);
     if (!path.isEmpty() && actual) *actual = Quality::Fast;
     return path;
 }
@@ -88,7 +91,10 @@ QString BackgroundRemover::resolveModelBlocking(Quality wanted, Quality* actual)
 #ifndef ENABLE_ONNX
 
 bool BackgroundRemover::isAvailable() { return false; }
-QString BackgroundRemover::ensureModelBlocking(Quality) { return {}; }
+QString BackgroundRemover::ensureModelBlocking(Quality, const std::function<bool()>&)
+{
+    return {};
+}
 
 BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& image,
                                                              const QString&,
@@ -105,12 +111,15 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
 
 bool BackgroundRemover::isAvailable() { return true; }
 
-QString BackgroundRemover::ensureModelBlocking(Quality q)
+QString BackgroundRemover::ensureModelBlocking(Quality q,
+                                               const std::function<bool()>& cancelled)
 {
     const QString dst = modelPath(q);
     if (QFileInfo::exists(dst))
         return dst;
     if (!qEnvironmentVariableIsEmpty("QTMESH_REMBG_NO_DOWNLOAD"))
+        return {};
+    if (cancelled && cancelled())
         return {};
 
     QString base;
@@ -136,6 +145,7 @@ QString BackgroundRemover::ensureModelBlocking(Quality q)
     req.destination = dst;
     req.label = QString::fromLatin1(modelLabelFor(q));
     req.timeoutMs = q == Quality::Best ? 2400000 : 600000;
+    req.cancelled = cancelled;
     // #1037: one shared blocking wait — keeps the downloader's own error text
     // and the synchronous-rejection guard every consumer used to lack.
     const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
@@ -165,7 +175,14 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_rembg");
         Ort::SessionOptions so;
-        OnnxRuntimeSettings::configureSessionOptions(so);
+        // CPU only: BiRefNet (Best) hard-fails under CoreML on macOS —
+        // "Unable to compute the prediction using a neural network model" —
+        // and the catch below then returned the ORIGINAL image, so TripoSplat
+        // / TRELLIS.2 / TripoSR rebuilt the whole room behind the subject.
+        // U²-Net is fine on CoreML, but rembg is a one-shot; CPU is seconds.
+        OnnxRuntimeSettings::SessionConfig cfg;
+        cfg.appendGpu = false;
+        OnnxRuntimeSettings::configureSessionOptions(so, cfg);
 #ifdef _WIN32
         Ort::Session session(env, modelPath.toStdWString().c_str(), so);
 #else

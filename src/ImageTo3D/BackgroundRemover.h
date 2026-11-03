@@ -3,6 +3,8 @@
 
 #include <QImage>
 #include <QString>
+
+#include <functional>
 #include <vector>
 
 // AI background removal (epic #764 support): segment the foreground object out of
@@ -92,14 +94,18 @@ public:
     // Download the model on first use (blocks via a local event loop). Returns the
     // path when present, else empty. Honours QTMESH_REMBG_NO_DOWNLOAD + the
     // base-URL override (QTMESH_REMBG_MODEL_BASE_URL / QSettings ai/rembgModelBaseUrl).
-    static QString ensureModelBlocking(Quality q = Quality::Fast);
+    // `cancelled` is polled during the transfer (Best is ~930 MB) — return true to stop.
+    static QString ensureModelBlocking(Quality q = Quality::Fast,
+                                       const std::function<bool()>& cancelled = {});
 
     /// Resolve the model for `wanted`, degrading Best -> Fast when BiRefNet is
     /// unavailable (not downloaded, offline, downloads disabled). Writes the
     /// tier that was actually resolved to `actual`, so a caller can report an
     /// honest result instead of assuming it got the better matte. Returns an
-    /// empty path when neither tier is available.
-    static QString resolveModelBlocking(Quality wanted, Quality* actual);
+    /// empty path when neither tier is available. `cancelled` is forwarded to
+    /// each ensure (so Stop during a Best fetch aborts instead of waiting ~930 MB).
+    static QString resolveModelBlocking(Quality wanted, Quality* actual,
+                                        const std::function<bool()>& cancelled = {});
 
     // Run U²-Net on `image`, apply the mask as alpha, composite over the solid
     // background, and return the cleaned image. On any failure (no ONNX, missing

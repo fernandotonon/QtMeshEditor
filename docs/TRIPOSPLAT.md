@@ -22,10 +22,13 @@ Models: AI Model Settings → "TripoSplat" (~6.1 GB, downloads on first use).
 
 ## Pipeline
 
-1. **Matte.** Any input without real alpha is matted (`BackgroundRemover`);
-   the model is trained on a subject composited over black. Then upstream's
-   crop: erode alpha 1 px, square crop 1.2× the alpha bounding box, 1024²,
-   composite on black (`TripoSplatPredictor::prepareImage`).
+1. **Matte.** With `--remove-bg` / the GUI checkbox (default on), the input is
+   always matted (`BackgroundRemover`) — even if it already has some alpha
+   (a soft edge is not a subject matte). Without the flag, inputs that have
+   no real alpha are still matted. The model is trained on a subject
+   composited over black. Then upstream's crop: erode alpha 1 px, square crop
+   1.2× the alpha bounding box, 1024², composite on black
+   (`TripoSplatPredictor::prepareImage`).
 2. **Encode.** DINOv3 ViT-H (1024² → 4101×1280) and the FLUX.2 VAE encoder
    (→ 4101×128, with its sampling noise drawn by us).
 3. **Flow matching.** 8192×16 latent + a 5-dim camera token, Euler steps with

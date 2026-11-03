@@ -726,20 +726,41 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     } else if (useSplat) {
         QString dlErr;
         emit statusMessage(tr("Checking TripoSplat models (~6 GB on first use)…"));
-        if (!TripoSplatPredictor::ensureModelsBlocking(&dlErr)) {
+        // Forward Stop into ModelFetch's 200 ms cancel poll — without this the
+        // ~6 GB first-use download ignores m_cancel until every graph finishes.
+        if (!TripoSplatPredictor::ensureModelsBlocking(
+                &dlErr, [this]() { return m_cancel.load(); })) {
             setBusy(false);
-            emit error(tr("TripoSplat models unavailable: %1").arg(dlErr));
+            if (m_cancel.load() || dlErr == QLatin1String("cancelled"))
+                emit statusMessage(tr("Cancelled."));
+            else
+                emit error(tr("TripoSplat models unavailable: %1").arg(dlErr));
             return;
         }
-        // TripoSplat mattes any input without real alpha (its model is
-        // trained on a subject over black), on the WORKER — which can only
-        // read models already on disk, so ensure the matte here.
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
+        // TripoSplat mattes on the WORKER — which can only read models already
+        // on disk, so ensure the matte here. Always cache Fast as well so a
+        // Best inference failure can fall back to U²-Net without a download.
         matteEnsured = true;
         BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        const auto cancelPoll = [this]() { return m_cancel.load(); };
         BackgroundRemover::resolveModelBlocking(
             wantBestMatte ? BackgroundRemover::Quality::Best
                           : BackgroundRemover::Quality::Fast,
-            &ensuredQ);
+            &ensuredQ, cancelPoll);
+        if (wantBestMatte)
+            BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
+                                                    nullptr, cancelPoll);
+        // Best matte is ~930 MB; honour a Stop that arrived during the fetch.
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -828,8 +849,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         QImage subject = image;
         if (rembg && !useSG && !useT2 && !useSplat) {
             // TripoSR path: composite over gray-128 (its training background).
-            // The TripoSG path leaves removal to the predictor dispatch, which
-            // composites over WHITE per its reference pipeline.
+            // TripoSG / TripoSplat / TRELLIS.2 leave removal to the predictor
+            // dispatch (white / keep-alpha-over-black / keep-alpha respectively).
             post(QStringLiteral("background"), 0, 1);
             QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
                 Q_ARG(QString, tr("Removing background…")));
@@ -853,13 +874,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         MeshGenPredictor::Options opts;
         opts.sdfResolution   = res;
         opts.vertexColor     = true;
-        // TripoSR removal already ran above; TripoSG's white-background and
-        // TRELLIS.2's keep-alpha matte removal happen inside the predictor
-        // dispatch. TRELLIS.2 ALWAYS gets the matte (the CLI forces it too):
-        // its preprocess needs an alpha channel to keep the non-commercial
-        // rembg model unused, so the GUI checkbox only governs the Tripo
-        // backends.
-        opts.removeBackground = useT2 || (rembg && useSG);
+        // TripoSR removal already ran above; TripoSG (white), TripoSplat
+        // (keep-alpha → black via prepareImage) and TRELLIS.2 (keep-alpha)
+        // matte inside their predictor dispatch. TRELLIS.2 ALWAYS gets the
+        // matte (the CLI forces it too): its preprocess needs an alpha
+        // channel to keep the non-commercial rembg model unused. The GUI
+        // checkbox governs TripoSR / TripoSG / TripoSplat.
+        opts.removeBackground = useT2 || (rembg && (useSG || useSplat));
         opts.mattingQuality  = wantBestMatte
             ? BackgroundRemover::Quality::Best
             : BackgroundRemover::Quality::Fast;
@@ -879,10 +900,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.maxTextureSize  = t2MaxTexture;
         opts.bakeNormalMap   = m_generatePbr;
         if (useSplat) {
-            // TripoSplat defaults (TripoSplatPredictor::kDefault*): 1024^3
-            // grid, a 150k game-ready target unless the picker set one, and
-            // the raw Gaussians kept as a .ply beside the generated textures.
-            opts.sdfResolution = TripoSplatPredictor::kDefaultMeshResolution;
+            // TripoSplat defaults (TripoSplatPredictor::kDefault*): a 150k
+            // game-ready target unless the picker set one, and the raw
+            // Gaussians kept as a .ply. The splat→mesh grid resolution comes
+            // from the shared Resolution picker (GUI) / --resolution (CLI) —
+            // same control as TripoSR/TripoSG; 1024 is the recommended default
+            // (matches splat spacing) and is what the QML combo snaps to when
+            // this backend is selected.
             if (opts.targetTriangles <= 0)
                 opts.targetTriangles = TripoSplatPredictor::kDefaultTargetTriangles;
             opts.seed = t2Seed;

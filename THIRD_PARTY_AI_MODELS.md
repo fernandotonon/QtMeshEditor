@@ -13,6 +13,7 @@ For a one-page overview of every model and what it does in the app, see
 > [`QtMeshEditor-skintokens-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-skintokens-onnx),
 > [`QtMeshEditor-triposr-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposr-onnx),
 > [`QtMeshEditor-triposg-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposg-onnx),
+> [`QtMeshEditor-triposplat-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposplat-onnx),
 > [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx),
 > [`QtMeshEditor-realesrgan-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-realesrgan-onnx),
 > [`QtMeshEditor-u2net-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-u2net-onnx),
@@ -158,11 +159,14 @@ For a one-page overview of every model and what it does in the app, see
   Gaussians → mesh is QtMeshEditor-native (`SplatToMesh`).
 - **Hosted** on `fernandotonon/QtMeshEditor-models` under `triposplat/`
   (~6.1 GB fp32: `triposplat_{dinov3,vae,flow,octree,gs}.onnx` + `.onnx.data`,
-  `LICENSE-TripoSplat.txt`, `LICENSE-DINOv3.txt`), uploaded with
-  `scripts/upload-triposplat-models.sh`. Every file's SHA-256 is pinned in
-  `TripoSplatPredictor.cpp` and verified on download and on an existing file
-  (default hosting only). Overrides: `QTMESH_TRIPOSPLAT_MODEL_BASE_URL` /
-  QSettings `ai/triposplatModelBaseUrl`; `QTMESH_TRIPOSPLAT_NO_DOWNLOAD`.
+  `LICENSE-TripoSplat.txt`, `LICENSE-DINOv3.txt`), mirrored to the dedicated
+  [`QtMeshEditor-triposplat-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposplat-onnx)
+  card. Uploaded with `scripts/upload-triposplat-models.sh`; mirrors refreshed
+  with `scripts/sync-hf-model-repos.sh triposplat`. Every file's SHA-256 is
+  pinned in `TripoSplatPredictor.cpp` and verified on download and on an
+  existing file (default hosting only). Overrides:
+  `QTMESH_TRIPOSPLAT_MODEL_BASE_URL` / QSettings `ai/triposplatModelBaseUrl`;
+  `QTMESH_TRIPOSPLAT_NO_DOWNLOAD`.
 
 ## TRELLIS.2 — image-to-3D generation, sidecar backend (default when installed)
 

@@ -416,14 +416,15 @@ MeshGenPredictor::Result MeshGenPredictor::predictTripoSplat(const QImage& image
                                                          const ProgressFn& progress)
 {
     TripoSplatPredictor::Options so;
-    so.flowSteps        = opts.splatFlowSteps;
-    so.guidanceScale    = opts.splatGuidance;
-    so.seed             = opts.seed;
-    so.numGaussians     = opts.numGaussians;
-    so.mattingQuality   = opts.mattingQuality;
-    so.meshResolution   = opts.sdfResolution;
-    so.smoothMesh       = opts.smoothMesh;
-    so.smoothIterations = opts.smoothIterations;
+    so.flowSteps         = opts.splatFlowSteps;
+    so.guidanceScale     = opts.splatGuidance;
+    so.seed              = opts.seed;
+    so.numGaussians      = opts.numGaussians;
+    so.removeBackground  = opts.removeBackground;
+    so.mattingQuality    = opts.mattingQuality;
+    so.meshResolution    = opts.sdfResolution;
+    so.smoothMesh        = opts.smoothMesh;
+    so.smoothIterations  = opts.smoothIterations;
     TripoSplatPredictor::Output gen = TripoSplatPredictor::predict(image, so, progress);
     Result r = std::move(gen.mesh);
     if (!r.ok)
