@@ -747,13 +747,14 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // Best inference failure can fall back to U²-Net without a download.
         matteEnsured = true;
         BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        const auto cancelPoll = [this]() { return m_cancel.load(); };
         BackgroundRemover::resolveModelBlocking(
             wantBestMatte ? BackgroundRemover::Quality::Best
                           : BackgroundRemover::Quality::Fast,
-            &ensuredQ);
+            &ensuredQ, cancelPoll);
         if (wantBestMatte)
             BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
-                                                    nullptr);
+                                                    nullptr, cancelPoll);
         // Best matte is ~930 MB; honour a Stop that arrived during the fetch.
         if (m_cancel.load()) {
             setBusy(false);

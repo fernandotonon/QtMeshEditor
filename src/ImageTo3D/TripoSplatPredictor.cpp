@@ -595,8 +595,8 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
     QString warning;
     QImage subject = image;
     const bool hadAlpha = hasRealAlpha(image);
-    const bool needMatte = opts.removeBackground || !hadAlpha;
-    if (!draws.fixture() && needMatte) {
+    if (const bool needMatte = opts.removeBackground || !hadAlpha;  // cpp:S6004
+        !draws.fixture() && needMatte) {
         if (!report(Stage::Encode, 0, 2))
             return fail(QStringLiteral("cancelled"));
         // BackgroundRemover reads RGB and ignores the source alpha. Flatten

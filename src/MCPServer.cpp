@@ -3598,14 +3598,16 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (!args.contains("remove_bg"))
             opts.removeBackground = true;
         BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
-        BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &ensuredQ);
+        const auto cancelPoll = [this]() { return m_toolCancelRequested; };
+        // Forward Stop into the matte fetch itself (~930 MB Best) — a post-fetch
+        // check alone still waited out the whole download.
+        BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &ensuredQ,
+                                                cancelPoll);
         // Cache Fast too so a Best inference failure can fall back on the worker.
         if (opts.mattingQuality == BackgroundRemover::Quality::Best)
             BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
-                                                    nullptr);
+                                                    nullptr, cancelPoll);
         opts.mattingQuality = ensuredQ;
-        // resolveModelBlocking can download (~930 MB Best); honour Stop that
-        // arrived during the fetch before starting the long inference.
         if (m_toolCancelRequested)
             return makeErrorResult(QStringLiteral("cancelled"));
     } else if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
