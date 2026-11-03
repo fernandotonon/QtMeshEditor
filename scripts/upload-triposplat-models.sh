@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Upload the TripoSplat ONNX graphs (+ licence texts) to the QtMeshEditor HF
-# models repo. ONE-TIME, run by a maintainer with write access.
+# repos. ONE-TIME, run by a maintainer with write access.
 #
 # The app downloads these on first use from
 #   https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/main/triposplat/...
 # so the names MUST match TripoSplatPredictor::modelFiles() + kLicenseFiles,
 # and the files MUST be the ones whose SHA-256 is pinned in
 # TripoSplatPredictor.cpp (kDigests) — a re-export changes them; re-pin.
+# Every graph is also mirrored to the dedicated repo QtMeshEditor-triposplat-onnx
+# (see sync-hf-model-repos.sh).
 #
 # Every graph is a small proto + an .onnx.data external-weights file: BOTH
 # must be hosted side by side or ONNX Runtime cannot load the graph.
@@ -28,19 +30,23 @@
 #   OUT_DIR=~/triposplat_eval/onnx LIC_DIR=~/triposplat_eval/licenses \
 #       ./scripts/upload-triposplat-models.sh
 #   DRY_RUN=1 ... checks digests + licences without uploading.
+# Big HF transfers drop connections routinely: each upload is retried (the CLI resumes).
 set -euo pipefail
 
-REPO="${REPO:-fernandotonon/QtMeshEditor-models}"
+AGG="${AGG:-fernandotonon/QtMeshEditor-models}"
+DED="${DED:-fernandotonon/QtMeshEditor-triposplat-onnx}"
 OUT_DIR="${OUT_DIR:?set OUT_DIR to the exported graphs}"
 LIC_DIR="${LIC_DIR:?set LIC_DIR to the licence texts}"
 HFCLI="${HFCLI:-hf}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 
 # Refuse to upload files that do not match the digests the app pins.
 expected() {
-    grep -o "{\"$1\", *\"[0-9a-f]*\"}" "$(dirname "$0")/../src/ImageTo3D/TripoSplatPredictor.cpp" \
+    grep -o "{\"$1\", *\"[0-9a-f]*\"}" "$HERE/../src/ImageTo3D/TripoSplatPredictor.cpp" \
         | sed -E 's/.*"([0-9a-f]{64})".*/\1/'
 }
 
+FILES=()
 for g in dinov3 vae flow octree gs; do
     for ext in onnx onnx.data; do
         f="triposplat_${g}.${ext}"
@@ -51,28 +57,58 @@ for g in dinov3 vae flow octree gs; do
             echo "!! $f digest $got does not match the pinned $want — re-pin kDigests first"
             exit 1
         fi
+        FILES+=("$f")
     done
 done
 for l in LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
     [ -f "$LIC_DIR/$l" ] || { echo "!! missing $LIC_DIR/$l"; exit 1; }
 done
+[ -f "$HERE/triposplat_model_card.md" ] || { echo "!! missing $HERE/triposplat_model_card.md"; exit 1; }
 
 if [ "${DRY_RUN:-0}" = "1" ]; then
-    echo "dry run: all 10 graph files match the pinned digests; licences present. Nothing uploaded."
+    echo "dry run: all 10 graph files match the pinned digests; licences + card present. Nothing uploaded."
     exit 0
 fi
 
+retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 8 ] && return 1; echo "retry $n..."; sleep 10; done; }
+
+# Create the dedicated repo if missing. Prefer `hf repo create` (hub >= 1.0);
+# fall back to `huggingface-cli repo create` for older installs.
+create_ded() {
+    if "$HFCLI" repo create "$DED" --repo-type model --exist-ok 2>/dev/null; then
+        return 0
+    fi
+    # Older CLI: name only (no owner/ prefix), -y to skip the prompt.
+    local name="${DED##*/}"
+    huggingface-cli repo create "$name" --type model -y 2>/dev/null || true
+}
+
+create_ded
+
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/triposplat"
-for g in dinov3 vae flow octree gs; do
-    ln -s "$OUT_DIR/triposplat_${g}.onnx" "$STAGE/triposplat/"
-    ln -s "$OUT_DIR/triposplat_${g}.onnx.data" "$STAGE/triposplat/"
+# Licence texts live next to the graphs in both repos.
+cp "$LIC_DIR/LICENSE-TripoSplat.txt" "$LIC_DIR/LICENSE-DINOv3.txt" "$STAGE/"
+for f in "${FILES[@]}"; do
+    ln -s "$OUT_DIR/$f" "$STAGE/$f"
 done
-cp "$LIC_DIR/LICENSE-TripoSplat.txt" "$LIC_DIR/LICENSE-DINOv3.txt" "$STAGE/triposplat/"
 
-"$HFCLI" upload "$REPO" "$STAGE/triposplat" triposplat \
-    --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License for the image encoder)"
+for f in "${FILES[@]}" LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
+    echo ">> $f -> $AGG:triposplat/$f"
+    retry "$HFCLI" upload "$AGG" "$STAGE/$f" "triposplat/$f" \
+        --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License for the image encoder)"
+done
+
+for f in "${FILES[@]}" LICENSE-TripoSplat.txt LICENSE-DINOv3.txt; do
+    echo ">> $f -> $DED:$f"
+    retry "$HFCLI" upload "$DED" "$STAGE/$f" "$f" \
+        --commit-message "Add TripoSplat ONNX graphs (MIT; DINOv3 License for the image encoder)"
+done
+
+echo ">> model card -> $DED:README.md"
+retry "$HFCLI" upload "$DED" "$HERE/triposplat_model_card.md" README.md \
+    --commit-message "Model card"
 
 echo "done. Verify:"
-echo "  curl -sIL https://huggingface.co/$REPO/resolve/main/triposplat/triposplat_octree.onnx | grep -i -m1 '^HTTP'"
+echo "  curl -sIL https://huggingface.co/$AGG/resolve/main/triposplat/triposplat_octree.onnx | grep -i -m1 '^HTTP'"
+echo "  curl -sIL https://huggingface.co/$DED/resolve/main/triposplat_octree.onnx | grep -i -m1 '^HTTP'"

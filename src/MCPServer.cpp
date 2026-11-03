@@ -3592,6 +3592,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (!ok)
             return makeErrorResult(QStringLiteral("TripoSplat models unavailable: %1")
                                        .arg(dlErr));
+        // Match the GUI default (Remove background checked): force the matte
+        // unless the caller explicitly passed remove_bg. A soft-alpha PNG must
+        // not skip rembg and leave the room in the reconstruction.
+        if (!args.contains("remove_bg"))
+            opts.removeBackground = true;
+        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+        BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &ensuredQ);
+        opts.mattingQuality = ensuredQ;
     } else if (opts.backend == MeshGenPredictor::Backend::TripoSG) {
         // TripoSG always runs the fp32 DiT (int8 tier dropped — degraded
         // geometry, no ARM speed win); 'quality' still selects the TripoSR

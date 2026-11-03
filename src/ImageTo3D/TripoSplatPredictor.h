@@ -64,9 +64,14 @@ public:
         float shift         = 3.0f;     // timestep schedule shift
         int   numGaussians  = 262144;   // 32768..262144, multiple of 32
         unsigned seed       = 42;
-        // Matte the subject when the input has no real alpha. The model is
-        // trained on a subject composited over BLACK; leaving a background in
-        // makes it part of the object.
+        // Matte the subject before inference. The model is trained on a subject
+        // composited over BLACK; leaving a background in makes it part of the
+        // object. When true (the GUI "Remove background" checkbox / CLI
+        // --remove-bg), ALWAYS run the matte — even if the input already has
+        // some alpha (a soft edge or a partial cutout is not a subject matte).
+        // When false, still matte inputs with no real alpha so a plain photo
+        // does not silently become a room slab.
+        bool removeBackground = true;
         BackgroundRemover::Quality mattingQuality = BackgroundRemover::Quality::Fast;
         // Splat -> mesh voxel resolution and post-extraction smoothing.
         int  meshResolution   = 256;

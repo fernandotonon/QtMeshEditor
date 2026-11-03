@@ -2471,15 +2471,13 @@ Rectangle {
                 wrapMode: Text.WordWrap
             }
 
-            // Resolution picker — marching-cubes grid resolution. Cost grows with
-            // the cube of the value (the decoder queries resolution³ points), so
-            // higher = more detail but much slower. Labels flag the trade-off.
+            // Resolution picker — marching-cubes / splat→mesh grid. Cost grows
+            // with the cube of the value, so higher = more detail but much
+            // slower. Labels flag the trade-off. Hidden for TRELLIS.2 (its
+            // resolution comes from the Quality preset).
             Row {
                 spacing: 6
-                // Marching-cubes grid — local ONNX backends only (TRELLIS.2's
-                // resolution comes from its Quality preset instead; TripoSplat
-                // meshes its splats on a fixed 1024³ grid).
-                visible: !mgBackendCombo.t2Selected && !mgBackendCombo.splatSelected
+                visible: !mgBackendCombo.t2Selected
                 Text {
                     text: "Resolution"
                     color: PropertiesPanelController.textColor
@@ -2490,9 +2488,19 @@ Rectangle {
                     id: mgResCombo
                     width: 150
                     enabled: !MeshGenController.busy
-                    model: ["128 (fast)", "192", "256 (default)", "320",
-                            "384", "448", "512 (slow, detailed)",
-                            "640 (~1 GB)", "768 (~1.7 GB)", "1024 (~4 GB, very slow)"]
+                    // TripoSplat's recommended default is 1024 (matches splat
+                    // spacing); TripoSR/TripoSG stay on 256. Labels flip with
+                    // the backend so the marked "default" matches what the
+                    // combo snaps to.
+                    model: mgBackendCombo.splatSelected
+                           ? ["128 (fast)", "192", "256", "320",
+                              "384", "448", "512",
+                              "640 (~1 GB)", "768 (~1.7 GB)",
+                              "1024 (default, ~4 GB)"]
+                           : ["128 (fast)", "192", "256 (default)", "320",
+                              "384", "448", "512 (slow, detailed)",
+                              "640 (~1 GB)", "768 (~1.7 GB)",
+                              "1024 (~4 GB, very slow)"]
                     currentIndex: 2
                     readonly property var resValues: [128, 192, 256, 320, 384, 448, 512,
                                                       640, 768, 1024]
@@ -2543,9 +2551,20 @@ Rectangle {
                     currentIndex: t2Ready ? 0 : 2
                     // Switching to TripoSG snaps the tier picker to fp32 (its
                     // only geometry tier); the int8 option is meaningless there.
+                    // TripoSplat's splat→mesh grid wants 1024 by default
+                    // (matches splat spacing); TripoSR/TripoSG stay on 256.
+                    property int _lastSplat: -1
                     onCurrentIndexChanged: {
                         if (sgSelected)
                             mgQualityCombo.currentIndex = 0
+                        if (splatSelected && _lastSplat !== 1) {
+                            mgResCombo.currentIndex = mgResCombo.resValues.indexOf(1024)
+                            _lastSplat = 1
+                        } else if (!splatSelected && _lastSplat !== 0) {
+                            if (_lastSplat === 1)
+                                mgResCombo.currentIndex = mgResCombo.resValues.indexOf(256)
+                            _lastSplat = 0
+                        }
                     }
                 }
             }
@@ -2553,9 +2572,10 @@ Rectangle {
             // raw Gaussians go.
             Text {
                 visible: mgBackendCombo.splatSelected
-                text: "  Generates 262k 3D Gaussians, meshes them on a 1024³ grid and bakes "
-                    + "their colours (~6 GB download once; ~25 min on CPU). The raw "
-                    + "splats are also saved as a .ply (generated_splats/)."
+                text: "  Generates 262k 3D Gaussians, meshes them on the Resolution grid "
+                    + "(1024³ recommended) and bakes their colours (~6 GB download once; "
+                    + "~25 min on CPU at 20 flow steps). The raw splats are also saved "
+                    + "as a .ply (generated_splats/). Uses Remove background."
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap

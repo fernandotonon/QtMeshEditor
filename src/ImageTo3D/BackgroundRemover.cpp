@@ -165,7 +165,14 @@ BackgroundRemover::Result BackgroundRemover::removeBackground(const QImage& imag
     try {
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_rembg");
         Ort::SessionOptions so;
-        OnnxRuntimeSettings::configureSessionOptions(so);
+        // CPU only: BiRefNet (Best) hard-fails under CoreML on macOS —
+        // "Unable to compute the prediction using a neural network model" —
+        // and the catch below then returned the ORIGINAL image, so TripoSplat
+        // / TRELLIS.2 / TripoSR rebuilt the whole room behind the subject.
+        // U²-Net is fine on CoreML, but rembg is a one-shot; CPU is seconds.
+        OnnxRuntimeSettings::SessionConfig cfg;
+        cfg.appendGpu = false;
+        OnnxRuntimeSettings::configureSessionOptions(so, cfg);
 #ifdef _WIN32
         Ort::Session session(env, modelPath.toStdWString().c_str(), so);
 #else

@@ -22,6 +22,7 @@
 #   skintokens → QtMeshEditor-skintokens-onnx  (MIT,    VAST-AI SkinTokens/TokenRig)
 #   triposr    → QtMeshEditor-triposr-onnx     (MIT,    Stability/Tripo TripoSR)
 #   triposg    → QtMeshEditor-triposg-onnx     (MIT,    VAST-AI TripoSG; int8 tier NOT mirrored — deprecated)
+#   triposplat → QtMeshEditor-triposplat-onnx  (MIT + DINOv3 License for the image encoder; VAST-AI TripoSplat)
 #   u2net      → QtMeshEditor-u2net-onnx       (Apache, U²-Net / rembg)
 #   birefnet   → QtMeshEditor-birefnet-onnx    (MIT,    BiRefNet high-quality matting)
 #   lama       → QtMeshEditor-lama-onnx        (Apache, LaMa texture inpainting)
@@ -53,6 +54,7 @@ declare -A REPOS=(
   [skintokens]=QtMeshEditor-skintokens-onnx
   [triposr]=QtMeshEditor-triposr-onnx
   [triposg]=QtMeshEditor-triposg-onnx
+  [triposplat]=QtMeshEditor-triposplat-onnx
   [u2net]=QtMeshEditor-u2net-onnx
   [smolvlm]=QtMeshEditor-smolvlm-gguf
   [motion]=QtMeshEditor-t2m
@@ -77,6 +79,7 @@ declare -A FILES=(
   [skintokens]="skintokens/skintokens.json skintokens/mesh_cond.onnx skintokens/vae_cond.onnx skintokens/embed.onnx skintokens/skin_decode.onnx skintokens/decoder.onnx skintokens/decoder.onnx.data"
   [triposr]="triposr/triposr_encoder.onnx triposr/triposr_encoder_int8.onnx triposr/triposr_decoder.onnx"
   [triposg]="triposg/triposg_image_encoder.onnx triposg/triposg_dit_step.onnx triposg/triposg_dit_step.onnx.data triposg/triposg_vae_latents.onnx triposg/triposg_vae_decoder.onnx"
+  [triposplat]="triposplat/triposplat_dinov3.onnx triposplat/triposplat_dinov3.onnx.data triposplat/triposplat_vae.onnx triposplat/triposplat_vae.onnx.data triposplat/triposplat_flow.onnx triposplat/triposplat_flow.onnx.data triposplat/triposplat_octree.onnx triposplat/triposplat_octree.onnx.data triposplat/triposplat_gs.onnx triposplat/triposplat_gs.onnx.data triposplat/LICENSE-TripoSplat.txt triposplat/LICENSE-DINOv3.txt"
   [u2net]="rembg/u2net.onnx"
   [smolvlm]="caption/SmolVLM-500M-Instruct-Q8_0.gguf caption/mmproj-SmolVLM-500M-Instruct-Q8_0.gguf"
   [motion]="motion/motion-library.json"

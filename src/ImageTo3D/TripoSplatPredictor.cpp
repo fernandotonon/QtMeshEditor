@@ -584,9 +584,14 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
     }
 
     // ---- 1. matte + prepare ----------------------------------------------------
+    // Force the matte when the caller asked for it (GUI checkbox / --remove-bg):
+    // a few transparent edge pixels must NOT skip rembg and leave the room in
+    // the reconstruction. Without a request, still matte a fully-opaque photo
+    // — the model is trained on a cut-out over black.
     QString warning;
     QImage subject = image;
-    if (!draws.fixture() && !hasRealAlpha(image)) {
+    const bool needMatte = opts.removeBackground || !hasRealAlpha(image);
+    if (!draws.fixture() && needMatte) {
         if (!report(Stage::Encode, 0, 2))
             return fail(QStringLiteral("cancelled"));
         const bool onMainThread = QCoreApplication::instance()
@@ -605,15 +610,31 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
         bg.keepAlpha = true;
         bg.foregroundRatio = 0.0f;   // prepareImage does upstream's own crop
         bg.quality = usedQ;
-        const BackgroundRemover::Result cut =
+        BackgroundRemover::Result cut =
             BackgroundRemover::removeBackground(image, model, bg);
+        // Best (BiRefNet) used to hard-fail under CoreML and silently leave
+        // the room in the mesh — CPU-only is fixed in BackgroundRemover, but
+        // still fall back to U²-Net if Best fails for any other reason.
+        if (!(cut.ok && cut.usedModel)
+            && usedQ == BackgroundRemover::Quality::Best
+            && BackgroundRemover::modelPresent(BackgroundRemover::Quality::Fast)) {
+            usedQ = BackgroundRemover::Quality::Fast;
+            bg.quality = usedQ;
+            model = BackgroundRemover::modelPath(usedQ);
+            cut = BackgroundRemover::removeBackground(image, model, bg);
+        }
         if (cut.ok && cut.usedModel) {
             subject = cut.image;
+            fprintf(stderr, "[triposplat] matte: %s\n",
+                    usedQ == BackgroundRemover::Quality::Best
+                        ? "BiRefNet" : "U²-Net");
         } else {
             warning = QStringLiteral("background removal unavailable (%1); the "
                                      "whole image is treated as the subject.")
                           .arg(cut.error.isEmpty() ? QStringLiteral("no model")
                                                    : cut.error);
+            fprintf(stderr, "[triposplat] matte FAILED: %s\n",
+                    qPrintable(warning));
         }
     }
     const QImage prepared = draws.fixture()
