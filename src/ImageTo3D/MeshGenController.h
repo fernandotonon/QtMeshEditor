@@ -198,6 +198,7 @@ private:
     Q_INVOKABLE void buildOnMainThread();
 
     void setBusy(bool b);
+    bool ensureMatteModels(bool wantBest);
 
     bool m_busy = false;
     bool m_imageGenActive = false;   // prompt-to-3D image generation in flight

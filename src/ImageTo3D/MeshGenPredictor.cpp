@@ -521,7 +521,7 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
             bg.quality = usedQ;   // #1016: the tier that actually resolved
             bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
             const BackgroundRemover::Result br =
-                BackgroundRemover::removeBackground(image, bgModel, bg);
+                BackgroundRemover::removeBackgroundWithFallback(image, bgModel, bg);
             subject = br.image;
         }
         TripoSGPredictor::Options sg;
@@ -567,7 +567,7 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
         const QString bgModel =
             BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &mq2);
         const BackgroundRemover::Result br =
-            BackgroundRemover::removeBackground(image, bgModel, [&]{
+            BackgroundRemover::removeBackgroundWithFallback(image, bgModel, [&]{
                 BackgroundRemover::Options o; o.quality = mq2; return o; }());
         subject = br.image;   // cleaned on success, original on fallback
     }

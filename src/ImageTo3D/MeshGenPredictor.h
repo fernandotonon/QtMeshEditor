@@ -95,12 +95,13 @@ public:
         // the image is used as-is. Recommended for photos; harmless for
         // already-segmented inputs.
         bool  removeBackground = false;
-        // #1016: matting tier used when removeBackground is on. Fast = U²-Net
-        // 320² (default, unchanged behaviour); Best = BiRefNet 1024² (MIT,
-        // ~930 MB, measured ~3x crisper at the edge). Best degrades to Fast
-        // when its model is not available.
+        // #1016: matting tier used when removeBackground is on. Best =
+        // BiRefNet 1024² (MIT, ~930 MB, ~3x crisper edges) is the default for
+        // GUI / CLI / MCP generation; Fast = U²-Net 320² is the opt-out
+        // (`--matting fast` / uncheck). Best degrades to Fast when its model
+        // is not available.
         BackgroundRemover::Quality mattingQuality =
-            BackgroundRemover::Quality::Fast;
+            BackgroundRemover::Quality::Best;
         // Decoder query-point chunk size (points per decoder Run). Bounds memory
         // on the resolution^3 grid; 0 → one shot (only for tiny grids).
         int   chunkPoints   = 262144;

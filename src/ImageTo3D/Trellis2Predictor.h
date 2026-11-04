@@ -82,11 +82,11 @@ public:
         bool noNaf         = false;
         bool removeBackground = true;   // alpha matte (skipped if the input
                                         // already carries real alpha)
-        // #1016: which matting model. Fast = U²-Net 320² (default); Best =
-        // BiRefNet 1024² (MIT, ~930 MB, ~3x crisper edges). Best degrades to
-        // Fast when its model is unavailable.
+        // #1016: which matting model. Best = BiRefNet 1024² (MIT, ~930 MB,
+        // ~3x crisper edges) is the generation default; Fast = U²-Net 320²
+        // is the opt-out. Best degrades to Fast when its model is unavailable.
         BackgroundRemover::Quality mattingQuality =
-            BackgroundRemover::Quality::Fast;
+            BackgroundRemover::Quality::Best;
         // Phase 9: persist the raw generation (QTM3D) here so textures/LODs can
         // be re-baked later without re-running inference. Empty = don't keep.
         QString sourceKeepDir;

@@ -2789,13 +2789,13 @@ Rectangle {
                 checked: true
             }
             // #1016: matting tier. BiRefNet (1024²) cuts hair/fur far cleaner
-            // than U²-Net (320²) — measured ~3x fewer ambiguous edge pixels —
-            // but it is a ~930 MB download and several CPU-seconds, so it is
-            // opt-in. Only meaningful while background removal is on.
+            // than U²-Net (320²) — measured ~3x fewer ambiguous edge pixels.
+            // Default ON (downloads ~930 MB on first use); uncheck for the
+            // lighter U²-Net path. Only meaningful while background removal is on.
             InspectorCheck {
                 id: mgBestMatte
                 text: "High-quality matte (BiRefNet, ~930 MB)"
-                checked: false
+                checked: true
                 enabled: mgRemoveBg.checked || mgBackendCombo.t2Selected
             }
             InspectorCheck {

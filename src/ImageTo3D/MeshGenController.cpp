@@ -587,6 +587,30 @@ void MeshGenController::pickImageAndGenerate(int resolution, bool removeBackgrou
     generate(path, resolution, removeBackground, quality, options);
 }
 
+// Ensure the matting model(s) on the main thread (the worker cannot download).
+// Best-effort: a failed BiRefNet fetch degrades to U²-Net. When Best is wanted,
+// U²-Net is cached too so a BiRefNet INFERENCE failure on the worker can still
+// fall back (removeBackgroundWithFallback). Stop is polled during the ~930 MB
+// transfer. Returns false (after resetting busy) only when the user cancelled.
+bool MeshGenController::ensureMatteModels(bool wantBest)
+{
+    const auto cancelPoll = [this]() { return m_cancel.load(); };
+    BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
+    BackgroundRemover::resolveModelBlocking(
+        wantBest ? BackgroundRemover::Quality::Best
+                 : BackgroundRemover::Quality::Fast,
+        &ensuredQ, cancelPoll);
+    if (wantBest && !m_cancel.load())
+        BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
+                                                nullptr, cancelPoll);
+    if (m_cancel.load()) {
+        setBusy(false);
+        emit statusMessage(tr("Cancelled."));
+        return false;
+    }
+    return true;
+}
+
 void MeshGenController::generate(const QString& imagePath, int resolution,
                                  bool removeBackground, int quality,
                                  const QVariantMap& options)
@@ -610,12 +634,11 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         return options.contains(QLatin1String(key))
             ? options.value(QLatin1String(key)).toBool() : def;
     };
-    // #1016: matting tier. "best" = BiRefNet 1024² (MIT, ~930 MB, ~3x crisper
-    // edges on hair/fur); anything else keeps U²-Net 320². Only meaningful when
-    // background removal is on.
+    // #1016: matting tier. BiRefNet Best is the default; only an explicit
+    // "fast" opts out to U²-Net. Only meaningful when background removal is on.
     const bool wantBestMatte =
         options.value(QLatin1String("matting")).toString().toLower()
-            == QLatin1String("best");
+            != QLatin1String("fast");
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
@@ -718,11 +741,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         // (no nested event loop off the main thread), so without the Fast
         // fallback HERE it would find nothing and skip matting entirely.
         matteEnsured = true;
-        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
-        BackgroundRemover::resolveModelBlocking(
-            wantBestMatte ? BackgroundRemover::Quality::Best
-                          : BackgroundRemover::Quality::Fast,
-            &ensuredQ);
+        if (!ensureMatteModels(wantBestMatte))
+            return;
     } else if (useSplat) {
         QString dlErr;
         emit statusMessage(tr("Checking TripoSplat models (~6 GB on first use)…"));
@@ -743,24 +763,10 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             return;
         }
         // TripoSplat mattes on the WORKER — which can only read models already
-        // on disk, so ensure the matte here. Always cache Fast as well so a
-        // Best inference failure can fall back to U²-Net without a download.
+        // on disk, so ensure the matte here.
         matteEnsured = true;
-        BackgroundRemover::Quality ensuredQ = BackgroundRemover::Quality::Fast;
-        const auto cancelPoll = [this]() { return m_cancel.load(); };
-        BackgroundRemover::resolveModelBlocking(
-            wantBestMatte ? BackgroundRemover::Quality::Best
-                          : BackgroundRemover::Quality::Fast,
-            &ensuredQ, cancelPoll);
-        if (wantBestMatte)
-            BackgroundRemover::resolveModelBlocking(BackgroundRemover::Quality::Fast,
-                                                    nullptr, cancelPoll);
-        // Best matte is ~930 MB; honour a Stop that arrived during the fetch.
-        if (m_cancel.load()) {
-            setBusy(false);
-            emit statusMessage(tr("Cancelled."));
+        if (!ensureMatteModels(wantBestMatte))
             return;
-        }
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
@@ -793,13 +799,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     // Skip when the TRELLIS.2 branch above already ensured it: repeating a
     // failed Best fetch would burn a SECOND ~930 MB / 40-minute timeout before
     // generation even starts.
-    if (removeBackground && !matteEnsured) {
-        BackgroundRemover::Quality ensuredQ2 = BackgroundRemover::Quality::Fast;
-        BackgroundRemover::resolveModelBlocking(   // best-effort, Best -> Fast
-            wantBestMatte ? BackgroundRemover::Quality::Best
-                          : BackgroundRemover::Quality::Fast,
-            &ensuredQ2);
-    }
+    if (removeBackground && !matteEnsured && !ensureMatteModels(wantBestMatte))
+        return;
 
     // The optional post-bake upscale runs on the WORKER, so its model must be
     // ensured here on the main thread (event loop) first. Best-effort: an empty
@@ -866,7 +867,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             BackgroundRemover::Options bgo;
             bgo.quality = mq;
             const QString bgModel = BackgroundRemover::modelPath(mq);
-            const auto br = BackgroundRemover::removeBackground(image, bgModel, bgo);
+            const auto br = BackgroundRemover::removeBackgroundWithFallback(image, bgModel, bgo);
             subject = br.image;
             post(QStringLiteral("background"), 1, 1);
         }

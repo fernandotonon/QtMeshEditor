@@ -536,3 +536,19 @@ void BackgroundRemover::applyUniformBackgroundRescue(const QImage& image,
         if (keep[i])
             alpha[i] = 1.0f;
 }
+
+BackgroundRemover::Result BackgroundRemover::removeBackgroundWithFallback(
+    const QImage& image, const QString& model, const Options& opts)
+{
+    Result r = removeBackground(image, model, opts);
+    if ((r.ok && r.usedModel) || opts.quality != Quality::Best
+        || !modelPresent(Quality::Fast))
+        return r;
+    // BiRefNet is the generation default, so a Best failure (inference error,
+    // corrupt file) must not silently hand back the unmatted image — that
+    // makes the backdrop part of the reconstructed object.
+    Options fast = opts;
+    fast.quality = Quality::Fast;
+    Result f = removeBackground(image, modelPath(Quality::Fast), fast);
+    return (f.ok && f.usedModel) ? f : r;
+}
