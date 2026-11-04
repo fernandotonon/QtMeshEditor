@@ -610,12 +610,11 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         return options.contains(QLatin1String(key))
             ? options.value(QLatin1String(key)).toBool() : def;
     };
-    // #1016: matting tier. "best" = BiRefNet 1024² (MIT, ~930 MB, ~3x crisper
-    // edges on hair/fur); anything else keeps U²-Net 320². Only meaningful when
-    // background removal is on.
+    // #1016: matting tier. BiRefNet Best is the default; only an explicit
+    // "fast" opts out to U²-Net. Only meaningful when background removal is on.
     const bool wantBestMatte =
         options.value(QLatin1String("matting")).toString().toLower()
-            == QLatin1String("best");
+            != QLatin1String("fast");
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);

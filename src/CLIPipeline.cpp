@@ -13244,7 +13244,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool vertexColor = true;
     bool noModel = false;
     bool removeBg = false;
-    bool mattingBest = false;   // #1016 BiRefNet tier
+    bool mattingBest = true;    // #1016 BiRefNet tier (default; --matting fast opts out)
     bool smooth = true;         // quality pass defaults ON
     bool refine = true;
     bool bake = true;
@@ -13291,9 +13291,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-color") { vertexColor = false; continue; }
         if (arg == "--no-model") { noModel = true; continue; }
         if (arg == "--remove-bg" || arg == "--rembg") { removeBg = true; continue; }
-        // #1016: matting tier. --matting best uses BiRefNet 1024² (MIT, ~930 MB,
-        // ~3x crisper edges); default fast keeps U²-Net 320². Implies --remove-bg
-        // so `--matting best` alone does what it says.
+        // #1016: matting tier. Default is BiRefNet Best; --matting fast opts
+        // out to U²-Net 320². Explicit --matting best also implies --remove-bg
+        // so the flag alone does what it says.
         if (arg == "--matting" && i + 1 < argc) {
             const QString v = QString(argv[++i]).toLower();
             if (v == "best") { mattingBest = true; removeBg = true; }
@@ -13601,7 +13601,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     if (inputPath.isEmpty() && genPrompt.trimmed().isEmpty()) {
         err() << "Error: No input image (or --prompt) specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
-                 "[--no-color] [--remove-bg] [--quality fp32|int8] "
+                 "[--no-color] [--remove-bg] [--matting best|fast] [--quality fp32|int8] "
                  "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
                  "[--upscale-texture] [--no-pbr] [--keep-degenerates] "
                  "[--backend trellis2|pixal3d|triposr|triposg|triposplat] [--flow-steps 25] [--guidance 7.0] "

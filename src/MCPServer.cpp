@@ -3356,9 +3356,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
     if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
     if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
-    // #1016 matting tier: "best" = BiRefNet 1024², otherwise U²-Net 320².
-    if (args.value("matting").toString().toLower() == QLatin1String("best"))
-        opts.mattingQuality = BackgroundRemover::Quality::Best;
+    // #1016 matting tier: Best (BiRefNet) is the Options default; only an
+    // explicit "fast" opts out to U²-Net.
+    if (args.value("matting").toString().toLower() == QLatin1String("fast"))
+        opts.mattingQuality = BackgroundRemover::Quality::Fast;
     if (opts.sdfResolution < 16 || opts.sdfResolution > 1024)
         return makeErrorResult("'resolution' must be between 16 and 1024.");
     if (args.contains("quality")) {
@@ -13446,7 +13447,7 @@ QJsonArray MCPServer::buildToolsList()
         props["resolution"] = QJsonObject{{"type", "integer"}, {"description", "Marching-cubes grid resolution 16..1024 (default 256; 128 is a fast/preview tier). Higher = more detail + slower. Cost is res^3 floats in RAM: 512~=0.5 GB, 768~=1.7 GB, 1024~=4.3 GB. (TripoSR's encoder input is fixed at 512^2, so its detail gains taper off above 512; TripoSG uses a 224^2 DINOv2 encoder and this is purely the extraction grid.)"}};
         props["vertex_color"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake its predicted per-vertex color (default true). Ignored by triposg (geometry-only — colour comes from the AI texture pass)."}};
         props["remove_bg"] = QJsonObject{{"type", "boolean"}, {"description", "Run background removal on the image first. Default false for TripoSR/TripoSG; default true for triposplat/trellis2/pixal3d (those backends always need a subject matte — omit the field to get the backend default). Recommended for photos with a background. Falls back to the raw image if the model is unavailable."}};
-        props["matting"] = QJsonObject{{"type", "string"}, {"description", "Matting tier for remove_bg (#1016): 'fast' = U2Net 320px (default), 'best' = BiRefNet 1024px (MIT, ~930 MB, measured ~3x crisper edges on hair/fur). 'best' degrades to 'fast' when its model is unavailable."}};
+        props["matting"] = QJsonObject{{"type", "string"}, {"description", "Matting tier for remove_bg (#1016): 'best' = BiRefNet 1024px (default; MIT, ~930 MB, measured ~3x crisper edges on hair/fur), 'fast' = U2Net 320px (opt-out). 'best' degrades to 'fast' when its model is unavailable."}};
         props["quality"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"fp32", "int8"}}, {"description", "Precision/size tier, downloaded on demand. TripoSR: fp32 = best (~1.7GB), int8 = smallest with slight quality loss (~430MB). TripoSG: fp32 only (int8 degrades geometry) — int8 is silently upgraded to fp32."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "Taubin-smooth the extracted mesh to remove marching-cubes stair-stepping (default true; volume-preserving)."}};
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};

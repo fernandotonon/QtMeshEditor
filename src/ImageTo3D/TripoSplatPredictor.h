@@ -72,7 +72,8 @@ public:
         // When false, still matte inputs with no real alpha so a plain photo
         // does not silently become a room slab.
         bool removeBackground = true;
-        BackgroundRemover::Quality mattingQuality = BackgroundRemover::Quality::Fast;
+        // Best (BiRefNet) is the generation default; Fast is the explicit opt-out.
+        BackgroundRemover::Quality mattingQuality = BackgroundRemover::Quality::Best;
         // Splat -> mesh voxel resolution and post-extraction smoothing.
         int  meshResolution   = 256;
         bool smoothMesh       = true;
