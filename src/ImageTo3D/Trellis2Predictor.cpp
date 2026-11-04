@@ -487,17 +487,16 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             bg.keepAlpha = true;
             bg.quality = usedQ;   // #1016: MUST match the model actually loaded
             const BackgroundRemover::Result cut =
-                BackgroundRemover::removeBackground(subject, model, bg);
+                BackgroundRemover::removeBackgroundWithFallback(subject, model, bg);
             if (cut.ok) {
                 subject = cut.image;
                 matteReady = true;
                 // #1016: say which matting model ran. Without this the tier
                 // bug was invisible — a failed matte just looked like a mesh
                 // with a backdrop slab, with nothing in the log to explain it.
-                fprintf(stderr, "[trellis2] matte: %s (%s)\n",
-                        usedQ == BackgroundRemover::Quality::Best
-                            ? "BiRefNet 1024" : "U2Net 320",
-                        qPrintable(QFileInfo(model).fileName()));
+                fprintf(stderr, "[trellis2] matte: %s\n",
+                        cut.qualityUsed == BackgroundRemover::Quality::Best
+                            ? "BiRefNet 1024" : "U2Net 320");
             } else {
                 fprintf(stderr, "[trellis2] matte FAILED (%s) — the whole frame "
                         "is treated as foreground; the background will be "

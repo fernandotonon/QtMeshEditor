@@ -115,6 +115,14 @@ public:
                                    const QString& modelPath,
                                    const Options& opts = {});
 
+    // removeBackground(), and when a Best (BiRefNet) run fails, a second run
+    // with U²-Net if its model is already on disk. Never downloads, so it is
+    // safe on a worker thread. `qualityUsed` reports the tier that produced
+    // the matte.
+    static Result removeBackgroundWithFallback(const QImage& image,
+                                               const QString& modelPath,
+                                               const Options& opts = {});
+
     // Uniform-background thin-appendage rescue (#978): OR into `alpha` pixels
     // that clearly differ from the corner-agreed background color. Tightened
     // after 3.37.3 field reports (backdrop slabs + washed-out bakes): a pixel

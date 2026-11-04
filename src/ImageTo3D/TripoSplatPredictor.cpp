@@ -627,23 +627,14 @@ TripoSplatPredictor::Output TripoSplatPredictor::predict(
         bg.keepAlpha = true;
         bg.foregroundRatio = 0.0f;   // prepareImage does upstream's own crop
         bg.quality = usedQ;
-        BackgroundRemover::Result cut =
-            BackgroundRemover::removeBackground(matteInput, model, bg);
         // Best (BiRefNet) used to hard-fail under CoreML and silently leave
-        // the room in the mesh — CPU-only is fixed in BackgroundRemover, but
-        // still fall back to U²-Net if Best fails for any other reason.
-        if (!(cut.ok && cut.usedModel)
-            && usedQ == BackgroundRemover::Quality::Best
-            && BackgroundRemover::modelPresent(BackgroundRemover::Quality::Fast)) {
-            usedQ = BackgroundRemover::Quality::Fast;
-            bg.quality = usedQ;
-            model = BackgroundRemover::modelPath(usedQ);
-            cut = BackgroundRemover::removeBackground(matteInput, model, bg);
-        }
+        // the room in the mesh; the helper falls back to U²-Net on any failure.
+        const BackgroundRemover::Result cut =
+            BackgroundRemover::removeBackgroundWithFallback(matteInput, model, bg);
         if (cut.ok && cut.usedModel) {
             subject = cut.image;
             fprintf(stderr, "[triposplat] matte: %s\n",
-                    usedQ == BackgroundRemover::Quality::Best
+                    cut.qualityUsed == BackgroundRemover::Quality::Best
                         ? "BiRefNet" : "U²-Net");
         } else {
             warning = QStringLiteral("background removal unavailable (%1); the "

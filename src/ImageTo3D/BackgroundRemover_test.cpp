@@ -314,3 +314,30 @@ TEST(BackgroundRemoverTest, ResolveDegradesBestToFastWhenUncached)
         EXPECT_TRUE(QFileInfo::exists(path));
     }
 }
+
+// Review #1150: with no usable Best model and no cached U²-Net, the fallback
+// helper keeps the original contract (ok=false + the original image); a Fast
+// request is never retried.
+TEST(BackgroundRemoverTest, FallbackHelperKeepsContractWithoutModels)
+{
+    QImage img(32, 24, QImage::Format_RGB888);
+    img.fill(Qt::green);
+    BackgroundRemover::Options best;
+    best.quality = BackgroundRemover::Quality::Best;
+    const auto r = BackgroundRemover::removeBackgroundWithFallback(
+        img, "/no/such/birefnet.onnx", best);
+    if (BackgroundRemover::isAvailable()
+        && BackgroundRemover::modelPresent(BackgroundRemover::Quality::Fast)) {
+        // U²-Net is cached on this machine: the helper must have used it.
+        EXPECT_TRUE(r.ok);
+        EXPECT_TRUE(r.usedModel);
+        EXPECT_EQ(r.qualityUsed, BackgroundRemover::Quality::Fast);
+    } else {
+        EXPECT_FALSE(r.ok);
+        EXPECT_EQ(r.image.size(), img.size());
+    }
+    const auto f = BackgroundRemover::removeBackgroundWithFallback(
+        img, "/no/such/u2net.onnx", {});
+    EXPECT_FALSE(f.ok);
+    EXPECT_EQ(f.qualityUsed, BackgroundRemover::Quality::Fast);
+}
