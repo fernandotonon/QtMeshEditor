@@ -58,6 +58,8 @@ bool load(const QString& id, ImportedHair* hair, Meta* meta = nullptr);
 /// call returns true with an empty `*newId`.
 bool save(const ImportedHair& hair, Meta meta, QString* newId, QString* duplicateOf = nullptr, QString* error = nullptr);
 bool remove(const QString& id);
+/// Empty the trash of removed hairstyles (they are kept until then so that undo can still rebuild a character that used one).
+void purgeTrash();
 bool updateMeta(const Meta& meta);
 
 /// Order-independent hash of the geometry (quantised to 0.1 mm of the style's own units): the duplicate test.

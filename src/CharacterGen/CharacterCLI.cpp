@@ -186,9 +186,16 @@ int run(int argc, char* argv[])
     }
     if (listHairPresets) {
         QStringList lines;
-        for (const QString& id : Hair::presetIds()) lines << QStringLiteral("proc:%1  %2").arg(id, -24).arg(Hair::presetLabel(id));
-        for (const QString& n : Hair::Library::presetNames()) lines << QStringLiteral("saved: %1").arg(n);
-        CLIPipeline::writeOutput(lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+        QJsonArray arr;
+        for (const QString& id : Hair::presetIds()) {
+            lines << QStringLiteral("proc:%1  %2").arg(id, -24).arg(Hair::presetLabel(id));
+            arr.append(QJsonObject{{"key", QStringLiteral("proc:") + id}, {"kind", QStringLiteral("builtin")}, {"label", Hair::presetLabel(id)}});
+        }
+        for (const QString& n : Hair::Library::presetNames()) {
+            lines << QStringLiteral("saved: %1").arg(n);
+            arr.append(QJsonObject{{"key", QStringLiteral("proc:") + n}, {"kind", QStringLiteral("saved")}, {"label", n}});
+        }
+        CLIPipeline::writeOutput(json ? QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) + QLatin1Char('\n') : lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
         return 0;
     }
     if (listHairLibrary) {
@@ -302,9 +309,13 @@ int run(int argc, char* argv[])
             bool ok = false;
             const double v = kv.mid(eq + 1).toDouble(&ok);
             if (eq <= 0 || !ok || !Hair::setParam(p.hairProcedural, kv.left(eq), v)) {
-                CLIPipeline::writeCliError(QStringLiteral("Error: bad --hair-param '%1' (key=number; keys: length density volume curliness clumping frizz parting layers taper thickness fringe tipCurl gravity hairlineOffset ponytail tieHeight quality seed).\n").arg(kv));
+                CLIPipeline::writeCliError(QStringLiteral("Error: bad --hair-param '%1' (key=number; keys: length density volume curliness clumping frizz parting layers taper thickness fringe tipCurl gravity hairlineOffset ponytail tieHeight whorl quality seed).\n").arg(kv));
                 return 2;
             }
+        }
+        if (hairArg.startsWith(QLatin1String("proc:")) && !hairFitArgs.isEmpty()) {   // the fit moves IMPORTED hair onto the head; procedural hair is grown on it
+            CLIPipeline::writeCliError(QStringLiteral("Error: --hair-fit applies to imported (lib:) hairstyles only; tune procedural hair with --hair-param.\n"));
+            return 2;
         }
         QJsonObject fitObj = Hair::toJson(p.hairFit);
         for (const QString& kv : hairFitArgs) {
@@ -312,7 +323,7 @@ int run(int argc, char* argv[])
             static const QStringList keys{"tx", "ty", "tz", "rx", "ry", "rz", "scale", "snug", "clearance"};
             bool ok = false;
             const double v = kv.mid(eq + 1).toDouble(&ok);
-            if (eq > 0 && kv.left(eq) == QLatin1String("flip")) fitObj["flipFront"] = v != 0.0;
+            if (eq > 0 && ok && kv.left(eq) == QLatin1String("flip")) fitObj["flipFront"] = v != 0.0;
             else if (eq > 0 && ok && keys.contains(kv.left(eq))) fitObj[kv.left(eq)] = v;
             else {
                 CLIPipeline::writeCliError(QStringLiteral("Error: bad --hair-fit '%1' (keys: tx ty tz rx ry rz scale snug clearance flip).\n").arg(kv));
@@ -388,7 +399,9 @@ int run(int argc, char* argv[])
         // the Hair Studio settings travel with the file, so the character's hair can be restored and edited later
         Hair::Library::StudioConfig cfg;
         cfg.style = p.hairStyle; cfg.procedural = p.hairProcedural; cfg.fit = p.hairFit; cfg.colour = hairColourHex(p.hairColour);
-        Hair::Library::saveConfigFile(QFileInfo(outPath).absoluteFilePath() + QStringLiteral(".hair.json"), cfg);
+        const QString sidecar = QFileInfo(outPath).absoluteFilePath() + QStringLiteral(".hair.json");
+        if (!Hair::Library::saveConfigFile(sidecar, cfg))
+            CLIPipeline::writeCliError(QStringLiteral("Warning: could not write %1.\n").arg(sidecar));
     }
     if (json) {
         QJsonObject o;

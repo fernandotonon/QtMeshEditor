@@ -988,7 +988,11 @@ bool addHairStudioHair(const Params& p, const Dna::Mesh& body, Dna::Rig& rig, Bu
         const Hair::HeadFrame head = Hair::estimateHeadFrame(body.positions, mask);
         std::vector<Hair::V3> pos, nrm;
         Hair::FitReport fit;
-        Hair::fitToHead(hair, head, collider, p.hairFit, &pos, &nrm, &fit);
+        // the fit of a library entry (its saved correction, e.g. a flipped front) applies unless the caller gave one: the GUI hands it in, but
+        // the CLI and MCP only name the entry
+        Hair::FitAdjust fitAdjust = p.hairFit;
+        if (Hair::toJson(p.hairFit) == Hair::toJson(Hair::FitAdjust()) && !meta.fit.isEmpty()) fitAdjust = Hair::fitAdjustFromJson(meta.fit);
+        Hair::fitToHead(hair, head, collider, fitAdjust, &pos, &nrm, &fit);
         rep.warnings << fit.warnings;
         m = Hair::importedToDnaMesh(hair, pos, nrm, collider, body.skin);
         if (!hair.texturePng.isEmpty()) {
@@ -1994,6 +1998,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rep.warnings << QStringLiteral("Unknown hairstyle '%1'").arg(p.hairStyle);
         }
     }
+    if (rep.hairStyle.isEmpty()) rep.scalp.clear();   // no hair mesh was added (a missing or damaged style): do not paint roots on a bald head
     if (p.nativeHead && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
         for (int e = 0; e < a.ictExpressions; ++e) {
             Dna::BlendShapeTarget bt;

@@ -97,7 +97,7 @@ public:
     Q_INVOKABLE QString pickColour(const QString& initial) const;
     QStringList hairNames() const;
     QString hairStyle() const { return m_hairStyle; }
-    void setHairStyle(const QString& v) { if (v != m_hairStyle) { m_hairStyle = v; emit hairStyleChanged(); } }
+    void setHairStyle(const QString& v) { if (v != m_hairStyle) { m_hairStyle = v; emit hairStyleChanged(); saveHairStudioSettings(); } }
     /// The hair colour as "#rrggbb" (a preset id is accepted too; anything else is ignored).
     QString hairColour() const { return m_hairColour; }
     void setHairColour(const QString& v);

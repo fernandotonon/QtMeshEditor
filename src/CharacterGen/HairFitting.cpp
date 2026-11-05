@@ -66,14 +66,16 @@ std::vector<V3> normalise(const ImportedHair& hair, const HeadFrame& head, const
         // a style wraps the head with a little room: it is ~12 % wider than the skull
         scale = crownW > 1e-6f ? (2.0f * head.radii.x * 1.12f) / crownW : 1.0f;
     } else {
-        centre = {0.5f * (lo.x + hi.x), 0, 0.5f * (lo.z + hi.z)};
+        centre = {};                       // as it is: no re-centring, no top alignment (see `placed` below)
+        topY = 0.0f;
     }
     scale *= adj.scale;
     if (rep) rep->scale = scale;
     const float turn = adj.flipFront ? 3.14159265f : 0.0f;
     if (rep) rep->facingFlipped = adj.flipFront;
-    const V3 target(head.centre.x, 0, head.centre.z);
-    const float targetTop = head.top + 0.012f;
+    // autoFit places the style on the head (centred in x/z, its top just above the crown); without it the source is used exactly as it is
+    const V3 target = adj.autoFit ? V3(head.centre.x, 0, head.centre.z) : V3();
+    const float targetTop = adj.autoFit ? head.top + 0.012f : 0.0f;
     for (V3& v : p) {
         V3 q((v.x - centre.x) * scale, (v.y - topY) * scale, (v.z - centre.z) * scale);
         if (adj.flipFront) q = {q.x * std::cos(turn) + q.z * std::sin(turn), q.y, -q.x * std::sin(turn) + q.z * std::cos(turn)};
@@ -153,9 +155,14 @@ void fitToHead(const ImportedHair& hair, const HeadFrame& head, const BodyCollid
 {
     FitReport local;
     FitReport& rep = report ? *report : local;
+    if (!head.valid) {   // the head could not be measured: the style stays exactly as it came (normalise() would move it to a default head at the origin)
+        rep.warnings << QStringLiteral("Hair fitting: the head could not be measured; the style was left unfitted.");
+        if (outPos) *outPos = hair.pos;
+        if (outNrm) *outNrm = recomputeNormals(hair.pos, hair.idx);
+        return;
+    }
     std::vector<V3> p = normalise(hair, head, adj, &rep);
-    if (p.empty() || !head.valid || collider.empty()) {
-        if (!head.valid) rep.warnings << QStringLiteral("Hair fitting: the head could not be measured; the style was left unfitted.");
+    if (p.empty() || collider.empty()) {
         if (outPos) *outPos = p;
         if (outNrm) *outNrm = recomputeNormals(p, hair.idx);
         return;
@@ -200,6 +207,13 @@ void fitToHead(const ImportedHair& hair, const HeadFrame& head, const BodyCollid
             avg = avg * (1.0f / float(adjacency_[i].size()));
             next[i] = disp[i] * 0.5f + avg * 0.5f * 0.85f;                   // slightly damped: the influence dies out with distance
         }
+        // the copies of one welded position must keep moving together (each one averages its OWN triangle neighbours, so they drift apart and
+        // a UV seam opens): put them back on the group average after every pass; held vertices (weight >= 1) stay as they are
+        std::fill(gd.begin(), gd.end(), V3());
+        std::fill(gc.begin(), gc.end(), 0);
+        for (size_t i = 0; i < p.size(); ++i) { gd[group[i]] += next[i]; ++gc[group[i]]; }
+        for (size_t i = 0; i < p.size(); ++i)
+            if (weight[i] < 1.0f) next[i] = gd[group[i]] * (1.0f / float(std::max(1, gc[group[i]])));
         disp = std::move(next);
     }
     for (size_t i = 0; i < p.size(); ++i) p[i] += disp[i];

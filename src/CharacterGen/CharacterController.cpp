@@ -175,7 +175,7 @@ CharacterController* CharacterController::qmlInstance(QQmlEngine*, QJSEngine*)
 {
     CharacterController* c = instance();
     static bool restored = false;      // the GUI restores the last Hair Studio state once (unit tests use instance() and start clean)
-    if (!restored) { restored = true; c->loadHairStudioSettings(); }
+    if (!restored) { restored = true; CharacterGen::Hair::Library::purgeTrash(); c->loadHairStudioSettings(); }
     QQmlEngine::setObjectOwnership(c, QQmlEngine::CppOwnership);
     return c;
 }
@@ -547,11 +547,11 @@ void CharacterController::useProceduralHair(const QString& presetId)
 
 void CharacterController::useLibraryHair(const QString& id)
 {
-    m_hairFit = CharacterGen::Hair::FitAdjust();
     CharacterGen::Hair::ImportedHair h;
     CharacterGen::Hair::Library::Meta meta;
+    // load first: a failed load must leave the current style AND its fit as they were
     if (!CharacterGen::Hair::Library::load(id, &h, &meta)) { m_hairStudioStatus = tr("The hairstyle '%1' is missing or damaged.").arg(id); emit hairLibraryChanged(); return; }
-    if (!meta.fit.isEmpty()) m_hairFit = CharacterGen::Hair::fitAdjustFromJson(meta.fit);
+    m_hairFit = meta.fit.isEmpty() ? CharacterGen::Hair::FitAdjust() : CharacterGen::Hair::fitAdjustFromJson(meta.fit);
     m_hairStyle = QStringLiteral("lib:") + id;
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character hair library"));
     hairChanged();
@@ -603,6 +603,11 @@ void CharacterController::resetHairFit()
 bool CharacterController::saveHairPreset(const QString& name)
 {
     QString err;
+    if (CharacterGen::Hair::isPreset(name.trimmed())) {   // the browser lists a saved preset under the same key as the built-in one: the built-in would always win
+        m_hairStudioStatus = tr("'%1' is a built-in hair preset. Choose another name.").arg(name.trimmed());
+        emit hairLibraryChanged();
+        return false;
+    }
     CharacterGen::Hair::Params p = m_hairParams;
     p.preset = name;
     if (!CharacterGen::Hair::Library::savePreset(name, p, &err)) { m_hairStudioStatus = err; emit hairLibraryChanged(); return false; }
@@ -660,7 +665,9 @@ QString CharacterController::duplicateHair(const QString& name)
         meta.name = name;
         meta.fit = CharacterGen::Hair::toJson(m_hairFit);
         QString id, dup, err;
-        if (!CharacterGen::Hair::Library::save(h, meta, &id, &dup, &err) || id.isEmpty()) return QString();
+        if (!CharacterGen::Hair::Library::save(h, meta, &id, &dup, &err)) return QString();
+        if (id.isEmpty()) id = dup;                 // this exact copy already exists: select it instead of doing nothing
+        if (id.isEmpty()) return QString();
         m_hairStyle = QStringLiteral("lib:") + id;
         emit hairLibraryChanged();
         hairChanged();
@@ -743,8 +750,9 @@ QVariantList CharacterController::hairBrowser(const QString& kind, const QString
     for (const QString& n : hairNames()) add(n, QStringLiteral("builtin"), n, tagsForBundleName(n), QString(), QStringLiteral("CC0"), QStringLiteral("MakeHuman"));
     for (const QString& id : CharacterGen::Hair::presetIds()) add(QStringLiteral("proc:") + id, QStringLiteral("procedural"), CharacterGen::Hair::presetLabel(id), tagsForProcedural(id), QString(), QString(), QString());
     for (const QString& n : CharacterGen::Hair::Library::presetNames()) add(QStringLiteral("proc:") + n, QStringLiteral("procedural"), n, Tags{"medium", "straight", "unisex", QStringLiteral("saved")}, QString(), QString(), QString());
-    for (const CharacterGen::Hair::Library::Meta& m : CharacterGen::Hair::Library::list())
-        add(QStringLiteral("lib:") + m.id, QStringLiteral("imported"), m.name, Tags{m.length, m.texture, m.gender, m.style}, thumbnailUri(m.id), m.license, m.author);
+    if (matchesFilter(kind, QStringLiteral("imported")))   // the thumbnail of an entry may have to be rendered: not for entries the filter drops anyway
+        for (const CharacterGen::Hair::Library::Meta& m : CharacterGen::Hair::Library::list())
+            add(QStringLiteral("lib:") + m.id, QStringLiteral("imported"), m.name, Tags{m.length, m.texture, m.gender, m.style}, thumbnailUri(m.id), m.license, m.author);
     return out;
 }
 

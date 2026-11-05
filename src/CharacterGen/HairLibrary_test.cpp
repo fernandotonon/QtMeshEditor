@@ -8,6 +8,8 @@
 #include <QImage>
 #include <QTemporaryDir>
 
+#include <limits>
+
 using namespace CharacterGen::Hair;
 using namespace CharacterGen::Hair::Library;
 
@@ -87,8 +89,72 @@ TEST_F(LibFixture, RemoveAndBadIdsAreSafe)
     EXPECT_FALSE(load(QStringLiteral("../escape"), nullptr));
     ImportedHair h;
     EXPECT_FALSE(load(QStringLiteral("../../etc"), &h));
+    EXPECT_FALSE(Library::remove(QStringLiteral(".")));          // "." would have meant the whole imported folder
+    EXPECT_EQ(list().size(), 1);
     EXPECT_TRUE(Library::remove(id));
     EXPECT_TRUE(list().isEmpty());
+    // removed, not destroyed: undo may still have to rebuild a character that used it, until the trash is emptied
+    EXPECT_TRUE(load(id, &h));
+    Library::purgeTrash();
+    EXPECT_FALSE(load(id, &h));
+}
+
+TEST_F(LibFixture, ADamagedMetaFileMakesTheEntryDamaged)
+{
+    QString id, dup;
+    ASSERT_TRUE(save(quad(), Meta(), &id, &dup));
+    QFile meta(Library::dir() + "/imported/" + id + "/meta.json");
+    ASSERT_TRUE(meta.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    meta.write("[ not an object");
+    meta.close();
+    ImportedHair h;
+    EXPECT_FALSE(load(id, &h));
+}
+
+TEST_F(LibFixture, SaveRefusesWhatLoadCouldNotRead)
+{
+    ImportedHair h = quad();
+    h.pos[1].x = std::numeric_limits<float>::quiet_NaN();
+    QString id, dup, err;
+    EXPECT_FALSE(save(h, Meta(), &id, &dup, &err));
+    EXPECT_FALSE(err.isEmpty());
+    EXPECT_TRUE(list().isEmpty());
+    ImportedHair odd = quad();
+    odd.idx.pop_back();                                          // not a multiple of 3
+    EXPECT_FALSE(save(odd, Meta(), &id, &dup, &err));
+}
+
+TEST_F(LibFixture, PresetNamesThatSanitiseAlikeStaySeparateFiles)
+{
+    Params a = presetParams("curly"), b = presetParams("bob");
+    ASSERT_TRUE(savePreset("Long/curls", a));
+    ASSERT_TRUE(savePreset("Long?curls", b));
+    const QStringList names = presetNames();
+    EXPECT_TRUE(names.contains("Long/curls"));
+    EXPECT_TRUE(names.contains("Long?curls"));
+    Params qa, qb;
+    ASSERT_TRUE(loadPreset("Long/curls", &qa));
+    ASSERT_TRUE(loadPreset("Long?curls", &qb));
+    EXPECT_NE(qa.curliness, qb.curliness);                       // neither overwrote the other
+    EXPECT_TRUE(removePreset("Long/curls"));
+    EXPECT_TRUE(loadPreset("Long?curls", &qb));
+}
+
+TEST_F(LibFixture, AConfigWithoutParametersResolvesTheNamedPreset)
+{
+    StudioConfig c;
+    QJsonObject o = toJson(c);
+    o["style"] = "proc:curly";
+    o.remove("procedural");
+    StudioConfig back;
+    ASSERT_TRUE(fromJson(o, &back));
+    EXPECT_FLOAT_EQ(back.procedural.curliness, presetParams("curly").curliness);
+    ASSERT_TRUE(savePreset("Mine", presetParams("afro")));
+    o["style"] = "proc:Mine";
+    ASSERT_TRUE(fromJson(o, &back));
+    EXPECT_FLOAT_EQ(back.procedural.volume, presetParams("afro").volume);
+    o["style"] = "proc:nonexistent";
+    EXPECT_FALSE(fromJson(o, &back));                            // not silently default hair
 }
 
 TEST_F(LibFixture, DamagedEntryFailsToLoadInsteadOfCrashing)

@@ -195,9 +195,10 @@ TEST(HairGeneration, CardsFaceOutwardWithConsistentWinding)
         ++total;
         if (dot(n, radial) > 0) ++outward;
     }
-    // the winding is the same for every strip, so a clear majority (not a coin flip) agrees on the side
+    // every strip is wound counter-clockwise seen from OUTSIDE the head (emitStrip: (a, ad, b), (b, ad, bd)): a clear majority faces outward.
+    // Accepting "mostly inward" as well would let a reversed strip order pass.
     const float f = float(outward) / float(total);
-    EXPECT_TRUE(f > 0.75f || f < 0.25f) << f;
+    EXPECT_GT(f, 0.75f) << f;
 }
 
 TEST(HairGeneration, HairStaysOutsideTheHead)
@@ -240,6 +241,17 @@ TEST(HairGeneration, SymmetricGuidesMirrorAcrossTheHead)
         for (const Guide& o : guides)
             if (length(V3(2 * h.scalp.head.centre.x - g.root.x, g.root.y, g.root.z) - o.root) < 1e-4f) { ++matched; break; }
     EXPECT_GT(float(matched) / float(guides.size()), 0.9f);
+    // mirror partners also get the same hem: the noise that varies the length is folded across the centre plane
+    int sameLength = 0, pairs = 0;
+    for (const Guide& g : guides)
+        for (const Guide& o : guides)
+            if (&g != &o && length(V3(2 * h.scalp.head.centre.x - g.root.x, g.root.y, g.root.z) - o.root) < 1e-4f && std::fabs(g.root.x - h.scalp.head.centre.x) > 1e-3f) {
+                ++pairs;
+                if (std::fabs(curveLength(g.cp) - curveLength(o.cp)) < 0.004f * std::max(1.0f, curveLength(g.cp) / 0.1f)) ++sameLength;
+                break;
+            }
+    ASSERT_GT(pairs, 20);
+    EXPECT_GT(float(sameLength) / float(pairs), 0.9f);
 }
 
 TEST(HairGeneration, HasAtLeastSixteenPresetsAndEachOneIsDistinct)
@@ -395,6 +407,43 @@ TEST(HairGuides, EditsMoveControlPointsAndKeepTheRoot)
     p.edits.push_back({2, 4, V3(0, 0.02f, 0)});           // edits stored in the params replay identically
     const auto a = generateGuides(p, h.scalp, h.collider), b = generateGuides(p, h.scalp, h.collider);
     EXPECT_EQ(length(a[2].cp[4] - b[2].cp[4]), 0.0f);
+}
+
+TEST(HairParams, NumbersAreClampedBeforeTheIntegerConversion)
+{
+    Params p = presetParams("bob");
+    EXPECT_TRUE(setParam(p, "seed", 1e100));            // a finite 1e100 must not be converted unchecked
+    EXPECT_EQ(p.seed, 4294967295u);
+    EXPECT_TRUE(setParam(p, "seed", -5));
+    EXPECT_EQ(p.seed, 0u);
+    EXPECT_TRUE(setParam(p, "maxTriangles", 1e100));
+    EXPECT_EQ(p.maxTriangles, 200000);
+    EXPECT_TRUE(setParam(p, "maxTriangles", -1e100));
+    EXPECT_EQ(p.maxTriangles, 200);
+    EXPECT_TRUE(setParam(p, "quality", 1e100));
+    EXPECT_EQ(p.quality, 2);
+    QJsonObject o = toJson(p);
+    o["seed"] = 1e100;
+    o["quality"] = -1e100;
+    o["maxTriangles"] = 1e100;
+    Params q;
+    ASSERT_TRUE(fromJson(o, &q));
+    EXPECT_EQ(q.seed, 4294967295u);
+    EXPECT_EQ(q.quality, 0);
+    EXPECT_EQ(q.maxTriangles, 200000);
+}
+
+TEST(HairValidation, AMeshWithoutNormalsIsReportedAndRepairedWithoutReadingPastTheArray)
+{
+    CardMesh m;
+    m.pos = {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}};
+    m.uv = {0, 0, 1, 0, 0, 1};
+    m.idx = {0, 1, 2};
+    m.nrm = {{0, 0, 1}};                                   // two normals missing
+    EXPECT_FALSE(validate(m).ok());
+    repair(m);
+    EXPECT_EQ(m.nrm.size(), m.pos.size());
+    EXPECT_TRUE(validate(m).ok());
 }
 
 TEST(HairValidation, DetectsAndRepairsBrokenGeometry)

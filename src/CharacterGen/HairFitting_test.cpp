@@ -195,6 +195,26 @@ TEST(HairFitting, EmptyOrUnmeasurableHeadLeavesTheStyleUnfitted)
     std::vector<V3> pos, n;
     FitReport rep;
     fitToHead(h, HeadFrame(), empty, FitAdjust(), &pos, &n, &rep);
-    EXPECT_EQ(pos.size(), h.pos.size());
+    ASSERT_EQ(pos.size(), h.pos.size());
     EXPECT_FALSE(rep.warnings.isEmpty());
+    // "left unfitted" means EXACTLY as it came (it used to be moved to a default head at the origin, with only the warning saying otherwise)
+    for (size_t i = 0; i < pos.size(); ++i) EXPECT_EQ(length(pos[i] - h.pos[i]), 0.0f) << i;
+}
+
+TEST(HairFitting, WithoutAutoFitTheSourceIsUsedAsItIsAndMovedOnlyByTheAdjustments)
+{
+    Head head(0.080f, 0.115f, 0.095f);
+    ImportedHair h = makeHair();                       // far from the head: nothing for the collision pass to push
+    FitAdjust a;
+    a.autoFit = false;
+    a.snug = 0.0f;
+    a.translate = {0.5f, -0.25f, 0.125f};
+    std::vector<V3> pos, n;
+    fitToHead(h, head.frame, head.collider, a, &pos, &n);
+    ASSERT_EQ(pos.size(), h.pos.size());
+    for (size_t i = 0; i < pos.size(); ++i) {
+        EXPECT_NEAR(pos[i].x, h.pos[i].x + 0.5f, 1e-3f) << i;
+        EXPECT_NEAR(pos[i].y, h.pos[i].y - 0.25f, 1e-3f) << i;
+        EXPECT_NEAR(pos[i].z, h.pos[i].z + 0.125f, 1e-3f) << i;
+    }
 }

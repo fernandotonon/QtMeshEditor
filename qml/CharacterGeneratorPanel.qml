@@ -227,6 +227,7 @@ Column {
             target: CharacterController
             function onHairLibraryChanged() { studio.refresh() }
             function onHairStyleChanged() { studio.refresh() }
+            function onHairNamesChanged() { studio.refresh() }
         }
         ToolBtn { label: (studio.open ? "▾ " : "▸ ") + "Hair Studio  (" + CharacterController.hairSource + ")"; onClicked: studio.open = !studio.open }
         Column {
@@ -258,6 +259,12 @@ Column {
                         border.color: modelData.current ? AnimationControlController.highlightColor : AnimationControlController.borderColor
                         Accessible.role: Accessible.Button
                         Accessible.name: modelData.name
+                        activeFocusOnTab: true
+                        function select() { CharacterController.selectHair(tile.modelData.key); sec.liveUpdate() }
+                        Accessible.onPressAction: select()
+                        Keys.onReturnPressed: select()
+                        Keys.onEnterPressed: select()
+                        Keys.onSpacePressed: select()
                         HoverHandler { id: tileHover }
                         ToolTip.visible: tileHover.hovered; ToolTip.delay: 300
                         ToolTip.text: modelData.name + " · " + modelData.length + " " + modelData.texture + " " + modelData.gender
@@ -271,7 +278,7 @@ Column {
                         }
                         Text { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; margins: 2 } height: 22; text: modelData.name; elide: Text.ElideRight; wrapMode: Text.WordWrap; maximumLineCount: 2
                                horizontalAlignment: Text.AlignHCenter; font.pixelSize: 9; color: AnimationControlController.textColor }
-                        MouseArea { anchors.fill: parent; onClicked: { CharacterController.selectHair(tile.modelData.key); sec.liveUpdate() } }
+                        MouseArea { anchors.fill: parent; onClicked: tile.select() }
                     }
                 }
             }

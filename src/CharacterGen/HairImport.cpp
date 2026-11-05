@@ -106,7 +106,8 @@ QImage loadTexture(const aiScene* scene, const aiMaterial* mat, aiTextureType ty
         return img;
     }
     const QString rel = QString::fromUtf8(path.C_Str()).replace(QLatin1Char('\\'), QLatin1Char('/'));
-    for (const QString& cand : {baseDir + QLatin1Char('/') + rel, baseDir + QLatin1Char('/') + QFileInfo(rel).fileName(), baseDir + QStringLiteral("/textures/") + QFileInfo(rel).fileName()}) {
+    for (const QString& cand : {QFileInfo(rel).isAbsolute() ? rel : QString(), baseDir + QLatin1Char('/') + rel, baseDir + QLatin1Char('/') + QFileInfo(rel).fileName(), baseDir + QStringLiteral("/textures/") + QFileInfo(rel).fileName()}) {
+        if (cand.isEmpty()) continue;
         QImage img(cand);
         if (!img.isNull()) return img;
     }
@@ -119,7 +120,15 @@ QByteArray texturePngFor(const aiScene* scene, const aiMesh* mesh, const QString
     const aiMaterial* mat = scene->mMaterials[mesh->mMaterialIndex];
     QImage img = loadTexture(scene, mat, aiTextureType_BASE_COLOR, baseDir);
     if (img.isNull()) img = loadTexture(scene, mat, aiTextureType_DIFFUSE, baseDir);
-    if (img.isNull()) return QByteArray();
+    if (img.isNull()) {
+        // no colour map but an opacity map (hair cards often have only that): a constant colour sized to the opacity map, so the cut-out is kept
+        const QImage op = loadTexture(scene, mat, aiTextureType_OPACITY, baseDir);
+        if (op.isNull()) return QByteArray();
+        aiColor4D colour(1.0f, 1.0f, 1.0f, 1.0f);
+        mat->Get(AI_MATKEY_COLOR_DIFFUSE, colour);
+        img = QImage(op.size(), QImage::Format_RGBA8888);
+        img.fill(qRgba(int(colour.r * 255.0f), int(colour.g * 255.0f), int(colour.b * 255.0f), 255));
+    }
     img = img.convertToFormat(QImage::Format_RGBA8888);
     // a separate opacity map (common for hair cards) goes into the alpha channel
     const QImage opacity = loadTexture(scene, mat, aiTextureType_OPACITY, baseDir);

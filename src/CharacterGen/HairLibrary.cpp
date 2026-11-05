@@ -24,8 +24,18 @@ constexpr quint32 kVersion = 1;
 
 QString importedDir() { return dir() + QStringLiteral("/imported"); }
 QString entryDir(const QString& id) { return importedDir() + QLatin1Char('/') + id; }
+// A removed hairstyle is moved here, not deleted: the undo history of the editor may still refer to it (undoing the edit that followed a
+// removal rebuilds the earlier character). The trash is emptied at the next start (purgeTrash).
+QString trashDir() { return dir() + QStringLiteral("/trash"); }
+QString trashEntryDir(const QString& id) { return trashDir() + QLatin1Char('/') + id; }
+QString resolveEntryDir(const QString& id)
+{
+    if (QFileInfo::exists(entryDir(id) + QStringLiteral("/hair.qmh"))) return entryDir(id);
+    if (QFileInfo::exists(trashEntryDir(id) + QStringLiteral("/hair.qmh"))) return trashEntryDir(id);
+    return entryDir(id);
+}
 
-bool validId(const QString& id) { return !id.isEmpty() && id.size() < 120 && !id.contains(QLatin1Char('/')) && !id.contains(QLatin1Char('\\')) && !id.contains(QStringLiteral("..")); }
+bool validId(const QString& id) { return !id.isEmpty() && id.size() < 120 && !id.startsWith(QLatin1Char('.')) && !id.contains(QLatin1Char('/')) && !id.contains(QLatin1Char('\\')) && !id.contains(QStringLiteral("..")); }
 
 bool writeFile(const QString& path, const QByteArray& bytes)
 {
@@ -100,7 +110,14 @@ bool fromJson(const QJsonObject& o, StudioConfig* out)
     c.style = o.value("style").toString();
     c.colour = o.value("colour").toString();
     c.fit = fitAdjustFromJson(o.value("fit").toObject());
-    if (o.value("procedural").isObject() && !Hair::fromJson(o.value("procedural").toObject(), &c.procedural)) return false;
+    if (o.value("procedural").isObject()) {
+        if (!Hair::fromJson(o.value("procedural").toObject(), &c.procedural)) return false;
+    } else if (c.style.startsWith(QLatin1String("proc:"))) {
+        // no parameters stored: the style id names them (a built-in preset, or a saved one) instead of silently generating default hair
+        const QString id = c.style.mid(5);
+        if (Hair::isPreset(id)) c.procedural = Hair::presetParams(id);
+        else if (!loadPreset(id, &c.procedural)) return false;
+    }
     *out = c;
     return true;
 }
@@ -192,15 +209,18 @@ QList<Meta> list()
 bool load(const QString& id, ImportedHair* hair, Meta* meta)
 {
     if (!hair || !validId(id)) return false;
-    QFile mf(entryDir(id) + QStringLiteral("/meta.json"));
-    QFile gf(entryDir(id) + QStringLiteral("/hair.qmh"));
+    const QString entry = resolveEntryDir(id);
+    QFile mf(entry + QStringLiteral("/meta.json"));
+    QFile gf(entry + QStringLiteral("/hair.qmh"));
     if (!mf.open(QIODevice::ReadOnly) || !gf.open(QIODevice::ReadOnly)) return false;
     ImportedHair h;
     if (!decode(gf.readAll(), &h)) return false;
-    const Meta m = Meta::fromJson(QJsonDocument::fromJson(mf.readAll()).object());
+    const QJsonDocument metaDoc = QJsonDocument::fromJson(mf.readAll());
+    if (!metaDoc.isObject()) return false;       // a truncated or damaged meta.json is a damaged entry, like in list()
+    const Meta m = Meta::fromJson(metaDoc.object());
     h.id = id;
     h.name = m.name;
-    QFile tf(entryDir(id) + QStringLiteral("/texture.png"));
+    QFile tf(entry + QStringLiteral("/texture.png"));
     if (tf.open(QIODevice::ReadOnly)) h.texturePng = tf.readAll();
     *hair = std::move(h);
     if (meta) { *meta = m; meta->id = id; }
@@ -211,6 +231,10 @@ bool save(const ImportedHair& hair, Meta meta, QString* newId, QString* duplicat
 {
     if (newId) newId->clear();
     if (hair.pos.empty() || hair.idx.size() < 3) { if (error) *error = QStringLiteral("empty hairstyle"); return false; }
+    // what decode() would refuse must not be registered (an entry load() cannot read, and a re-import that reports a duplicate)
+    if (hair.pos.size() > 5000000 || hair.idx.size() > 30000000 || hair.idx.size() % 3 != 0) { if (error) *error = QStringLiteral("hairstyle exceeds the library format limits"); return false; }
+    for (const V3& p : hair.pos)
+        if (!finite(p)) { if (error) *error = QStringLiteral("hairstyle has non-finite vertex positions"); return false; }
     meta.geometryHash = geometryHash(hair);
     for (const Meta& e : list())
         if (e.geometryHash == meta.geometryHash) {
@@ -230,7 +254,16 @@ bool save(const ImportedHair& hair, Meta meta, QString* newId, QString* duplicat
     return true;
 }
 
-bool remove(const QString& id) { return validId(id) && QDir(entryDir(id)).removeRecursively(); }
+bool remove(const QString& id)
+{
+    if (!validId(id) || !QFileInfo::exists(entryDir(id))) return false;
+    QDir().mkpath(trashDir());
+    QDir(trashEntryDir(id)).removeRecursively();                       // an older copy of the same id
+    if (QDir().rename(entryDir(id), trashEntryDir(id))) return true;
+    return QDir(entryDir(id)).removeRecursively();                     // could not move it: delete it
+}
+
+void purgeTrash() { QDir(trashDir()).removeRecursively(); }
 
 bool updateMeta(const Meta& meta)
 {
@@ -241,19 +274,29 @@ bool updateMeta(const Meta& meta)
 // ---- presets ----------------------------------------------------------------------------------------------------------------
 
 namespace {
+// One file per distinct name: the readable stem alone made "Long/curls" and "Long?curls" the same file (the second silently overwrote the
+// first), so a hash of the exact name is part of the file name. The real name is stored inside the file (`preset`).
 QString presetFile(const QString& name)
 {
-    QString stem = name;
+    const QString key = name.trimmed();
+    QString stem = key;
     stem.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_\\- ]+")), QStringLiteral("_"));
-    stem = stem.trimmed().left(60);
-    return dir() + QStringLiteral("/presets/") + stem + QStringLiteral(".json");
+    stem = stem.trimmed().left(40);
+    const QString hash = QString::fromLatin1(QCryptographicHash::hash(key.toUtf8(), QCryptographicHash::Sha1).toHex().left(8));
+    return dir() + QStringLiteral("/presets/") + stem + QLatin1Char('-') + hash + QStringLiteral(".json");
 }
 }  // namespace
 
 QStringList presetNames()
 {
     QStringList names;
-    for (const QString& f : QDir(dir() + QStringLiteral("/presets")).entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name)) names << f.left(f.size() - 5);
+    for (const QString& f : QDir(dir() + QStringLiteral("/presets")).entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name)) {
+        QFile file(dir() + QStringLiteral("/presets/") + f);
+        QString name;
+        if (file.open(QIODevice::ReadOnly)) name = QJsonDocument::fromJson(file.readAll()).object().value("preset").toString().trimmed();
+        names << (name.isEmpty() ? f.left(f.size() - 5) : name);
+    }
+    names.removeDuplicates();
     return names;
 }
 
@@ -261,7 +304,9 @@ bool savePreset(const QString& name, const Params& p, QString* error)
 {
     if (name.trimmed().isEmpty()) { if (error) *error = QStringLiteral("a preset needs a name"); return false; }
     QDir().mkpath(dir() + QStringLiteral("/presets"));
-    return writeFile(presetFile(name), QJsonDocument(toJson(p)).toJson());
+    Params q = p;
+    q.preset = name.trimmed();      // the stored name is the real one (the file name is only a readable key)
+    return writeFile(presetFile(name), QJsonDocument(toJson(q)).toJson());
 }
 
 bool loadPreset(const QString& name, Params* p, QString* error)

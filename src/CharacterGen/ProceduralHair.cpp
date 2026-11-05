@@ -114,9 +114,12 @@ int BodyCollider::nearest(const V3& p, float* distance) const
     const int maxRing = std::max(m_nx, std::max(m_ny, m_nz));
     for (int ring = 0; ring <= maxRing; ++ring) {
         for (int dz = -ring; dz <= ring; ++dz)
-            for (int dy = -ring; dy <= ring; ++dy)
-                for (int dx = -ring; dx <= ring; ++dx) {
-                    if (std::max(std::abs(dx), std::max(std::abs(dy), std::abs(dz))) != ring) continue;
+            for (int dy = -ring; dy <= ring; ++dy) {
+                // only the cells ON the shell of this ring: a row that is not on a z / y face of the shell touches just its two x ends (scanning
+                // the whole cube and skipping the inside made the search cost grow with the 4th power of the ring count)
+                const bool onFace = std::abs(dz) == ring || std::abs(dy) == ring;
+                const int dxStep = onFace || ring == 0 ? 1 : 2 * ring;
+                for (int dx = -ring; dx <= ring; dx += dxStep) {
                     const int ix = cx + dx, iy = cy + dy, iz = cz + dz;
                     if (ix < 0 || iy < 0 || iz < 0 || ix >= m_nx || iy >= m_ny || iz >= m_nz) continue;
                     for (int v : m_grid[size_t(cellIndex(ix, iy, iz))]) {
@@ -125,6 +128,7 @@ int BodyCollider::nearest(const V3& p, float* distance) const
                         if (d2 < bestD2) { bestD2 = d2; best = v; }
                     }
                 }
+            }
         // a ring further out cannot hold anything closer than (ring * cell)
         if (best >= 0 && std::sqrt(bestD2) <= float(ring) * m_cell) break;
     }
@@ -420,9 +424,10 @@ bool setParam(Params& p, const QString& key, double v)
                                         "fringe", "tipCurl", "gravity", "hairlineOffset", "ponytail", "tieHeight", "whorl"};
     for (size_t i = 0; i < std::size(names); ++i)
         if (key == QLatin1String(names[i])) { *fields[i] = f; sanitize(p); return true; }
-    if (key == QLatin1String("quality")) { p.quality = int(std::lround(v)); sanitize(p); return true; }
-    if (key == QLatin1String("seed")) { p.seed = uint32_t(std::max(0.0, v)); return true; }
-    if (key == QLatin1String("maxTriangles")) { p.maxTriangles = int(v); sanitize(p); return true; }
+    // clamped BEFORE the integer conversion: a finite 1e100 would be undefined behaviour
+    if (key == QLatin1String("quality")) { p.quality = int(std::lround(std::clamp(v, 0.0, 2.0))); sanitize(p); return true; }
+    if (key == QLatin1String("seed")) { p.seed = uint32_t(std::clamp(v, 0.0, 4294967295.0)); return true; }
+    if (key == QLatin1String("maxTriangles")) { p.maxTriangles = int(std::clamp(v, 200.0, 200000.0)); sanitize(p); return true; }
     if (key == QLatin1String("symmetric")) { p.symmetric = v != 0.0; return true; }
     return false;
 }
@@ -469,10 +474,10 @@ bool fromJson(const QJsonObject& o, Params* out, QString* error)
     num("clumping", p.clumping); num("frizz", p.frizz); num("parting", p.parting); num("layers", p.layers);
     num("taper", p.taper); num("thickness", p.thickness); num("fringe", p.fringe); num("tipCurl", p.tipCurl);
     num("gravity", p.gravity); num("hairlineOffset", p.hairlineOffset); num("ponytail", p.ponytail); num("tieHeight", p.tieHeight); num("whorl", p.whorl);
-    if (o.value("quality").isDouble()) p.quality = o.value("quality").toInt();
-    if (o.value("maxTriangles").isDouble()) p.maxTriangles = o.value("maxTriangles").toInt();
+    if (o.value("quality").isDouble()) p.quality = int(std::lround(std::clamp(o.value("quality").toDouble(), 0.0, 2.0)));
+    if (o.value("maxTriangles").isDouble()) p.maxTriangles = int(std::clamp(o.value("maxTriangles").toDouble(), 200.0, 200000.0));
     if (o.value("symmetric").isBool()) p.symmetric = o.value("symmetric").toBool();
-    if (o.value("seed").isDouble()) p.seed = uint32_t(std::max(0.0, o.value("seed").toDouble()));
+    if (o.value("seed").isDouble()) p.seed = uint32_t(std::clamp(o.value("seed").toDouble(), 0.0, 4294967295.0));
     p.edits.clear();
     for (const QJsonValue& v : o.value("edits").toArray()) {
         const QJsonObject e = v.toObject();
@@ -811,7 +816,8 @@ std::vector<Guide> generateGuides(const Params& pin, const Scalp& scalp, const B
             root = collider.pushOut(root, 0.002f, false);
             const float psi = std::acos(clampf(dot(u0, uw), -1.0f, 1.0f));        // angular distance hairline -> whorl (for the ring spacing)
             // a smooth, slow irregularity of the hem (never per-strand noise: that is what made the old ends look like stairs)
-            const float hem = 1.0f + (0.06f + 0.14f * p.frizz) * (valueNoise(theta * 1.7f + float(r) * 3.1f + float(p.seed % 977u) * 0.37f, 91u + p.seed) - 0.5f) * 2.0f;
+            const float thetaN = p.symmetric ? std::min(theta, 2.0f * kPi - theta) : theta;      // mirror partners must get the same hem
+            const float hem = 1.0f + (0.06f + 0.14f * p.frizz) * (valueNoise(thetaN * 1.7f + float(r) * 3.1f + float(p.seed % 977u) * 0.37f, 91u + p.seed) - 0.5f) * 2.0f;
             // every sheet is at least as long as the distance to the next ring up, so the rings overlap and no scalp shows between them
             const float spacing = 0.5f * (h.radii.x + h.radii.z) * psi * 0.97f / float(std::max(1, L.rings - 1));
             const float base = std::max(1e-3f, p.length * lengthFactor(p, h, root));
@@ -1076,7 +1082,7 @@ ValidationReport validate(const CardMesh& m)
 {
     ValidationReport r;
     for (size_t i = 0; i < m.pos.size(); ++i)
-        if (!finite(m.pos[i]) || !finite(m.nrm[i])) ++r.nanVertices;
+        if (!finite(m.pos[i]) || i >= m.nrm.size() || !finite(m.nrm[i])) ++r.nanVertices;     // a missing normal counts as a broken vertex
     for (size_t i = 0; i + 1 < m.uv.size(); i += 2)
         if (!std::isfinite(m.uv[i]) || !std::isfinite(m.uv[i + 1]) || m.uv[i] < -1e-4f || m.uv[i] > 1.0001f || m.uv[i + 1] < -1e-4f || m.uv[i + 1] > 1.0001f) ++r.badUvs;
     for (size_t t = 0; t + 2 < m.idx.size(); t += 3) {
@@ -1103,7 +1109,7 @@ ValidationReport repair(CardMesh& m)
     }
     m.idx = std::move(kept);
     for (size_t i = 0; i < m.pos.size(); ++i) {
-        if (!finite(m.nrm[i])) m.nrm[i] = V3(0, 1, 0);
+        if (i >= m.nrm.size() || !finite(m.nrm[i])) { if (i >= m.nrm.size()) m.nrm.resize(m.pos.size(), V3(0, 1, 0)); m.nrm[i] = V3(0, 1, 0); }
         if (!finite(m.pos[i])) m.pos[i] = V3();
     }
     for (float& u : m.uv) u = std::isfinite(u) ? clampf(u, 0.0f, 1.0f) : 0.0f;
