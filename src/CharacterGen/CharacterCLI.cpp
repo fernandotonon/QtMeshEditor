@@ -4,6 +4,7 @@
 
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
+#include "HairLibrary.h"
 #include "CharacterScene.h"
 #include "Clothing.h"
 #include "HairTint.h"
@@ -34,13 +35,17 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE [--hair-colour NAME|#rrggbb] | --list-hair | --list-hair-colours] [--assets DIR] [--json]\n"
+        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
         "separate parts (100 face identity modes, the 51 ARKit expression shapes as morph targets). --seed picks a random body and\n"
         "face (--variety scales the spread, default 1.0); --body / --face set individual mode coefficients (index=value).\n"
         "--bust keeps only the head and shoulders (previews, thumbnails). Skin and eye colours tint the parts. The character faces -Z like the rest of the editor (--facing-z keeps +Z).\n"
+        "Hair Studio: --hair proc:<preset> (procedural hair cards: --list-hair-presets) or lib:<id> (imported library hairstyle: --list-hair-library),\n"
+        "tuned with --hair-param key=value (length, density, volume, curliness, clumping, frizz, parting, layers, taper, ... seed) and --hair-fit key=value\n"
+        "(tx ty tz rx ry rz scale snug clearance flip); --hair-config / --save-hair-config read and write the settings as JSON;\n"
+        "--import-hair <file|folder> [--hair-author A --hair-license L --hair-attribution T --hair-source URL] registers hairstyles.\n"
         "Asset bundles are read from --assets, QTMESH_CHARACTER_DIR or <AppData>/ai_models/character (scripts/build-character-assets.py).\n"));
 }
 
@@ -61,6 +66,10 @@ int run(int argc, char* argv[])
     QString hairColourArg;
     bool listHairColours = false;
     bool listHair = false;
+    // Hair Studio
+    QStringList hairParams, hairFitArgs;
+    QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
+    bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
     bool skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
@@ -105,6 +114,17 @@ int run(int argc, char* argv[])
         else if (a == "--no-skin-texture") skinTexture = false;
         else if (a == "--hair") hairArg = next();
         else if (a == "--list-hair") listHair = true;
+        else if (a == "--hair-param") hairParams << next();
+        else if (a == "--hair-fit") hairFitArgs << next();
+        else if (a == "--hair-config") hairConfigArg = next();
+        else if (a == "--save-hair-config") saveHairConfigArg = next();
+        else if (a == "--import-hair") importHairArg = next();
+        else if (a == "--hair-author") hairAuthor = next();
+        else if (a == "--hair-license") hairLicense = next();
+        else if (a == "--hair-attribution") hairAttribution = next();
+        else if (a == "--hair-source") hairSource = next();
+        else if (a == "--list-hair-presets") listHairPresets = true;
+        else if (a == "--list-hair-library") listHairLibrary = true;
         else if (a == "--no-eyelashes") eyelashes = false;
         else if (a == "--top") topArg = next();
         else if (a == "--bottom") bottomArg = next();
@@ -164,6 +184,41 @@ int run(int argc, char* argv[])
                                       : lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
         return 0;
     }
+    if (listHairPresets) {
+        QStringList lines;
+        QJsonArray arr;
+        for (const QString& id : Hair::presetIds()) {
+            lines << QStringLiteral("proc:%1  %2").arg(id, -24).arg(Hair::presetLabel(id));
+            arr.append(QJsonObject{{"key", QStringLiteral("proc:") + id}, {"kind", QStringLiteral("builtin")}, {"label", Hair::presetLabel(id)}});
+        }
+        for (const QString& n : Hair::Library::presetNames()) {
+            lines << QStringLiteral("saved: %1").arg(n);
+            arr.append(QJsonObject{{"key", QStringLiteral("proc:") + n}, {"kind", QStringLiteral("saved")}, {"label", n}});
+        }
+        CLIPipeline::writeOutput(json ? QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) + QLatin1Char('\n') : lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+        return 0;
+    }
+    if (listHairLibrary) {
+        QStringList lines;
+        QJsonArray arr;
+        for (const Hair::Library::Meta& m : Hair::Library::list()) {
+            lines << QStringLiteral("lib:%1  %2  [%3 %4 %5]  %6 / %7").arg(m.id, -34).arg(m.name, m.length, m.texture, m.gender, m.license.isEmpty() ? QStringLiteral("licence unknown") : m.license, m.author);
+            arr.append(m.toJson());
+        }
+        CLIPipeline::writeOutput(json ? QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)) + QLatin1Char('\n')
+                                      : (lines.isEmpty() ? QStringLiteral("The hair library is empty (--import-hair <file|folder>).\n") : lines.join(QLatin1Char('\n')) + QLatin1Char('\n')));
+        return 0;
+    }
+    if (!importHairArg.isEmpty()) {
+        Hair::Library::ImportOptions io;
+        io.author = hairAuthor; io.license = hairLicense; io.attribution = hairAttribution; io.source = hairSource;
+        const bool isDir = QFileInfo(importHairArg).isDir();
+        const Hair::Library::ImportResult r = isDir ? Hair::Library::importFolder(importHairArg, io) : Hair::Library::importFile(importHairArg, io);
+        if (hairLicense.isEmpty()) CLIPipeline::writeCliError(QStringLiteral("Note: no --hair-license given: check the source's licence before redistributing characters that use these styles.\n"));
+        CLIPipeline::writeOutput(QStringLiteral("found %1, added %2, duplicates %3, failed %4\n%5").arg(r.found).arg(r.added).arg(r.duplicates).arg(r.failed).arg(r.ids.isEmpty() ? QString() : r.ids.join(QLatin1Char('\n')) + QLatin1Char('\n')));
+        for (const QString& e : r.errors) CLIPipeline::writeCliError(e + QLatin1Char('\n'));
+        return r.added + r.duplicates > 0 ? 0 : 1;
+    }
     if (listHair) {
         const QStringList names = CharacterAssets::hairStyleNames(assets);
         if (json) {
@@ -217,7 +272,78 @@ int run(int argc, char* argv[])
     if (!topArg.isEmpty()) p.topStyle = topArg.toLower();
     if (!bottomArg.isEmpty()) p.bottomStyle = bottomArg.toLower();
     p.nativeHead = !ictHead && !data.mhrArkit.empty();   // the MHR head (no seam) whenever the bundle carries its expression data
-    if (!hairArg.isEmpty()) {
+    Hair::Library::StudioConfig studio;
+    if (!hairConfigArg.isEmpty()) {
+        if (!Hair::Library::loadConfigFile(hairConfigArg, &studio)) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: cannot read the hair config '%1'.\n").arg(hairConfigArg));
+            return 2;
+        }
+        if (hairArg.isEmpty()) hairArg = studio.style;
+        p.hairProcedural = studio.procedural;
+        p.hairFit = studio.fit;
+        if (hairColourArg.isEmpty()) hairColourArg = studio.colour;
+    }
+    if (hairArg.startsWith(QLatin1String("proc:")) || hairArg.startsWith(QLatin1String("lib:"))) {
+        if (!p.nativeHead) {
+            CLIPipeline::writeCliError(QStringLiteral("Error: hair needs the MHR head (not --ict-head, and a bundle with its expression data).\n"));
+            return 2;
+        }
+        if (hairArg.startsWith(QLatin1String("proc:"))) {
+            const QString id = hairArg.mid(5);
+            Hair::Params saved;
+            if (Hair::isPreset(id)) { if (hairConfigArg.isEmpty()) p.hairProcedural = Hair::presetParams(id); }
+            else if (Hair::Library::loadPreset(id, &saved)) { if (hairConfigArg.isEmpty()) p.hairProcedural = saved; }
+            else if (hairConfigArg.isEmpty()) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: unknown procedural hairstyle '%1' (see --list-hair-presets).\n").arg(id));
+                return 2;
+            }
+        } else {
+            Hair::ImportedHair probe;
+            if (!Hair::Library::load(hairArg.mid(4), &probe)) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: '%1' is not in the hair library (see --list-hair-library).\n").arg(hairArg.mid(4)));
+                return 2;
+            }
+        }
+        for (const QString& kv : hairParams) {
+            const int eq = kv.indexOf(QLatin1Char('='));
+            bool ok = false;
+            const double v = kv.mid(eq + 1).toDouble(&ok);
+            if (eq <= 0 || !ok || !Hair::setParam(p.hairProcedural, kv.left(eq), v)) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: bad --hair-param '%1' (key=number; keys: length density volume curliness clumping frizz parting layers taper thickness fringe tipCurl gravity hairlineOffset ponytail tieHeight whorl quality seed).\n").arg(kv));
+                return 2;
+            }
+        }
+        if (hairArg.startsWith(QLatin1String("proc:")) && !hairFitArgs.isEmpty()) {   // the fit moves IMPORTED hair onto the head; procedural hair is grown on it
+            CLIPipeline::writeCliError(QStringLiteral("Error: --hair-fit applies to imported (lib:) hairstyles only; tune procedural hair with --hair-param.\n"));
+            return 2;
+        }
+        QJsonObject fitObj = Hair::toJson(p.hairFit);
+        for (const QString& kv : hairFitArgs) {
+            const int eq = kv.indexOf(QLatin1Char('='));
+            static const QStringList keys{"tx", "ty", "tz", "rx", "ry", "rz", "scale", "snug", "clearance"};
+            bool ok = false;
+            const double v = kv.mid(eq + 1).toDouble(&ok);
+            if (eq > 0 && ok && kv.left(eq) == QLatin1String("flip")) fitObj["flipFront"] = v != 0.0;
+            else if (eq > 0 && ok && keys.contains(kv.left(eq))) fitObj[kv.left(eq)] = v;
+            else {
+                CLIPipeline::writeCliError(QStringLiteral("Error: bad --hair-fit '%1' (keys: tx ty tz rx ry rz scale snug clearance flip).\n").arg(kv));
+                return 2;
+            }
+        }
+        p.hairFit = Hair::fitAdjustFromJson(fitObj);
+        p.hairStyle = hairArg;
+        studio.style = hairArg; studio.procedural = p.hairProcedural; studio.fit = p.hairFit;
+        if (!hairColourArg.isEmpty()) {   // the colour is part of the saved config too (--hair-colour, or the one a loaded config carried)
+            Rgb resolved;
+            if (!parseHairColour(hairColourArg, &resolved)) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: unknown hair colour '%1' (a preset: see --list-hair-colours, or #rrggbb).\n").arg(hairColourArg));
+                return 2;
+            }
+            studio.colour = hairColourHex(resolved);
+        }
+        if (!saveHairConfigArg.isEmpty() && !Hair::Library::saveConfigFile(saveHairConfigArg, studio))
+            CLIPipeline::writeCliError(QStringLiteral("Warning: could not write %1.\n").arg(saveHairConfigArg));
+    } else if (!hairArg.isEmpty()) {
         if (!p.nativeHead) {
             CLIPipeline::writeCliError(QStringLiteral("Error: hair needs the MHR head (not --ict-head, and a bundle with its expression data).\n"));
             return 2;
@@ -268,6 +394,14 @@ int run(int argc, char* argv[])
     if (MeshImporterExporter::exporter(node, QFileInfo(outPath).absoluteFilePath(), CLIPipeline::formatForExtension(outPath)) != 0) {
         CLIPipeline::writeCliError(QStringLiteral("Error: export to %1 failed.\n").arg(outPath));
         return 1;
+    }
+    if (p.hairStyle.startsWith(QLatin1String("proc:")) || p.hairStyle.startsWith(QLatin1String("lib:"))) {
+        // the Hair Studio settings travel with the file, so the character's hair can be restored and edited later
+        Hair::Library::StudioConfig cfg;
+        cfg.style = p.hairStyle; cfg.procedural = p.hairProcedural; cfg.fit = p.hairFit; cfg.colour = hairColourHex(p.hairColour);
+        const QString sidecar = QFileInfo(outPath).absoluteFilePath() + QStringLiteral(".hair.json");
+        if (!Hair::Library::saveConfigFile(sidecar, cfg))
+            CLIPipeline::writeCliError(QStringLiteral("Warning: could not write %1.\n").arg(sidecar));
     }
     if (json) {
         QJsonObject o;

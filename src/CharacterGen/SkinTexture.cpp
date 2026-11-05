@@ -98,13 +98,14 @@ struct UvVertex {
     float x = 0, y = 0;              // texel coordinates
     std::array<float, 3> position{};
     float hair = 0.0f;               // body-hair density at the vertex
+    float scalp = 0.0f;              // scalp coverage at the vertex
 };
 
 // Rasterise one triangle: texels whose centre is inside it take the interpolated surface position; texels up to a pixel OUTSIDE it
 // take the extrapolated position (the colour is a function of the 3D point, so it continues smoothly past the island border and
 // filtering across a seam does not pull in a different colour). An inside texel is never overwritten by an extrapolated one.
 void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size, std::vector<std::array<float, 3>>& surface,
-               std::vector<float>& hair, std::vector<char>& covered)
+               std::vector<float>& hair, std::vector<float>& scalp, std::vector<char>& covered)
 {
     const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if (std::fabs(area) < 1e-9f) return;
@@ -134,6 +135,7 @@ void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size
             for (size_t k = 0; k < 3; ++k) p[k] = a.position[k] * w0 + b.position[k] * w1 + c.position[k] * w2;
             surface[i] = p;
             hair[i] = std::clamp(a.hair * w0 + b.hair * w1 + c.hair * w2, 0.0f, 1.0f);
+            scalp[i] = std::clamp(a.scalp * w0 + b.scalp * w1 + c.scalp * w2, 0.0f, 1.0f);
             covered[i] = inside ? 2 : 1;
         }
 }
@@ -273,7 +275,7 @@ NippleMask nippleMask(const std::array<float, 3>& p, const SkinNipples& nipples)
     return mask;
 }
 
-Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextureOptions& o, float hairDensity)
+Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextureOptions& o, float hairDensity, float scalp)
 {
     // large-scale tone: patches a few centimetres across, brighter / darker
     const float tone = fbm(p, 9.0f, 3, o.seed);
@@ -334,6 +336,18 @@ Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextu
         c = mix(c, hairColour, 0.30f * stubble);
     }
 
+    // scalp: where the hair grows the skin shows the roots - a shade of the hair colour with a stubble of darker dots, and an irregular
+    // hairline (the interpolated weight is soft; noise breaks the edge up so it is not a clean contour)
+    if (scalp > 0.02f) {
+        const float edge = valueNoise({p[0] * 260.0f, p[1] * 260.0f, p[2] * 260.0f}, o.seed + 401u);
+        const float cover = std::clamp((scalp + 0.22f * edge - 0.45f) / 0.35f + 0.5f, 0.0f, 1.0f);
+        const Rgb root = scaled(o.scalpColour, 0.80f, 0.80f, 0.80f);
+        c = mix(c, root, 0.55f * cover);
+        const float grain = valueNoise({p[0] * 900.0f, p[1] * 900.0f, p[2] * 900.0f}, o.seed + 419u) * 0.5f + 0.5f;
+        const float stubble = std::clamp((grain - 0.35f) / 0.30f, 0.0f, 1.0f);
+        c = mix(c, scaled(o.scalpColour, 0.65f, 0.65f, 0.65f), 0.35f * stubble * cover);
+    }
+
     // pores and fine grain
     if (o.poreStrength > 0.0f) {
         const float pores = valueNoise({p[0] * 420.0f, p[1] * 420.0f, p[2] * 420.0f}, o.seed + 53u);
@@ -351,8 +365,10 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
     const size_t texels = size_t(size) * size_t(size);
     std::vector<std::array<float, 3>> surface(texels);
     std::vector<float> hair(texels, 0.0f);
+    std::vector<float> scalpCover(texels, 0.0f);
     std::vector<char> covered(texels, 0);
     const bool haveHair = options.bodyHair > 0.0f && options.hairDensity.size() * 3 >= body.positions.size();
+    const bool haveScalp = options.scalp.size() * 3 >= body.positions.size();
 
     auto vertexOf = [&](uint32_t layoutIndex, UvVertex& out) {
         if (layoutIndex >= body.layouts.size()) return false;
@@ -362,6 +378,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
         out.y = (1.0f - body.uvs[size_t(l.uv) * 2 + 1]) * float(size);   // the scene importer flips V
         for (size_t k = 0; k < 3; ++k) out.position[k] = body.positions[size_t(l.position) * 3 + k];
         out.hair = haveHair ? options.hairDensity[l.position] : 0.0f;
+        out.scalp = haveScalp ? options.scalp[l.position] : 0.0f;
         return true;
     };
     for (const auto& face : body.faces) {
@@ -369,7 +386,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
             UvVertex a;
             UvVertex b;
             UvVertex c;
-            if (vertexOf(face[0], a) && vertexOf(face[i], b) && vertexOf(face[i + 1], c)) rasterise(a, b, c, size, surface, hair, covered);
+            if (vertexOf(face[0], a) && vertexOf(face[i], b) && vertexOf(face[i + 1], c)) rasterise(a, b, c, size, surface, hair, scalpCover, covered);
         }
     }
 
@@ -379,7 +396,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
         for (int x = 0; x < size; ++x) {
             const size_t i = size_t(y) * size_t(size) + size_t(x);
             if (!covered[i]) continue;
-            const Rgb c = skinColourAt(surface[i], skin, options, hair[i]);
+            const Rgb c = skinColourAt(surface[i], skin, options, hair[i], scalpCover[i]);
             image.setPixel(x, y, qRgb(int(std::lround(c[0] * 255.0f)), int(std::lround(c[1] * 255.0f)), int(std::lround(c[2] * 255.0f))));
         }
     dilate(image, covered, 4);

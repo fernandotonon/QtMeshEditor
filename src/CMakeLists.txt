@@ -240,6 +240,10 @@ CharacterGen/CharacterModel.cpp
 CharacterGen/CharacterScene.cpp
 CharacterGen/SkinTexture.cpp
 CharacterGen/HairTint.cpp
+CharacterGen/ProceduralHair.cpp
+CharacterGen/HairFitting.cpp
+CharacterGen/HairLibrary.cpp
+CharacterGen/HairImport.cpp
 CharacterGen/EyeTexture.cpp
 CharacterGen/Eyelashes.cpp
 CharacterGen/LidClose.cpp

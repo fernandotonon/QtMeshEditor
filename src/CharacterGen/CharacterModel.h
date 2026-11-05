@@ -15,6 +15,8 @@
 
 #include "../DNA/DnaReader.h"
 #include "QmcBundle.h"
+#include "HairFitting.h"
+#include "ProceduralHair.h"
 
 #include <QString>
 #include <QStringList>
@@ -116,6 +118,10 @@ struct Params {
     Rgb lash{0.05f, 0.04f, 0.04f};
     /// Name of a hairstyle of the hair bundle (empty = bald). Native head only.
     QString hairStyle;
+    /// Hair Studio: "proc:<preset id>" builds `hairProcedural` as native hair cards, "lib:<id>" fits an imported library hairstyle
+    /// (`hairFit` is its manual correction). Any other name is a style of the hair bundle.
+    Hair::Params hairProcedural;
+    Hair::FitAdjust hairFit;
     /// Procedural clothes (see Clothing.h): a style id ("none", "tshirt", "longsleeve", "tank" / "none", "shorts", "pants") and a colour each.
     QString topStyle = QStringLiteral("none");
     QString bottomStyle = QStringLiteral("none");
@@ -218,6 +224,7 @@ struct BuildReport {
     QByteArray lashTexturePng;       ///< the eyelash strand texture (empty: no lashes were built)
     QByteArray eyeTexturePng;        ///< the procedural eye's texture (empty: no procedural eye, or a user-supplied eye mesh is used)
     std::vector<float> bodyHair;     ///< 0..1 body-hair density per body vertex (from the skin weights); empty = none
+    std::vector<float> scalp;        ///< 0..1 per body vertex: scalp (where the hair grows, soft at the hairline) - painted into the skin; empty = no hair
     QStringList meshNames;
     QStringList warnings;
 };

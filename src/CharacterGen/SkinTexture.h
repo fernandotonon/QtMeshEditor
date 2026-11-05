@@ -29,6 +29,8 @@ struct SkinTextureOptions {
     SkinNipples nipples;            ///< valid = paint the areolae and nipples
     float bodyHair = 0.0f;          ///< 0..1 amount of body hair (needs hairDensity)
     std::vector<float> hairDensity; ///< 0..1 per POSITION vertex of the baked mesh: where body hair may grow
+    std::vector<float> scalp;       ///< 0..1 per POSITION vertex: the scalp (hair-covered skin of the head), painted in `scalpColour`
+    Rgb scalpColour{0.24f, 0.145f, 0.09f};   ///< the hair colour the scalp is shaded towards
 };
 
 /// Bake the albedo of `body` (positions in metres, UVs + layouts + faces as the rig stores them: the V flip is applied here).
@@ -60,7 +62,7 @@ NippleMask nippleMask(const std::array<float, 3>& position, const SkinNipples& n
 
 /// The skin colour at a surface point (metres), before the texture's coverage logic. Exposed for tests.
 /// `hairDensity` (0..1) is the body-hair density at this point (interpolated from the vertices); it scales with options.bodyHair.
-Rgb skinColourAt(const std::array<float, 3>& position, const Rgb& skin, const SkinTextureOptions& options, float hairDensity = 0.0f);
+Rgb skinColourAt(const std::array<float, 3>& position, const Rgb& skin, const SkinTextureOptions& options, float hairDensity = 0.0f, float scalp = 0.0f);
 
 }  // namespace CharacterGen
 

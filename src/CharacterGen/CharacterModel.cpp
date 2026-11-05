@@ -4,6 +4,9 @@
 #include "Eyelashes.h"
 #include "LidClose.h"
 #include "HairTint.h"
+#include <QImage>
+#include <QBuffer>
+#include "HairLibrary.h"
 
 #include "../AppStorage.h"
 #include "../BodyFromPhoto/SamBodyRetarget.h"
@@ -917,6 +920,100 @@ Dna::Mesh buildHairMesh(const HairStyle& style, const Dna::Mesh& body)
     }
     m.normals = positionNormals(m.positions, m.faces, m.layouts);
     return m;
+}
+
+// ---- Hair Studio (ProceduralHair.h / HairFitting.h): hair built on the SHAPED body, so it follows every head shape ----------------
+
+// Vertices driven mostly by the head joint(s).
+std::vector<uint8_t> headMaskOf(const Dna::Mesh& body, const Dna::Rig& rig)
+{
+    std::vector<bool> isHead(rig.joints.size(), false);
+    for (size_t j = 0; j < rig.joints.size(); ++j) isHead[j] = rig.joints[j].name.toLower().contains(QLatin1String("head"));
+    std::vector<uint8_t> mask(body.positions.size() / 3, 0);
+    for (size_t v = 0; v < mask.size() && v < body.skin.size(); ++v) {
+        float w = 0.0f;
+        for (const Dna::SkinInfluence& si : body.skin[v])
+            if (size_t(si.joint) < isHead.size() && isHead[size_t(si.joint)]) w += si.weight;
+        mask[v] = w >= 0.5f ? 1 : 0;
+    }
+    return mask;
+}
+
+std::vector<std::array<uint32_t, 3>> positionTriangles(const Dna::Mesh& m)
+{
+    std::vector<std::array<uint32_t, 3>> tris;
+    for (const std::vector<uint32_t>& f : m.faces)
+        for (size_t k = 2; k < f.size(); ++k) {
+            if (f[0] >= m.layouts.size() || f[k - 1] >= m.layouts.size() || f[k] >= m.layouts.size()) continue;
+            tris.push_back({m.layouts[f[0]].position, m.layouts[f[k - 1]].position, m.layouts[f[k]].position});
+        }
+    return tris;
+}
+
+QString safeStem(const QString& s)
+{
+    QString out = s;
+    for (QChar& c : out) if (!c.isLetterOrNumber()) c = QLatin1Char('_');
+    return out;
+}
+
+// "proc:<id>" / "lib:<id>": returns true when the style was handled (successfully or with a warning).
+bool addHairStudioHair(const Params& p, const Dna::Mesh& body, Dna::Rig& rig, BuildReport& rep)
+{
+    const bool proc = p.hairStyle.startsWith(QLatin1String("proc:"));
+    const bool lib = p.hairStyle.startsWith(QLatin1String("lib:"));
+    if (!proc && !lib) return false;
+    const std::vector<uint8_t> mask = headMaskOf(body, rig);
+    const std::vector<std::array<uint32_t, 3>> tris = positionTriangles(body);
+    Hair::BodyCollider collider;
+    collider.build(body.positions, tris);
+    Hair::addEarColliders(&collider, body.positions, mask);   // thin ears: hair must not poke through them
+    Dna::Mesh m;
+    QByteArray texture = Hair::bakeCardTexturePng();
+    if (proc) {
+        Hair::Params hp = p.hairProcedural;
+        const Hair::Scalp scalp = Hair::extractScalp(body.positions, tris, mask, Hair::effectiveHairlineOffset(hp) + 0.03f);   // the liner starts where the first ring of roots does
+        const Hair::Result r = Hair::generate(hp, scalp, collider);
+        rep.warnings << r.warnings;
+        if (r.mesh.triangles() == 0) return true;
+        m = Hair::toDnaMesh(r.mesh, collider, body.skin);
+        rep.hairStyle = QStringLiteral("proc_") + safeStem(p.hairStyle.mid(5));
+    } else {
+        Hair::ImportedHair hair;
+        Hair::Library::Meta meta;
+        if (!Hair::Library::load(p.hairStyle.mid(4), &hair, &meta)) {
+            rep.warnings << QStringLiteral("Hairstyle '%1' is not in the hair library.").arg(p.hairStyle.mid(4));
+            return true;
+        }
+        const Hair::HeadFrame head = Hair::estimateHeadFrame(body.positions, mask);
+        std::vector<Hair::V3> pos, nrm;
+        Hair::FitReport fit;
+        // the fit of a library entry (its saved correction, e.g. a flipped front) applies unless the caller gave one: the GUI hands it in, but
+        // the CLI and MCP only name the entry
+        Hair::FitAdjust fitAdjust = p.hairFit;
+        if (Hair::toJson(p.hairFit) == Hair::toJson(Hair::FitAdjust()) && !meta.fit.isEmpty()) fitAdjust = Hair::fitAdjustFromJson(meta.fit);
+        Hair::fitToHead(hair, head, collider, fitAdjust, &pos, &nrm, &fit);
+        rep.warnings << fit.warnings;
+        m = Hair::importedToDnaMesh(hair, pos, nrm, collider, body.skin);
+        if (!hair.texturePng.isEmpty()) {
+            texture = hair.texturePng;
+        } else {   // an untextured source: a flat, fully opaque shading map, so the hair colour fills it (the card atlas would be sampled at UV 0)
+            QImage flat(8, 8, QImage::Format_RGBA8888);
+            flat.fill(QColor(128, 128, 128, 255));
+            QBuffer buf(&texture);
+            texture.clear();
+            buf.open(QIODevice::WriteOnly);
+            flat.save(&buf, "PNG");
+        }
+        rep.hairStyle = QStringLiteral("lib_") + safeStem(hair.id);
+    }
+    rep.headVertices += int(m.positions.size() / 3);
+    rep.headTriangles += int(m.faces.size());
+    rep.meshNames << m.name;
+    rep.hairTexturePng = tintHairTexturePng(texture, p.hairColour);
+    if (rep.hairTexturePng.isEmpty()) rep.hairTexturePng = texture;
+    rig.meshes.push_back(std::move(m));
+    return true;
 }
 
 // The lips of the built body: the lip-seam landmarks give the centre and the width of the mouth (the seam covers the middle ~70 % of
@@ -1883,7 +1980,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     addClothes(p, body, rig, rep);
     if (!p.nativeHead && !p.hairStyle.isEmpty())
         rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
-    if (p.nativeHead && !p.hairStyle.isEmpty()) {
+    if (p.nativeHead && !p.hairStyle.isEmpty())   // the scalp is painted into the skin wherever the hair grows
+        rep.scalp = Hair::scalpWeights(body.positions, headMaskOf(body, rig), p.hairStyle.startsWith(QLatin1String("proc:")) ? Hair::effectiveHairlineOffset(p.hairProcedural) : 0.0f);
+    if (p.nativeHead && !p.hairStyle.isEmpty() && addHairStudioHair(p, body, rig, rep)) {
+        // handled by the Hair Studio (procedural / library)
+    } else if (p.nativeHead && !p.hairStyle.isEmpty()) {
         if (const HairStyle* hair = a.hairStyle(p.hairStyle)) {
             Dna::Mesh m = buildHairMesh(*hair, body);
             rep.headVertices += int(m.positions.size() / 3);
@@ -1897,6 +1998,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rep.warnings << QStringLiteral("Unknown hairstyle '%1'").arg(p.hairStyle);
         }
     }
+    if (rep.hairStyle.isEmpty()) rep.scalp.clear();   // no hair mesh was added (a missing or damaged style): do not paint roots on a bald head
     if (p.nativeHead && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
         for (int e = 0; e < a.ictExpressions; ++e) {
             Dna::BlendShapeTarget bt;
