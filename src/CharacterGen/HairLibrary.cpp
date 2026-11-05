@@ -257,10 +257,9 @@ bool save(const ImportedHair& hair, Meta meta, QString* newId, QString* duplicat
 bool remove(const QString& id)
 {
     if (!validId(id) || !QFileInfo::exists(entryDir(id))) return false;
-    QDir().mkpath(trashDir());
+    if (!QDir().mkpath(trashDir())) return false;                      // cannot move it: keep it (deleting would break the undo this exists for)
     QDir(trashEntryDir(id)).removeRecursively();                       // an older copy of the same id
-    if (QDir().rename(entryDir(id), trashEntryDir(id))) return true;
-    return QDir(entryDir(id)).removeRecursively();                     // could not move it: delete it
+    return QDir().rename(entryDir(id), trashEntryDir(id));             // false leaves the entry where it was
 }
 
 void purgeTrash() { QDir(trashDir()).removeRecursively(); }
