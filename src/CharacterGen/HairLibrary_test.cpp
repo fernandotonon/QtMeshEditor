@@ -99,6 +99,20 @@ TEST_F(LibFixture, RemoveAndBadIdsAreSafe)
     EXPECT_FALSE(load(id, &h));
 }
 
+TEST_F(LibFixture, RemoveKeepsTheEntryWhenItCannotBeMovedToTheTrash)
+{
+    QString id, dup;
+    ASSERT_TRUE(save(quad(), Meta(), &id, &dup));
+    QFile blocker(Library::dir() + "/trash");                    // a FILE where the trash folder should be: the move cannot happen
+    ASSERT_TRUE(blocker.open(QIODevice::WriteOnly));
+    blocker.write("x");
+    blocker.close();
+    EXPECT_FALSE(Library::remove(id));                           // deleting it instead would break the undo the trash exists for
+    ImportedHair h;
+    EXPECT_TRUE(load(id, &h));
+    EXPECT_EQ(list().size(), 1);
+}
+
 TEST_F(LibFixture, ADamagedMetaFileMakesTheEntryDamaged)
 {
     QString id, dup;
