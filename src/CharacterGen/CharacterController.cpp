@@ -197,6 +197,7 @@ void CharacterController::setHairColour(const QString& v)
     if (hex == m_hairColour) return;
     m_hairColour = hex;
     emit hairColourChanged();
+    saveHairStudioSettings();   // a colour-only edit must be persisted too
 }
 
 QVariantList CharacterController::hairColourPresets() const
@@ -686,6 +687,8 @@ void CharacterController::loadHairStudioSettings()
     m_hairStyle = c.style;
     m_hairParams = c.procedural;
     m_hairFit = c.fit;
+    CharacterGen::Rgb colour;
+    if (CharacterGen::parseHairColour(c.colour, &colour)) m_hairColour = CharacterGen::hairColourHex(colour);   // validated: a damaged value keeps the default
 }
 
 namespace {
@@ -698,7 +701,12 @@ Tags tagsForProcedural(const QString& id)
         {"short_straight", {"short", "straight", "unisex", "crop"}},         {"medium_layered", {"medium", "straight", "feminine", "layered"}},
         {"long_straight", {"long", "straight", "feminine", "long"}},         {"wavy", {"medium", "wavy", "feminine", "wavy"}},
         {"curly", {"medium", "curly", "unisex", "curls"}},                   {"bob", {"short", "straight", "feminine", "bob"}},
-        {"ponytail", {"long", "straight", "feminine", "ponytail"}},          {"short_side_part", {"short", "straight", "masculine", "side part"}}};
+        {"ponytail", {"long", "straight", "feminine", "ponytail"}},          {"short_side_part", {"short", "straight", "masculine", "side part"}},
+        {"pixie", {"short", "straight", "feminine", "pixie"}},               {"buzz", {"short", "straight", "masculine", "fade"}},
+        {"afro", {"medium", "coily", "unisex", "afro"}},                     {"curly_bob", {"short", "curly", "feminine", "bob"}},
+        {"shag", {"medium", "wavy", "unisex", "layered"}},                   {"long_wavy", {"long", "wavy", "feminine", "wavy"}},
+        {"high_ponytail", {"long", "straight", "feminine", "ponytail"}},     {"low_ponytail", {"long", "straight", "unisex", "ponytail"}},
+        {"side_swept_long", {"long", "straight", "feminine", "long"}}};
     return t.value(id, Tags{"medium", "straight", "unisex", QString()});
 }
 

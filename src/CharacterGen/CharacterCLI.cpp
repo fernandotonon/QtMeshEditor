@@ -322,6 +322,14 @@ int run(int argc, char* argv[])
         p.hairFit = Hair::fitAdjustFromJson(fitObj);
         p.hairStyle = hairArg;
         studio.style = hairArg; studio.procedural = p.hairProcedural; studio.fit = p.hairFit;
+        if (!hairColourArg.isEmpty()) {   // the colour is part of the saved config too (--hair-colour, or the one a loaded config carried)
+            Rgb resolved;
+            if (!parseHairColour(hairColourArg, &resolved)) {
+                CLIPipeline::writeCliError(QStringLiteral("Error: unknown hair colour '%1' (a preset: see --list-hair-colours, or #rrggbb).\n").arg(hairColourArg));
+                return 2;
+            }
+            studio.colour = hairColourHex(resolved);
+        }
         if (!saveHairConfigArg.isEmpty() && !Hair::Library::saveConfigFile(saveHairConfigArg, studio))
             CLIPipeline::writeCliError(QStringLiteral("Warning: could not write %1.\n").arg(saveHairConfigArg));
     } else if (!hairArg.isEmpty()) {

@@ -150,6 +150,24 @@ TEST(HairGeneration, RespectsTheTriangleBudget)
     EXPECT_GT(r.mesh.triangles(), 200);
 }
 
+TEST(HairGeneration, AHardBudgetBelowTheSmallestLayoutIsStillRespected)
+{
+    // sanitize() accepts budgets down to 200; the layout used to stop at 16 columns x 2 rings and overshoot (768+ triangles at quality 2)
+    SyntheticHead h;
+    for (int budget : {200, 300, 600, 1000}) {
+        for (int quality : {0, 1, 2}) {
+            Params p = presetParams("long_straight");
+            p.quality = quality;
+            p.maxTriangles = budget;
+            const Result r = generate(p, h.scalp, h.collider);
+            SCOPED_TRACE("budget " + std::to_string(budget) + " quality " + std::to_string(quality));
+            EXPECT_LE(r.mesh.triangles(), budget);
+            EXPECT_GT(r.mesh.triangles(), 0);
+            EXPECT_TRUE(validate(r.mesh).ok());
+        }
+    }
+}
+
 TEST(HairGeneration, UvsStayInsideTheTextureAndRunAlongTheCard)
 {
     SyntheticHead h;

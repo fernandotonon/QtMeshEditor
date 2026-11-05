@@ -15,6 +15,9 @@
 
 #include <QList>
 
+#include <map>
+#include <vector>
+
 namespace CharacterGen {
 namespace Hair {
 namespace Library {
@@ -86,6 +89,16 @@ ImportResult importFile(const QString& path, const ImportOptions& opt);
 ImportResult importFolder(const QString& folder, const ImportOptions& opt);
 /// Same as importFile but returns the extracted styles without storing them (tests, preview).
 QList<ImportedHair> extractFromFile(const QString& path, QStringList* errors = nullptr);
+
+/// The vertices one part of a style occupies in its merged mesh, and the material that part came from.
+struct TexturePart {
+    uint32_t first = 0, count = 0;
+    unsigned material = 0;
+};
+/// A style is ONE mesh with ONE texture. When its parts use different materials, stack the parts' textures (`pngByMaterial`, empty = no
+/// texture) into an atlas, scaled to a common width, and remap each part's UVs into its own band; a part without a texture gets a flat opaque
+/// tile. A single texture is kept as it is. Public so the merge can be tested without crafting a multi-node model file.
+void assignTextures(ImportedHair& hair, const std::vector<TexturePart>& parts, const std::map<unsigned, QByteArray>& pngByMaterial);
 
 }  // namespace Library
 }  // namespace Hair

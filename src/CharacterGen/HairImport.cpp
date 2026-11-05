@@ -8,12 +8,15 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QImage>
+#include <QPainter>
 
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 
 #include <algorithm>
+#include <cmath>
+#include <map>
 
 namespace CharacterGen {
 namespace Hair {
@@ -140,6 +143,8 @@ ImportedHair buildHair(const aiScene* scene, const Group& g, const QString& base
 {
     ImportedHair h;
     h.name = g.name;
+    std::vector<TexturePart> ranges;
+    std::map<unsigned, QByteArray> pngByMaterial;
     for (const auto& part : g.parts) {
         const aiMesh* m = part.first;
         if (!m->HasPositions() || m->mNumFaces == 0) continue;
@@ -158,12 +163,78 @@ ImportedHair buildHair(const aiScene* scene, const Group& g, const QString& base
             h.idx.push_back(base + face.mIndices[1]);
             h.idx.push_back(base + face.mIndices[2]);
         }
-        if (h.texturePng.isEmpty()) h.texturePng = texturePngFor(scene, m, baseDir);
+        ranges.push_back({base, m->mNumVertices, m->mMaterialIndex});
+        if (pngByMaterial.find(m->mMaterialIndex) == pngByMaterial.end()) pngByMaterial[m->mMaterialIndex] = texturePngFor(scene, m, baseDir);
     }
+    assignTextures(h, ranges, pngByMaterial);
     return h;
 }
 
 }  // namespace
+
+// The vertices one part of a style occupies in the merged mesh, and the material it came from.
+// A style whose parts use different materials is rendered as ONE mesh with ONE texture: stack the parts' textures into an atlas (all scaled
+// to a common width) and remap each part's UVs into its own band. A part without a texture gets a flat opaque tile, so it renders as hair
+// colour instead of sampling somebody else's alpha. A single texture (the usual case) is kept untouched.
+void assignTextures(ImportedHair& h, const std::vector<TexturePart>& ranges, const std::map<unsigned, QByteArray>& pngByMaterial)
+{
+    std::vector<unsigned> materials;
+    for (const TexturePart& r : ranges)
+        if (std::find(materials.begin(), materials.end(), r.material) == materials.end()) materials.push_back(r.material);
+    if (materials.size() <= 1) {
+        for (const auto& kv : pngByMaterial)
+            if (!kv.second.isEmpty()) { h.texturePng = kv.second; break; }
+        return;
+    }
+    constexpr int kFlatHeight = 16, kMaxWidth = 2048, kMaxHeight = 4096;
+    std::map<unsigned, QImage> images;
+    int width = 16;
+    for (unsigned m : materials) {
+        QImage img;
+        const auto it = pngByMaterial.find(m);
+        if (it != pngByMaterial.end() && !it->second.isEmpty()) img = QImage::fromData(it->second, "PNG").convertToFormat(QImage::Format_RGBA8888);
+        images[m] = img;
+        width = std::max(width, img.width());
+    }
+    width = std::min(width, kMaxWidth);
+    std::map<unsigned, std::pair<int, int>> band;       // material -> (first row, rows)
+    int height = 0;
+    for (unsigned m : materials) {
+        QImage& img = images[m];
+        if (img.isNull()) {
+            img = QImage(width, kFlatHeight, QImage::Format_RGBA8888);
+            img.fill(QColor(128, 128, 128, 255));
+        } else {
+            img = img.scaledToWidth(width, Qt::SmoothTransformation);
+        }
+        band[m] = {height, img.height()};
+        height += img.height();
+    }
+    QImage atlas(width, height, QImage::Format_RGBA8888);
+    atlas.fill(Qt::transparent);
+    {
+        QPainter painter(&atlas);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        for (unsigned m : materials) painter.drawImage(0, band[m].first, images[m]);
+    }
+    for (const TexturePart& r : ranges) {
+        const auto [row0, rows] = band[r.material];
+        for (uint32_t v = r.first; v < r.first + r.count; ++v) {
+            const auto wrap = [](float x) { return x - std::floor(x) < 1e-6f && x > 0.0f ? 1.0f : x - std::floor(x); };   // repeat, keeping 1.0 as 1.0
+            const float u = wrap(h.uv[size_t(v) * 2]);
+            const float vv = wrap(h.uv[size_t(v) * 2 + 1]);
+            // inset by half a texel inside the band: a UV on the band's border would blend the neighbouring part's texture in (bilinear filtering)
+            h.uv[size_t(v) * 2] = (0.5f + u * float(width - 1)) / float(width);
+            h.uv[size_t(v) * 2 + 1] = 1.0f - (float(row0) + 0.5f + (1.0f - vv) * float(rows - 1)) / float(height);     // v is up in the file, image rows run down
+        }
+    }
+    if (height > kMaxHeight) atlas = atlas.scaled(width * kMaxHeight / height, kMaxHeight, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    atlas.save(&buf, "PNG");
+    h.texturePng = bytes;
+}
 
 QList<ImportedHair> extractFromFile(const QString& path, QStringList* errors)
 {

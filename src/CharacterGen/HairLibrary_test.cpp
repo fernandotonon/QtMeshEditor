@@ -2,8 +2,10 @@
 
 #include "HairLibrary.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QTemporaryDir>
 
 using namespace CharacterGen::Hair;
@@ -145,6 +147,67 @@ TEST_F(LibFixture, ImportsACollectionAsSeparateHairstylesWithoutDuplicates)
     EXPECT_EQ(again.added, 0);
     EXPECT_EQ(again.duplicates, 2);
     EXPECT_EQ(list().size(), 2);
+}
+
+namespace {
+QByteArray solidPng(const QColor& c, int w = 8, int h = 8)
+{
+    QImage img(w, h, QImage::Format_RGBA8888);
+    img.fill(c);
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "PNG");
+    return bytes;
+}
+}  // namespace
+
+TEST(HairTextures, AStyleWithTwoMaterialsKeepsEachPartsTextureInAnAtlas)
+{
+    // two quads (4 vertices each), different materials with different textures: the merged mesh has ONE texture, so each part must still
+    // sample its own colours (before, the first texture was used for every part and the other part rendered with the wrong colour/alpha)
+    ImportedHair h;
+    for (int part = 0; part < 2; ++part)
+        for (const std::pair<float, float>& uv : {std::make_pair(0.0f, 0.0f), std::make_pair(1.0f, 0.0f), std::make_pair(1.0f, 1.0f), std::make_pair(0.0f, 1.0f)}) {
+            h.pos.push_back({float(part), uv.first, uv.second});
+            h.uv.push_back(uv.first);
+            h.uv.push_back(uv.second);
+        }
+    const std::map<unsigned, QByteArray> png = {{0u, solidPng(QColor(220, 20, 20))}, {1u, solidPng(QColor(20, 20, 220), 16, 16)}};
+    assignTextures(h, {{0, 4, 0}, {4, 4, 1}}, png);
+    QImage atlas;
+    ASSERT_TRUE(atlas.loadFromData(h.texturePng, "PNG"));
+    EXPECT_EQ(atlas.width(), 16);                       // the common width
+    EXPECT_EQ(atlas.height(), 8 * 2 + 16);              // the 8x8 red part scaled to 16 wide + the 16x16 blue one
+    int redHits = 0, blueHits = 0;
+    for (size_t v = 0; v < h.pos.size(); ++v) {
+        const float u = h.uv[v * 2], vv = h.uv[v * 2 + 1];
+        const QColor c = QColor::fromRgb(atlas.pixel(std::min(atlas.width() - 1, int(u * float(atlas.width()))), std::min(atlas.height() - 1, int((1.0f - vv) * float(atlas.height())))));
+        const bool firstPart = v < 4;
+        if (c.red() > 150 && c.blue() < 100) { ++redHits; EXPECT_TRUE(firstPart) << "vertex " << v; }
+        if (c.blue() > 150 && c.red() < 100) { ++blueHits; EXPECT_FALSE(firstPart) << "vertex " << v; }
+    }
+    EXPECT_EQ(redHits, 4);
+    EXPECT_EQ(blueHits, 4);
+}
+
+TEST(HairTextures, ASinglePartTextureIsKeptUntouchedAndAMissingOneGetsAFlatTile)
+{
+    ImportedHair one;
+    one.uv = {0.25f, 0.5f, 0.75f, 0.5f};
+    const QByteArray red = solidPng(QColor(220, 20, 20));
+    assignTextures(one, {{0, 2, 7}}, {{7u, red}});
+    EXPECT_EQ(one.texturePng, red);
+    EXPECT_FLOAT_EQ(one.uv[0], 0.25f);
+
+    ImportedHair mixed;
+    mixed.uv = {0.5f, 0.5f, 0.5f, 0.5f};
+    assignTextures(mixed, {{0, 1, 0}, {1, 1, 1}}, {{0u, red}, {1u, QByteArray()}});      // part 1 has no texture
+    QImage atlas;
+    ASSERT_TRUE(atlas.loadFromData(mixed.texturePng, "PNG"));
+    const QColor c = QColor::fromRgb(atlas.pixel(int(mixed.uv[2] * float(atlas.width())), std::min(atlas.height() - 1, int((1.0f - mixed.uv[3]) * float(atlas.height())))));
+    EXPECT_EQ(qAlpha(atlas.pixel(int(mixed.uv[2] * float(atlas.width())), std::min(atlas.height() - 1, int((1.0f - mixed.uv[3]) * float(atlas.height()))))), 255);   // opaque, not someone else's alpha
+    EXPECT_NEAR(c.red(), 128, 2);
 }
 
 TEST_F(LibFixture, FolderImportSkipsUnrelatedFilesAndReportsBrokenOnes)

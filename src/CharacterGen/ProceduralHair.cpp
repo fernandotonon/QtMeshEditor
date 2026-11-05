@@ -754,7 +754,7 @@ int segmentsFor(int quality) { return quality <= 0 ? 4 : (quality == 1 ? 7 : 12)
 // The hair is a stack of RINGS of sheets around the head (hairline first, crown last); a ring is `cols` neighbouring guides, so the
 // surface between them is continuous and the hem is a smooth function of the position, like the shells of the bundled hairstyles.
 struct Layout {
-    int rings = 4, cols = 48;
+    int rings = 4, cols = 48, segments = 7;
 };
 
 // The scalp liner is dropped when it would take more than a third of a tight triangle budget.
@@ -767,10 +767,14 @@ Layout layoutFor(const Params& p, size_t reserved)
     // short hair needs more rings: each must reach the next one or the scalp shows between them
     l.rings = std::max(l.rings, std::min(9, int(std::ceil(0.13f / std::max(0.015f, p.length * 0.7f)))));
     l.cols = 36 + 2 * int(std::lround(p.density * 18.0f));
-    const int S = segmentsFor(p.quality);
-    auto tris = [&] { return l.rings * l.cols * S * 2 + l.cols + int(reserved); };
+    l.segments = segmentsFor(p.quality);
+    auto tris = [&] { return l.rings * l.cols * l.segments * 2 + l.cols + int(reserved); };
+    // Reduce the layout until it fits: columns, then rings, and only below the smallest sensible layout the segments per column (a budget of
+    // 200 triangles is accepted by `sanitize`, and the layout must never exceed a hard budget).
     while (tris() > p.maxTriangles && l.cols > 16) l.cols -= 2;
     while (tris() > p.maxTriangles && l.rings > 2) --l.rings;
+    while (tris() > p.maxTriangles && l.cols > 8) l.cols -= 2;
+    while (tris() > p.maxTriangles && l.segments > 2) --l.segments;
     return l;
 }
 
@@ -1040,7 +1044,7 @@ CardMesh generateCards(const Params& pin, const Scalp& scalp, const std::vector<
     const Layout L = layoutFor(p, capTriangles(p, scalp));
     if (guides.size() != size_t(L.rings * L.cols)) return m;
     const HeadFrame& h = scalp.head;
-    const CardCtx c{p, scalp, guides, collider, segmentsFor(p.quality)};
+    const CardCtx c{p, scalp, guides, collider, L.segments};
     const float spacing = 2.0f * kPi * 0.5f * (h.radii.x + h.radii.z) * 0.8f / float(L.cols);
     const int G = std::max(1, std::min(4, int(std::lround(p.thickness / std::max(1e-3f, spacing)))));   // columns per lock of hair
     for (int r = 0; r < L.rings; ++r) {
