@@ -249,6 +249,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/SkinTexture_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairTint.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairTint_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/ProceduralHair.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairFitting.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairImport.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/ProceduralHair_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairFitting_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/HairLibrary_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/EyeTexture.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/EyeTexture_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Eyelashes.cpp

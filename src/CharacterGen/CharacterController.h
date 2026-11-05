@@ -46,6 +46,14 @@ class CharacterController : public QObject
     Q_PROPERTY(QString bottomStyle READ bottomStyle WRITE setBottomStyle NOTIFY clothesChanged)
     Q_PROPERTY(QString topColour READ topColour WRITE setTopColour NOTIFY clothesChanged)
     Q_PROPERTY(QString bottomColour READ bottomColour WRITE setBottomColour NOTIFY clothesChanged)
+    Q_PROPERTY(QString hairSource READ hairSource NOTIFY hairStyleChanged)
+    Q_PROPERTY(QVariantList hairParamSpecs READ hairParamSpecs CONSTANT)
+    Q_PROPERTY(QVariantMap hairParams READ hairParams NOTIFY hairParamsChanged)
+    Q_PROPERTY(QVariantMap hairFitParams READ hairFitParams NOTIFY hairParamsChanged)
+    Q_PROPERTY(QStringList hairPresetIds READ hairPresetIds CONSTANT)
+    Q_PROPERTY(QStringList savedHairPresets READ savedHairPresets NOTIFY hairLibraryChanged)
+    Q_PROPERTY(QVariantList hairLibrary READ hairLibrary NOTIFY hairLibraryChanged)
+    Q_PROPERTY(QString hairStudioStatus READ hairStudioStatus NOTIFY hairLibraryChanged)
     Q_PROPERTY(bool eyelashes READ eyelashes WRITE setEyelashes NOTIFY eyelashesChanged)
     Q_PROPERTY(double bodyHair READ bodyHair WRITE setBodyHair NOTIFY bodyHairChanged)
 
@@ -97,6 +105,42 @@ public:
     QVariantList hairColourPresets() const;
     QStringList eyeNames() const;
 
+    // ---- Hair Studio (ProceduralHair.h / HairFitting.h / HairLibrary.h) ----
+    /// "none" | "bundle" | "procedural" | "library": where the current hairstyle comes from.
+    QString hairSource() const;
+    QVariantList hairParamSpecs() const;        ///< [{key,label,min,max,step}]
+    QVariantMap hairParams() const;             ///< current procedural parameters by key
+    QVariantMap hairFitParams() const;          ///< current fit adjustment (tx..rz, scale, snug, clearance, flip)
+    QStringList hairPresetIds() const;
+    QStringList savedHairPresets() const;
+    QVariantList hairLibrary() const;           ///< [{id,name,length,texture,gender,style,license,author,collection,thumbnail}]
+    QString hairStudioStatus() const { return m_hairStudioStatus; }
+    /// The browser: built-in (bundle), procedural presets and imported styles in one list, filtered; [{key,kind,name,length,texture,gender,style,thumbnail,license,author,current}].
+    /// An empty filter value (or "all") matches everything; `style` is a case-insensitive substring of the style/name.
+    Q_INVOKABLE QVariantList hairBrowser(const QString& kind, const QString& length, const QString& texture, const QString& gender, const QString& style) const;
+    /// Select a browser entry by its key ("proc:<id>", "lib:<id>" or a bundle style name).
+    Q_INVOKABLE void selectHair(const QString& key);
+    Q_INVOKABLE QString hairPresetLabel(const QString& id) const;
+    /// Use a bundled ("short_straight" ...) or saved procedural preset: the hair becomes "proc:<id>".
+    Q_INVOKABLE void useProceduralHair(const QString& presetId);
+    Q_INVOKABLE void useLibraryHair(const QString& id);
+    Q_INVOKABLE void clearHair();
+    Q_INVOKABLE void setHairParam(const QString& key, double value);
+    Q_INVOKABLE void setHairFitParam(const QString& key, double value);
+    Q_INVOKABLE void resetHairParams();
+    Q_INVOKABLE void resetHairFit();
+    Q_INVOKABLE bool saveHairPreset(const QString& name);
+    Q_INVOKABLE bool deleteHairPreset(const QString& name);
+    /// Register hairstyles from a model file or a folder (FBX/OBJ/GLB/DAE...); returns a summary line.
+    Q_INVOKABLE QString importHair(const QString& path, const QString& author, const QString& license, const QString& attribution);
+    Q_INVOKABLE bool removeLibraryHair(const QString& id);
+    /// Duplicate the current hairstyle under a new name (procedural: a saved preset; library: a copy of the entry).
+    Q_INVOKABLE QString duplicateHair(const QString& name);
+    Q_INVOKABLE QString hairFileFilter() const;
+    /// Settings persistence (QSettings): the Hair Studio state of the last session.
+    void saveHairStudioSettings() const;
+    void loadHairStudioSettings();
+
     /// body/face are "index=value,..." lists; seed < 0 = the average character. Returns "" on success, else an error.
     /// replace = true: swap the character this panel made last (live preview; consecutive swaps merge into one undo step).
     Q_INVOKABLE QString generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
@@ -128,6 +172,8 @@ signals:
     void hairNamesChanged();
     void hairStyleChanged();
     void hairColourChanged();
+    void hairParamsChanged();
+    void hairLibraryChanged();
     void bodyHairChanged();
     void eyelashesChanged();
     void clothesChanged();
@@ -151,6 +197,10 @@ private:
     bool m_openEyes = true;
     bool m_skinTexture = true;
     QString m_hairStyle;
+    CharacterGen::Hair::Params m_hairParams;
+    CharacterGen::Hair::FitAdjust m_hairFit;
+    QString m_hairStudioStatus;
+    void hairChanged();
     QStringList m_hairNamesSeen;   ///< the hairstyles the panel was last told about (hairNamesChanged)
     QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;

@@ -153,8 +153,9 @@ Column {
             onActivated: { CharacterController.hairStyle = currentIndex > 0 ? model[currentIndex] : ""; sec.liveUpdate() }
         }
     }
+    HairStudio {}
     Row {
-        visible: CharacterController.hairNames.length > 0
+        visible: CharacterController.hairNames.length > 0 || CharacterController.hairStyle !== ""
         spacing: 4
         Label { width: 52; height: 22; text: "Hair colour" }
         Flow {
@@ -179,7 +180,7 @@ Column {
         }
     }
     Row {
-        visible: CharacterController.hairNames.length > 0
+        visible: CharacterController.hairNames.length > 0 || CharacterController.hairStyle !== ""
         spacing: 4
         Label { width: 52; height: 22; text: "" }
         ColourSwatch {
@@ -194,6 +195,187 @@ Column {
             onEditingFinished: { CharacterController.hairColour = text; text = Qt.binding(function() { return CharacterController.hairColour }); sec.liveUpdate() }
         }
         Label { height: 22; text: "any #rrggbb" ; opacity: 0.6 }
+    }
+    // ── Hair Studio ─────────────────────────────────────────────────────────
+    // One browser for the built-in, procedural and imported hairstyles (filterable), procedural controls (cards generated natively
+    // from guide curves) and the manual fit of an imported style. Every change rebuilds the character in place when live preview is on.
+    component FilterBox: ThemedComboBox {
+        property string current: "all"
+        property real cellWidth: 80
+        width: cellWidth; height: 22; font.pixelSize: 11
+        onActivated: current = model[currentIndex]
+    }
+    component HairStudio: Column {
+        id: studio
+        width: sec.width
+        spacing: 4
+        property bool open: false
+        property string kindFilter: "all"
+        property string lengthFilter: "all"
+        property string textureFilter: "all"
+        property string genderFilter: "all"
+        property string styleFilter: ""
+        property var tiles: []
+        function refresh() { tiles = CharacterController.hairBrowser(kindFilter, lengthFilter, textureFilter, genderFilter, styleFilter) }
+        onOpenChanged: if (open) refresh()
+        onKindFilterChanged: refresh()
+        onLengthFilterChanged: refresh()
+        onTextureFilterChanged: refresh()
+        onGenderFilterChanged: refresh()
+        onStyleFilterChanged: refresh()
+        Connections {
+            target: CharacterController
+            function onHairLibraryChanged() { studio.refresh() }
+            function onHairStyleChanged() { studio.refresh() }
+        }
+        ToolBtn { label: (studio.open ? "▾ " : "▸ ") + "Hair Studio  (" + CharacterController.hairSource + ")"; onClicked: studio.open = !studio.open }
+        Column {
+            visible: studio.open
+            width: studio.width
+            spacing: 4
+            Row {
+                spacing: 4
+                FilterBox { cellWidth: (studio.width - 8) / 3; model: ["all", "builtin", "procedural", "imported"]; onCurrentChanged: studio.kindFilter = current }
+                FilterBox { cellWidth: (studio.width - 8) / 3; model: ["all", "short", "medium", "long"]; onCurrentChanged: studio.lengthFilter = current }
+                FilterBox { cellWidth: (studio.width - 8) / 3; model: ["all", "straight", "wavy", "curly", "coily"]; onCurrentChanged: studio.textureFilter = current }
+            }
+            Row {
+                spacing: 4
+                FilterBox { cellWidth: (studio.width - 8) / 3; model: ["all", "feminine", "masculine", "unisex"]; onCurrentChanged: studio.genderFilter = current }
+                Field { width: studio.width - (studio.width - 8) / 3 - 4; text: ""; placeholderText: "style: bob, ponytail, bun, afro, fade…"; onTextChanged: studio.styleFilter = text }
+            }
+            Flow {
+                width: studio.width
+                spacing: 4
+                Repeater {
+                    model: studio.tiles
+                    delegate: Rectangle {
+                        id: tile
+                        required property var modelData
+                        width: 66; height: 74; radius: 4
+                        color: AnimationControlController.buttonColor
+                        border.width: modelData.current ? 2 : 1
+                        border.color: modelData.current ? AnimationControlController.highlightColor : AnimationControlController.borderColor
+                        Accessible.role: Accessible.Button
+                        Accessible.name: modelData.name
+                        HoverHandler { id: tileHover }
+                        ToolTip.visible: tileHover.hovered; ToolTip.delay: 300
+                        ToolTip.text: modelData.name + " · " + modelData.length + " " + modelData.texture + " " + modelData.gender
+                                      + (modelData.license ? "\nLicence: " + modelData.license : "") + (modelData.author ? "\nBy: " + modelData.author : "")
+                        Image { visible: modelData.thumbnail !== ""; anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 3 } width: 54; height: 48; fillMode: Image.PreserveAspectFit; source: modelData.thumbnail }
+                        Text {
+                            visible: modelData.thumbnail === ""
+                            anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 8 }
+                            text: modelData.kind === "procedural" ? "⌇⌇⌇" : "✂"
+                            font.pixelSize: 22; color: AnimationControlController.textColor; opacity: 0.6
+                        }
+                        Text { anchors { bottom: parent.bottom; left: parent.left; right: parent.right; margins: 2 } height: 22; text: modelData.name; elide: Text.ElideRight; wrapMode: Text.WordWrap; maximumLineCount: 2
+                               horizontalAlignment: Text.AlignHCenter; font.pixelSize: 9; color: AnimationControlController.textColor }
+                        MouseArea { anchors.fill: parent; onClicked: { CharacterController.selectHair(tile.modelData.key); sec.liveUpdate() } }
+                    }
+                }
+            }
+            Note { visible: studio.tiles.length === 0; text: "No hairstyle matches these filters." }
+            Row {
+                spacing: 4
+                ToolBtn { label: "No hair"; onClicked: { CharacterController.clearHair(); sec.liveUpdate() } }
+                ToolBtn { label: "Duplicate"; enabled: CharacterController.hairSource === "procedural" || CharacterController.hairSource === "library"; onClicked: { CharacterController.duplicateHair(dupName.text.length > 0 ? dupName.text : "My hairstyle") ; sec.liveUpdate() } }
+                Field { id: dupName; width: studio.width - 150; placeholderText: "name (duplicate / save preset)" }
+            }
+
+            // ── procedural controls
+            Column {
+                visible: CharacterController.hairSource === "procedural"
+                width: studio.width
+                spacing: 2
+                Label { text: "Procedural hair cards"; font.bold: true }
+                Repeater {
+                    model: CharacterController.hairParamSpecs
+                    delegate: Row {
+                        id: prow
+                        required property var modelData
+                        spacing: 4
+                        Label { width: 92; height: 22; text: prow.modelData.label }
+                        Slider {
+                            id: pslider
+                            width: studio.width - 92 - 44 - 12
+                            height: 22
+                            from: prow.modelData.min; to: prow.modelData.max; stepSize: prow.modelData.step
+                            value: CharacterController.hairParams[prow.modelData.key] === undefined ? prow.modelData.min : CharacterController.hairParams[prow.modelData.key]
+                            onMoved: CharacterController.setHairParam(prow.modelData.key, value)
+                            onPressedChanged: if (!pressed) sec.liveUpdate()
+                        }
+                        Label { width: 40; height: 22; horizontalAlignment: Text.AlignRight; text: pslider.value.toFixed(prow.modelData.step >= 1 ? 0 : 3) }
+                    }
+                }
+                InspectorCheckBox {
+                    text: "Symmetric guides"
+                    checked: CharacterController.hairParams["symmetric"] === 1
+                    onToggled: { CharacterController.setHairParam("symmetric", checked ? 1 : 0); sec.liveUpdate() }
+                }
+                Row {
+                    spacing: 4
+                    ToolBtn { label: "Reset"; onClicked: { CharacterController.resetHairParams(); sec.liveUpdate() } }
+                    ToolBtn { label: "Save as preset"; onClicked: CharacterController.saveHairPreset(dupName.text.length > 0 ? dupName.text : "My hairstyle") }
+                }
+                Flow {
+                    width: studio.width
+                    spacing: 4
+                    Repeater {
+                        model: CharacterController.savedHairPresets
+                        delegate: ToolBtn { required property string modelData; label: "✕ " + modelData; onClicked: CharacterController.deleteHairPreset(modelData) }
+                    }
+                }
+            }
+
+            // ── imported hair: fit + attribution
+            Column {
+                visible: CharacterController.hairSource === "library"
+                width: studio.width
+                spacing: 2
+                Label { text: "Fit to this head"; font.bold: true }
+                Repeater {
+                    model: [{k: "tx", l: "Move X (m)", a: -0.1, b: 0.1}, {k: "ty", l: "Move Y (m)", a: -0.1, b: 0.1}, {k: "tz", l: "Move Z (m)", a: -0.1, b: 0.1},
+                            {k: "rx", l: "Pitch", a: -45, b: 45}, {k: "ry", l: "Yaw", a: -180, b: 180}, {k: "rz", l: "Roll", a: -45, b: 45},
+                            {k: "scale", l: "Scale", a: 0.5, b: 2}, {k: "snug", l: "Snug to scalp", a: 0, b: 1}, {k: "clearance", l: "Clearance (m)", a: 0, b: 0.02}]
+                    delegate: Row {
+                        id: frow
+                        required property var modelData
+                        spacing: 4
+                        Label { width: 92; height: 22; text: frow.modelData.l }
+                        Slider {
+                            id: fslider
+                            width: studio.width - 92 - 44 - 12
+                            height: 22
+                            from: frow.modelData.a; to: frow.modelData.b
+                            value: CharacterController.hairFitParams[frow.modelData.k] === undefined ? 0 : CharacterController.hairFitParams[frow.modelData.k]
+                            onMoved: CharacterController.setHairFitParam(frow.modelData.k, value)
+                            onPressedChanged: if (!pressed) sec.liveUpdate()
+                        }
+                        Label { width: 40; height: 22; horizontalAlignment: Text.AlignRight; text: fslider.value.toFixed(3) }
+                    }
+                }
+                InspectorCheckBox { text: "Source faces the other way (turn 180°)"; checked: CharacterController.hairFitParams["flipFront"] === true; onToggled: { CharacterController.setHairFitParam("flip", checked ? 1 : 0); sec.liveUpdate() } }
+                Row {
+                    spacing: 4
+                    ToolBtn { label: "Reset fit"; onClicked: { CharacterController.resetHairFit(); sec.liveUpdate() } }
+                    ToolBtn { label: "Remove from library"; onClicked: { CharacterController.removeLibraryHair(CharacterController.hairStyle.substring(4)); sec.liveUpdate() } }
+                }
+            }
+
+            // ── import
+            Label { text: "Import hairstyles"; font.bold: true }
+            Field { id: impPath; width: studio.width; placeholderText: "model file or folder (FBX, OBJ, GLB, DAE…) — paste the path" }
+            Row {
+                spacing: 4
+                Field { id: impAuthor; width: (studio.width - 8) / 2; placeholderText: "author" }
+                Field { id: impLicense; width: (studio.width - 8) / 2; placeholderText: "licence (e.g. CC-BY-4.0)" }
+            }
+            Field { id: impAttribution; width: studio.width; placeholderText: "attribution / source URL" }
+            ToolBtn { label: "Import into library"; enabled: impPath.text.length > 0; onClicked: CharacterController.importHair(impPath.text, impAuthor.text, impLicense.text, impAttribution.text) }
+            Note { visible: CharacterController.hairStudioStatus !== ""; text: CharacterController.hairStudioStatus }
+            Note { text: "Imported styles are fitted to each head automatically (scale, scalp clearance); nothing is bundled or downloaded — enter the licence of what you import." }
+        }
     }
     // one garment slot: a style picker and a colour row (swatches + a hex field)
     component ClothesRow: Column {

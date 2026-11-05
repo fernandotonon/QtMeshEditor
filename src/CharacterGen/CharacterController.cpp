@@ -16,6 +16,15 @@
 #include <QColorDialog>
 #include <QFileInfo>
 #include <QSettings>
+#include <QBuffer>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QUrl>
+#include <QFileInfo>
+#include <QImage>
+#include <QPainter>
+#include <QPolygonF>
+#include "HairLibrary.h"
 
 #include <QCoreApplication>
 #include <QMetaObject>
@@ -165,6 +174,8 @@ CharacterController* CharacterController::instance()
 CharacterController* CharacterController::qmlInstance(QQmlEngine*, QJSEngine*)
 {
     CharacterController* c = instance();
+    static bool restored = false;      // the GUI restores the last Hair Studio state once (unit tests use instance() and start clean)
+    if (!restored) { restored = true; c->loadHairStudioSettings(); }
     QQmlEngine::setObjectOwnership(c, QQmlEngine::CppOwnership);
     return c;
 }
@@ -397,6 +408,8 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     p.openEyes = m_openEyes;
     p.skinTexture = m_skinTexture;
     p.hairStyle = m_hairStyle;
+    p.hairProcedural = m_hairParams;
+    p.hairFit = m_hairFit;
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
     p.eyelashes = m_eyelashes;
@@ -430,4 +443,306 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     m_haveParams = true;
     setStatus(tr("Character ready (Ctrl+Z goes back)."), false);
     return {};
+}
+
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Hair Studio
+// ---------------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+constexpr const char* kStudioKey = "Character/hairStudio";
+
+// A small front-view silhouette of a library hairstyle (data URI), cached: the browser's thumbnail.
+QString thumbnailUri(const QString& id)
+{
+    static QHash<QString, QString> cache;
+    const auto hit = cache.constFind(id);
+    if (hit != cache.constEnd()) return hit.value();
+    CharacterGen::Hair::ImportedHair h;
+    if (!CharacterGen::Hair::Library::load(id, &h)) return QString();
+    float lo[2] = {1e9f, 1e9f}, hi[2] = {-1e9f, -1e9f};
+    for (const auto& p : h.pos) { lo[0] = std::min(lo[0], p.x); hi[0] = std::max(hi[0], p.x); lo[1] = std::min(lo[1], p.y); hi[1] = std::max(hi[1], p.y); }
+    const float span = std::max(1e-6f, std::max(hi[0] - lo[0], hi[1] - lo[1]));
+    const int S = 96;
+    QImage img(S, S, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    QPainter pt(&img);
+    pt.setRenderHint(QPainter::Antialiasing);
+    pt.setPen(Qt::NoPen);
+    pt.setBrush(QColor(120, 105, 95, 200));
+    auto map = [&](const CharacterGen::Hair::V3& v) { return QPointF(4 + (v.x - lo[0]) / span * (S - 8), S - 4 - (v.y - lo[1]) / span * (S - 8)); };
+    const size_t step = std::max<size_t>(1, h.idx.size() / 3 / 4000);
+    for (size_t t = 0; t + 2 < h.idx.size(); t += 3 * step) pt.drawPolygon(QPolygonF{map(h.pos[h.idx[t]]), map(h.pos[h.idx[t + 1]]), map(h.pos[h.idx[t + 2]])});
+    pt.end();
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "PNG");
+    const QString uri = QStringLiteral("data:image/png;base64,") + QString::fromLatin1(bytes.toBase64());
+    cache.insert(id, uri);
+    return uri;
+}
+
+}  // namespace
+
+QString CharacterController::hairSource() const
+{
+    if (m_hairStyle.isEmpty()) return QStringLiteral("none");
+    if (m_hairStyle.startsWith(QLatin1String("proc:"))) return QStringLiteral("procedural");
+    if (m_hairStyle.startsWith(QLatin1String("lib:"))) return QStringLiteral("library");
+    return QStringLiteral("bundle");
+}
+
+QVariantList CharacterController::hairParamSpecs() const
+{
+    QVariantList list;
+    for (const CharacterGen::Hair::ParamSpec& s : CharacterGen::Hair::paramSpecs())
+        list.append(QVariantMap{{"key", s.key}, {"label", s.label}, {"min", s.min}, {"max", s.max}, {"step", s.step}});
+    return list;
+}
+
+QVariantMap CharacterController::hairParams() const
+{
+    QVariantMap m;
+    for (const CharacterGen::Hair::ParamSpec& s : CharacterGen::Hair::paramSpecs()) m.insert(s.key, CharacterGen::Hair::getParam(m_hairParams, s.key));
+    m.insert(QStringLiteral("symmetric"), CharacterGen::Hair::getParam(m_hairParams, QStringLiteral("symmetric")));
+    return m;
+}
+
+QVariantMap CharacterController::hairFitParams() const { return CharacterGen::Hair::toJson(m_hairFit).toVariantMap(); }
+QStringList CharacterController::hairPresetIds() const { return CharacterGen::Hair::presetIds(); }
+QStringList CharacterController::savedHairPresets() const { return CharacterGen::Hair::Library::presetNames(); }
+QString CharacterController::hairPresetLabel(const QString& id) const { return CharacterGen::Hair::presetLabel(id); }
+QString CharacterController::hairFileFilter() const { return QStringLiteral("Hair models (*.fbx *.obj *.glb *.gltf *.dae *.ply);;All files (*)"); }
+
+QVariantList CharacterController::hairLibrary() const
+{
+    QVariantList list;
+    for (const CharacterGen::Hair::Library::Meta& m : CharacterGen::Hair::Library::list())
+        list.append(QVariantMap{{"id", m.id}, {"name", m.name}, {"length", m.length}, {"texture", m.texture}, {"gender", m.gender}, {"style", m.style},
+                                {"license", m.license}, {"author", m.author}, {"collection", m.collection}, {"source", m.source}, {"thumbnail", thumbnailUri(m.id)}});
+    return list;
+}
+
+void CharacterController::hairChanged()
+{
+    emit hairStyleChanged();
+    emit hairParamsChanged();
+    saveHairStudioSettings();
+}
+
+void CharacterController::useProceduralHair(const QString& presetId)
+{
+    CharacterGen::Hair::Params p;
+    if (CharacterGen::Hair::isPreset(presetId)) p = CharacterGen::Hair::presetParams(presetId);
+    else if (!CharacterGen::Hair::Library::loadPreset(presetId, &p)) { m_hairStudioStatus = tr("Unknown hair preset '%1'").arg(presetId); emit hairLibraryChanged(); return; }
+    m_hairParams = p;
+    m_hairStyle = QStringLiteral("proc:") + presetId;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character hair procedural %1").arg(presetId));
+    hairChanged();
+}
+
+void CharacterController::useLibraryHair(const QString& id)
+{
+    m_hairFit = CharacterGen::Hair::FitAdjust();
+    CharacterGen::Hair::ImportedHair h;
+    CharacterGen::Hair::Library::Meta meta;
+    if (!CharacterGen::Hair::Library::load(id, &h, &meta)) { m_hairStudioStatus = tr("The hairstyle '%1' is missing or damaged.").arg(id); emit hairLibraryChanged(); return; }
+    if (!meta.fit.isEmpty()) m_hairFit = CharacterGen::Hair::fitAdjustFromJson(meta.fit);
+    m_hairStyle = QStringLiteral("lib:") + id;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character hair library"));
+    hairChanged();
+}
+
+void CharacterController::clearHair()
+{
+    m_hairStyle.clear();
+    hairChanged();
+}
+
+void CharacterController::setHairParam(const QString& key, double value)
+{
+    if (!CharacterGen::Hair::setParam(m_hairParams, key, value)) return;
+    emit hairParamsChanged();
+    saveHairStudioSettings();
+}
+
+void CharacterController::setHairFitParam(const QString& key, double value)
+{
+    QJsonObject o = CharacterGen::Hair::toJson(m_hairFit);
+    static const QStringList numeric{"tx", "ty", "tz", "rx", "ry", "rz", "scale", "snug", "clearance"};
+    if (key == QLatin1String("flip")) o["flipFront"] = value != 0.0;
+    else if (numeric.contains(key)) o[key] = value;
+    else return;
+    m_hairFit = CharacterGen::Hair::fitAdjustFromJson(o);
+    emit hairParamsChanged();
+    saveHairStudioSettings();
+}
+
+void CharacterController::resetHairParams()
+{
+    const QString id = m_hairStyle.startsWith(QLatin1String("proc:")) ? m_hairStyle.mid(5) : QString();
+    CharacterGen::Hair::Params p;
+    if (CharacterGen::Hair::isPreset(id)) p = CharacterGen::Hair::presetParams(id);
+    else if (!id.isEmpty()) CharacterGen::Hair::Library::loadPreset(id, &p);
+    m_hairParams = p;
+    emit hairParamsChanged();
+    saveHairStudioSettings();
+}
+
+void CharacterController::resetHairFit()
+{
+    m_hairFit = CharacterGen::Hair::FitAdjust();
+    emit hairParamsChanged();
+    saveHairStudioSettings();
+}
+
+bool CharacterController::saveHairPreset(const QString& name)
+{
+    QString err;
+    CharacterGen::Hair::Params p = m_hairParams;
+    p.preset = name;
+    if (!CharacterGen::Hair::Library::savePreset(name, p, &err)) { m_hairStudioStatus = err; emit hairLibraryChanged(); return false; }
+    m_hairStudioStatus = tr("Saved hair preset '%1'.").arg(name);
+    emit hairLibraryChanged();
+    return true;
+}
+
+bool CharacterController::deleteHairPreset(const QString& name)
+{
+    const bool ok = CharacterGen::Hair::Library::removePreset(name);
+    emit hairLibraryChanged();
+    return ok;
+}
+
+QString CharacterController::importHair(const QString& path, const QString& author, const QString& license, const QString& attribution)
+{
+    CharacterGen::Hair::Library::ImportOptions opt;
+    opt.author = author;
+    opt.license = license;
+    opt.attribution = attribution;
+    const QString local = path.startsWith(QLatin1String("file:")) ? QUrl(path).toLocalFile() : path;
+    const auto r = QFileInfo(local).isDir() ? CharacterGen::Hair::Library::importFolder(local, opt) : CharacterGen::Hair::Library::importFile(local, opt);
+    m_hairStudioStatus = tr("Hair import: %1 found, %2 added, %3 already in the library, %4 failed.%5")
+                             .arg(r.found).arg(r.added).arg(r.duplicates).arg(r.failed)
+                             .arg(license.isEmpty() ? tr(" No licence was entered: check the source before sharing characters that use it.") : QString());
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"), QStringLiteral("character hair import added=%1").arg(r.added));
+    emit hairLibraryChanged();
+    return m_hairStudioStatus;
+}
+
+bool CharacterController::removeLibraryHair(const QString& id)
+{
+    if (m_hairStyle == QLatin1String("lib:") + id) { m_hairStyle.clear(); hairChanged(); }
+    const bool ok = CharacterGen::Hair::Library::remove(id);
+    emit hairLibraryChanged();
+    return ok;
+}
+
+QString CharacterController::duplicateHair(const QString& name)
+{
+    if (name.trimmed().isEmpty()) return QString();
+    if (hairSource() == QLatin1String("procedural")) {
+        if (!saveHairPreset(name)) return QString();
+        m_hairStyle = QStringLiteral("proc:") + name;
+        hairChanged();
+        return m_hairStyle;
+    }
+    if (hairSource() == QLatin1String("library")) {
+        CharacterGen::Hair::ImportedHair h;
+        CharacterGen::Hair::Library::Meta meta;
+        if (!CharacterGen::Hair::Library::load(m_hairStyle.mid(4), &h, &meta)) return QString();
+        // a copy has to differ in geometry to pass the duplicate test: nudge one vertex by a tenth of a millimetre-quantum
+        if (!h.pos.empty()) h.pos[0].x += 0.0002f;
+        meta.name = name;
+        meta.fit = CharacterGen::Hair::toJson(m_hairFit);
+        QString id, dup, err;
+        if (!CharacterGen::Hair::Library::save(h, meta, &id, &dup, &err) || id.isEmpty()) return QString();
+        m_hairStyle = QStringLiteral("lib:") + id;
+        emit hairLibraryChanged();
+        hairChanged();
+        return m_hairStyle;
+    }
+    return QString();
+}
+
+void CharacterController::saveHairStudioSettings() const
+{
+    CharacterGen::Hair::Library::StudioConfig c;
+    c.style = m_hairStyle;
+    c.procedural = m_hairParams;
+    c.fit = m_hairFit;
+    c.colour = m_hairColour;
+    QSettings().setValue(QLatin1String(kStudioKey), QString::fromUtf8(QJsonDocument(CharacterGen::Hair::Library::toJson(c)).toJson(QJsonDocument::Compact)));
+}
+
+void CharacterController::loadHairStudioSettings()
+{
+    CharacterGen::Hair::Library::StudioConfig c;
+    const QByteArray raw = QSettings().value(QLatin1String(kStudioKey)).toString().toUtf8();
+    if (raw.isEmpty() || !CharacterGen::Hair::Library::fromJson(QJsonDocument::fromJson(raw).object(), &c)) return;
+    m_hairStyle = c.style;
+    m_hairParams = c.procedural;
+    m_hairFit = c.fit;
+}
+
+namespace {
+
+struct Tags { QString length, texture, gender, style; };
+
+Tags tagsForProcedural(const QString& id)
+{
+    static const QHash<QString, Tags> t = {
+        {"short_straight", {"short", "straight", "unisex", "crop"}},         {"medium_layered", {"medium", "straight", "feminine", "layered"}},
+        {"long_straight", {"long", "straight", "feminine", "long"}},         {"wavy", {"medium", "wavy", "feminine", "wavy"}},
+        {"curly", {"medium", "curly", "unisex", "curls"}},                   {"bob", {"short", "straight", "feminine", "bob"}},
+        {"ponytail", {"long", "straight", "feminine", "ponytail"}},          {"short_side_part", {"short", "straight", "masculine", "side part"}}};
+    return t.value(id, Tags{"medium", "straight", "unisex", QString()});
+}
+
+// The MakeHuman bundle styles carry no metadata: read what the name says (short02, bob01, afro01, ponytail02, braid01 ...).
+Tags tagsForBundleName(const QString& name)
+{
+    const QString n = name.toLower();
+    Tags t{"medium", "straight", "unisex", QString()};
+    for (const char* k : {"short", "long", "bob", "pixie", "afro", "ponytail", "braid", "bun", "mohawk"}) {
+        if (!n.contains(QLatin1String(k))) continue;
+        t.style = QString::fromLatin1(k);
+        break;
+    }
+    if (n.contains(QLatin1String("short")) || n.contains(QLatin1String("bob")) || n.contains(QLatin1String("pixie"))) t.length = QStringLiteral("short");
+    if (n.contains(QLatin1String("long")) || n.contains(QLatin1String("ponytail")) || n.contains(QLatin1String("braid"))) t.length = QStringLiteral("long");
+    if (n.contains(QLatin1String("afro"))) t.texture = QStringLiteral("coily");
+    return t;
+}
+
+bool matchesFilter(const QString& filter, const QString& value) { return filter.isEmpty() || filter == QLatin1String("all") || filter == value; }
+
+}  // namespace
+
+QVariantList CharacterController::hairBrowser(const QString& kind, const QString& length, const QString& texture, const QString& gender, const QString& style) const
+{
+    QVariantList out;
+    const QString needle = style.trimmed().toLower();
+    auto add = [&](const QString& key, const QString& k, const QString& name, const Tags& t, const QString& thumb, const QString& license, const QString& author) {
+        if (!matchesFilter(kind, k) || !matchesFilter(length, t.length) || !matchesFilter(texture, t.texture) || !matchesFilter(gender, t.gender)) return;
+        if (!needle.isEmpty() && !t.style.toLower().contains(needle) && !name.toLower().contains(needle)) return;
+        out.append(QVariantMap{{"key", key}, {"kind", k}, {"name", name}, {"length", t.length}, {"texture", t.texture}, {"gender", t.gender}, {"style", t.style},
+                               {"thumbnail", thumb}, {"license", license}, {"author", author}, {"current", m_hairStyle == key}});
+    };
+    for (const QString& n : hairNames()) add(n, QStringLiteral("builtin"), n, tagsForBundleName(n), QString(), QStringLiteral("CC0"), QStringLiteral("MakeHuman"));
+    for (const QString& id : CharacterGen::Hair::presetIds()) add(QStringLiteral("proc:") + id, QStringLiteral("procedural"), CharacterGen::Hair::presetLabel(id), tagsForProcedural(id), QString(), QString(), QString());
+    for (const QString& n : CharacterGen::Hair::Library::presetNames()) add(QStringLiteral("proc:") + n, QStringLiteral("procedural"), n, Tags{"medium", "straight", "unisex", QStringLiteral("saved")}, QString(), QString(), QString());
+    for (const CharacterGen::Hair::Library::Meta& m : CharacterGen::Hair::Library::list())
+        add(QStringLiteral("lib:") + m.id, QStringLiteral("imported"), m.name, Tags{m.length, m.texture, m.gender, m.style}, thumbnailUri(m.id), m.license, m.author);
+    return out;
+}
+
+void CharacterController::selectHair(const QString& key)
+{
+    if (key.startsWith(QLatin1String("proc:"))) useProceduralHair(key.mid(5));
+    else if (key.startsWith(QLatin1String("lib:"))) useLibraryHair(key.mid(4));
+    else { m_hairStyle = key; hairChanged(); }
 }

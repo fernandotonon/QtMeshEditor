@@ -3,6 +3,8 @@
 #include "CharacterGen/CharacterModel.h"
 #include "CharacterGen/CharacterScene.h"
 #include "CharacterGen/HairTint.h"
+#include "CharacterGen/HairLibrary.h"
+#include "CharacterGen/ProceduralHair.h"
 #include "CharacterGen/Clothing.h"
 #include <QSettings>
 #include "ImageTo3D/BackgroundRemover.h"
@@ -3762,8 +3764,26 @@ QJsonObject MCPServer::toolGenerateCharacter(const QJsonObject &args)
     p.hairStyle = hairValue.toString();
     if (!p.hairStyle.isEmpty() && !p.nativeHead)
         return makeErrorResult(QStringLiteral("Hair needs the MHR head: use head \"mhr\" (and a bundle with its expression data)."));
-    if (!p.hairStyle.isEmpty() && !data.hairStyle(p.hairStyle))
-        return makeErrorResult(QStringLiteral("Unknown hairstyle '%1' (available: %2).").arg(p.hairStyle, data.hairStyleNames().join(QStringLiteral(", "))));
+    if (p.hairStyle.startsWith(QLatin1String("proc:")) || p.hairStyle.startsWith(QLatin1String("lib:"))) {
+        // Hair Studio styles: native procedural hair cards (a preset or a saved custom one) or an imported library hairstyle
+        namespace Hair = CharacterGen::Hair;
+        if (p.hairStyle.startsWith(QLatin1String("proc:"))) {
+            const QString id = p.hairStyle.mid(5);
+            Hair::Params saved;
+            if (Hair::isPreset(id)) p.hairProcedural = Hair::presetParams(id);
+            else if (Hair::Library::loadPreset(id, &saved)) p.hairProcedural = saved;
+            else return makeErrorResult(QStringLiteral("Unknown procedural hairstyle '%1' (presets: %2).").arg(id, Hair::presetIds().join(QStringLiteral(", "))));
+            const QJsonObject hp = args.value("hair_params").toObject();
+            for (auto it = hp.begin(); it != hp.end(); ++it)
+                if (!it.value().isDouble() || !Hair::setParam(p.hairProcedural, it.key(), it.value().toDouble()))
+                    return makeErrorResult(QStringLiteral("Bad hair_params entry '%1' (numbers only; keys: length density volume curliness clumping frizz parting layers taper thickness fringe tipCurl gravity hairlineOffset ponytail tieHeight quality seed).").arg(it.key()));
+        } else {
+            Hair::ImportedHair probe;
+            if (!Hair::Library::load(p.hairStyle.mid(4), &probe))
+                return makeErrorResult(QStringLiteral("'%1' is not in the hair library.").arg(p.hairStyle.mid(4)));
+        }
+    } else if (!p.hairStyle.isEmpty() && !data.hairStyle(p.hairStyle))
+        return makeErrorResult(QStringLiteral("Unknown hairstyle '%1' (available: %2; or proc:<preset>, lib:<id>).").arg(p.hairStyle, data.hairStyleNames().join(QStringLiteral(", "))));
     if (args.contains("hair_colour")) {
         const QJsonValue colourValue = args.value("hair_colour");
         if (!colourValue.isString() || !CharacterGen::parseHairColour(colourValue.toString(), &p.hairColour))
@@ -13780,7 +13800,8 @@ QJsonArray MCPServer::buildToolsList()
         props["eye"] = QJsonObject{{"type", "string"}, {"description", "Eye colour: #rrggbb or blue/green/brown/hazel/grey/dark."}};
         props["bust"] = QJsonObject{{"type", "boolean"}, {"description", "Head and shoulders only (previews)."}};
         props["skin_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body instead of a flat colour (default true)."}};
-        props["hair"] = QJsonObject{{"type", "string"}, {"description", "Hairstyle name from the hair bundle (e.g. short02, bob01, long01, ponytail01, afro01); omit for bald. Native head only."}};
+        props["hair"] = QJsonObject{{"type", "string"}, {"description", "Hairstyle: a name from the hair bundle (short02, bob01, long01, ponytail01, afro01), proc:<preset> for native procedural hair cards (short_straight, medium_layered, long_straight, wavy, curly, bob, ponytail, short_side_part, pixie, buzz, afro, curly_bob, shag, long_wavy, high_ponytail, low_ponytail, side_swept_long), or lib:<id> for an imported library hairstyle; omit for bald. Native head only."}};
+        props["hair_params"] = QJsonObject{{"type", "object"}, {"description", "Numeric overrides for a proc: hairstyle: length (m), density, volume, curliness, clumping, frizz, parting (-1..1), layers, taper, thickness, fringe, tipCurl, gravity, hairlineOffset, ponytail, tieHeight, quality (0-2), seed."}};
         props["hair_colour"] = QJsonObject{{"type", "string"}, {"description", "Hair colour: a preset (black, dark_brown, brown, light_brown, blonde, platinum_blonde, red, gray, white) or \"#rrggbb\" (default brown). Needs hair."}};
         props["top"] = QJsonObject{{"type", "string"}, {"description", "Procedural top: none (default), tshirt, longsleeve, tank. Cut from the body, so it follows every shape and animation."}};
         props["bottom"] = QJsonObject{{"type", "string"}, {"description", "Procedural bottom: none (default), shorts, pants."}};
