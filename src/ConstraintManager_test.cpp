@@ -586,6 +586,200 @@ TEST_F(ConstraintSceneTest, UiHelpersListObjectsAndAddFromStrings)
     EXPECT_FALSE(mgr()->addFromUi(QStringLiteral("wobble"), QStringLiteral("node:x"), QString(), QString()));
 }
 
+// ---------------------------------------------------------------------------
+// #560 — IK chain authoring with auto-created handles
+// ---------------------------------------------------------------------------
+
+namespace {
+Ogre::SceneNode* liveNode(const QString& name)
+{
+    Ogre::SceneManager* s = Manager::getSingleton()->getSceneMgr();
+    return s->hasSceneNode(name.toStdString()) ? s->getSceneNode(name.toStdString()) : nullptr;
+}
+} // namespace
+
+TEST_F(ConstraintSceneTest, CreateIkChainAddsHandlesWithoutMovingThePose)
+{
+    Ogre::Entity* e = makeChainEntity("IK_Arm");
+    const Ogre::Vector3 end0 = boneWorld(e, "End"), mid0 = boneWorld(e, "Mid");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Arm/End"), true, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    Ogre::SceneNode* t = liveNode(r.target);
+    Ogre::SceneNode* p = liveNode(r.pole);
+    ASSERT_TRUE(t && p);
+    EXPECT_TRUE(ConstraintManager::isHandleNode(t));
+    EXPECT_TRUE(ConstraintManager::isHandleNode(p));
+    EXPECT_FALSE(ConstraintManager::isHandleNode(e->getParentSceneNode())) << "the character is not a handle";
+    EXPECT_EQ(mgr()->handleNames().size(), 2);
+    EXPECT_LT((t->getPosition() - end0).length(), 1e-4f) << "the target starts at the end bone";
+
+    const Constraint* c = mgr()->find(r.id);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->type, Type::IK);
+    EXPECT_EQ(c->target.object, r.target);
+    EXPECT_EQ(c->pole.object, r.pole);
+
+    mgr()->evaluate();
+    EXPECT_LT((boneWorld(e, "End") - end0).length(), 1e-3f) << "creating the chain does not move the limb";
+    EXPECT_LT((boneWorld(e, "Mid") - mid0).length(), 1e-3f) << "the default pole keeps the current bend";
+}
+
+TEST_F(ConstraintSceneTest, MovingTheHandlesSolvesAndThePoleChoosesTheBend)
+{
+    Ogre::Entity* e = makeChainEntity("IK_Leg");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Leg/End"), true, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    Ogre::SceneNode* t = liveNode(r.target);
+    Ogre::SceneNode* p = liveNode(r.pole);
+    const Ogre::Vector3 goal(0.4f, 1.4f, 0.3f);
+    t->setPosition(goal);
+    for (float side : {1.0f, -1.0f}) {
+        p->setPosition(side * 3.0f, 1.0f, 0.0f);
+        mgr()->evaluate();
+        EXPECT_LT((boneWorld(e, "End") - goal).length(), 1e-3f) << "the end bone reaches the target handle";
+        const Ogre::Vector3 A = boneWorld(e, "Root"), B = boneWorld(e, "Mid");
+        Ogre::Vector3 axis = (goal - A).normalisedCopy();
+        const Ogre::Vector3 bend = (B - A) - axis * (B - A).dotProduct(axis);
+        EXPECT_GT(bend.x * side, 0.05f) << "the middle joint bends toward the pole (side " << side << ")";
+    }
+}
+
+TEST_F(ConstraintSceneTest, IkWeightBlendsFkAndIk)
+{
+    Ogre::Entity* e = makeChainEntity("IK_Blend");
+    const Ogre::Vector3 fk = boneWorld(e, "End");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Blend/End"), false, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_TRUE(r.pole.isEmpty());
+    const Ogre::Vector3 goal(0.9f, 1.1f, 0.0f);
+    liveNode(r.target)->setPosition(goal);
+
+    auto endAt = [&](const char* w) {
+        EXPECT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("influence"), QString::fromLatin1(w)}}, nullptr, false).ok);
+        mgr()->evaluate();
+        return boneWorld(e, "End");
+    };
+    EXPECT_LT((endAt("1") - goal).length(), 1e-3f) << "1 = pure IK";
+    const Ogre::Vector3 half = endAt("0.5");
+    EXPECT_GT((half - goal).length(), 1e-2f);
+    EXPECT_GT((half - fk).length(), 1e-2f) << "0.5 lies between FK and IK";
+    EXPECT_LT((endAt("0") - fk).length(), 1e-3f) << "0 = pure FK (the clip)";
+}
+
+TEST_F(ConstraintSceneTest, IkChainIsOneUndoStepIncludingItsHandles)
+{
+    makeChainEntity("IK_Undo");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Undo/End"), true, true);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), 1);
+
+    UndoManager::getSingleton()->undo();
+    EXPECT_EQ(mgr()->count(), 0);
+    EXPECT_FALSE(liveNode(r.target)) << "undo removes the handles";
+    EXPECT_FALSE(liveNode(r.pole));
+    EXPECT_TRUE(mgr()->handleNames().isEmpty());
+
+    UndoManager::getSingleton()->redo();
+    EXPECT_EQ(mgr()->count(), 1);
+    ASSERT_TRUE(liveNode(r.target)) << "redo recreates them under the same names";
+    ASSERT_TRUE(liveNode(r.pole));
+    EXPECT_TRUE(ConstraintManager::isHandleNode(liveNode(r.target)));
+}
+
+TEST_F(ConstraintSceneTest, RemovingTheChainRemovesItsHandlesAndUndoPutsThemBackWhereTheyWere)
+{
+    makeChainEntity("IK_Remove");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Remove/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    const Ogre::Vector3 moved(0.5f, 1.5f, 0.2f);
+    liveNode(r.target)->setPosition(moved);
+
+    ASSERT_TRUE(mgr()->remove(r.id, true).ok);
+    EXPECT_FALSE(liveNode(r.target));
+    EXPECT_FALSE(liveNode(r.pole));
+    UndoManager::getSingleton()->undo();
+    ASSERT_TRUE(liveNode(r.target));
+    EXPECT_LT((liveNode(r.target)->getPosition() - moved).length(), 1e-5f) << "the handle comes back where the user left it";
+    EXPECT_EQ(mgr()->count(), 1);
+}
+
+TEST_F(ConstraintSceneTest, JointLimitsStillHoldUnderIk)
+{
+    Ogre::Entity* e = makeChainEntity("IK_Limit");
+    Constraint lim;
+    lim.type = Type::LimitRotation;
+    ASSERT_TRUE(parseRef(QStringLiteral("bone:IK_Limit/Mid"), &lim.owner));
+    lim.minDeg = Ogre::Vector3(-10, -10, -10);
+    lim.maxDeg = Ogre::Vector3(10, 10, 10);
+    ASSERT_TRUE(mgr()->add(lim, false).ok);
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Limit/End"), true, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    liveNode(r.target)->setPosition(0.2f, 0.6f, 0.4f);   // needs a deep elbow bend
+    mgr()->evaluate();
+    const Ogre::Quaternion q = e->getSkeleton()->getBone("Mid")->getOrientation();
+    const Ogre::Quaternion clamped = limitRotation(q, lim);
+    EXPECT_GT(std::abs(q.Dot(clamped)), 0.99999f) << "the middle joint stays inside its limits after the IK";
+}
+
+TEST_F(ConstraintSceneTest, IkChainHandlesRoundTripThroughTheSidecar)
+{
+    makeChainEntity("IK_Side");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Side/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    const Ogre::Vector3 moved(0.3f, 1.6f, -0.2f);
+    liveNode(r.target)->setPosition(moved);
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("arm.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset, {QStringLiteral("IK_Side")}));
+
+    mgr()->clear();
+    EXPECT_FALSE(liveNode(r.target)) << "clearing drops the handles";
+    QString err;
+    ASSERT_EQ(mgr()->loadSidecar(asset, {}, &err), 1) << err.toStdString();
+    ASSERT_TRUE(liveNode(r.target)) << "the sidecar recreates the handles";
+    ASSERT_TRUE(liveNode(r.pole));
+    EXPECT_LT((liveNode(r.target)->getPosition() - moved).length(), 1e-5f);
+    EXPECT_TRUE(mgr()->constraintRows().front().toMap().value(QStringLiteral("bound")).toBool());
+}
+
+TEST_F(ConstraintSceneTest, IkChainBakesToKeysThatMatchTheSolve)
+{
+    Ogre::Entity* e = makeChainEntity("IK_BakeH");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_BakeH/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    const Ogre::Vector3 goal(-0.6f, 1.2f, 0.4f);
+    liveNode(r.target)->setPosition(goal);
+    ConstraintManager::BakeOptions o;
+    o.clip = QStringLiteral("Idle");
+    ASSERT_TRUE(mgr()->bake(o, false).ok) << mgr()->status().toStdString();
+    EXPECT_FALSE(mgr()->find(r.id)->enabled) << "baked = IK off";
+    EXPECT_TRUE(liveNode(r.target)) << "muting keeps the handles for further editing";
+    Ogre::AnimationState* st = e->getAnimationState("Idle");
+    st->setEnabled(true);
+    st->setTimePosition(0.25f);
+    e->getSkeleton()->setAnimationState(*e->getAllAnimationStates());
+    EXPECT_LT((boneWorld(e, "End") - goal).length(), 2e-3f) << "FK keys play back the IK pose";
+}
+
+TEST_F(ConstraintSceneTest, IkChainRejectsBadOwnersWithoutLeavingHandles)
+{
+    makeChainEntity("IK_Bad");
+    EXPECT_FALSE(mgr()->createIkChain(QStringLiteral("node:IK_Bad"), true, false).ok) << "needs a bone";
+    EXPECT_FALSE(mgr()->createIkChain(QStringLiteral("bone:IK_Bad/Mid"), true, false).ok) << "Mid has no grandparent";
+    EXPECT_FALSE(mgr()->createIkChain(QStringLiteral("bone:IK_Bad/Nope"), true, false).ok);
+    EXPECT_TRUE(mgr()->handleNames().isEmpty());
+    EXPECT_EQ(mgr()->count(), 0);
+}
+
+TEST_F(ConstraintSceneTest, SelectingAHandleShowsItsChain)
+{
+    makeChainEntity("IK_Sel");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Sel/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    SelectionSet::getSingleton()->selectOne(liveNode(r.pole));
+    EXPECT_EQ(mgr()->ownerFromSelection(), QStringLiteral("bone:IK_Sel/End"));
+}
+
 TEST_F(ConstraintSceneTest, PanelQmlLoadsWithoutErrors)
 {
     qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",

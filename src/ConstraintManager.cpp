@@ -34,6 +34,12 @@ The MIT License
 #include <OgreKeyFrame.h>
 #include <OgreSceneNode.h>
 #include <OgreSkeletonInstance.h>
+#include <OgreMaterialManager.h>
+#include <OgreMeshManager.h>
+#include <OgreTechnique.h>
+#include <OgrePass.h>
+
+#include <ProceduralSphereGenerator.h>
 
 #include <algorithm>
 #include <cmath>
@@ -285,6 +291,51 @@ void crumb(const char* op, const QString& msg)
 
 QString ownerKey(const Ref& r) { return formatRef(r); }
 
+// ---- IK handles (#560) ------------------------------------------------------
+constexpr const char* kHandleMesh = "__QtMeshEditor_IKHandle__";
+
+std::string handleMaterial(const QString& role)
+{
+    const bool pole = role == QLatin1String("pole");
+    const std::string name = pole ? "QtMeshEditor/IKHandle/Pole" : "QtMeshEditor/IKHandle/Target";
+    auto& mm = Ogre::MaterialManager::getSingleton();
+    if (!mm.resourceExists(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
+        Ogre::MaterialPtr mat = mm.create(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        const Ogre::ColourValue c = pole ? Ogre::ColourValue(0.2f, 0.8f, 1.0f) : Ogre::ColourValue(1.0f, 0.55f, 0.1f);
+        // Emissive only: an UNLIT pass renders white under the RTSS (it
+        // ignores the material colours), so keep lighting on and let the
+        // self-illumination carry a flat colour.
+        pass->setDiffuse(Ogre::ColourValue::Black);
+        pass->setAmbient(Ogre::ColourValue::Black);
+        pass->setSpecular(Ogre::ColourValue::Black);
+        pass->setSelfIllumination(c);
+        // Visible through the character: a target usually sits inside a hand.
+        pass->setDepthCheckEnabled(false);
+        pass->setDepthWriteEnabled(false);
+    }
+    return name;
+}
+
+void ensureHandleMesh()
+{
+    if (Ogre::MeshManager::getSingleton().resourceExists(kHandleMesh,
+                                                         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+        return;
+    Procedural::SphereGenerator().setRadius(1.0f).setNumRings(10).setNumSegments(14).realizeMesh(kHandleMesh);
+}
+
+/// Node names the constraints reference (targets and poles).
+QSet<QString> referencedNodes(const std::vector<Constraint>& cs)
+{
+    QSet<QString> out;
+    for (const auto& c : cs) {
+        if (!c.target.isEmpty() && !c.target.isBone()) out.insert(c.target.object);
+        if (!c.pole.isEmpty() && !c.pole.isBone()) out.insert(c.pole.object);
+    }
+    return out;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -356,6 +407,7 @@ void ConstraintManager::discardForSceneClear()
     detachListener();
     const bool had = !m_cons.empty();
     m_cons.clear();
+    m_handles.clear();   // the scene destroys the nodes
     m_nodeStates.clear();
     m_skippingEntities.clear();
     if (had) {
@@ -488,6 +540,17 @@ void ConstraintManager::evaluate()
                 const Ogre::Quaternion midLocal = midParent.rotation.Inverse() * midWorld;
                 mid->setOrientation(blend(mid->getOrientation(), midLocal, c.influence));
                 refreshSubtree(root);
+                // Joint limits (#560): a limit-rotation on the root or middle
+                // bone runs BEFORE this IK in depth order, so the IK would
+                // override it — re-apply it to the solved joints.
+                for (Ogre::Bone* jb : {static_cast<Ogre::Bone*>(root), static_cast<Ogre::Bone*>(mid)}) {
+                    const QString jk = QStringLiteral("bone:%1/%2").arg(it.key(), QString::fromStdString(jb->getName()));
+                    if (!stacks.contains(jk)) continue;
+                    const auto& js = stacks[jk];
+                    for (auto lit = js.rbegin(); lit != js.rend(); ++lit)
+                        if ((*lit)->type == Type::LimitRotation)
+                            writeLocal(jb, applyLocal(**lit, boneParentWorld(e, jb), localOf(jb)));
+                }
                 m_touchedBones.insert(it.key() + QLatin1Char('/') + QString::fromStdString(root->getName()));
                 m_touchedBones.insert(it.key() + QLatin1Char('/') + QString::fromStdString(mid->getName()));
             }
@@ -596,6 +659,7 @@ ConstraintManager::Result ConstraintManager::commit(const std::vector<Constraint
     r.id = id;
     const QJsonObject before = document();
     m_cons = next;
+    dropUnreferencedHandles();
     syncOwners();
     const QJsonObject after = document();
     if (undoable)
@@ -612,6 +676,8 @@ bool ConstraintManager::applyDocument(const QJsonObject& doc, QString* error)
     std::vector<Constraint> next;
     if (!fromDocument(doc, &next, error)) return false;
     m_cons = std::move(next);
+    if (doc.contains(QStringLiteral("handles"))) reconcileHandles(doc.value(QStringLiteral("handles")).toArray(), true);
+    else dropUnreferencedHandles();
     syncOwners();
     emit constraintsChanged();
     return true;
@@ -620,6 +686,7 @@ bool ConstraintManager::applyDocument(const QJsonObject& doc, QString* error)
 void ConstraintManager::clear()
 {
     m_cons.clear();
+    dropUnreferencedHandles();
     syncOwners();
     emit constraintsChanged();
 }
@@ -1025,6 +1092,8 @@ bool ConstraintManager::writeSidecar(const QString& assetPath, const QStringList
         return false;
     }
     QJsonObject doc = toDocument(keep);
+    const QJsonArray handles = handlesJson(keep);
+    if (!handles.isEmpty()) doc[QStringLiteral("handles")] = handles;
     if (!meta.isEmpty()) doc[QStringLiteral("meta")] = meta;
     QSaveFile f(path);
     if (!f.open(QIODevice::WriteOnly)) return false;
@@ -1039,8 +1108,12 @@ int ConstraintManager::loadSidecar(const QString& assetPath, const QHash<QString
     if (!f.exists()) return 0;
     if (!f.open(QIODevice::ReadOnly)) { if (error) *error = f.errorString(); return -1; }
     std::vector<Constraint> file;
-    if (!fromDocument(QJsonDocument::fromJson(f.readAll()).object(), &file, error)) return -1;
+    const QJsonObject fileDoc = QJsonDocument::fromJson(f.readAll()).object();
+    if (!fromDocument(fileDoc, &file, error)) return -1;
     ensureSceneHook();
+    // IK handles (#560) are not part of the mesh file: recreate the ones the
+    // sidecar lists (an existing node of that name is reused).
+    reconcileHandles(fileDoc.value(QStringLiteral("handles")).toArray(), false);
     auto ren = [&](Ref r) { if (rename.contains(r.object)) r.object = rename.value(r.object); return r; };
     std::vector<Constraint> next = m_cons;
     QSet<QString> taken;
@@ -1165,8 +1238,16 @@ QString ConstraintManager::ownerFromSelection() const
         for (Ogre::Node* c : root->getChildren()) if (live(c, want)) return true;
         return false;
     };
-    for (Ogre::SceneNode* n : sel->getNodesSelectionList())
-        if (n && live(scene->getRootSceneNode(), n)) return QStringLiteral("node:%1").arg(QString::fromStdString(n->getName()));
+    for (Ogre::SceneNode* n : sel->getNodesSelectionList()) {
+        if (!n || !live(scene->getRootSceneNode(), n)) continue;
+        const QString name = QString::fromStdString(n->getName());
+        // A selected IK handle stands for the chain it drives (#560).
+        if (m_handles.contains(name))
+            for (const auto& c : m_cons)
+                if ((!c.target.isBone() && c.target.object == name) || (!c.pole.isBone() && c.pole.object == name))
+                    return formatRef(c.owner);
+        return QStringLiteral("node:%1").arg(name);
+    }
     if (ent && ent->getParentSceneNode() && live(scene->getRootSceneNode(), ent->getParentSceneNode()))
         return QStringLiteral("node:%1").arg(QString::fromStdString(ent->getParentSceneNode()->getName()));
     return {};
@@ -1223,6 +1304,12 @@ bool ConstraintManager::addFromUi(const QString& typeStr, const QString& owner, 
     return add(c).ok;
 }
 
+bool ConstraintManager::createIkChainFromUi(const QString& owner, bool withPole)
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Constraints: create IK chain"));
+    return createIkChain(owner, withPole).ok;
+}
+
 bool ConstraintManager::removeFromUi(const QString& id) { return remove(id).ok; }
 bool ConstraintManager::setEnabledFromUi(const QString& id, bool enabled) { return setParams(id, {}, &enabled).ok; }
 bool ConstraintManager::setParamFromUi(const QString& id, const QString& key, const QString& value)
@@ -1241,4 +1328,186 @@ bool ConstraintManager::bakeFromUi(const QString& owner, const QString& clip, in
     o.fps = fps > 0 ? fps : 30;
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Constraints: bake"));
     return bake(o).ok;
+}
+
+// ---------------------------------------------------------------------------
+// IK chains + handles (#560)
+// ---------------------------------------------------------------------------
+
+QJsonObject ConstraintManager::document() const
+{
+    QJsonObject d = toDocument(m_cons);
+    d[QStringLiteral("handles")] = handlesJson(m_cons);
+    return d;
+}
+
+bool ConstraintManager::isHandleEntity(const Ogre::MovableObject* obj)
+{
+    const auto* e = dynamic_cast<const Ogre::Entity*>(obj);
+    return e && e->getMesh() && e->getMesh()->getName() == kHandleMesh;
+}
+
+bool ConstraintManager::isHandleNode(const Ogre::SceneNode* node)
+{
+    if (!node) return false;
+    for (const Ogre::MovableObject* o : node->getAttachedObjects())
+        if (isHandleEntity(o)) return true;
+    return false;
+}
+
+QStringList ConstraintManager::handleNames() const
+{
+    QStringList out = m_handles.keys();
+    out.sort();
+    return out;
+}
+
+QJsonArray ConstraintManager::handlesJson(const std::vector<Constraint>& only) const
+{
+    QJsonArray arr;
+    QStringList names = referencedNodes(only).values();
+    names.sort();   // stable sidecars
+    for (const QString& name : names) {
+        if (!m_handles.contains(name)) continue;
+        Ogre::SceneNode* n = nodeByName(name);
+        if (!n) continue;
+        const Ogre::Vector3 p = n->_getDerivedPosition();
+        arr.append(QJsonObject{{QStringLiteral("name"), name},
+                               {QStringLiteral("role"), m_handles.value(name)},
+                               {QStringLiteral("position"), QJsonArray{p.x, p.y, p.z}},
+                               {QStringLiteral("radius"), double(n->getScale().x)}});
+    }
+    return arr;
+}
+
+QString ConstraintManager::createHandle(const QString& name, const QString& role, const Ogre::Vector3& pos, float radius)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr || !mgr->getSceneMgr()) return {};
+    ensureHandleMesh();
+    Ogre::SceneNode* node = mgr->addSceneNode(name);   // suffixes the name when taken
+    node->setPosition(pos);
+    node->setScale(Ogre::Vector3(radius));
+    Ogre::Entity* ent = mgr->createEntity(node, Ogre::MeshManager::getSingleton().getByName(
+                                                   kHandleMesh, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME));
+    ent->setMaterialName(handleMaterial(role));
+    ent->setCastShadows(false);
+    ent->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+    const QString actual = QString::fromStdString(node->getName());
+    m_handles.insert(actual, role);
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.ik.handle"), QStringLiteral("create %1 %2").arg(role, actual));
+    return actual;
+}
+
+void ConstraintManager::destroyHandle(const QString& name)
+{
+    m_handles.remove(name);
+    m_nodeStates.remove(name);
+    Manager* mgr = Manager::getSingletonPtr();
+    Ogre::SceneNode* n = nodeByName(name);
+    if (!mgr || !n || !isHandleNode(n)) return;   // never destroy a node the user owns
+    if (SelectionSet* sel = SelectionSet::getSingletonPtr()) sel->clear();
+    mgr->destroySceneNode(n);
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.ik.handle"), QStringLiteral("destroy %1").arg(name));
+}
+
+void ConstraintManager::dropUnreferencedHandles()
+{
+    const QSet<QString> used = referencedNodes(m_cons);
+    for (const QString& name : m_handles.keys())
+        if (!used.contains(name)) destroyHandle(name);
+}
+
+void ConstraintManager::reconcileHandles(const QJsonArray& wanted, bool destroyUnlisted)
+{
+    QSet<QString> listed;
+    for (const QJsonValue& v : wanted) {
+        const QJsonObject o = v.toObject();
+        const QString name = o.value(QStringLiteral("name")).toString();
+        if (name.isEmpty()) continue;
+        listed.insert(name);
+        const QString role = o.value(QStringLiteral("role")).toString(QStringLiteral("target"));
+        if (Ogre::SceneNode* existing = nodeByName(name)) {
+            // Keep it where the user left it; adopt a handle we lost track of.
+            if (isHandleNode(existing)) m_handles.insert(name, role);
+            continue;
+        }
+        const QJsonArray p = o.value(QStringLiteral("position")).toArray();
+        const Ogre::Vector3 pos(float(p.at(0).toDouble()), float(p.at(1).toDouble()), float(p.at(2).toDouble()));
+        const double r = o.value(QStringLiteral("radius")).toDouble(0.05);
+        createHandle(name, role, pos, float(r > 0 ? r : 0.05));
+    }
+    if (destroyUnlisted)
+        for (const QString& name : m_handles.keys())
+            if (!listed.contains(name)) destroyHandle(name);
+}
+
+ConstraintManager::IkChainResult ConstraintManager::createIkChain(const QString& ownerRef, bool withPole, bool undoable)
+{
+    ensureSceneHook();
+    IkChainResult r;
+    auto fail = [&](const QString& m) {
+        r.error = m;
+        setStatus(m, false);
+        SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.ik.error"), m);
+        return r;
+    };
+    Ref owner;
+    QString err;
+    if (!parseRef(ownerRef, &owner, &err)) return fail(err);
+    if (!owner.isBone())
+        return fail(QStringLiteral("an IK chain needs a bone owner: the END bone (a hand or a foot), as bone:Entity/Bone"));
+    Ogre::Entity* e = entityByName(owner.object);
+    Ogre::Bone* end = boneOf(e, owner.bone);
+    if (!end) return fail(QStringLiteral("'%1' has no bone '%2'").arg(owner.object, owner.bone));
+    auto* mid = dynamic_cast<Ogre::Bone*>(end->getParent());
+    auto* root = mid ? dynamic_cast<Ogre::Bone*>(mid->getParent()) : nullptr;
+    if (!root)
+        return fail(QStringLiteral("IK needs the END bone of a 2-bone chain: '%1' has no parent and grandparent bone")
+                        .arg(owner.bone));
+
+    // Place the handles on the pose that is on screen right now.
+    evaluate();
+    const Transform ew = entityWorld(e);
+    const Ogre::Vector3 A = compose(ew, derivedOf(root)).position;
+    const Ogre::Vector3 B = compose(ew, derivedOf(mid)).position;
+    const Ogre::Vector3 C = compose(ew, derivedOf(end)).position;
+    const float chain = (B - A).length() + (C - B).length();
+    if (chain < 1e-6f) return fail(QStringLiteral("the chain ending at '%1' has zero length").arg(owner.bone));
+    const float radius = chain * 0.06f;
+
+    const QJsonObject before = document();
+    const QString base = QStringLiteral("IK_%1").arg(owner.bone);
+    r.target = createHandle(base + QStringLiteral("_target"), QStringLiteral("target"), C, radius);
+    if (r.target.isEmpty()) return fail(QStringLiteral("no scene to create the IK handles in"));
+    if (withPole) {
+        const Ogre::Vector3 P = defaultPolePosition(A, B, C, ew.rotation * Ogre::Vector3::UNIT_Z,
+                                                    ew.rotation * Ogre::Vector3::UNIT_Y, chain * 0.5f);
+        r.pole = createHandle(base + QStringLiteral("_pole"), QStringLiteral("pole"), P, radius * 0.75f);
+    }
+
+    Constraint c;
+    c.type = Type::IK;
+    c.owner = owner;
+    c.target.object = r.target;
+    if (withPole) c.pole.object = r.pole;
+    const Result added = add(c, /*undoable=*/false);
+    if (!added.ok) {
+        destroyHandle(r.target);
+        if (!r.pole.isEmpty()) destroyHandle(r.pole);
+        return fail(added.error);
+    }
+    r.id = added.id;
+    r.ok = true;
+    if (undoable)
+        if (UndoManager* um = UndoManager::getSingleton())
+            um->push(new ConstraintDocCommand(QStringLiteral("Create IK chain (%1)").arg(owner.bone), before, document()));
+    // Ready to drag: select the target handle.
+    if (SelectionSet* sel = SelectionSet::getSingletonPtr())
+        if (Ogre::SceneNode* t = nodeByName(r.target)) sel->selectOne(t);
+    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.ik.create"),
+                                  QStringLiteral("%1 pole=%2").arg(formatRef(owner), withPole ? QStringLiteral("yes") : QStringLiteral("no")));
+    setStatus(QStringLiteral("IK chain on %1: move the target handle%2").arg(owner.bone,
+              withPole ? QStringLiteral(" (the pole sets the bend direction)") : QString()), true);
+    return r;
 }

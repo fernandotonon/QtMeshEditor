@@ -268,6 +268,27 @@ IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Og
     return s;
 }
 
+Ogre::Vector3 defaultPolePosition(const Ogre::Vector3& A, const Ogre::Vector3& B, const Ogre::Vector3& C,
+                                  const Ogre::Vector3& forward, const Ogre::Vector3& up, float distance)
+{
+    Ogre::Vector3 axis = C - A;
+    const float chain = (B - A).length() + (C - B).length();
+    if (axis.squaredLength() < 1e-12f) axis = B - A;
+    if (axis.squaredLength() < 1e-12f) return B + up * distance;
+    axis.normalise();
+    auto offAxis = [&](const Ogre::Vector3& v) { return v - axis * v.dotProduct(axis); };
+    // The current bend: the middle joint's offset from the A-C line.
+    Ogre::Vector3 dir = offAxis(B - A);
+    if (dir.length() < 1e-3f * std::max(chain, 1e-6f)) {
+        const bool hangsDown = axis.dotProduct(up) < -0.7f;
+        dir = offAxis(hangsDown ? forward : -forward);
+        if (dir.squaredLength() < 1e-12f) dir = offAxis(up);
+        if (dir.squaredLength() < 1e-12f) dir = axis.perpendicular();
+    }
+    dir.normalise();
+    return B + dir * distance;
+}
+
 Ogre::Quaternion limitRotation(const Ogre::Quaternion& local, const Constraint& c)
 {
     Ogre::Matrix3 m;

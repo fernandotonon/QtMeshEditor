@@ -15,6 +15,37 @@ When you're done, **Bake** writes the result into ordinary keyframes.
 
 Every constraint has an **influence** (0–1) that blends it with the incoming value.
 
+## IK chains with handles (#560)
+
+**Create IK chain** (Constraints panel, with a bone owner; MCP `create_ik_chain`) is the
+one-click way to rig an arm or a leg. Pick the **end bone** (hand or foot) and it does the following:
+
+- creates an orange **target** handle at the end bone and, with *with pole* on (the default),
+  a cyan **pole** handle on the side the elbow/knee already bends to. A straight limb gets
+  knees forward and elbows back. Nothing moves until a handle is dragged;
+- adds an `ik` constraint wired to them;
+- selects the target, so the transform gizmo can drag it immediately.
+
+Handles are ordinary scene nodes with a small sphere, drawn through the character. That means
+the gizmo, the Scene tree and node animation all work on them, so keyframing a handle
+animates the IK. Selecting a handle shows its chain in the panel.
+
+The handles belong to the constraints:
+
+- they are created and destroyed with the constraint that references them, and every step is undoable
+  (creation is ONE step, handles included);
+- scene export skips them, so they never become geometry;
+- they are saved in the sidecar's `handles` array and recreated on import.
+
+**FK ↔ IK** is the constraint's `influence`: 0 = the clip (FK), 1 = pure IK, in between a
+blend. **Bake** turns the IK into FK keys and mutes the constraint. Engines without runtime IK
+need this, so export offers it.
+
+**Joint limits:** put a *Limit rotation* constraint on the elbow/knee (or shoulder/hip). It is
+re-applied after the IK solve, so the IK cannot push a joint past its limits.
+
+Longer chains (CCD / FABRIK) are out of scope: 2-bone analytical IK covers arms and legs.
+
 ## Stacks: the top wins
 
 Constraints on one owner form a stack. The stack is evaluated **bottom-up**, so the top-most
@@ -60,7 +91,8 @@ glTF/FBX can't store constraints. **Export** therefore asks whether to *Bake & E
 ## Persistence
 
 Constraints are saved in `<file>.constraints.json` (schema `qtmesh-anim-constraints-v1`)
-next to every export, and loaded again on import:
+next to every export, together with the IK handles they reference (`handles`: name, role,
+world position, radius), and loaded again on import:
 
 - A single-entity export keeps the constraints owned by that entity or its node.
 - `meta` records the exported names, so a renamed re-import rebinds the constraints.

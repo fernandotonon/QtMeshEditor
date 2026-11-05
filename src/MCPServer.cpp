@@ -823,6 +823,7 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("get_dna_correctives"), &MCPServer::toolGetDnaCorrectives},
         {QStringLiteral("set_dna_correctives"), &MCPServer::toolSetDnaCorrectives},
         {QStringLiteral("add_constraint"), &MCPServer::toolAddConstraint},
+        {QStringLiteral("create_ik_chain"), &MCPServer::toolCreateIkChain},
         {QStringLiteral("set_constraint"), &MCPServer::toolSetConstraint},
         {QStringLiteral("move_constraint"), &MCPServer::toolMoveConstraint},
         {QStringLiteral("remove_constraint"), &MCPServer::toolRemoveConstraint},
@@ -1023,6 +1024,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
             {QStringLiteral("set_generator"), QStringLiteral("animation_blend")},
             {QStringLiteral("bake_generator"), QStringLiteral("animation_blend")},
             {QStringLiteral("add_constraint"), QStringLiteral("animation_blend")},
+            {QStringLiteral("create_ik_chain"), QStringLiteral("animation_blend")},
             {QStringLiteral("bake_constraints"), QStringLiteral("animation_blend")},
             {QStringLiteral("list_morph_targets"), QStringLiteral("morph")},
             {QStringLiteral("describe_material"), QStringLiteral("material_editor")},
@@ -1054,7 +1056,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         QStringLiteral("set_light_property"), QStringLiteral("apply_light_rig"), QStringLiteral("duplicate_entity"),
         QStringLiteral("group_nodes"), QStringLiteral("ungroup_node"), QStringLiteral("reparent_node"),
         QStringLiteral("apply_atlas"), QStringLiteral("optimize_mesh"), QStringLiteral("weld_vertices"), QStringLiteral("bake_vat"), QStringLiteral("retarget_animation"), QStringLiteral("add_generator"), QStringLiteral("set_generator"), QStringLiteral("bake_generator"), QStringLiteral("remove_generator"),
-        QStringLiteral("add_constraint"), QStringLiteral("set_constraint"), QStringLiteral("move_constraint"),
+        QStringLiteral("add_constraint"), QStringLiteral("create_ik_chain"), QStringLiteral("set_constraint"), QStringLiteral("move_constraint"),
         QStringLiteral("remove_constraint"), QStringLiteral("bake_constraints"),
         QStringLiteral("set_motion_graph"),
         QStringLiteral("set_morph_weight"), QStringLiteral("import_alembic"), QStringLiteral("set_node_keyframe"),
@@ -11481,6 +11483,46 @@ QJsonObject MCPServer::toolAddConstraint(const QJsonObject& args)
     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
 }
 
+QJsonObject MCPServer::toolCreateIkChain(const QJsonObject& args)
+{
+    SentryReporter::addBreadcrumb("ai.tool_call", "create_ik_chain");
+    const QString owner = args.value("owner").toString();
+    if (owner.isEmpty()) return makeErrorResult("Error: 'owner' is required: bone:<entity>/<END bone> (a hand or a foot)");
+    if (args.contains("pole") && !args.value("pole").isBool()) return makeErrorResult("Error: 'pole' must be a boolean");
+    auto readVec = [&](const char* key, Ogre::Vector3* out, QString* error) {
+        if (!args.contains(key)) return true;
+        const QJsonArray a = args.value(key).toArray();
+        if (a.size() != 3 || !a.at(0).isDouble() || !a.at(1).isDouble() || !a.at(2).isDouble()) {
+            *error = QStringLiteral("'%1' must be [x, y, z]").arg(QLatin1String(key));
+            return false;
+        }
+        *out = Ogre::Vector3(float(a.at(0).toDouble()), float(a.at(1).toDouble()), float(a.at(2).toDouble()));
+        return true;
+    };
+    Ogre::Vector3 targetPos, polePos;
+    QString err;
+    if (!readVec("target_position", &targetPos, &err) || !readVec("pole_position", &polePos, &err))
+        return makeErrorResult("Error: " + err);
+    const bool withPole = args.value("pole").toBool(true);
+    if (args.contains("pole_position") && !withPole) return makeErrorResult("Error: 'pole_position' needs pole: true");
+
+    auto* cm = ConstraintManager::instance();
+    const auto r = cm->createIkChain(owner, withPole);
+    if (!r.ok) return makeErrorResult("Error: " + r.error);
+    // Optional placement after creation (still the same scene nodes, so a
+    // later transform_mesh {name, position} moves them the same way).
+    auto place = [](const QString& name, const Ogre::Vector3& p) {
+        if (Ogre::SceneNode* n = findSceneNodeByName(name)) n->setPosition(p);
+    };
+    if (args.contains("target_position")) place(r.target, targetPos);
+    if (args.contains("pole_position")) place(r.pole, polePos);
+    cm->evaluate();
+    QJsonObject content{{"ok", true}, {"id", r.id}, {"target_handle", r.target}, {"pole_handle", r.pole},
+                        {"constraint", constraintJson(*cm->find(r.id))},
+                        {"note", "Move a handle with transform_mesh {name, position}; bake_constraints writes the IK into keyframes."}};
+    return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolSetConstraint(const QJsonObject& args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "set_constraint");
@@ -15532,6 +15574,19 @@ QJsonArray MCPServer::buildToolsList()
                    "its animation; bake_constraints writes the result into keyframes. parent-of keeps the owner where it is "
                    "now (offset captured). Undoable.",
                    props, QJsonArray{"type", "owner"});
+    }
+    {
+        QJsonObject props;
+        props["owner"] = QJsonObject{{"type", "string"}, {"description", "bone:<entity>/<bone> — the END bone of the chain (a hand or a foot); its parent and grandparent bend."}};
+        props["pole"] = QJsonObject{{"type", "boolean"}, {"description", "Also create a pole handle that sets the elbow/knee direction (default true)."}};
+        props["target_position"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}}, {"description", "Optional world [x,y,z] for the target handle (default: where the end bone is now, so nothing moves)."}};
+        props["pole_position"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}}, {"description", "Optional world [x,y,z] for the pole handle (default: on the side the middle joint already bends to)."}};
+        appendTool("create_ik_chain",
+                   "Create a 2-bone IK chain with viewport HANDLES: scene nodes for the target (and pole) are created and an ik "
+                   "constraint is added on the end bone. Move the handles (transform_mesh {name, position}) to pose the limb; "
+                   "influence (set_constraint) blends FK <-> IK; bake_constraints writes keyframes. Handles are editor-only (not "
+                   "exported as geometry) and are removed with the constraint. One undo step.",
+                   props, QJsonArray{"owner"});
     }
     {
         QJsonObject props;

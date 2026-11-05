@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 #include "AnimConstraints.h"
 
 #include <QJsonArray>
@@ -208,4 +210,28 @@ TEST(AnimConMaths, LookAtDefaultsToOgreForward)
     const Ogre::Quaternion q = aimRotation(Ogre::Vector3::ZERO, Ogre::Vector3(5, 0, 0), c.aimAxis, c.upAxis,
                                            Ogre::Vector3::UNIT_Y, Ogre::Quaternion::IDENTITY);
     EXPECT_GT((q * Ogre::Vector3::NEGATIVE_UNIT_Z).dotProduct(Ogre::Vector3::UNIT_X), 0.9999f);
+}
+
+// #560: the default pole keeps the current bend, and a straight chain picks
+// knees-forward / elbows-back from the facing.
+TEST(AnimConIk, DefaultPoleFollowsTheCurrentBend)
+{
+    const Ogre::Vector3 fwd = Ogre::Vector3::UNIT_Z, up = Ogre::Vector3::UNIT_Y;
+    // Bent toward +X: the pole sits on +X of the middle joint.
+    const Ogre::Vector3 p = defaultPolePosition({0, 0, 0}, {0.3f, 1, 0}, {0, 2, 0}, fwd, up, 1.0f);
+    EXPECT_NEAR(p.x, 1.3f, 1e-4f);
+    EXPECT_NEAR(p.y, 1.0f, 1e-4f);
+    // Feeding that pole to the solver with the end where it is changes nothing.
+    const IkSolution s = solveTwoBone({0, 0, 0}, {0.3f, 1, 0}, {0, 2, 0}, {0, 2, 0}, p, true);
+    ASSERT_TRUE(s.valid);
+    EXPECT_LT((s.newMid - Ogre::Vector3(0.3f, 1, 0)).length(), 1e-3f);
+
+    // Straight leg hanging down: knee forward.
+    const Ogre::Vector3 knee = defaultPolePosition({0, 1, 0}, {0, 0.5f, 0}, {0, 0, 0}, fwd, up, 0.5f);
+    EXPECT_GT(knee.z, 0.4f);
+    // Straight horizontal arm (T-pose): elbow back.
+    const Ogre::Vector3 elbow = defaultPolePosition({0, 1, 0}, {0.5f, 1, 0}, {1, 1, 0}, fwd, up, 0.5f);
+    EXPECT_LT(elbow.z, -0.4f);
+    // The pole never lies on the chain axis.
+    EXPECT_GT(std::abs(elbow.z), 0.0f);
 }

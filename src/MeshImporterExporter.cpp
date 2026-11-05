@@ -5179,6 +5179,8 @@ static aiScene* buildSceneAiScene()
     {
         if (!manager->getSceneMgr()->hasEntity(sn->getName()))
             continue;
+        if (ConstraintManager::isHandleNode(sn))   // editor-only IK handle (#560)
+            continue;
         auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
         if (entity)
             nodeEntities.push_back({sn, entity});
@@ -5402,6 +5404,8 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         for (auto* sn : sceneNodes)
         {
             if (!manager->getSceneMgr()->hasEntity(sn->getName()))
+                continue;
+            if (ConstraintManager::isHandleNode(sn))   // editor-only IK handle (#560)
                 continue;
             auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
             if (entity)
