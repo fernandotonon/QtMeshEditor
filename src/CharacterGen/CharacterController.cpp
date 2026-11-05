@@ -641,8 +641,14 @@ QString CharacterController::importHair(const QString& path, const QString& auth
 
 bool CharacterController::removeLibraryHair(const QString& id)
 {
-    if (m_hairStyle == QLatin1String("lib:") + id) { m_hairStyle.clear(); hairChanged(); }
+    // remove first: the selection is only cleared once the hairstyle really is gone (a failed removal keeps both the entry and the selection)
     const bool ok = CharacterGen::Hair::Library::remove(id);
+    if (ok) {
+        if (m_hairStyle == QLatin1String("lib:") + id) { m_hairStyle.clear(); hairChanged(); }
+        m_hairStudioStatus = tr("Removed the hairstyle '%1' from the library.").arg(id);
+    } else {
+        m_hairStudioStatus = tr("The hairstyle '%1' could not be removed (is the hair library folder writable?).").arg(id);   // shown by the panel
+    }
     emit hairLibraryChanged();
     return ok;
 }
