@@ -9,6 +9,7 @@
 #include "Clothing.h"
 #include "HairTint.h"
 #include "PhotoAppearance.h"
+#include "MouthFit.h"
 #include "../CLIPipeline.h"
 #include "../MeshImporterExporter.h"
 #include "../SentryReporter.h"
@@ -41,7 +42,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--photo IMAGE [--fit-face] [--project-face]] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
+        "                        [--photo IMAGE [--fit-face] [--project-face]] [--mouth-report] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -78,7 +79,7 @@ int run(int argc, char* argv[])
     QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
     bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
-    bool fitFace = false, projectFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    bool mouthReport = false, fitFace = false, projectFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -117,6 +118,7 @@ int run(int argc, char* argv[])
         }
         else if (a == "--photo") photoArg = next();
         else if (a == "--fit-face") fitFace = true;
+        else if (a == "--mouth-report") mouthReport = true;
         else if (a == "--project-face") projectFace = true;
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
@@ -474,6 +476,19 @@ int run(int argc, char* argv[])
         return 2;
     }
 
+    if (mouthReport) {
+        // development metric: how many mouth-interior vertices (teeth, gums, tongue) sit outside the head skin, at rest and per shape
+        const Dna::Rig rig = buildRig(data, p, nullptr, &err);
+        if (rig.meshes.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err)); return 1; }
+        const std::vector<std::pair<QString, float>> shapes = {{"jawOpen", 1.0f}, {"mouthFunnel", 1.0f}, {"mouthPucker", 1.0f}, {"mouthSmileLeft", 1.0f},
+                                                               {"mouthLowerDownLeft", 1.0f}, {"jawForward", 1.0f}, {"mouthClose", 1.0f}};
+        int worstOutside = 0;
+        for (const auto& s : MouthFit::measure(rig, shapes)) {
+            worstOutside = std::max(worstOutside, s.outside);
+            CLIPipeline::writeCliError(QStringLiteral("mouth %1: %2/%3 outside, worst %4 mm, outside box (mm, from the interior centre) x[%5 %6] y[%7 %8] z[%9 %10]\n").arg(s.shape.isEmpty() ? QStringLiteral("rest") : s.shape).arg(s.outside).arg(s.interiorVertices).arg(double(s.worst) * 1000.0, 0, 'f', 1).arg(double(s.outsideMin[0]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[0]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMin[1]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[1]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMin[2]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[2]) * 1000.0, 0, 'f', 0));
+        }
+        return worstOutside > 0 ? 3 : 0;
+    }
     if (!CLIPipeline::initOgreHeadless()) return 1;
     SceneBuild sb;
     Ogre::SceneNode* node = createCharacterInScene(data, p, QStringLiteral("character"), &sb, &err);
