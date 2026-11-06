@@ -82,6 +82,19 @@ TEST(CLIPipelineCmdGenerate3dCoverage, QualityRequiresValue)
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdGenerate3dCoverage, UvLayoutIsValidated)
+{
+    Gen3dArgv bad({"generate3d", kMissingImage, "--uv-layout", "islands"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(bad.argc(), bad.argv()), 2);
+    Gen3dArgv missing({"generate3d", kMissingImage, "--uv-layout"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    // both layouts parse; the missing image is the (runtime) failure
+    for (const char* ok : {"parts", "xatlas", "XATLAS"}) {
+        Gen3dArgv a({"generate3d", kMissingImage, "--uv-layout", ok});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1) << ok;
+    }
+}
+
 // ── Runtime failures (return 1), no crash ───────────────────────────────────
 
 TEST(CLIPipelineCmdGenerate3dCoverage, MissingImageIsError)

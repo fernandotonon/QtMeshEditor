@@ -123,6 +123,13 @@ public:
         // to vertex colours (Result::warning set) if the unwrap/bake fails.
         bool bakeTexture = true;
         int  textureSize = 1024;
+        // UV layout of the baked texture. true: part-based islands
+        // (PartUnwrap — regions by colour, cut to discs, area-preserving
+        // flattening), so the texture reads as face / hands / clothes and can
+        // be painted on; false: plain xatlas charts (hundreds of near-planar
+        // scraps, ~10 % tighter packing). Every backend; falls back to xatlas
+        // on its own when the unwrap cannot handle a mesh.
+        bool partUvIslands = true;
         // #1017: after baking, AI-fill the texels no chart covered (the atlas
         // gutter) with LaMa, so bilinear filtering and MIPs pull continued
         // texture across UV seams instead of the dilation pass's smeared
@@ -211,6 +218,8 @@ public:
         bool ok = false;
         QString error;                 // populated when !ok
         QString warning;               // non-fatal (e.g. bake fell back to vertex colours)
+        int  uvCharts = 0;             // UV islands of the baked atlas (0 = no bake)
+        bool partUvIslands = false;    // islands came from PartUnwrap (else plain xatlas)
         std::vector<float>    positions; // Nx3, world space
         std::vector<uint32_t> indices;   // Mx3
         std::vector<float>    colors;    // Nx3 in [0,1], empty if not generated

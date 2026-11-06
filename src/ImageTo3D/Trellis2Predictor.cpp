@@ -1015,6 +1015,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         bo.textureSize = opts.textureSize;
         bo.supersample = opts.supersample;
         bo.bakeNormalMap = opts.bakeNormalMap;
+        bo.partIslands = opts.partUvIslands;
         // The dense source carries the dual-grid's voxel terracing (the remesh
         // reproduces it faithfully): unsmoothed it bakes into the detail map as
         // contour-line banding on every flat panel, forehead and neck. Each pass
@@ -1058,6 +1059,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             r.texture = std::move(bk.baseColor);
             r.roughnessMap = std::move(bk.roughness);
             r.metallicMap = std::move(bk.metallic);
+            r.uvCharts = bk.charts;
+            r.partUvIslands = bk.partIslands;
+            if (opts.partUvIslands && !bk.partIslands)
+                r.warning += (r.warning.isEmpty() ? QString() : QStringLiteral(" "))
+                    + QStringLiteral("part UV islands unavailable (%1) — used xatlas charts")
+                          .arg(bk.partIslandWarning);
             r.normalMap = std::move(bk.normalMap);
             baked = true;
         } else {

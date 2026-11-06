@@ -7361,6 +7361,34 @@ TEST_F(MCPServerTest, GenerateMeshFromImage_SchemaAdvertisesGamePresetEnum)
 
 // Review #1150: BiRefNet is the default matte, so an unknown `matting` value
 // must be rejected (a typo would otherwise start the ~930 MB Best download).
+TEST_F(MCPServerTest, GenerateMeshFromImage_RejectsUnknownUvLayout)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QString png = dir.filePath("subject.png");
+    QImage img(32, 32, QImage::Format_RGBA8888);
+    img.fill(Qt::red);
+    ASSERT_TRUE(img.save(png));
+
+    QJsonObject bad;
+    bad["image_path"] = png;
+    bad["uv_layout"] = "islands";
+    QJsonObject r = server->callTool("generate_mesh_from_image", bad);
+    EXPECT_TRUE(isError(r));
+    EXPECT_TRUE(getResultText(r).contains("uv_layout")) << getResultText(r).toStdString();
+
+    // Valid layouts pass the argument gate (whatever fails next is the runtime).
+    for (const char* ok : {"parts", "xatlas", "XATLAS"}) {
+        QJsonObject a;
+        a["image_path"] = png;
+        a["uv_layout"] = ok;
+        a["resolution"] = 8;   // fail fast on the next validation, no inference
+        const QString text = getResultText(server->callTool("generate_mesh_from_image", a));
+        EXPECT_FALSE(text.contains("'uv_layout'")) << ok << ": " << text.toStdString();
+        EXPECT_TRUE(text.contains("resolution")) << ok << ": " << text.toStdString();
+    }
+}
+
 TEST_F(MCPServerTest, GenerateMeshFromImage_RejectsUnknownMatting)
 {
     QTemporaryDir dir;

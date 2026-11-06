@@ -2854,6 +2854,15 @@ Rectangle {
                 visible: !parent.sgSelected
                 enabled: !MeshGenController.busy
             }
+            // UV layout of the bake: islands that follow the model's parts and
+            // materials (face, hands, clothes) instead of xatlas's scraps.
+            InspectorCheck {
+                id: mgPartUv
+                text: "Part-based UV islands (easier to paint)"
+                checked: true
+                visible: !parent.sgSelected
+                enabled: !MeshGenController.busy && mgBake.checked
+            }
             InspectorCheck {
                 id: mgPbr
                 text: "Generate PBR maps (normal + roughness)"
@@ -2969,6 +2978,7 @@ Rectangle {
                         "smooth": mgSmooth.checked,
                         "refine": mgRefine.checked,
                         "bake_texture": buildBake,
+                        "uv_layout": mgPartUv.checked ? "parts" : "xatlas",
                         "generate_pbr": buildPbr,
                         "upscale_texture": mgUpscale.checked && buildBake,
                         "remove_degenerates": mgCleanDegen.checked,

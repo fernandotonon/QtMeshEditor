@@ -13249,6 +13249,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool refine = true;
     bool bake = true;
     bool inpaintSeams = false;   // #1017: opt-in UV-seam fill
+    bool partUvIslands = true;   // --uv-layout parts|xatlas
     bool removeDegenerates = true; // drop zero-area/duplicate triangles
     bool upscaleTex = false;    // optional Real-ESRGAN 2x on the baked texture
     bool generatePbr = true;    // #404 normal+roughness synthesis on the baked diffuse
@@ -13308,6 +13309,16 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-refine") { refine = false; continue; }
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--inpaint-seams") { inpaintSeams = true; continue; }   // #1017
+        if (arg == "--uv-layout") {
+            const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]).toLower() : QString();
+            if (v == "parts") { partUvIslands = true; }
+            else if (v == "xatlas") { partUvIslands = false; }
+            else {
+                err() << "Error: --uv-layout must be 'parts' or 'xatlas'." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--keep-degenerates") { removeDegenerates = false; continue; }
         if (arg == "--upscale-texture") { upscaleTex = true; continue; }
         if (arg == "--no-pbr") { generatePbr = false; continue; }
@@ -13602,7 +13613,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: No input image (or --prompt) specified." << Qt::endl;
         err() << "Usage: qtmesh generate3d <image> [-o out.glb] [--resolution 256] "
                  "[--no-color] [--remove-bg] [--matting best|fast] [--quality fp32|int8] "
-                 "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] "
+                 "[--no-smooth] [--no-refine] [--no-bake-texture] [--texture-size 1024] [--uv-layout parts|xatlas] "
                  "[--upscale-texture] [--no-pbr] [--keep-degenerates] "
                  "[--backend trellis2|pixal3d|triposr|triposg|triposplat] [--flow-steps 25] [--guidance 7.0] "
                  "[--gaussians 262144] [--splat-out file.ply] [--no-splats] "
@@ -13808,6 +13819,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     opts.refineSurface   = refine;
     opts.bakeTexture     = bake;
     opts.inpaintSeams    = inpaintSeams;
+    opts.partUvIslands   = partUvIslands;
     opts.removeDegenerates = removeDegenerates;
     opts.textureSize     = textureSize;
     opts.backend         = backend;
@@ -13936,7 +13948,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     cliWrite(topo + QString("Generated 3D mesh: %1 verts, %2 tris%3\nWrote: %4\n%5")
                  .arg(res.vertexCount).arg(res.triangleCount)
                  .arg(!res.uvs.empty()
-                          ? QStringLiteral(" (+baked %1px diffuse texture)").arg(res.texture.width())
+                          ? QStringLiteral(" (+baked %1px diffuse texture, %2 UV islands%3)")
+                                .arg(res.texture.width()).arg(res.uvCharts)
+                                .arg(res.partUvIslands ? QStringLiteral(", part layout") : QString())
                           : (res.colors.empty() ? QString()
                                                 : QStringLiteral(" (+vertex color)")))
                  .arg(QFileInfo(outputPath).fileName())

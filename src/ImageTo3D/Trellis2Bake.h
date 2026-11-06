@@ -248,6 +248,9 @@ struct BakeOptions {
     int  sourceNormalLowIterations = 0;
     // done/total covered texels; return false to cancel.
     std::function<bool(int done, int total)> progress;
+    // Part-based UV islands (PartUnwrap): regions by base colour + metallic,
+    // cut to discs and flattened, instead of xatlas's near-planar scraps.
+    bool partIslands = true;
 };
 
 struct BakeResult {
@@ -268,6 +271,9 @@ struct BakeResult {
     QImage roughness;   // Grayscale8
     QImage metallic;    // Grayscale8
     QImage normalMap;   // RGB888 tangent-space, OpenGL +Y up (null if disabled)
+    int  charts = 0;            // UV islands in the atlas
+    bool partIslands = false;   // PartUnwrap made the islands (else plain xatlas)
+    QString partIslandWarning;  // why part islands fell back to xatlas
 };
 
 // Bake the SOURCE surface's TRELLIS.2 attributes onto the (possibly

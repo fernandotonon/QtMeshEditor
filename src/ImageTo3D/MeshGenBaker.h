@@ -58,6 +58,9 @@ struct Result {
     // continue the texture, so these are the texels a seam-fill inpaint should
     // replace. Feed straight to TextureInpaint::maskFromCoverage.
     std::vector<uint8_t> coverage;
+    int  charts = 0;            // UV islands in the atlas
+    bool partIslands = false;   // PartUnwrap made the islands (else plain xatlas)
+    QString partIslandWarning;  // why part islands fell back to xatlas
 };
 
 struct Options {
@@ -70,6 +73,11 @@ struct Options {
     // CANCEL (bake returns cancelled, no partial data). The baker knows the
     // true texel total, which the sampler owner doesn't.
     std::function<bool(int done, int total)> progress;
+    // Part-based UV islands (PartUnwrap): regions by colour (one extra sampler
+    // call over the face centroids), cut to discs and flattened, so the
+    // texture reads as face / hands / clothes instead of xatlas's hundreds of
+    // near-planar scraps. false = plain xatlas charting.
+    bool partIslands = true;
 };
 
 // Unwrap + bake. `positions`/`indices` describe the input triangle mesh

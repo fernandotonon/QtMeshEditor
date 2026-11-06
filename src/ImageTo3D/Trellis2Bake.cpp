@@ -7,7 +7,7 @@
 #include "MeshSegmenter.h"   // connectedComponents (pure-data union-find)
 
 #include <meshoptimizer.h>
-#include <xatlas.h>
+#include "PartUnwrap.h"
 
 #include <algorithm>
 #include <atomic>
@@ -2280,83 +2280,71 @@ BakeResult bake(const std::vector<float>& targetPositions,
     const int texSize = std::clamp(opts.textureSize, 64, 8192);
     const int ss = std::clamp(opts.supersample, 1, 2);
 
-    // ---- 1. xatlas unwrap of the target -------------------------------------
-    xatlas::Atlas* atlas = xatlas::Create();
-    xatlas::MeshDecl decl;
-    decl.vertexCount          = static_cast<uint32_t>(nv);
-    decl.vertexPositionData   = targetPositions.data();
-    decl.vertexPositionStride = sizeof(float) * 3;
-    decl.indexCount           = static_cast<uint32_t>(targetIndices.size());
-    decl.indexData            = targetIndices.data();
-    decl.indexFormat          = xatlas::IndexFormat::UInt32;
-    const auto err = xatlas::AddMesh(atlas, decl);
-    if (err != xatlas::AddMeshError::Success) {
-        r.error = QStringLiteral("bake: xatlas::AddMesh failed: %1")
-                      .arg(QString::fromLatin1(xatlas::StringForEnum(err)));
-        xatlas::Destroy(atlas);
-        return r;
+    // ---- 1. unwrap + pack the target (PartUnwrap::buildAtlas) --------------
+    // The closest-point accelerator serves the per-face colours of the part
+    // islands here as well as the texel loop below.
+    TriangleGrid grid;
+    grid.build(sourcePositions, sourceIndices);
+    std::vector<float> faceRgb, faceMetal;
+    if (opts.partIslands) {
+        // base colour + metallic at each target face, the same closest-point
+        // volume lookup the texels use (metallic separates metal from cloth
+        // of a similar colour)
+        const size_t nf = targetIndices.size() / 3;
+        const std::vector<float> cent = PartUnwrap::faceCentroids(targetPositions, targetIndices);
+        faceRgb.resize(nf * 3);
+        faceMetal.resize(nf);
+        for (size_t f = 0; f < nf; ++f) {
+            float S[3], sb[3], attr[6];
+            const int sTri = grid.closest(&cent[f * 3], S, sb);
+            volume.sample(sTri >= 0 ? S : &cent[f * 3], attr);   // neutral when empty
+            faceRgb[f * 3] = attr[0];
+            faceRgb[f * 3 + 1] = attr[1];
+            faceRgb[f * 3 + 2] = attr[2];
+            faceMetal[f] = attr[3];
+        }
     }
+    PartUnwrap::AtlasOptions ao;
+    ao.textureSize = texSize;
+    ao.padding = std::max(1, opts.dilatePx);
+    ao.partIslands = opts.partIslands;
     // Cancellation during the unwrap: ComputeCharts can run for minutes on
     // dense targets and used to be un-cancellable (the Cancel button only
-    // reached the sampling phase). xatlas's progress callback returns false
-    // to abort; throttled so the callback overhead stays negligible.
-    struct UnwrapCancelCtx {
-        const std::function<bool(int, int)>* progress = nullptr;
-        int counter = 0;
-        bool cancelled = false;
-    } ucc;
-    if (opts.progress) {
-        ucc.progress = &opts.progress;
-        xatlas::SetProgressCallback(
-            atlas,
-            [](xatlas::ProgressCategory, int, void* user) -> bool {
-                auto* c = static_cast<UnwrapCancelCtx*>(user);
-                if ((++c->counter & 63) != 0)
-                    return true;
-                if (!(*c->progress)(0, 1)) {
-                    c->cancelled = true;
-                    return false;
-                }
-                return true;
-            },
-            &ucc);
-    }
-    xatlas::PackOptions pack;
-    pack.resolution = static_cast<uint32_t>(texSize);
-    pack.padding    = std::max(1, opts.dilatePx);
-    pack.bilinear   = true;
-    xatlas::Generate(atlas, /*chartOptions=*/{}, pack);
-    if (ucc.cancelled) {
-        xatlas::Destroy(atlas);
+    // reached the sampling phase).
+    if (opts.progress)
+        ao.cancelled = [&opts]() { return !opts.progress(0, 1); };
+    const PartUnwrap::Atlas xa =
+        PartUnwrap::buildAtlas(targetPositions, targetIndices, faceRgb, faceMetal, ao);
+    if (xa.cancelled) {
         r = BakeResult{};
         r.cancelled = true;
         r.error = QStringLiteral("cancelled");
         return r;
     }
-    if (atlas->meshCount != 1 || atlas->width == 0 || atlas->height == 0) {
-        r.error = QStringLiteral("bake: xatlas produced no atlas.");
-        xatlas::Destroy(atlas);
+    if (!xa.ok) {
+        r.error = QStringLiteral("bake: %1").arg(xa.error);
         return r;
     }
-    const xatlas::Mesh& xm = atlas->meshes[0];
-    const int W = static_cast<int>(atlas->width);
-    const int H = static_cast<int>(atlas->height);
+    r.charts = xa.chartCount;
+    r.partIslands = xa.usedPartIslands;
+    r.partIslandWarning = xa.partFallbackReason;
+    const int W = xa.width;
+    const int H = xa.height;
 
-    r.positions.resize(static_cast<size_t>(xm.vertexCount) * 3);
-    r.uvs.resize(static_cast<size_t>(xm.vertexCount) * 2);
-    std::vector<uint32_t> xref(xm.vertexCount);
-    for (uint32_t v = 0; v < xm.vertexCount; ++v) {
-        const xatlas::Vertex& xv = xm.vertexArray[v];
-        xref[v] = xv.xref;
+    const size_t outV = xa.xref.size();
+    r.positions.resize(outV * 3);
+    r.uvs.resize(outV * 2);
+    const std::vector<uint32_t>& xref = xa.xref;
+    for (size_t v = 0; v < outV; ++v) {
         std::memcpy(&r.positions[v * 3],
-                    &targetPositions[static_cast<size_t>(xv.xref) * 3],
+                    &targetPositions[static_cast<size_t>(xref[v]) * 3],
                     sizeof(float) * 3);
-        r.uvs[v * 2 + 0] = xv.uv[0] / float(W);
-        r.uvs[v * 2 + 1] = xv.uv[1] / float(H);
+        r.uvs[v * 2 + 0] = xa.uv[v * 2] / float(W);
+        r.uvs[v * 2 + 1] = xa.uv[v * 2 + 1] / float(H);
     }
-    r.indices.assign(xm.indexArray, xm.indexArray + xm.indexCount);
-    r.vertexCount   = static_cast<int>(xm.vertexCount);
-    r.triangleCount = static_cast<int>(xm.indexCount / 3);
+    r.indices = xa.indices;
+    r.vertexCount   = static_cast<int>(outV);
+    r.triangleCount = static_cast<int>(xa.indices.size() / 3);
 
     // ---- 2. target normals + tangents (Lengyel), source normals -------------
     // Target normals come from the ORIGINAL (pre-split) mesh and are carried
@@ -2368,10 +2356,6 @@ BakeResult bake(const std::vector<float>& targetPositions,
     const std::vector<float> sNormals = smoothNormalField(
         smoothNormals(sourcePositions, sourceIndices),
         sourcePositions, sourceIndices, opts.sourceNormalSmoothIterations);
-    // The closest-point accelerator is needed here (shading-normal transfer) as
-    // well as by the texel loop below.
-    TriangleGrid grid;
-    grid.build(sourcePositions, sourceIndices);
     if (opts.sourceNormalLowIterations > opts.sourceNormalSmoothIterations) {
         // continue from the mid-frequency field: only the extra passes are new
         const std::vector<float> sLow = smoothNormalField(
@@ -2435,9 +2419,6 @@ BakeResult bake(const std::vector<float>& targetPositions,
     }
     std::vector<uint8_t> covered(static_cast<size_t>(W) * H, 0);
 
-    // All atlas (xm) references end here — the r.* copies carry everything
-    // the sampling needs, so the atlas is freed before the heavy phase.
-    xatlas::Destroy(atlas);
 
     // ---- Phase 1: serial UV rasterization → texel job list -------------------
     // Cheap (pure 2D coverage). Each covered texel becomes one independent

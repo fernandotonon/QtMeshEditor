@@ -137,6 +137,7 @@ MeshGenPredictor::Result predictTrellis2(
     t2.strictTriangleBudget = opts.targetTrianglesStrict;
     t2.bakeTexture      = opts.bakeTexture;
     t2.textureSize      = opts.textureSize;
+    t2.partUvIslands    = opts.partUvIslands;
     t2.bakeNormalMap    = opts.bakeNormalMap;
     t2.supersample      = opts.textureSupersample;
     t2.texVolumeRes     = opts.texVolumeRes;
@@ -338,6 +339,7 @@ bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
     MeshGenBaker::Options bakeOpts;
     bakeOpts.textureSize = opts.textureSize;
     bakeOpts.chunkPoints = chunkPoints;
+    bakeOpts.partIslands = opts.partUvIslands;
     // The baker owns the Bake stage's progress (it knows the true texel
     // total); the sampler only cancellation-checks.
     if (progress)
@@ -365,6 +367,11 @@ bool MeshGenPredictor::bakeTextureAndDetail(Result& out,
     out.texture       = baked.texture;
     out.vertexCount   = baked.vertexCount;
     out.triangleCount = baked.triangleCount;
+    out.uvCharts      = baked.charts;
+    out.partUvIslands = baked.partIslands;
+    if (opts.partUvIslands && !baked.partIslands)
+        warn(QStringLiteral("part UV islands unavailable (%1) — used xatlas charts")
+                 .arg(baked.partIslandWarning));
 
     // #1017: AI-fill the atlas gutter. The baker's dilation pass smears
     // chart-border colour outward so filtering does not drag the clear
