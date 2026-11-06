@@ -1,5 +1,6 @@
 #include "CharacterModel.h"
 #include "MouthFit.h"
+#include "Proportions.h"
 #include "EyeTexture.h"
 #include "Clothing.h"
 #include "Eyelashes.h"
@@ -1206,6 +1207,16 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         return rig;
     }
 
+    // ---- body: shaped positions (computed first: the proportions warp them together with the skeleton) ------------------------------------------------------------------------------------
+    const int V = a.mhrVertices;
+    std::vector<float> shaped(a.mhrBase);
+    for (int s = 0; s < a.mhrShapes && s < int(p.bodyShape.size()); ++s) {
+        const float c = p.bodyShape[size_t(s)];
+        if (c == 0.0f) continue;
+        const float* vec = a.mhrShapeVectors.data() + size_t(s) * V * 3;
+        for (size_t i = 0; i < shaped.size(); ++i) shaped[i] += c * vec[i];
+    }
+
     // ---- skeleton (the zero pose: parent-relative offsets + prerotations) -------------------------------------------
     rig.descriptor.name = QStringLiteral("Character");
     rig.descriptor.translationUnit = QStringLiteral("m");
@@ -1226,6 +1237,15 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         }
     }
     if (p.standardSkeleton) straightenStandardSkeleton(gt, a);
+    // Proportions: scale the joint hierarchy and bring the vertices along (the world-aligned skeleton only: MHR's own bones carry
+    // prerotations the scaled offsets would not follow).
+    float bodyArkitScale = 1.0f;
+    if (!p.proportions.isDefault()) {
+        if (p.identityBones || p.standardSkeleton) {
+            const ProportionFrame frame = applyProportions(a, p.proportions, gt, shaped);
+            if (frame.active) bodyArkitScale = std::clamp(p.proportions.height, 0.6f, 1.6f) * std::clamp(p.proportions.head, 0.6f, 1.6f);
+        } else rep.warnings << QStringLiteral("The proportions need the world-aligned skeleton; they were ignored.");
+    }
     // Which joints are kept. MHR carries ~127 joints: the standard body (spine, limbs, fingers: the ones with a standard name),
     // plus procedural helpers (twist joints driven by its runtime), sub-joints (wrist twist, ankle sub-joints, metacarpals) and the
     // face joints. Animation tools drive plain rotations of a Mixamo-style skeleton and know nothing about the extras: left in, they
@@ -1276,15 +1296,6 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     if (newIndex[size_t(cHead)] < 0) {
         fail(error, QStringLiteral("The head joint is not part of the kept skeleton."));
         return rig;
-    }
-    // ---- body: shaped positions ------------------------------------------------------------------------------------
-    const int V = a.mhrVertices;
-    std::vector<float> shaped(a.mhrBase);
-    for (int s = 0; s < a.mhrShapes && s < int(p.bodyShape.size()); ++s) {
-        const float c = p.bodyShape[size_t(s)];
-        if (c == 0.0f) continue;
-        const float* vec = a.mhrShapeVectors.data() + size_t(s) * V * 3;
-        for (size_t i = 0; i < shaped.size(); ++i) shaped[i] += c * vec[i];
     }
 
     // ---- head alignment: chin + top of the head, uniform scale -----------------------------------------------------
@@ -2051,7 +2062,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 const float* dv = d + size_t(v) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;
                 bt.vertexIndices.push_back(uint32_t(v));
-                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * kCmToM);
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * kCmToM * bodyArkitScale);
             }
             if (!bt.vertexIndices.empty()) body.blendShapeTargets.push_back(std::move(bt));
         }

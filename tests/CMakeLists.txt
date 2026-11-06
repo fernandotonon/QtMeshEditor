@@ -268,6 +268,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoAppearance.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/MouthFit.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/BodyShape.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Proportions.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Proportions_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/BodyShape_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/MouthFit_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoAppearance_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
