@@ -156,3 +156,44 @@ TEST(PhotoAppearance, ProjectFaceIgnoresVerticesOutsideTheMatteOrTheHeadBox)
     EXPECT_FALSE(CharacterGen::PhotoAppearance::projectFace(photo, none, QRectF(0, 0, 200, 200), v, tris, {0.0f, 0.0f, 2.0f}, 100.0f).ok);
     EXPECT_FALSE(CharacterGen::PhotoAppearance::projectFace(photo, QImage(), QRectF(0, 0, 20, 20), v, tris, {0.0f, 0.0f, 2.0f}, 100.0f).ok);
 }
+
+namespace {
+CharacterGen::PhotoAppearance::FaceAppearance shape(float top, float side, float lowest, float fringe, float coherence)
+{
+    CharacterGen::PhotoAppearance::FaceAppearance fa;
+    fa.hairShapeOk = true;
+    fa.hairTop = top; fa.hairSide = side; fa.hairLowest = lowest; fa.hairFringe = fringe; fa.hairCoherence = coherence;
+    return fa;
+}
+}  // namespace
+
+TEST(PhotoAppearance, ChooseHairNeedsAMeasuredShape)
+{
+    EXPECT_TRUE(CharacterGen::PhotoAppearance::chooseHair(CharacterGen::PhotoAppearance::FaceAppearance()).preset.isEmpty());
+}
+
+TEST(PhotoAppearance, ChooseHairFollowsLengthVolumeAndCurl)
+{
+    using CharacterGen::PhotoAppearance::chooseHair;
+    EXPECT_EQ(chooseHair(shape(0.0f, 0.0f, 0.2f, 0.0f, 0.8f)).preset, QStringLiteral("buzz"));
+    EXPECT_EQ(chooseHair(shape(0.25f, 0.1f, 0.8f, 0.0f, 0.8f)).preset, QStringLiteral("short_straight"));
+    EXPECT_EQ(chooseHair(shape(0.25f, 0.1f, 0.8f, 0.5f, 0.8f)).preset, QStringLiteral("short_side_part"));
+    EXPECT_EQ(chooseHair(shape(0.25f, 0.1f, 1.1f, 0.0f, 0.8f)).preset, QStringLiteral("bob"));
+    EXPECT_EQ(chooseHair(shape(0.25f, 0.1f, 1.1f, 0.0f, 0.2f)).preset, QStringLiteral("curly_bob"));
+    EXPECT_EQ(chooseHair(shape(0.3f, 0.2f, 2.0f, 0.0f, 0.8f)).preset, QStringLiteral("long_straight"));
+    EXPECT_EQ(chooseHair(shape(0.3f, 0.2f, 2.0f, 0.0f, 0.2f)).preset, QStringLiteral("long_wavy"));
+    EXPECT_EQ(chooseHair(shape(0.7f, 0.6f, 0.9f, 0.0f, 0.1f)).preset, QStringLiteral("afro"));
+    EXPECT_EQ(chooseHair(shape(0.42f, 0.31f, 1.0f, 0.0f, 0.6f)).preset, QStringLiteral("afro"));   // voluminous short hair standing off the head
+}
+
+TEST(PhotoAppearance, ChooseHairLengthGrowsWithTheHairAndVolumeWithTheSides)
+{
+    using CharacterGen::PhotoAppearance::chooseHair;
+    const auto shortHair = chooseHair(shape(0.25f, 0.1f, 0.8f, 0.0f, 0.8f));
+    const auto longHair = chooseHair(shape(0.25f, 0.4f, 2.4f, 0.0f, 0.8f));
+    EXPECT_GT(longHair.length, shortHair.length + 0.2f);
+    EXPECT_GT(longHair.volume, shortHair.volume);
+    EXPECT_LT(shortHair.curliness, 0.0f);   // straight hair keeps the preset's own curliness
+    EXPECT_GE(chooseHair(shape(0.25f, 0.1f, 0.8f, 0.5f, 0.8f)).fringe, 0.5f);
+    EXPECT_EQ(chooseHair(shape(0.25f, 0.1f, 0.8f, 0.05f, 0.8f)).fringe, 0.0f);   // no bangs in the photo: none on the character either
+}

@@ -46,10 +46,24 @@ struct FaceAppearance {
     std::vector<std::array<float, 3>> landmarks;   ///< the 478 MediaPipe landmarks in photo px (x, y, relative z), empty when no face
     int hairLength = 0;
     float sideHairFraction = 0.0f;
+    /// Continuous hair shape (0 when unknown), in face heights / widths so it does not depend on the photo size:
+    bool hairShapeOk = false;
+    float hairTop = 0.0f;        ///< hair above the top of the face (face heights): 0 = none (buzz / bald), ~0.25 normal, > 0.55 afro volume
+    float hairSide = 0.0f;       ///< hair beside the face at eye level (face widths, per side)
+    float hairLowest = 0.0f;     ///< lowest strand below the top of the face (face heights): ~0.8 short, ~1.0 chin, ~1.6 shoulders, > 2.2 long
+    float hairFringe = 0.0f;     ///< fraction of the forehead covered by hair
+    float hairCoherence = 1.0f;  ///< 1 = strands all run one way (straight), low = curly
     bool faceFound = false;
     QRectF faceBox;          ///< photo px
     QString note;
 };
+
+/// A Hair Studio preset id and the parameters to set on it, from the measured hair shape (or an empty id when there is nothing to go on).
+struct HairChoice {
+    QString preset;                 ///< "short_straight" ... (without the "proc:" prefix)
+    float length = -1.0f, volume = -1.0f, curliness = -1.0f, fringe = -1.0f;   ///< < 0: keep the preset's value
+};
+HairChoice chooseHair(const FaceAppearance& fa);
 
 struct FaceFit {
     bool ok = false;

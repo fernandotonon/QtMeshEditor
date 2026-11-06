@@ -239,6 +239,89 @@ FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<f
             }
             fa.sideHairFraction = total > 0 ? float(hairLike) / float(fb.width() * fb.height() * 0.5) : 0.0f;
             fa.hairLength = fa.sideHairFraction > 0.30f ? 3 : (fa.sideHairFraction > 0.10f ? 2 : 1);
+
+            // ---- continuous shape of the hair silhouette (see FaceAppearance::hairTop ...) ----
+            const double Wf = std::max(1.0, fb.width()), Hf = std::max(1.0, fb.height());
+            auto isHair = [&](const uchar* sl, int x) {
+                const auto l = toLab(sl[x * 3], sl[x * 3 + 1], sl[x * 3 + 2]);
+                return dist(l, hairLab) < 26.0f && dist(l, skinLab) > 12.0f;
+            };
+            const int top = std::max(0, int(fb.top() - 1.3 * Hf)), bottom = std::min(H - 1, int(fb.bottom() + 2.2 * Hf));
+            const int left = std::max(0, int(fb.left() - 1.2 * Wf)), right = std::min(W - 1, int(fb.right() + 1.2 * Wf));
+            // top of the hair above the middle of the face
+            double topY = fb.top();
+            for (int y = top; y < int(fb.top()); ++y) {
+                const uchar* sl = img.constScanLine(y);
+                int n = 0;
+                for (int x = int(fb.center().x() - 0.3 * Wf); x <= int(fb.center().x() + 0.3 * Wf); ++x)
+                    if (x >= 0 && x < W && on(matte, x, y) && isHair(sl, x)) ++n;
+                if (n >= std::max(3, int(0.06 * Wf))) { topY = y; break; }
+            }
+            fa.hairTop = float(std::clamp((fb.top() - topY) / Hf, 0.0, 1.6));
+            // fullness beside the face at eye level, and the lowest strand in the side bands
+            double sideSum = 0.0;
+            int sideRows = 0;
+            double lowest = fb.top();
+            int gapRows = 0;
+            const int maxGap = std::max(2, int(0.3 * Hf));   // a strand run ends at the first gap this tall (shadows and clothes further down are not hair)
+            for (int y = int(fb.top()); y <= bottom && gapRows <= maxGap; ++y) {
+                const uchar* sl = img.constScanLine(y);
+                int leftN = 0, rightN = 0, leftEdge = int(fb.left()), rightEdge = int(fb.right());
+                const bool belowChin = y > int(fb.bottom());
+                for (int x = left; x <= right; ++x) {
+                    if (!on(matte, x, y) || on(ovalMask, x, y) || !isHair(sl, x)) continue;
+                    if (belowChin && std::fabs(x - fb.center().x()) < 0.55 * Wf) continue;   // the neck and its shadow
+                    if (x < fb.center().x()) { ++leftN; leftEdge = std::min(leftEdge, x); }
+                    else { ++rightN; rightEdge = std::max(rightEdge, x); }
+                }
+                const int need = std::max(2, int(0.04 * Wf));
+                if (leftN >= need || rightN >= need) { lowest = y; gapRows = 0; } else ++gapRows;
+                if (y >= int(eyeY - 0.15 * Hf) && y <= int(eyeY + 0.35 * Hf)) {
+                    sideSum += ((fb.left() - leftEdge) + (rightEdge - fb.right())) / 2.0 / Wf;
+                    ++sideRows;
+                }
+            }
+            fa.hairSide = sideRows > 0 ? float(std::clamp(sideSum / sideRows, 0.0, 1.5)) : 0.0f;
+            fa.hairLowest = float(std::clamp((lowest - fb.top()) / Hf, 0.0, 3.5));
+            // fringe: hair-coloured pixels in the CENTRAL strip of the forehead (hair at its sides is a side sweep or a parting, not bangs)
+            long fringeTotal = 0, fringeHair = 0;
+            for (int y = int(fb.top() + 0.08 * Hf); y <= int(eyeY - 0.25 * Hf); ++y) {
+                const uchar* sl = img.constScanLine(y);
+                for (int x = int(fb.center().x() - 0.22 * Wf); x <= int(fb.center().x() + 0.22 * Wf); ++x) {
+                    if (!on(ovalMask, x, y)) continue;
+                    ++fringeTotal;
+                    if (isHair(sl, x)) ++fringeHair;
+                }
+            }
+            fa.hairFringe = fringeTotal > 0 ? float(fringeHair) / float(fringeTotal) : 0.0f;
+            // strand direction coherence: the structure tensor of the luminance, per small block of hair (hair radiates from the crown, so
+            // one tensor over the whole region would call straight hair incoherent), averaged weighted by the blocks' gradient energy
+            const int blk = std::max(8, int(0.06 * Wf));
+            auto lum = [](const uchar* r, int xx) { return 0.299 * r[xx * 3] + 0.587 * r[xx * 3 + 1] + 0.114 * r[xx * 3 + 2]; };
+            double cohSum = 0.0, energySum = 0.0;
+            for (int by = std::max(1, top); by + blk < std::min(H - 1, bottom); by += blk)
+                for (int bx = std::max(1, left); bx + blk < std::min(W - 1, right); bx += blk) {
+                    double sxx = 0, syy = 0, sxy = 0;
+                    int inHair = 0, count = 0;
+                    for (int y = by; y < by + blk; ++y) {
+                        const uchar* a0 = img.constScanLine(y - 1);
+                        const uchar* a1 = img.constScanLine(y);
+                        const uchar* a2 = img.constScanLine(y + 1);
+                        for (int x = bx; x < bx + blk; ++x) {
+                            ++count;
+                            if (!on(matte, x, y) || on(ovalMask, x, y) || !isHair(a1, x)) continue;
+                            ++inHair;
+                            const double gx = lum(a1, x + 1) - lum(a1, x - 1), gy = lum(a2, x) - lum(a0, x);
+                            sxx += gx * gx; syy += gy * gy; sxy += gx * gy;
+                        }
+                    }
+                    const double e = sxx + syy;
+                    if (inHair < count * 3 / 4 || e < 400.0 * double(count)) continue;   // mostly hair, with real structure (not a flat patch)
+                    cohSum += e * std::sqrt((sxx - syy) * (sxx - syy) + 4.0 * sxy * sxy) / e;
+                    energySum += e;
+                }
+            fa.hairCoherence = energySum > 1e-6 ? float(cohSum / energySum) : 0.6f;   // no textured hair found: assume plain wavy-straight
+            fa.hairShapeOk = true;
         }
         if (!fa.hair.ok) fa.note += QStringLiteral("no hair pixels found (bald, hat or occluded). ");
     }
@@ -324,8 +407,10 @@ FaceAppearance estimate(const QImage& photo, const QRectF& personBoxIn, const QR
     if (headBox.isValid() && headBox.width() > 8) {
         // The head box (SAM's own head projected into the photo) covers head + neck; the face is in its upper two thirds.
         const double s = std::max(headBox.width(), headBox.height());
-        const double fx = headBox.center().x(), fy = headBox.top() + headBox.height() * 0.45;
-        for (double k : {1.25, 1.6, 2.1}) addCrop(fx, fy, s * k);
+        const double fx = headBox.center().x();
+        // the presence score of the landmark model depends a lot on the crop: try a few scales and heights and keep the best
+        for (double dy : {0.35, 0.45, 0.55})
+            for (double k : {1.0, 1.25, 1.6, 2.1}) addCrop(fx, headBox.top() + headBox.height() * dy, s * k);
     } else {
         for (double frac : {1.0 / 7.0, 1.0 / 5.5, 1.0 / 4.0, 1.0 / 2.8, 1.0 / 1.8})
             addCrop(cx, box.top() + box.height() * frac * 0.65, box.height() * frac * 1.5);
@@ -340,7 +425,7 @@ FaceAppearance estimate(const QImage& photo, const QRectF& personBoxIn, const QR
             best = r;
         }
     }
-    if (!best.ok || best.presenceLogit < 2.0f) { none.note = QStringLiteral("no face found in the photo"); return none; }
+    if (!best.ok || best.presenceLogit < 0.5f) { none.note = QStringLiteral("no face found in the photo"); return none; }
     return fromLandmarks(photo, best.points, matte);
 }
 
@@ -662,6 +747,26 @@ FaceProjection projectFace(const QImage& photo, const QImage& matte, const QRect
     }
     out.ok = out.visible > 50;
     return out;
+}
+
+
+HairChoice chooseHair(const FaceAppearance& fa)
+{
+    HairChoice c;
+    if (!fa.hairShapeOk) return c;
+    const float curl = std::clamp((0.55f - fa.hairCoherence) / 0.35f, 0.0f, 1.0f);
+    if (fa.hairTop < 0.04f && fa.hairSide < 0.04f && fa.hairLowest < 0.45f) { c.preset = QStringLiteral("buzz"); return c; }
+    const bool puffy = fa.hairTop > 0.38f && fa.hairSide > 0.28f && fa.hairLowest < 1.3f;   // a lot of hair standing off the head, not hanging
+    if ((fa.hairTop > 0.55f && curl > 0.35f) || puffy) { c.preset = QStringLiteral("afro"); }   // (measured on real photos: curly hair is NOT incoherent block by block, so the shape decides)
+    else if (fa.hairLowest > 1.45f) c.preset = curl > 0.4f ? QStringLiteral("long_wavy") : QStringLiteral("long_straight");
+    else if (fa.hairLowest > 1.05f) c.preset = curl > 0.45f ? QStringLiteral("curly_bob") : (fa.hairLowest > 1.25f ? QStringLiteral("medium_layered") : QStringLiteral("bob"));
+    else c.preset = fa.hairFringe > 0.3f ? QStringLiteral("short_side_part") : QStringLiteral("short_straight");
+    const float lengthFace = std::max(0.0f, fa.hairLowest + fa.hairTop);   // from the top of the hair, in face heights
+    c.length = std::clamp(lengthFace * 0.19f + 0.04f, 0.04f, 0.6f);
+    c.volume = std::clamp(0.2f + 1.4f * fa.hairSide + 0.5f * std::max(0.0f, fa.hairTop - 0.3f), 0.1f, 1.0f);
+    if (curl > 0.15f) c.curliness = curl;
+    c.fringe = fa.hairFringe > 0.2f ? std::clamp((fa.hairFringe - 0.1f) * 1.6f, 0.0f, 1.0f) : 0.0f;   // always set: some presets carry their own bangs
+    return c;
 }
 
 }  // namespace PhotoAppearance

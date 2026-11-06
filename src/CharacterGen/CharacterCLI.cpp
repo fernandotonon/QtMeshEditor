@@ -434,8 +434,23 @@ int run(int argc, char* argv[])
         if (fa.hair.ok) {
             p.hairColour = fa.hair.colour;
             if (hairArg.isEmpty() && p.nativeHead) {
-                const char* const styles[] = {"", "short02", "bob01", "long01"};
-                if (data.hairStyle(QString::fromLatin1(styles[fa.hairLength]))) { hairArg = QString::fromLatin1(styles[fa.hairLength]); p.hairStyle = hairArg; }
+                const PhotoAppearance::HairChoice hc = PhotoAppearance::chooseHair(fa);
+                if (!hc.preset.isEmpty() && !qEnvironmentVariableIsSet("QTMESH_PHOTO_BUNDLE_HAIR")) {
+                    // Hair Studio: a procedural preset, shaped by what the photo shows
+                    p.hairStyle = QStringLiteral("proc:") + hc.preset;
+                    p.hairProcedural = Hair::presetParams(hc.preset);
+                    if (hc.length >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("length"), double(hc.length));
+                    if (hc.volume >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("volume"), double(hc.volume));
+                    if (hc.curliness >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("curliness"), double(hc.curliness));
+                    if (hc.fringe >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("fringe"), double(hc.fringe));
+                    hairArg = p.hairStyle;
+                    CLIPipeline::writeCliError(QStringLiteral("Photo hair: %1 (length %2 m, volume %3, curliness %4, fringe %5) from top %6, side %7, lowest %8, fringe %9, coherence %10\n")
+                        .arg(p.hairStyle).arg(double(p.hairProcedural.length), 0, 'f', 2).arg(double(p.hairProcedural.volume), 0, 'f', 2).arg(double(p.hairProcedural.curliness), 0, 'f', 2).arg(double(p.hairProcedural.fringe), 0, 'f', 2)
+                        .arg(double(fa.hairTop), 0, 'f', 2).arg(double(fa.hairSide), 0, 'f', 2).arg(double(fa.hairLowest), 0, 'f', 2).arg(double(fa.hairFringe), 0, 'f', 2).arg(double(fa.hairCoherence), 0, 'f', 2));
+                } else {
+                    const char* const styles[] = {"", "short02", "bob01", "long01"};
+                    if (data.hairStyle(QString::fromLatin1(styles[fa.hairLength]))) { hairArg = QString::fromLatin1(styles[fa.hairLength]); p.hairStyle = hairArg; }
+                }
             }
         }
         if (fa.iris.ok) { p.eye = fa.iris.colour; }
