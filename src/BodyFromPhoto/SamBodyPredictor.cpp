@@ -448,7 +448,18 @@ Result Runner::predict(const QImage& photo, const Options& opts)
         r.ok = true;
         return r;
     } catch (const std::exception& e) {
-        r.error = QStringLiteral("SAM 3D Body inference failed: %1").arg(QString::fromUtf8(e.what()));
+        const QString msg = QString::fromUtf8(e.what());
+        // The decoder graph does not compile under CoreML on some macOS versions ("Error compiling model: ... generic_general_slice"):
+        // retry once on the CPU provider (the env var is read at every session creation and also stops a second retry).
+        const bool cpuForced = qEnvironmentVariableIsSet("QTMESH_ONNX_PREFER_GPU") && qEnvironmentVariableIntValue("QTMESH_ONNX_PREFER_GPU") == 0;
+        if (!cpuForced && msg.contains(QLatin1String("Error compiling model"))) {
+            qputenv("QTMESH_ONNX_PREFER_GPU", "0");
+            d->backbone.reset(); d->decoder.reset(); d->mhr.reset();
+            Result again = predict(photo, opts);
+            if (again.ok) again.warning = (again.warning.isEmpty() ? QString() : again.warning + QLatin1Char(' ')) + QStringLiteral("CoreML could not compile the model; ran on the CPU.");
+            return again;
+        }
+        r.error = QStringLiteral("SAM 3D Body inference failed: %1").arg(msg);
         return r;
     }
 }
