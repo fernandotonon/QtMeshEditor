@@ -642,6 +642,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     const bool wantSmooth  = optBool("smooth", true);
     const bool wantRefine  = optBool("refine", true);
     const bool wantBake    = optBool("bake_texture", true);
+    const bool wantPartUv  =
+        options.value(QLatin1String("uv_layout")).toString().toLower() != QLatin1String("xatlas");
     const bool wantClean   = optBool("remove_degenerates", true);
     m_upscaleTexture       = optBool("upscale_texture", false);
     m_generatePbr          = optBool("generate_pbr", true) && wantBake;
@@ -837,7 +839,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      flowSteps,
                                      backend, t2Seed, t2Preset, t2TargetTris,
                                      t2TargetTrisStrict, t2MaxTexture,
-                                     t2Supersample, wantClean,
+                                     t2Supersample, wantClean, wantPartUv,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -888,6 +890,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         opts.smoothMesh      = wantSmooth;
         opts.refineSurface   = wantRefine;
         opts.bakeTexture     = wantBake;
+        opts.partUvIslands   = wantPartUv;
         opts.removeDegenerates = wantClean;
         opts.textureSize     = textureSize;
         opts.backend         = backend;
@@ -1053,6 +1056,13 @@ void MeshGenController::buildOnMainThread()
     }
     if (!r.warning.isEmpty()) out["warning"] = r.warning;
     if (!r.splatPlyPath.isEmpty()) out["splatPath"] = r.splatPlyPath;
+    if (r.uvCharts > 0) {
+        out["uvCharts"] = r.uvCharts;
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
+            QStringLiteral("uv layout %1, %2 islands")
+                .arg(r.partUvIslands ? QStringLiteral("parts") : QStringLiteral("xatlas"))
+                .arg(r.uvCharts));
+    }
     emit statusMessage(!r.warning.isEmpty()
                            ? tr("Generated %1 verts, %2 tris (%3)")
                                  .arg(r.vertexCount).arg(r.triangleCount).arg(r.warning)

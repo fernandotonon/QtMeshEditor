@@ -3281,6 +3281,12 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
 #endif
 }
 
+namespace {
+// Above this many UV islands the atlas is fragmented enough for the
+// target_tris note below (seam lines at sane texture sizes).
+constexpr int kFragmentedAtlasCharts = 1500;
+}  // namespace
+
 QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
 {
     // NOT blanket-gated on ENABLE_ONNX: the TRELLIS.2 backend runs through an
@@ -3300,6 +3306,12 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 "'game_preset' must be one of: %1 (got '%2').")
                 .arg(GameReady::ids().join(", "), requested));
     }
+    // uv_layout too, for the same reason: a bad value must not cost a prompt
+    // image generation first.
+    bool partUvIslands = true;
+    if (args.contains("uv_layout")
+        && !MeshGenPredictor::parseUvLayout(args["uv_layout"].toString(), &partUvIslands))
+        return makeErrorResult("'uv_layout' must be 'parts' or 'xatlas'.");
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
     if (!genPrompt.isEmpty()) {
@@ -3364,6 +3376,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
     if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
     if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
+    if (args.contains("uv_layout")) opts.partUvIslands = partUvIslands;
     // #1016 matting tier: Best (BiRefNet) is the Options default; only an
     // explicit "fast" opts out to U²-Net. Anything else is rejected like the
     // CLI's --matting, so a typo cannot start the ~930 MB BiRefNet download.
@@ -3753,6 +3766,10 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     result["vertexCount"]   = res.vertexCount;
     result["triangleCount"] = res.triangleCount;
     result["degeneratesRemoved"] = res.degeneratesRemoved;
+    if (res.uvCharts > 0) {
+        result["uvCharts"] = res.uvCharts;
+        result["uvLayout"] = res.partUvIslands ? QStringLiteral("parts") : QStringLiteral("xatlas");
+    }
     if (!meshPath.isEmpty()) result["meshPath"] = meshPath;
     result["backend"] = backendName;
     if (!gamePresetId.isEmpty()) {
@@ -3771,8 +3788,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Join the predictor's own warning with the atlas-density note so a
     // caller never loses either one.
     QString warn = res.warning;
-    // Drop the note when nothing was actually textured (see above).
-    if (res.texture.isNull())
+    // Drop the note when nothing was actually textured (see above), and when
+    // the atlas did not fragment: part islands keep a dense mesh to a few
+    // hundred islands, while at native density they still reach thousands
+    // (measured 2,541 on the 300k-tri goblin), so the count decides.
+    if (res.texture.isNull() || (res.uvCharts > 0 && res.uvCharts < kFragmentedAtlasCharts))
         densityWarning.clear();
     if (!gamePresetNote.isEmpty()) {
         if (!warn.isEmpty()) warn += QStringLiteral(" ");
@@ -13528,6 +13548,7 @@ QJsonArray MCPServer::buildToolsList()
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution, any value 64..8192 (default 1024; GUI default for TRELLIS.2 is 2048). xatlas treats it as a hint, so the atlas can land slightly larger. Overrides game_preset's texture cap when both are given (past a Roblox limit it is honoured and flagged). TRELLIS.2's texture VOLUME is a separate knob: tex_res 512|1024."}};
+        props["uv_layout"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"parts", "xatlas"}}, {"description", "UV layout of the baked texture. 'parts' (default): islands follow the model's parts and materials (regions by colour, cut to discs, area-preserving flattening) so the texture reads as face / hands / clothes and is easy to paint on. 'xatlas': plain xatlas charts (hundreds of small near-planar scraps, ~10% tighter packing). 'parts' falls back to xatlas on its own when it cannot handle a mesh (a warning says so)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["remove_degenerates"] = QJsonObject{{"type", "boolean"}, {"description", "Drop zero-area, repeated-index and duplicate triangles from the result. Default true."}};
         props["inpaint_seams"] = QJsonObject{{"type", "boolean"}, {"description", "#1017: after baking, AI-fill the atlas gutter (texels no UV chart covered) with LaMa so filtering and MIPs pull continued texture across seams instead of the dilation pass's smeared border colour. Default FALSE — the model is a ~200 MB first-use download and several CPU-seconds. Requires bake_texture; falls back silently to the dilated bake when the model is unavailable."}};

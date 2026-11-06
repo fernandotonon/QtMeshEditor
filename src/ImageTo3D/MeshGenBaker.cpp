@@ -1,6 +1,6 @@
 #include "MeshGenBaker.h"
 
-#include <xatlas.h>
+#include "PartUnwrap.h"
 
 #include <algorithm>
 #include <cmath>
@@ -43,79 +43,67 @@ Result bake(const std::vector<float>& positions,
     }
     const int texSize = std::clamp(opts.textureSize, 64, 8192);
 
-    // ---- 1. xatlas unwrap ---------------------------------------------------
-    // xatlas IGNORES every face whose 3D area is <= FLT_EPSILON (1.19e-7)
-    // in ABSOLUTE units, and parks it at UV (0,0) outside every chart. A
-    // generated mesh is ~1 unit across, so at 150k triangles (mean area
-    // ~1e-5) ordinary small faces fall under that: measured 2054 vertices at
-    // (0,0) on a 1024^3 TripoSplat goblin. Those faces get no texture and an
-    // arbitrary tangent frame — the dark speckle after a GLB round trip.
-    // Charting and packing are scale-invariant (texels per unit is derived
-    // from the requested resolution), and the output maps back to the
-    // ORIGINAL positions through xref, so unwrap a copy scaled to a ~1000
-    // unit diagonal.
-    float lo[3] = {positions[0], positions[1], positions[2]};
-    float hi[3] = {positions[0], positions[1], positions[2]};
-    for (size_t v = 0; v < nv; ++v)
-        for (int a = 0; a < 3; ++a) {
-            lo[a] = std::min(lo[a], positions[3 * v + a]);
-            hi[a] = std::max(hi[a], positions[3 * v + a]);
+    // ---- 1. unwrap + pack (PartUnwrap::buildAtlas) -------------------------
+    // Part islands need a colour per face: one sampler pass over the face
+    // centroids. The sampler returning false is a cancel (the same contract as
+    // the texel pass below), so it ends the bake here rather than after the
+    // unwrap. Above the part limit the unwrap falls back to xatlas anyway, so
+    // the colours are not sampled at all (buildAtlas still reports why).
+    PartUnwrap::AtlasOptions ao;
+    ao.textureSize = texSize;
+    ao.padding = std::max(1, opts.dilatePx);
+    ao.partIslands = opts.partIslands;
+    if (opts.progress)
+        ao.cancelled = [&opts]() { return !opts.progress(0, 1); };
+    auto cancelledResult = []() {
+        Result c;
+        c.cancelled = true;
+        c.error = QStringLiteral("cancelled");
+        return c;
+    };
+    std::vector<float> faceRgb;
+    const size_t nf = indices.size() / 3;
+    if (opts.partIslands && nf <= ao.parts.maxFaces) {
+        const std::vector<float> cent = PartUnwrap::faceCentroids(positions, indices);
+        faceRgb.resize(nf * 3);
+        const size_t fchunk = opts.chunkPoints > 0 ? size_t(opts.chunkPoints) : nf;
+        for (size_t s0 = 0; s0 < nf; s0 += fchunk) {
+            const size_t n = std::min(fchunk, nf - s0);
+            if (!sampler(cent.data() + s0 * 3, n, faceRgb.data() + s0 * 3))
+                return cancelledResult();
         }
-    const float diag = std::sqrt((hi[0] - lo[0]) * (hi[0] - lo[0])
-                                 + (hi[1] - lo[1]) * (hi[1] - lo[1])
-                                 + (hi[2] - lo[2]) * (hi[2] - lo[2]));
-    const float unwrapScale = diag > 0.0f ? 1000.0f / diag : 1.0f;
-    std::vector<float> unwrapPositions(positions.size());
-    for (size_t i = 0; i < positions.size(); ++i)
-        unwrapPositions[i] = positions[i] * unwrapScale;
-
-    xatlas::Atlas* atlas = xatlas::Create();
-    xatlas::MeshDecl decl;
-    decl.vertexCount          = static_cast<uint32_t>(nv);
-    decl.vertexPositionData   = unwrapPositions.data();
-    decl.vertexPositionStride = sizeof(float) * 3;
-    decl.indexCount           = static_cast<uint32_t>(indices.size());
-    decl.indexData            = indices.data();
-    decl.indexFormat          = xatlas::IndexFormat::UInt32;
-    const auto err = xatlas::AddMesh(atlas, decl);
-    if (err != xatlas::AddMeshError::Success) {
-        r.error = QStringLiteral("bake: xatlas::AddMesh failed: %1")
-                      .arg(QString::fromLatin1(xatlas::StringForEnum(err)));
-        xatlas::Destroy(atlas);
+    }
+    const PartUnwrap::Atlas xa = PartUnwrap::buildAtlas(positions, indices, faceRgb, {}, ao);
+    if (xa.cancelled)
+        return cancelledResult();
+    if (!xa.ok) {
+        r.error = QStringLiteral("bake: %1").arg(xa.error);
         return r;
     }
-    xatlas::PackOptions pack;
-    pack.resolution = static_cast<uint32_t>(texSize);
-    pack.padding    = std::max(1, opts.dilatePx);
-    pack.bilinear   = true;
-    xatlas::Generate(atlas, /*chartOptions=*/{}, pack);
-    if (atlas->meshCount != 1 || atlas->width == 0 || atlas->height == 0) {
-        r.error = QStringLiteral("bake: xatlas produced no atlas.");
-        xatlas::Destroy(atlas);
-        return r;
-    }
+    r.charts = xa.chartCount;
+    r.partIslands = xa.usedPartIslands;
+    r.partIslandWarning = xa.partFallbackReason;
 
     // ---- 2. Re-indexed mesh with UVs ---------------------------------------
     // xatlas may output an atlas larger than `resolution` (it guarantees a
     // *minimum*); the UVs are normalized against the actual atlas size and the
     // bake target follows it so texel density matches the pack.
-    const xatlas::Mesh& xm = atlas->meshes[0];
-    const int W = static_cast<int>(atlas->width);
-    const int H = static_cast<int>(atlas->height);
-    r.positions.resize(static_cast<size_t>(xm.vertexCount) * 3);
-    r.uvs.resize(static_cast<size_t>(xm.vertexCount) * 2);
-    for (uint32_t v = 0; v < xm.vertexCount; ++v) {
-        const xatlas::Vertex& xv = xm.vertexArray[v];
-        const size_t src = static_cast<size_t>(xv.xref) * 3;
+    const int W = xa.width;
+    const int H = xa.height;
+    const size_t outV = xa.xref.size();
+    r.positions.resize(outV * 3);
+    r.uvs.resize(outV * 2);
+    for (size_t v = 0; v < outV; ++v) {
+        const size_t src = static_cast<size_t>(xa.xref[v]) * 3;
         r.positions[v * 3 + 0] = positions[src + 0];
         r.positions[v * 3 + 1] = positions[src + 1];
         r.positions[v * 3 + 2] = positions[src + 2];
-        r.uvs[v * 2 + 0] = xv.uv[0] / float(W);
-        r.uvs[v * 2 + 1] = xv.uv[1] / float(H);
+        r.uvs[v * 2 + 0] = xa.uv[v * 2] / float(W);
+        r.uvs[v * 2 + 1] = xa.uv[v * 2 + 1] / float(H);
     }
-    r.indices.assign(xm.indexArray, xm.indexArray + xm.indexCount);
-    r.vertexCount   = static_cast<int>(xm.vertexCount);
-    r.triangleCount = static_cast<int>(xm.indexCount / 3);
+    r.indices = xa.indices;
+    r.vertexCount   = static_cast<int>(outV);
+    r.triangleCount = static_cast<int>(xa.indices.size() / 3);
 
     // ---- 3. Rasterize charts, collect texel -> 3D-point queries -------------
     std::vector<int32_t>  texelOwner(static_cast<size_t>(W) * H, -1);
@@ -124,13 +112,13 @@ Result bake(const std::vector<float>& positions,
     queryPts.reserve(static_cast<size_t>(W) * H / 2 * 3);
     queryTexel.reserve(static_cast<size_t>(W) * H / 2);
 
-    for (uint32_t t = 0; t < xm.indexCount; t += 3) {
-        const uint32_t i0 = xm.indexArray[t + 0];
-        const uint32_t i1 = xm.indexArray[t + 1];
-        const uint32_t i2 = xm.indexArray[t + 2];
-        const float* uv0 = xm.vertexArray[i0].uv;
-        const float* uv1 = xm.vertexArray[i1].uv;
-        const float* uv2 = xm.vertexArray[i2].uv;
+    for (size_t t = 0; t + 2 < xa.indices.size(); t += 3) {
+        const uint32_t i0 = xa.indices[t + 0];
+        const uint32_t i1 = xa.indices[t + 1];
+        const uint32_t i2 = xa.indices[t + 2];
+        const float* uv0 = &xa.uv[i0 * 2];
+        const float* uv1 = &xa.uv[i1 * 2];
+        const float* uv2 = &xa.uv[i2 * 2];
         // Triangle bounding box in texels (uv is already in atlas pixels).
         const int minX = std::max(0, static_cast<int>(std::floor(
             std::min({uv0[0], uv1[0], uv2[0]}))));
@@ -145,9 +133,9 @@ Result bake(const std::vector<float>& positions,
         if (std::fabs(denom) < 1e-12f)
             continue;   // degenerate UV triangle
         const float inv = 1.0f / denom;
-        const size_t p0 = static_cast<size_t>(xm.vertexArray[i0].xref) * 3;
-        const size_t p1 = static_cast<size_t>(xm.vertexArray[i1].xref) * 3;
-        const size_t p2 = static_cast<size_t>(xm.vertexArray[i2].xref) * 3;
+        const size_t p0 = static_cast<size_t>(xa.xref[i0]) * 3;
+        const size_t p1 = static_cast<size_t>(xa.xref[i1]) * 3;
+        const size_t p2 = static_cast<size_t>(xa.xref[i2]) * 3;
         for (int y = minY; y <= maxY; ++y) {
             for (int x = minX; x <= maxX; ++x) {
                 const size_t lin = static_cast<size_t>(y) * W + x;
@@ -176,8 +164,6 @@ Result bake(const std::vector<float>& positions,
             }
         }
     }
-    xatlas::Destroy(atlas);
-
     if (queryTexel.empty()) {
         // Honour the "no partial data on failure" contract.
         r = Result{};

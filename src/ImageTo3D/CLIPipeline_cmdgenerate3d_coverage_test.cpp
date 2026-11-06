@@ -16,6 +16,7 @@
 #include <initializer_list>
 
 #include "CLIPipeline.h"
+#include "ImageTo3D/MeshGenPredictor.h"
 
 namespace {
 
@@ -80,6 +81,35 @@ TEST(CLIPipelineCmdGenerate3dCoverage, QualityRequiresValue)
 {
     Gen3dArgv args({"generate3d", kMissingImage, "--quality"});
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, UvLayoutIsValidated)
+{
+    Gen3dArgv bad({"generate3d", kMissingImage, "--uv-layout", "islands"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(bad.argc(), bad.argv()), 2);
+    Gen3dArgv missing({"generate3d", kMissingImage, "--uv-layout"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(missing.argc(), missing.argv()), 2);
+    // both layouts parse; the missing image is the (runtime) failure
+    for (const char* ok : {"parts", "xatlas", "XATLAS"}) {
+        Gen3dArgv a({"generate3d", kMissingImage, "--uv-layout", ok});
+        EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1) << ok;
+    }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, UvLayoutMapsToTheBakeOption)
+{
+    // The parser both --uv-layout and MCP uv_layout use: the two layouts must
+    // select DIFFERENT values (the CLI cases above stop at the missing image).
+    bool parts = false;
+    ASSERT_TRUE(MeshGenPredictor::parseUvLayout("parts", &parts));
+    EXPECT_TRUE(parts);
+    bool xatlas = true;
+    ASSERT_TRUE(MeshGenPredictor::parseUvLayout(" XAtlas ", &xatlas));
+    EXPECT_FALSE(xatlas);
+    bool untouched = true;
+    EXPECT_FALSE(MeshGenPredictor::parseUvLayout("islands", &untouched));
+    EXPECT_TRUE(untouched);
+    EXPECT_FALSE(MeshGenPredictor::parseUvLayout("", nullptr));
 }
 
 // ── Runtime failures (return 1), no crash ───────────────────────────────────

@@ -62,6 +62,7 @@ public:
         bool manifoldRemesh = true;
         bool bakeTexture   = true;  // false → per-vertex colours only
         int  textureSize   = 2048;  // 1024 / 2048 / 4096
+        bool partUvIslands = true;  // PartUnwrap islands (see MeshGenPredictor::Options)
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
         int  texVolumeRes  = 0;     // 0 = sidecar default | 512 | 1024
