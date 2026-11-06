@@ -1,4 +1,6 @@
 #include "CharacterModel.h"
+#include "MouthFit.h"
+#include "Proportions.h"
 #include "EyeTexture.h"
 #include "Clothing.h"
 #include "Eyelashes.h"
@@ -12,6 +14,7 @@
 #include "../BodyFromPhoto/SamBodyRetarget.h"
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
@@ -814,7 +817,7 @@ std::array<float, 3> turnedTipDelta(const LashMesh& lm, uint32_t tip, const std:
 // Every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the lashes follow
 // the blink, squint, brow and cheek shapes exactly as the lid does (tips of the blink channels turn, see turnedTipDelta).
 void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& arkit, int expressions, int vertexCount,
-                    const std::array<EyeSeat, 2>& seats, const std::array<int, 2>& blinkChannels)
+                    const std::array<EyeSeat, 2>& seats, const std::array<int, 2>& blinkChannels, float deltaScale = 1.0f)
 {
     const uint32_t nv = uint32_t(lm.positions.size() / 3);
     for (int e = 0; e < expressions; ++e) {
@@ -824,7 +827,7 @@ void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& 
         for (uint32_t i = 0; i < nv; ++i) {
             const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
             if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
-            std::array<float, 3> delta{dv[0] * kCmToM, dv[1] * kCmToM, dv[2] * kCmToM};
+            std::array<float, 3> delta{dv[0] * kCmToM * deltaScale, dv[1] * kCmToM * deltaScale, dv[2] * kCmToM * deltaScale};
             const size_t side = lm.positions[size_t(i) * 3] > 0.0f ? 0 : 1;
             const bool tipOfBlink = (i & 1u) != 0 && e == blinkChannels[side] && seats[side].seated;
             if (tipOfBlink) delta = turnedTipDelta(lm, i, delta, seats[side].centre);
@@ -1204,6 +1207,16 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         return rig;
     }
 
+    // ---- body: shaped positions (computed first: the proportions warp them together with the skeleton) ------------------------------------------------------------------------------------
+    const int V = a.mhrVertices;
+    std::vector<float> shaped(a.mhrBase);
+    for (int s = 0; s < a.mhrShapes && s < int(p.bodyShape.size()); ++s) {
+        const float c = p.bodyShape[size_t(s)];
+        if (c == 0.0f) continue;
+        const float* vec = a.mhrShapeVectors.data() + size_t(s) * V * 3;
+        for (size_t i = 0; i < shaped.size(); ++i) shaped[i] += c * vec[i];
+    }
+
     // ---- skeleton (the zero pose: parent-relative offsets + prerotations) -------------------------------------------
     rig.descriptor.name = QStringLiteral("Character");
     rig.descriptor.translationUnit = QStringLiteral("m");
@@ -1224,6 +1237,15 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         }
     }
     if (p.standardSkeleton) straightenStandardSkeleton(gt, a);
+    // Proportions: scale the joint hierarchy and bring the vertices along (the world-aligned skeleton only: MHR's own bones carry
+    // prerotations the scaled offsets would not follow).
+    float bodyArkitScale = 1.0f;
+    if (!p.proportions.isDefault()) {
+        if (p.identityBones || p.standardSkeleton) {
+            const ProportionFrame frame = applyProportions(a, p.proportions, gt, shaped);
+            if (frame.active) bodyArkitScale = std::clamp(p.proportions.height, 0.6f, 1.6f) * std::clamp(p.proportions.head, 0.6f, 1.6f);
+        } else rep.warnings << QStringLiteral("The proportions need the world-aligned skeleton; they were ignored.");
+    }
     // Which joints are kept. MHR carries ~127 joints: the standard body (spine, limbs, fingers: the ones with a standard name),
     // plus procedural helpers (twist joints driven by its runtime), sub-joints (wrist twist, ankle sub-joints, metacarpals) and the
     // face joints. Animation tools drive plain rotations of a Mixamo-style skeleton and know nothing about the extras: left in, they
@@ -1274,15 +1296,6 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     if (newIndex[size_t(cHead)] < 0) {
         fail(error, QStringLiteral("The head joint is not part of the kept skeleton."));
         return rig;
-    }
-    // ---- body: shaped positions ------------------------------------------------------------------------------------
-    const int V = a.mhrVertices;
-    std::vector<float> shaped(a.mhrBase);
-    for (int s = 0; s < a.mhrShapes && s < int(p.bodyShape.size()); ++s) {
-        const float c = p.bodyShape[size_t(s)];
-        if (c == 0.0f) continue;
-        const float* vec = a.mhrShapeVectors.data() + size_t(s) * V * 3;
-        for (size_t i = 0; i < shaped.size(); ++i) shaped[i] += c * vec[i];
     }
 
     // ---- head alignment: chin + top of the head, uniform scale -----------------------------------------------------
@@ -1816,6 +1829,21 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
         }
     }
+    // The fixed offset fits the head it was measured on; a more protruding / recessed / taller mouth leaves the front of the teeth and gums
+    // outside the lips. Test the interior against this face's skin and move it in until it is contained (MouthFit, a few ms).
+    if (p.nativeHead && qEnvironmentVariableIsEmpty("QTMESH_NO_MOUTH_CLEARANCE")) {
+        std::vector<float> interior;
+        for (const char* pn : {"gums_tongue", "teeth"})
+            if (const IctPart* q = a.part(QString::fromLatin1(pn)))
+                for (int v = q->v0; v <= q->v1; ++v)
+                    for (int k = 0; k < 3; ++k) interior.push_back(headPos[size_t(v) * 3 + size_t(k)] + mouthShift[k]);
+        int before = 0, after = 0;
+        QElapsedTimer mouthTimer; mouthTimer.start();
+        const std::array<float, 3> extra = MouthFit::clearanceShift(body, interior, 0.0015f, 0.025f, 12, 4, &before, &after);
+        for (int k = 0; k < 3; ++k) mouthShift[k] += extra[size_t(k)];
+        if (qEnvironmentVariableIsSet("QTMESH_MOUTH_DEBUG"))
+            fprintf(stderr, "mouth clearance (%lld ms): outside %d -> %d, shift %.1f %.1f %.1f mm\n", mouthTimer.elapsed(), before, after, double(extra[0]) * 1000.0, double(extra[1]) * 1000.0, double(extra[2]) * 1000.0);
+    }
     bool pupilChannels = false;
     const bool wantEyes = p.nativeHead && p.openEyes && (eyeSeat[0].seated || eyeSeat[1].seated);
     // ---- relaxed lids: a lower rest pose and a blink that really closes (see Params::relaxedLids, LidClose.h) ----
@@ -1839,6 +1867,32 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
     const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
     if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
+    // The jaw travel of the mouth interior relative to ICT's own deltas depends on the face (a short chin lets a 1.4x lower jaw
+    // hang below the skin, a long one wants more): pick the factor that keeps most of the interior inside at jawOpen.
+    float jawFollow = kMouthJawFollow;
+    if (p.nativeHead && qEnvironmentVariableIsEmpty("QTMESH_NO_MOUTH_CLEARANCE") && !a.mhrArkit.empty() && a.mhrArkit.size() == size_t(a.ictExpressions) * size_t(V) * 3) {
+        const int jaw = int(a.expressionNames.indexOf(QStringLiteral("jawOpen")));
+        if (jaw >= 0) {
+            std::vector<float> rest, ictDelta, skinDelta(body.positions.size(), 0.0f);
+            for (const char* pn : {"gums_tongue", "teeth"})
+                if (const IctPart* q = a.part(QString::fromLatin1(pn)))
+                    for (int v = q->v0; v <= q->v1; ++v)
+                        for (int k = 0; k < 3; ++k) {
+                            rest.push_back(headPos[size_t(v) * 3 + size_t(k)] + mouthShift[k]);
+                            ictDelta.push_back(a.ictExpression[size_t(jaw) * a.ictNeutral.size() + size_t(v) * 3 + size_t(k)] * s * kCmToM);
+                        }
+            const float* d = arkit->data() + size_t(jaw) * size_t(V) * 3;
+            for (size_t i = 0; i < skinDelta.size(); ++i) skinDelta[i] = d[i] * kCmToM;
+            std::vector<int> counts;
+            QElapsedTimer followTimer; followTimer.start();
+            jawFollow = MouthFit::chooseJawFollow(body, skinDelta, rest, ictDelta, {kMouthJawFollow, 1.0f, 1.2f, 1.7f, 2.0f, 2.5f}, kMouthJawFollow, &counts);
+            if (qEnvironmentVariableIsSet("QTMESH_MOUTH_DEBUG")) {
+                QStringList c;
+                for (int n : counts) c << QString::number(n);
+                fprintf(stderr, "mouth jaw follow (%lld ms): %.1f (outside per candidate 1.4/1.0/1.2/1.7/2.0/2.5: %s)\n", followTimer.elapsed(), double(jawFollow), qPrintable(c.join(QLatin1Char(' '))));
+            }
+        }
+    }
     for (const Group& g : groups) {
         // the MHR head is the skin. Its eyes are closed lids with no socket behind them, so ICT's eyeballs would only poke through
         // them: only the mouth interior (gums, tongue, teeth) comes from ICT
@@ -1940,7 +1994,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         for (int e = 0; e < a.ictExpressions; ++e) {
             const QString& shapeName = e < a.expressionNames.size() ? a.expressionNames[e] : QString();
             const bool jawShape = shapeName.startsWith(QLatin1String("jaw"));
-            const float follow = (mouthInterior && jawShape) ? kMouthJawFollow : 1.0f;
+            const float follow = (mouthInterior && jawShape) ? jawFollow : 1.0f;
             Dna::BlendShapeTarget bt;
             bt.channel = e;
             const float* d = a.ictExpression.data() + size_t(e) * a.ictNeutral.size();
@@ -1969,7 +2023,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         const LashMesh lm = buildLashes(body.positions, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat));
         if (!lm.indices.empty()) {
             Dna::Mesh m = lashDnaMesh(lm, body);
-            if (arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) addLashTargets(m, lm, *arkit, a.ictExpressions, V, eyeSeat, lidChannels.blink);
+            if (arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) addLashTargets(m, lm, *arkit, a.ictExpressions, V, eyeSeat, lidChannels.blink, bodyArkitScale);
             rep.headVertices += int(m.positions.size() / 3);
             rep.headTriangles += int(m.faces.size());
             rep.meshNames << m.name;
@@ -2008,7 +2062,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 const float* dv = d + size_t(v) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;
                 bt.vertexIndices.push_back(uint32_t(v));
-                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * kCmToM);
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * kCmToM * bodyArkitScale);
             }
             if (!bt.vertexIndices.empty()) body.blendShapeTargets.push_back(std::move(bt));
         }

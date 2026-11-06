@@ -1,4 +1,9 @@
 #include "CharacterController.h"
+#include <QFileDialog>
+#include <QThread>
+#include <QPointer>
+#include <QImageReader>
+#include "Proportions.h"
 
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
@@ -263,6 +268,78 @@ QString CharacterController::skinColourHex(const QString& name) const
     if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
     return QColor::fromRgbF(c[0], c[1], c[2]).name();
 }
+QString CharacterController::pickPhoto() const
+{
+    static QString lastDir;
+    const QString f = QFileDialog::getOpenFileName(QApplication::activeWindow(), tr("Choose a photo of a person"), lastDir,
+                                                   tr("Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff)"), nullptr, QFileDialog::DontUseNativeDialog);
+    if (!f.isEmpty()) lastDir = QFileInfo(f).absolutePath();
+    return f;
+}
+
+void CharacterController::clearPhoto()
+{
+    m_photoPath.clear();
+    emit photoChanged();
+}
+
+void CharacterController::generateFromPhoto(const QString& path)
+{
+    using namespace CharacterGen;
+    if (m_busy) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.from_photo"));
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
+    if (photo.isNull()) { setStatus(tr("That image could not be read: %1").arg(reader.errorString()), false); return; }
+    QString err;
+    if (!prepareAssets(&err)) return;   // (sets the status)
+    // the models download on the main thread (the downloader's thread); the worker then finds them on disk
+    setStatus(tr("Checking the photo models (they download on first use)…"), true);
+    if (!PhotoCharacter::prepareModels(&err)) { setStatus(err, false); return; }
+    setStatus(tr("Reading the photo…"), true);
+    const std::shared_ptr<Assets> assets = m_assets;
+    PhotoCharacter::Options options;
+    QPointer<CharacterController> self(this);
+    QThread* worker = QThread::create([self, assets, photo, options, path] {
+        auto result = std::make_shared<PhotoCharacter::Result>(PhotoCharacter::estimate(photo, *assets, options, [self](const QString& line) {
+            // only the stage lines (they end with an ellipsis) go to the status; the measurements are for the CLI log
+            if (self && line.endsWith(QChar(0x2026))) QMetaObject::invokeMethod(self.data(), [self, line] { if (self) self->setStatus(line, true); }, Qt::QueuedConnection);
+        }));
+        if (self) QMetaObject::invokeMethod(self.data(), [self, result, path] { if (self) self->finishPhoto(result, path); }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void CharacterController::finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result, const QString& path)
+{
+    using namespace CharacterGen;
+    if (!result->ok) { setStatus(tr("The photo could not be used: %1").arg(result->error), false); return; }
+    const PhotoCharacter::Result& r = *result;
+    auto hex = [](const Rgb& c) { return QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name(); };
+    // the controller's own state first (proportions, hair, clothes, face texture), then the panel gets the coefficients and colours
+    m_proportions = {double(r.proportions.height), double(r.proportions.legs), double(r.proportions.arms), double(r.proportions.torso), double(r.proportions.shoulders), double(r.proportions.head)};
+    emit proportionsChanged();
+    if (r.haveHairStyle) {
+        if (r.hairStyle.startsWith(QLatin1String("proc:"))) m_hairParams = r.hairProcedural;
+        setHairStyle(r.hairStyle);
+    }
+    if (r.haveHairColour) setHairColour(hex(r.hairColour));
+    if (r.haveClothes) {
+        setTopStyle(r.topStyle);
+        setBottomStyle(r.bottomStyle);
+        if (r.haveTopColour) setTopColour(hex(r.topColour));
+        if (r.haveBottomColour) setBottomColour(hex(r.bottomColour));
+    }
+    m_photoPath = path;
+    emit photoChanged();
+    QVariantList coefficients;
+    for (float v : r.bodyShape) coefficients << double(v);
+    setStatus(tr("Photo read: building the character…"), false);
+    emit photoFitted(coefficients, r.haveSkin ? hex(r.skin) : QString(), r.haveEye ? hex(r.eye) : QString());
+}
+
 QString CharacterController::pickColour(const QString& initial) const
 {
     const QColor c = QColorDialog::getColor(QColor(initial), QApplication::activeWindow(), QStringLiteral("Colour"),
@@ -291,29 +368,147 @@ bool CharacterController::hasCharacter() const
 
 // What each MHR body-shape mode does, from measuring it: displacement per body region, height and girth change of each mode
 // (modes 0-19 shape the torso, 20-39 the head and neck, 40-44 the arms; the later modes of each group are small refinements).
+const CharacterGen::BodyShape::Model* CharacterController::shapeModel() const
+{
+    if (m_shapeModel) return m_shapeModel->valid() ? m_shapeModel.get() : nullptr;
+    std::shared_ptr<CharacterGen::Assets> a = m_assets;
+    if (!a) {
+        if (!CharacterGen::CharacterAssets::present()) return nullptr;   // never downloads from a label lookup
+        a = std::make_shared<CharacterGen::Assets>();
+        if (!CharacterGen::loadAssetsFromDir(CharacterGen::CharacterAssets::dir(), *a, nullptr)) return nullptr;
+    }
+    m_shapeModel = std::make_shared<CharacterGen::BodyShape::Model>();
+    if (!m_shapeModel->build(*a)) return nullptr;
+    // (a lookup made while the panel was already showing: the bindings that read the model must run again)
+    QMetaObject::invokeMethod(const_cast<CharacterController*>(this), [this] { const_cast<CharacterController*>(this)->bumpShapeRevision(); }, Qt::QueuedConnection);
+    return m_shapeModel.get();
+}
+
+namespace {
+const CharacterGen::BodyShape::Measure kSliderMeasures[5] = {CharacterGen::BodyShape::ChestWidth, CharacterGen::BodyShape::WaistWidth, CharacterGen::BodyShape::HipsWidth, CharacterGen::BodyShape::BellyDepth, CharacterGen::BodyShape::ChestDepth};
+}
+
+QVariantList CharacterController::proportions() const
+{
+    QVariantList l;
+    for (double v : m_proportions) l << v;
+    return l;
+}
+
+QString CharacterController::proportionLabel(int i) const
+{
+    static const char* k[] = {"Height", "Leg length", "Arm length", "Torso length", "Shoulder width", "Head size"};
+    return (i >= 0 && i < 6) ? tr(k[i]) : QString();
+}
+
+QString CharacterController::proportionHint(int i) const
+{
+    switch (i) {
+    case 0: return tr("Overall height: the whole body scales, feet on the floor. 100% is the mean body (about 173 cm).");
+    case 1: return tr("Leg length (the legs scale about the hips).");
+    case 2: return tr("Arm length (the arms and hands scale about the shoulders).");
+    case 3: return tr("Torso length: the spine between the pelvis and the neck.");
+    case 4: return tr("Shoulder width: how far the shoulders sit from the spine.");
+    case 5: return tr("Head size (the head scales about the neck).");
+    default: return QString();
+    }
+}
+
+void CharacterController::setProportion(int i, double value)
+{
+    if (i < 0 || i >= 6) return;
+    value = std::clamp(value, 0.6, 1.6);
+    if (value == m_proportions[size_t(i)]) return;
+    m_proportions[size_t(i)] = value;
+    emit proportionsChanged();
+}
+
+void CharacterController::resetProportions()
+{
+    m_proportions = {1, 1, 1, 1, 1, 1};
+    emit proportionsChanged();
+}
+
+QString CharacterController::measureLabel(int i) const
+{
+    return (i >= 0 && i < 5) ? tr(CharacterGen::BodyShape::info(kSliderMeasures[i]).label) : QString();
+}
+
+QString CharacterController::measureHint(int i) const
+{
+    return (i >= 0 && i < 5) ? tr(CharacterGen::BodyShape::info(kSliderMeasures[i]).hint) : QString();
+}
+
+double CharacterController::measureRange(int i) const
+{
+    return (i >= 0 && i < 5) ? double(CharacterGen::BodyShape::info(kSliderMeasures[i]).range) : 0.0;
+}
+
+static std::vector<float> floatsOf(const QVariantList& l)
+{
+    std::vector<float> v;
+    v.reserve(size_t(l.size()));
+    for (const QVariant& x : l) v.push_back(x.toFloat());
+    return v;
+}
+
+double CharacterController::measureOffset(int i, const QVariantList& coefficients) const
+{
+    const CharacterGen::BodyShape::Model* m = shapeModel();
+    return (m && i >= 0 && i < 5) ? double(m->offset(kSliderMeasures[i], floatsOf(coefficients))) : 0.0;
+}
+
+QVariantList CharacterController::coefficientsWithMeasure(int i, double target, const QVariantList& coefficients) const
+{
+    const CharacterGen::BodyShape::Model* m = shapeModel();
+    if (!m || i < 0 || i >= 5) return coefficients;
+    const std::vector<float> c = m->withOffset(kSliderMeasures[i], float(target), floatsOf(coefficients));
+    QVariantList out;
+    for (float v : c) out << double(v);
+    return out;
+}
+
 QString CharacterController::shapeLabel(int m) const
 {
+    // measured with `qtmesh character --measure-body` (see BodyShape.h): what one unit of each identity mode does to the body
     static const char* k[] = {
-        "Weight (belly, chest)", "Hips and waist width", "Bust and hips balance", "Belly depth", "Waist width", "Hips depth",
-        "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
-        "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
-        "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Age (face)", "Head shape 6",
-        "Head shape 7", "Head shape 8", "Head shape 9", "Head shape 10", "Head shape 11", "Head shape 12", "Head shape 13",
-        "Head shape 14", "Head shape 15", "Head shape 16", "Head shape 17", "Head shape 18", "Head shape 19", "Head shape 20",
-        "Arms", "Arms detail 2", "Arms detail 3", "Arms detail 4", "Arms detail 5"};
-    return (m >= 0 && m < 45) ? QString::fromLatin1(k[m]) : QStringLiteral("Shape %1").arg(m + 1);
+        "Weight (overall girth)", "Hips vs shoulders", "Bust vs hips", "Belly depth", "Waist width", "Hips vs belly",
+        "Chest depth", "Hips narrowness", "Torso detail", "Waist vs hips"};
+    if (m >= 0 && m < 10) return tr(k[m]);
+    static const char* head[] = {"Head size and height", "Neck length", "Head roundness", "Narrow, tall head", "Face age", "Narrow head"};
+    if (m >= 20 && m < 26) return tr(head[m - 20]);
+    if (const CharacterGen::BodyShape::Model* model = shapeModel(); model && m >= 0 && m < model->shapes()) {
+        int best = -1;
+        float bestScore = 0.0f;
+        for (int q = 0; q < CharacterGen::BodyShape::MeasureCount; ++q) {
+            const float score = std::fabs(model->effect(CharacterGen::BodyShape::Measure(q), m)) / CharacterGen::BodyShape::info(CharacterGen::BodyShape::Measure(q)).range;
+            if (score > bestScore) { bestScore = score; best = q; }
+        }
+        if (best >= 0 && bestScore > 0.004f) return tr("%1 detail").arg(tr(CharacterGen::BodyShape::info(CharacterGen::BodyShape::Measure(best)).label));
+    }
+    if (m >= 40 && m < 45) return tr("Arm detail %1").arg(m - 39);
+    if (m >= 10 && m < 20) return tr("Torso detail %1").arg(m + 1);
+    if (m >= 20 && m < 40) return tr("Head detail %1").arg(m - 19);
+    return tr("Shape %1").arg(m + 1);
 }
 
 QString CharacterController::shapeHint(int m) const
 {
-    if (m == 0) return tr("The biggest body change: overall weight, mostly belly and chest.");
-    if (m == 1) return tr("Hips and waist width: negative = narrow hips and waist (more masculine), positive = wider hips and waist (more feminine).");
-    if (m == 2) return tr("Bust and hips balance: positive = a fuller, more forward bust with slimmer, flatter hips, negative = the opposite.");
-    if (m >= 3 && m < 8) return tr("Torso proportions: waist, hips, belly or chest.");
-    if (m < 20) return tr("A smaller refinement of the torso and hips.");
-    if (m == 20 || m == 21) return tr("Neck length and the size of the head.");
-    if (m < 40) return tr("A subtle change of the head's shape.");
-    return tr("A subtle change of the arms.");
+    const CharacterGen::BodyShape::Model* model = shapeModel();
+    if (!model || m < 0 || m >= model->shapes()) return tr("A change of the body's shape.");
+    std::vector<std::pair<float, int>> eff;
+    for (int q = 0; q < CharacterGen::BodyShape::MeasureCount; ++q) {
+        const float e = model->effect(CharacterGen::BodyShape::Measure(q), m);
+        if (std::fabs(e) >= 0.05f) eff.push_back({std::fabs(e), q});
+    }
+    std::sort(eff.rbegin(), eff.rend());
+    if (eff.empty()) return tr("A very subtle change (under a millimetre per step).");
+    QStringList parts;
+    for (size_t i = 0; i < std::min<size_t>(3, eff.size()); ++i) {
+        const auto q = CharacterGen::BodyShape::Measure(eff[i].second);
+        parts << QStringLiteral("%1 %2 cm %3").arg(model->effect(q, m) >= 0 ? QStringLiteral("+") : QStringLiteral("−")).arg(double(eff[i].first), 0, 'f', 1).arg(tr(CharacterGen::BodyShape::info(q).label).toLower());
+    }
+    return tr("Per +1.0 on the slider: %1.").arg(parts.join(QStringLiteral(", ")));
 }
 
 void CharacterController::setStatus(const QString& s, bool busy)
@@ -354,16 +549,10 @@ void CharacterController::onModelDownloadProgress(const QString& name, qint64 re
     setStatus(tr("Downloading %1…").arg(name), true);
 }
 
-QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
-                                      const QString& eye, bool replace)
+// The character bundles on disk, verified and loaded (downloads on first use). MAIN THREAD. Sets the status line; false with `err` on failure.
+bool CharacterController::prepareAssets(QString* err)
 {
     using namespace CharacterGen;
-    variety = std::min(5.0, std::max(0.0, variety));
-    if (m_busy) return QStringLiteral("busy");
-    if (!Manager::getSingletonPtr()) return QStringLiteral("No active scene.");
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
-    QString err;
-
     {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is.
         // Busy for EVERY ensureBlocking call — present() only checks body+head, but ensureBlocking can still fetch a
         // missing licence/hair file or re-fetch a digest mismatch, and its nested event loop would otherwise leave
@@ -378,13 +567,13 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
                                    &CharacterController::onModelDownloadProgress);
         }
-        const bool ok = CharacterAssets::ensureBlocking(&err);
+        const bool ok = CharacterAssets::ensureBlocking(err);
         m_watchingDownload = false;
         if (progressConn) disconnect(progressConn);
         clearDownloadProgress();
         if (!ok) {
-            setStatus(tr("Character assets unavailable: %1").arg(err), false);
-            return err;
+            setStatus(tr("Character assets unavailable: %1").arg(*err), false);
+            return false;
         }
     }
     // the optional hair bundle may have arrived with this ensureBlocking (a first run without hair): reload the cached assets so
@@ -393,16 +582,33 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     if (!m_assets) {
         setStatus(tr("Loading character assets…"), true);
         auto a = std::make_shared<Assets>();
-        if (!loadAssetsFromDir(CharacterAssets::dir(), *a, &err)) {
-            setStatus(tr("Character assets could not be loaded: %1").arg(err), false);
-            return err;
+        if (!loadAssetsFromDir(CharacterAssets::dir(), *a, err)) {
+            setStatus(tr("Character assets could not be loaded: %1").arg(*err), false);
+            return false;
         }
         m_assets = std::move(a);
+        m_shapeModel.reset();
+        bumpShapeRevision();
     }
     if (m_hairNamesSeen != CharacterAssets::hairStyleNames()) {
         m_hairNamesSeen = CharacterAssets::hairStyleNames();
         emit hairNamesChanged();
     }
+
+    return true;
+}
+
+QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
+                                      const QString& eye, bool replace)
+{
+    using namespace CharacterGen;
+    variety = std::min(5.0, std::max(0.0, variety));
+    if (m_busy) return QStringLiteral("busy");
+    if (!Manager::getSingletonPtr()) return QStringLiteral("No active scene.");
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
+    QString err;
+
+    if (!prepareAssets(&err)) return err;
 
     Params p;
     p.nativeHead = !m_assets->mhrArkit.empty();
@@ -413,6 +619,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     p.hairFit = m_hairFit;
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
+    p.proportions = Proportions{float(m_proportions[0]), float(m_proportions[1]), float(m_proportions[2]), float(m_proportions[3]), float(m_proportions[4]), float(m_proportions[5])};
     p.eyelashes = m_eyelashes;
     p.topStyle = m_topStyle;
     p.bottomStyle = m_bottomStyle;

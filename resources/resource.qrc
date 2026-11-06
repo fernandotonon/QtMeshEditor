@@ -21,4 +21,7 @@
         <file>spring.png</file>
         <file>scale.png</file>
     </qresource>
+    <qresource prefix="/character">
+        <file>face_landmark_fit.bin</file>
+    </qresource>
 </RCC>

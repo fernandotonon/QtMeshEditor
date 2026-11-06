@@ -248,6 +248,11 @@ CharacterGen/EyeTexture.cpp
 CharacterGen/Eyelashes.cpp
 CharacterGen/LidClose.cpp
 CharacterGen/Clothing.cpp
+CharacterGen/PhotoAppearance.cpp
+CharacterGen/PhotoCharacter.cpp
+CharacterGen/MouthFit.cpp
+CharacterGen/BodyShape.cpp
+CharacterGen/Proportions.cpp
 CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp

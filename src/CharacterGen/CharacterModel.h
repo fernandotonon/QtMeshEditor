@@ -18,6 +18,7 @@
 #include "HairFitting.h"
 #include "ProceduralHair.h"
 
+#include <QImage>
 #include <QString>
 #include <QStringList>
 
@@ -109,8 +110,23 @@ QString characterEyeDir();
 
 using Rgb = std::array<float, 3>;   ///< linear-ish 0..1 colour
 
+/// Body proportions on top of the identity modes (scale factors; 1 = the mean body). See Proportions.h.
+struct Proportions {
+    float height = 1.0f;      ///< the whole body (scaled about the floor)
+    float legs = 1.0f;        ///< each leg, scaled about its hip
+    float arms = 1.0f;        ///< each arm and hand, scaled about its shoulder joint
+    float torso = 1.0f;       ///< length of the spine (the bones between the pelvis and the neck)
+    float shoulders = 1.0f;   ///< the distance of the shoulders from the spine
+    float head = 1.0f;        ///< the head, scaled about the neck
+    bool isDefault() const { return height == 1.0f && legs == 1.0f && arms == 1.0f && torso == 1.0f && shoulders == 1.0f && head == 1.0f; }
+    bool operator==(const Proportions& o) const { return height == o.height && legs == o.legs && arms == o.arms && torso == o.torso && shoulders == o.shoulders && head == o.head; }
+    /// Clamp every factor to 0.6 .. 1.6 (a body out of that range is not a person).
+    void clamp();
+};
+
 struct Params {
     std::vector<float> bodyShape;       ///< MHR identity coefficients (45; shorter = rest zero). 0 = the mean body.
+    Proportions proportions;            ///< height, leg / arm / torso length, shoulders, head size (the identity modes barely change these)
     std::vector<float> faceIdentity;    ///< ICT PCA coefficients (100; shorter = rest zero). 0 = the mean face.
     Rgb skin{0.80f, 0.60f, 0.48f};
     Rgb eye{0.22f, 0.36f, 0.55f};
