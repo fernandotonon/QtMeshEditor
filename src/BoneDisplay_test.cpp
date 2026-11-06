@@ -175,6 +175,32 @@ TEST(BoneDisplaySceneNames, PrefixMatchesTheExportedSkeleton)
     EXPECT_FALSE(already.bones.contains(QStringLiteral("Hero_Hero_Jaw")));
 
     EXPECT_TRUE(matchImportedBoneNames(doc, QString(), imported).bones.contains(QStringLiteral("Jaw")));
+
+    EXPECT_TRUE(renameBoneKey(&doc, QStringLiteral("Jaw"), QStringLiteral("Chin")));
+    EXPECT_EQ(boneOrDefault(doc, QStringLiteral("Chin")).shape, Shape::Sphere);
+    EXPECT_FALSE(doc.bones.contains(QStringLiteral("Jaw")));
+    EXPECT_TRUE(renameBoneKey(&doc, QStringLiteral("Chin"), QStringLiteral("Jaw")));
+}
+
+TEST(BoneDisplayJson, RejectsNonNumericComponentsAndFractionalMasks)
+{
+    QString error;
+    Document doc;
+    QJsonObject badOffset = toJson(Document{});
+    QJsonObject bones;
+    bones.insert(QStringLiteral("Jaw"), QJsonObject{
+        {QStringLiteral("offset"), QJsonArray{QStringLiteral("bad"), 2, 3}}
+    });
+    badOffset.insert(QStringLiteral("bones"), bones);
+    EXPECT_FALSE(fromJson(badOffset, &doc, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("numbers")));
+
+    Document masks;
+    EXPECT_TRUE(setShape(&masks, QStringLiteral("Jaw"), Shape::Sphere));
+    QJsonObject fractional = toJson(masks);
+    fractional.insert(QStringLiteral("visibleLayers"), 0.5);
+    EXPECT_FALSE(fromJson(fractional, &doc, &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("32-bit")));
 }
 
 TEST(BoneDisplaySceneJson, RoundTripsPerNodeDocuments)
@@ -207,6 +233,20 @@ TEST(BoneDisplayGltfExtras, MergesIntoTheSceneAndSurvivesAGlb)
     Document fromExtras;
     ASSERT_TRUE(fromJson(gltfExtrasPayload(gltf), &fromExtras, &error)) << error.toStdString();
     EXPECT_EQ(boneOrDefault(fromExtras, QStringLiteral("Head")).shape, Shape::Sphere);
+
+    QJsonObject multi;
+    multi.insert(QStringLiteral("scene"), 1);
+    multi.insert(QStringLiteral("scenes"), QJsonArray{
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("A")}},
+        QJsonObject{{QStringLiteral("name"), QStringLiteral("B")}}
+    });
+    mergeGltfExtras(&multi, toJson(doc));
+    const QJsonArray scenes = multi.value(QStringLiteral("scenes")).toArray();
+    EXPECT_FALSE(scenes.at(0).toObject().value(QStringLiteral("extras")).toObject()
+                     .contains(QLatin1String(kGltfExtrasKey)));
+    Document fromScene1;
+    ASSERT_TRUE(fromJson(gltfExtrasPayload(multi), &fromScene1, &error)) << error.toStdString();
+    EXPECT_EQ(boneOrDefault(fromScene1, QStringLiteral("Head")).shape, Shape::Sphere);
 
     QTemporaryDir dir;
     ASSERT_TRUE(dir.isValid());

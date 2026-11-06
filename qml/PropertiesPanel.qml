@@ -5152,6 +5152,13 @@ Rectangle {
                             return "#" + hex.substring(7, 9) + hex.substring(1, 7)
                         return hex
                     }
+                    function finiteNumber(raw) {
+                        const t = String(raw).trim()
+                        if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(t))
+                            return NaN
+                        const v = Number(t)
+                        return isFinite(v) ? v : NaN
+                    }
 
             Text {
                 width: parent.width - 16
@@ -5214,7 +5221,11 @@ Rectangle {
                     text: BoneDisplayController.scaleX.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setScaleAxis(0, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.scaleX.toFixed(2)
+                        else BoneDisplayController.setScaleAxis(0, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5222,7 +5233,11 @@ Rectangle {
                     text: BoneDisplayController.scaleY.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setScaleAxis(1, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.scaleY.toFixed(2)
+                        else BoneDisplayController.setScaleAxis(1, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5230,7 +5245,11 @@ Rectangle {
                     text: BoneDisplayController.scaleZ.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setScaleAxis(2, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.scaleZ.toFixed(2)
+                        else BoneDisplayController.setScaleAxis(2, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
             }
@@ -5243,7 +5262,11 @@ Rectangle {
                     text: BoneDisplayController.offsetX.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setOffsetAxis(0, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.offsetX.toFixed(2)
+                        else BoneDisplayController.setOffsetAxis(0, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5251,7 +5274,11 @@ Rectangle {
                     text: BoneDisplayController.offsetY.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setOffsetAxis(1, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.offsetY.toFixed(2)
+                        else BoneDisplayController.setOffsetAxis(1, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5259,7 +5286,11 @@ Rectangle {
                     text: BoneDisplayController.offsetZ.toFixed(2)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setOffsetAxis(2, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.offsetZ.toFixed(2)
+                        else BoneDisplayController.setOffsetAxis(2, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
             }
@@ -5272,7 +5303,11 @@ Rectangle {
                     text: BoneDisplayController.rotationX.toFixed(0)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setRotationAxis(0, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.rotationX.toFixed(0)
+                        else BoneDisplayController.setRotationAxis(0, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5280,7 +5315,11 @@ Rectangle {
                     text: BoneDisplayController.rotationY.toFixed(0)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setRotationAxis(1, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.rotationY.toFixed(0)
+                        else BoneDisplayController.setRotationAxis(1, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
                 TextField {
@@ -5288,7 +5327,11 @@ Rectangle {
                     text: BoneDisplayController.rotationZ.toFixed(0)
                     color: PropertiesPanelController.textColor
                     enabled: BoneDisplayController.hasBone
-                    onEditingFinished: BoneDisplayController.setRotationAxis(2, parseFloat(text))
+                    onEditingFinished: {
+                        const v = boneDisplayFields.finiteNumber(text)
+                        if (isNaN(v)) text = BoneDisplayController.rotationZ.toFixed(0)
+                        else BoneDisplayController.setRotationAxis(2, v)
+                    }
                     background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
                 }
             }
@@ -5367,10 +5410,25 @@ Rectangle {
                     delegate: Rectangle {
                         required property int index
                         width: 18; height: 16; radius: 2
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.name: "Bone layer " + index
+                        Accessible.checkable: true
+                        Accessible.checked: BoneDisplayController.boneLayerBits.charAt(index) === "1"
                         color: BoneDisplayController.boneLayerBits.charAt(index) === "1"
                                ? PropertiesPanelController.highlightColor
                                : PropertiesPanelController.inputColor
-                        border.color: PropertiesPanelController.borderColor
+                        border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                                  : PropertiesPanelController.borderColor
+                        Keys.onPressed: function(event) {
+                            if (!BoneDisplayController.hasBone) return
+                            if (event.key !== Qt.Key_Space && event.key !== Qt.Key_Return
+                                    && event.key !== Qt.Key_Enter)
+                                return
+                            BoneDisplayController.setBoneOnLayer(
+                                index, BoneDisplayController.boneLayerBits.charAt(index) !== "1")
+                            event.accepted = true
+                        }
                         Text {
                             anchors.centerIn: parent
                             text: index
@@ -5399,10 +5457,24 @@ Rectangle {
                     delegate: Rectangle {
                         required property int index
                         width: 18; height: 16; radius: 2
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.CheckBox
+                        Accessible.name: "Visible layer " + index
+                        Accessible.checkable: true
+                        Accessible.checked: BoneDisplayController.visibleLayerBits.charAt(index) === "1"
                         color: BoneDisplayController.visibleLayerBits.charAt(index) === "1"
                                ? PropertiesPanelController.highlightColor
                                : PropertiesPanelController.inputColor
-                        border.color: PropertiesPanelController.borderColor
+                        border.color: activeFocus ? PropertiesPanelController.highlightColor
+                                                  : PropertiesPanelController.borderColor
+                        Keys.onPressed: function(event) {
+                            if (event.key !== Qt.Key_Space && event.key !== Qt.Key_Return
+                                    && event.key !== Qt.Key_Enter)
+                                return
+                            BoneDisplayController.setLayerVisible(
+                                index, BoneDisplayController.visibleLayerBits.charAt(index) !== "1")
+                            event.accepted = true
+                        }
                         Text {
                             anchors.centerIn: parent
                             text: index
@@ -5443,11 +5515,19 @@ Rectangle {
                     MouseArea {
                         anchors.fill: parent
                         onClicked: {
-                            BoneDisplayController.addGroup(newBoneGroupName.text)
-                            newBoneGroupName.text = ""
+                            if (BoneDisplayController.addGroup(newBoneGroupName.text) === "")
+                                newBoneGroupName.text = ""
                         }
                     }
                 }
+            }
+            Text {
+                width: skeletonToolsCol.width - 16
+                wrapMode: Text.Wrap
+                visible: BoneDisplayController.groupError.length > 0
+                text: BoneDisplayController.groupError
+                color: "#e07070"
+                font.pixelSize: 10
             }
             Repeater {
                 model: BoneDisplayController.groupNames

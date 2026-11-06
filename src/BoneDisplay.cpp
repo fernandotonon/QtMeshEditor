@@ -67,6 +67,15 @@ QJsonArray colorJson(const Color& c)
     return QJsonArray{c.r, c.g, c.b, c.a};
 }
 
+bool jsonNumber(const QJsonValue& value, double* out)
+{
+    if (!value.isDouble() || !out) return false;
+    const double n = value.toDouble();
+    if (!std::isfinite(n)) return false;
+    *out = n;
+    return true;
+}
+
 bool readVec3(const QJsonValue& value, Vec3* out, QString* error, const char* what)
 {
     const QJsonArray a = value.toArray();
@@ -74,10 +83,15 @@ bool readVec3(const QJsonValue& value, Vec3* out, QString* error, const char* wh
         if (error) *error = QStringLiteral("%1 must be a 3-number array").arg(QLatin1String(what));
         return false;
     }
+    double x = 0, y = 0, z = 0;
+    if (!jsonNumber(a.at(0), &x) || !jsonNumber(a.at(1), &y) || !jsonNumber(a.at(2), &z)) {
+        if (error) *error = QStringLiteral("%1 must contain only numbers").arg(QLatin1String(what));
+        return false;
+    }
     Vec3 v;
-    v.x = static_cast<float>(a.at(0).toDouble());
-    v.y = static_cast<float>(a.at(1).toDouble());
-    v.z = static_cast<float>(a.at(2).toDouble());
+    v.x = static_cast<float>(x);
+    v.y = static_cast<float>(y);
+    v.z = static_cast<float>(z);
     if (!finite3(v)) {
         if (error) *error = QStringLiteral("%1 has a non-finite component").arg(QLatin1String(what));
         return false;
@@ -93,16 +107,34 @@ bool readColor(const QJsonValue& value, Color* out, QString* error)
         if (error) *error = QStringLiteral("color must be an RGB or RGBA array");
         return false;
     }
+    double r = 0, g = 0, b = 0, aComp = 0.65;
+    if (!jsonNumber(a.at(0), &r) || !jsonNumber(a.at(1), &g) || !jsonNumber(a.at(2), &b)
+        || (a.size() == 4 && !jsonNumber(a.at(3), &aComp))) {
+        if (error) *error = QStringLiteral("color must contain only numbers");
+        return false;
+    }
     Color c;
-    c.r = static_cast<float>(a.at(0).toDouble());
-    c.g = static_cast<float>(a.at(1).toDouble());
-    c.b = static_cast<float>(a.at(2).toDouble());
-    c.a = a.size() == 4 ? static_cast<float>(a.at(3).toDouble()) : 0.65f;
+    c.r = static_cast<float>(r);
+    c.g = static_cast<float>(g);
+    c.b = static_cast<float>(b);
+    c.a = static_cast<float>(aComp);
     if (!finiteColor(c)) {
         if (error) *error = QStringLiteral("color has a non-finite component");
         return false;
     }
     *out = clampedColor(c);
+    return true;
+}
+
+bool readLayerMask(const QJsonValue& value, std::uint32_t* out, QString* error, const char* what)
+{
+    double layers = 0;
+    if (!jsonNumber(value, &layers) || layers < 0.0 || layers > static_cast<double>(kAllLayers)
+        || std::floor(layers) != layers) {
+        if (error) *error = QStringLiteral("%1 must be a 32-bit mask").arg(QLatin1String(what));
+        return false;
+    }
+    if (out) *out = static_cast<std::uint32_t>(layers);
     return true;
 }
 
@@ -185,12 +217,10 @@ bool boneFromJson(const QJsonObject& o, Bone* out, QString* error)
     b.lockRotation = o.value(QStringLiteral("lockRotation")).toBool(false);
     b.lockScale = o.value(QStringLiteral("lockScale")).toBool(false);
     if (o.contains(QStringLiteral("layers"))) {
-        const double layers = o.value(QStringLiteral("layers")).toDouble(-1.0);
-        if (layers < 0.0 || layers > static_cast<double>(kAllLayers) || !std::isfinite(layers)) {
-            if (error) *error = QStringLiteral("layers must be a 32-bit mask");
+        std::uint32_t mask = 0;
+        if (!readLayerMask(o.value(QStringLiteral("layers")), &mask, error, "layers"))
             return false;
-        }
-        b.layers = static_cast<std::uint32_t>(layers);
+        b.layers = mask;
     }
     if (o.contains(QStringLiteral("groups"))) {
         const QJsonArray groups = o.value(QStringLiteral("groups")).toArray();
@@ -208,12 +238,10 @@ bool fillDocument(const QJsonObject& obj, Document* out, QString* error)
 {
     Document doc;
     if (obj.contains(QStringLiteral("visibleLayers"))) {
-        const double layers = obj.value(QStringLiteral("visibleLayers")).toDouble(-1.0);
-        if (layers < 0.0 || layers > static_cast<double>(kAllLayers) || !std::isfinite(layers)) {
-            if (error) *error = QStringLiteral("visibleLayers must be a 32-bit mask");
+        std::uint32_t mask = 0;
+        if (!readLayerMask(obj.value(QStringLiteral("visibleLayers")), &mask, error, "visibleLayers"))
             return false;
-        }
-        doc.visibleLayers = static_cast<std::uint32_t>(layers);
+        doc.visibleLayers = mask;
     }
     doc.isolatedGroup = obj.value(QStringLiteral("isolatedGroup")).toString();
     const QJsonArray groups = obj.value(QStringLiteral("groups")).toArray();
@@ -734,6 +762,36 @@ Document matchImportedBoneNames(const Document& doc, const QString& prefix,
     return out;
 }
 
+bool renameBoneKey(Document* doc, const QString& from, const QString& to)
+{
+    if (!doc || from.isEmpty() || to.isEmpty() || from == to) return false;
+    const bool hasFrom = doc->bones.contains(from);
+    const bool hasTo = doc->bones.contains(to);
+    if (!hasFrom && !hasTo) return false;
+    Bone fromBone;
+    Bone toBone;
+    if (hasFrom) fromBone = doc->bones.take(from);
+    if (hasTo) toBone = doc->bones.take(to);
+    if (hasFrom) doc->bones.insert(to, fromBone);
+    if (hasTo) doc->bones.insert(from, toBone);
+    return true;
+}
+
+int selectedSceneIndex(const QJsonObject& gltfRoot)
+{
+    const QJsonArray scenes = gltfRoot.value(QStringLiteral("scenes")).toArray();
+    if (scenes.isEmpty()) return -1;
+    int index = 0;
+    const QJsonValue scene = gltfRoot.value(QStringLiteral("scene"));
+    if (!scene.isUndefined() && !scene.isNull()) {
+        double raw = 0;
+        if (!jsonNumber(scene, &raw) || std::floor(raw) != raw) return -1;
+        index = static_cast<int>(raw);
+    }
+    if (index < 0 || index >= scenes.size()) return -1;
+    return index;
+}
+
 QJsonObject sceneToJson(const QList<NamedDocument>& entities)
 {
     QJsonObject root;
@@ -827,20 +885,31 @@ void mergeGltfExtras(QJsonObject* gltfRoot, const QJsonObject& payload)
 {
     if (!gltfRoot) return;
     QJsonArray scenes = gltfRoot->value(QStringLiteral("scenes")).toArray();
-    QJsonObject scene = scenes.isEmpty() ? QJsonObject() : scenes.at(0).toObject();
+    const int index = selectedSceneIndex(*gltfRoot);
+    if (scenes.isEmpty()) {
+        QJsonObject scene;
+        QJsonObject extras;
+        extras.insert(QLatin1String(kGltfExtrasKey), payload);
+        scene.insert(QStringLiteral("extras"), extras);
+        scenes.append(scene);
+        gltfRoot->insert(QStringLiteral("scenes"), scenes);
+        return;
+    }
+    if (index < 0) return;
+    QJsonObject scene = scenes.at(index).toObject();
     QJsonObject extras = scene.value(QStringLiteral("extras")).toObject();
     extras.insert(QLatin1String(kGltfExtrasKey), payload);
     scene.insert(QStringLiteral("extras"), extras);
-    if (scenes.isEmpty()) scenes.append(scene);
-    else scenes.replace(0, scene);
+    scenes.replace(index, scene);
     gltfRoot->insert(QStringLiteral("scenes"), scenes);
 }
 
 QJsonObject gltfExtrasPayload(const QJsonObject& gltfRoot)
 {
+    const int index = selectedSceneIndex(gltfRoot);
+    if (index < 0) return {};
     const QJsonArray scenes = gltfRoot.value(QStringLiteral("scenes")).toArray();
-    if (scenes.isEmpty()) return {};
-    const QJsonObject extras = scenes.at(0).toObject().value(QStringLiteral("extras")).toObject();
+    const QJsonObject extras = scenes.at(index).toObject().value(QStringLiteral("extras")).toObject();
     const QJsonValue value = extras.value(QLatin1String(kGltfExtrasKey));
     if (value.isObject()) return value.toObject();
     if (value.isString()) {

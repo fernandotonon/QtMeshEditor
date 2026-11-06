@@ -4240,6 +4240,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
         exportMaterial(e, file);
         writeConstraintSidecar(_uri, e);   // IK chains + handles ride along like the binary .mesh export
+        writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
     }
     else if(_format.contains("mesh"))
     {
@@ -4811,6 +4812,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     if (!poseNames.empty())
                         FaceRig::writeArkitSidecar(file.filePath(), poseNames);
                 }
+                writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
             }
 
             delete scene;
@@ -4826,8 +4828,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // persist them beside the asset so they survive save/reopen
         // (#521). The .mesh / FBX branches above return before here and
         // write their own; this covers the Assimp-backed formats.
+        // Bone display is written only after a successful Assimp export,
+        // inside the success branch above, so a failed overwrite cannot
+        // replace the sidecar of the file that is still on disk.
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
-        writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
         writeMotionGraphSidecar(_uri, e);

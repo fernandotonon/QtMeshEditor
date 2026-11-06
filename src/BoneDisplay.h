@@ -154,6 +154,7 @@ bool setIsolatedGroup(Document* doc, const QString& name);
 Document prefixBoneNames(const Document& doc, const QString& prefix);
 Document matchImportedBoneNames(const Document& doc, const QString& prefix,
                                 const QStringList& skeletonBones);
+bool renameBoneKey(Document* doc, const QString& from, const QString& to);
 
 QJsonObject toJson(const Document& doc);
 bool fromJson(const QJsonObject& obj, Document* out, QString* error = nullptr);

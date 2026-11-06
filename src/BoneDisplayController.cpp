@@ -450,16 +450,35 @@ void BoneDisplayController::setLayerVisible(int index, bool on)
     commitSelected(false);
 }
 
-void BoneDisplayController::addGroup(const QString& name)
+QString BoneDisplayController::addGroup(const QString& name)
 {
     Ogre::Entity* entity = selectedEntity();
-    if (!entity) return;
+    if (!entity) {
+        m_groupError = QStringLiteral("Select a bone before adding a group");
+        emit displayChanged();
+        return m_groupError;
+    }
     const BoneDisplay::Color color = kGroupPalette[m_docs[entity].groups.size() % 6];
     QString error;
-    if (!BoneDisplay::addGroup(&m_docs[entity], name, color, &error)) return;
+    if (!BoneDisplay::addGroup(&m_docs[entity], name, color, &error)) {
+        m_groupError = error.isEmpty() ? QStringLiteral("Could not add the group") : error;
+        emit displayChanged();
+        return m_groupError;
+    }
+    m_groupError.clear();
     note(QStringLiteral("scene.skel.display.group"),
          QStringLiteral("add %1").arg(name.trimmed()));
     commitSelected(false);
+    return {};
+}
+
+void BoneDisplayController::rekeyBone(Ogre::Entity* entity, const QString& from, const QString& to)
+{
+    if (!entity) return;
+    auto it = m_docs.find(entity);
+    if (it == m_docs.end()) return;
+    if (!BoneDisplay::renameBoneKey(&it.value(), from, to)) return;
+    emit displayChanged();
 }
 
 void BoneDisplayController::removeGroup(const QString& name)
@@ -514,7 +533,11 @@ bool BoneDisplayController::saveEntity(Ogre::Entity* entity, const QString& mesh
     const BoneDisplay::Document doc = documentFor(entity);
     const QString path = BoneDisplay::sidecarPath(meshPath);
     if (BoneDisplay::isDefault(doc)) {
-        QFile::remove(path);
+        if (QFileInfo::exists(path) && !QFile::remove(path)) {
+            note(QStringLiteral("scene.skel.display.save"),
+                 QStringLiteral("could not remove %1").arg(path));
+            return false;
+        }
     } else {
         QString error;
         if (!BoneDisplay::writeSidecarFile(path, BoneDisplay::toJson(doc), &error)) {
@@ -523,8 +546,10 @@ bool BoneDisplayController::saveEntity(Ogre::Entity* entity, const QString& mesh
         }
         const QString ext = QFileInfo(meshPath).suffix().toLower();
         if (ext == QLatin1String("gltf") || ext == QLatin1String("glb") || ext == QLatin1String("vrm")) {
-            if (!BoneDisplay::writeGltfExtras(meshPath, BoneDisplay::toJson(doc), &error))
+            if (!BoneDisplay::writeGltfExtras(meshPath, BoneDisplay::toJson(doc), &error)) {
                 note(QStringLiteral("scene.skel.display.save"), error);
+                return false;
+            }
         }
     }
     note(QStringLiteral("scene.skel.display.save"), path);
@@ -565,10 +590,6 @@ bool BoneDisplayController::loadEntity(Ogre::Entity* entity, const QString& mesh
                     break;
                 }
             }
-            if (!loaded && scene.size() == 1) {
-                doc = scene.first().document;
-                loaded = true;
-            }
         } else {
             QString error;
             if (!BoneDisplay::fromJson(extras, &doc, &error)) {
@@ -605,7 +626,11 @@ bool BoneDisplayController::saveScene(const QHash<QString, Ogre::Entity*>& nodes
     const QString path = BoneDisplay::sidecarPath(scenePath);
     const QJsonArray stored = json.value(QStringLiteral("entities")).toArray();
     if (stored.isEmpty()) {
-        QFile::remove(path);
+        if (QFileInfo::exists(path) && !QFile::remove(path)) {
+            note(QStringLiteral("scene.skel.display.save"),
+                 QStringLiteral("could not remove %1").arg(path));
+            return false;
+        }
     } else {
         QString error;
         if (!BoneDisplay::writeSidecarFile(path, json, &error)) {
@@ -614,8 +639,10 @@ bool BoneDisplayController::saveScene(const QHash<QString, Ogre::Entity*>& nodes
         }
         const QString ext = QFileInfo(scenePath).suffix().toLower();
         if (ext == QLatin1String("gltf") || ext == QLatin1String("glb") || ext == QLatin1String("vrm")) {
-            if (!BoneDisplay::writeGltfExtras(scenePath, json, &error))
+            if (!BoneDisplay::writeGltfExtras(scenePath, json, &error)) {
                 note(QStringLiteral("scene.skel.display.save"), error);
+                return false;
+            }
         }
     }
     note(QStringLiteral("scene.skel.display.save"), path);
@@ -643,8 +670,14 @@ bool BoneDisplayController::loadScene(const QHash<QString, Ogre::Entity*>& nodes
         if (!BoneDisplay::readGltfExtras(scenePath, &extras, nullptr)) return true;
         QString error;
         if (!BoneDisplay::sceneFromJson(extras, &scene, &error)) {
-            note(QStringLiteral("scene.skel.display.load"), error);
-            return false;
+            BoneDisplay::Document single;
+            if (nodesToEntities.size() == 1 && !extras.contains(QStringLiteral("entities"))
+                && BoneDisplay::fromJson(extras, &single, &error)) {
+                scene.append(BoneDisplay::NamedDocument{nodesToEntities.constBegin().key(), single});
+            } else {
+                note(QStringLiteral("scene.skel.display.load"), error);
+                return false;
+            }
         }
         fromFile = true;
     }

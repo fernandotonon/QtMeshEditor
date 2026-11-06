@@ -1055,8 +1055,11 @@ void SkeletonDebug::createShapeMeshes()
             mo.position(center); mo.colour(white);
             mo.position(std::cos(a0), 0.f, std::sin(a0)); mo.colour(white);
             mo.position(std::cos(a1), 0.f, std::sin(a1)); mo.colour(white);
+            mo.position(center); mo.colour(white);
+            mo.position(std::cos(a1), 0.f, std::sin(a1)); mo.colour(white);
+            mo.position(std::cos(a0), 0.f, std::sin(a0)); mo.colour(white);
         }
-        return slices;
+        return slices * 2;
     });
     ensure("SkeletonDebug/RingMesh", "tmpBoneRing", [&](Ogre::ManualObject& mo) {
         const int slices = 16;
@@ -1074,8 +1077,14 @@ void SkeletonDebug::createShapeMeshes()
             mo.position(o0); mo.colour(white);
             mo.position(i1); mo.colour(white);
             mo.position(o1); mo.colour(white);
+            mo.position(o0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
+            mo.position(i0); mo.colour(white);
+            mo.position(o1); mo.colour(white);
+            mo.position(o0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
         }
-        return slices * 2;
+        return slices * 4;
     });
 }
 

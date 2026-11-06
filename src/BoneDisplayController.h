@@ -51,6 +51,7 @@ class BoneDisplayController : public QObject
     Q_PROPERTY(QString isolatedGroup READ isolatedGroup NOTIFY displayChanged)
     Q_PROPERTY(QString boneLayerBits READ boneLayerBits NOTIFY displayChanged)
     Q_PROPERTY(QString visibleLayerBits READ visibleLayerBits NOTIFY displayChanged)
+    Q_PROPERTY(QString groupError READ groupError NOTIFY displayChanged)
 
 public:
     static BoneDisplayController* instance();
@@ -65,6 +66,7 @@ public:
     bool loadEntity(Ogre::Entity* entity, const QString& meshPath);
     bool saveScene(const QHash<QString, Ogre::Entity*>& nodesToEntities, const QString& scenePath);
     bool loadScene(const QHash<QString, Ogre::Entity*>& nodesToEntities, const QString& scenePath);
+    void rekeyBone(Ogre::Entity* entity, const QString& from, const QString& to);
 
     QStringList shapeIds() const { return BoneDisplay::shapeIds(); }
     bool hasBone() const;
@@ -94,6 +96,7 @@ public:
     QString isolatedGroup() const;
     QString boneLayerBits() const;
     QString visibleLayerBits() const;
+    QString groupError() const { return m_groupError; }
 
     Q_INVOKABLE void setShapeIndex(int index);
     Q_INVOKABLE void setCustomMeshIndex(int index);
@@ -109,7 +112,7 @@ public:
     Q_INVOKABLE void setLockScale(bool locked);
     Q_INVOKABLE void setBoneOnLayer(int index, bool on);
     Q_INVOKABLE void setLayerVisible(int index, bool on);
-    Q_INVOKABLE void addGroup(const QString& name);
+    Q_INVOKABLE QString addGroup(const QString& name);
     Q_INVOKABLE void removeGroup(const QString& name);
     Q_INVOKABLE void setGroupMember(const QString& name, bool member);
     Q_INVOKABLE void setGroupColorHex(const QString& name, const QString& hex);
@@ -131,6 +134,7 @@ private:
     static QString bits(std::uint32_t mask);
 
     QHash<Ogre::Entity*, BoneDisplay::Document> m_docs;
+    QString m_groupError;
     bool m_mgrBound = false;
     bool m_animBound = false;
 };
