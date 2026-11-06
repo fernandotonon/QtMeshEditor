@@ -598,5 +598,71 @@ FaceFit fitFaceCoefficients(const std::vector<std::array<float, 3>>& photo, cons
     return ff;
 }
 
+
+FaceProjection projectFace(const QImage& photo, const QImage& matte, const QRectF& headBox, const std::vector<float>& v,
+                           const std::vector<int>& tris, const std::array<float, 3>& camT, float focal,
+                           const std::vector<std::array<float, 3>>& landmarks)
+{
+    FaceProjection out;
+    const size_t n = v.size() / 3;
+    if (photo.isNull() || n == 0 || focal <= 0.0f || headBox.isEmpty()) return out;
+    const float cx = float(photo.width()) * 0.5f, cy = float(photo.height()) * 0.5f;
+    std::vector<std::array<float, 3>> cam(n);
+    out.pixel.assign(n * 2, 0.0f);
+    out.weight.assign(n, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        cam[i] = {v[i * 3] + camT[0], -v[i * 3 + 1] + camT[1], -v[i * 3 + 2] + camT[2]};   // the SAM camera convention
+        if (cam[i][2] <= 1e-3f) continue;
+        out.pixel[i * 2] = focal * cam[i][0] / cam[i][2] + cx;
+        out.pixel[i * 2 + 1] = focal * cam[i][1] / cam[i][2] + cy;
+    }
+    std::vector<std::array<float, 3>> nrm(n, std::array<float, 3>{0, 0, 0});
+    for (size_t t = 0; t + 2 < tris.size(); t += 3) {
+        const int a = tris[t], b = tris[t + 1], c = tris[t + 2];
+        if (a < 0 || b < 0 || c < 0 || size_t(a) >= n || size_t(b) >= n || size_t(c) >= n) continue;
+        const auto& A = cam[size_t(a)]; const auto& B = cam[size_t(b)]; const auto& C = cam[size_t(c)];
+        const std::array<float, 3> e1{B[0] - A[0], B[1] - A[1], B[2] - A[2]}, e2{C[0] - A[0], C[1] - A[1], C[2] - A[2]};
+        const std::array<float, 3> f{e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+        for (int idx : {a, b, c}) for (size_t k = 0; k < 3; ++k) nrm[size_t(idx)][k] += f[k];
+    }
+    std::vector<float> facing(n, 0.0f);
+    for (size_t i = 0; i < n; ++i) {
+        const float nl = std::sqrt(nrm[i][0] * nrm[i][0] + nrm[i][1] * nrm[i][1] + nrm[i][2] * nrm[i][2]);
+        const float pl = std::sqrt(cam[i][0] * cam[i][0] + cam[i][1] * cam[i][1] + cam[i][2] * cam[i][2]);
+        if (nl < 1e-12f || pl < 1e-6f) continue;
+        facing[i] = -(nrm[i][0] * cam[i][0] + nrm[i][1] * cam[i][1] + nrm[i][2] * cam[i][2]) / (nl * pl);
+    }
+    // the winding may be either way round: the vertices nearest the camera must face it
+    std::vector<size_t> order(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    const size_t nearest = std::max<size_t>(1, n / 20);
+    std::partial_sort(order.begin(), order.begin() + long(nearest), order.end(), [&](size_t x, size_t y) { return cam[x][2] < cam[y][2]; });
+    float mean = 0.0f;
+    for (size_t k = 0; k < nearest; ++k) mean += facing[order[k]];
+    const float sign = mean >= 0.0f ? 1.0f : -1.0f;
+    const float feather = std::max(4.0f, float(std::min(headBox.width(), headBox.height())) * 0.12f);
+    auto ramp = [](float a, float b, float t) { const float u = std::clamp((t - a) / (b - a), 0.0f, 1.0f); return u * u * (3.0f - 2.0f * u); };
+    const bool haveMatte = !matte.isNull() && matte.size() == photo.size();
+    // soft face-oval mask: the oval shrunk a little, blurred by a down/up scale so the projection fades out instead of ending in a line
+    QImage oval;
+    if (landmarks.size() >= 468) {
+        oval = polygonMask(photo.width(), photo.height(), scaledPolygon(pts(landmarks, kOval), 0.95));
+        const QSize small(std::max(8, photo.width() / 32), std::max(8, photo.height() / 32));
+        oval = oval.scaled(small, Qt::IgnoreAspectRatio, Qt::SmoothTransformation).scaled(photo.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+    for (size_t i = 0; i < n; ++i) {
+        const float x = out.pixel[i * 2], y = out.pixel[i * 2 + 1];
+        if (cam[i][2] <= 1e-3f || x < 0 || y < 0 || x >= float(photo.width()) || y >= float(photo.height())) continue;
+        const float edge = std::min({x - float(headBox.left()), float(headBox.right()) - x, y - float(headBox.top()), float(headBox.bottom()) - y});
+        float w = ramp(0.0f, feather, edge) * ramp(0.25f, 0.6f, sign * facing[i]);
+        if (haveMatte && qGray(matte.pixel(int(x), int(y))) < 128) w = 0.0f;
+        if (!oval.isNull()) w *= ramp(0.15f, 0.85f, float(qGray(oval.pixel(int(x), int(y)))) / 255.0f);
+        out.weight[i] = w;
+        if (w > 0.5f) ++out.visible;
+    }
+    out.ok = out.visible > 50;
+    return out;
+}
+
 }  // namespace PhotoAppearance
 }  // namespace CharacterGen

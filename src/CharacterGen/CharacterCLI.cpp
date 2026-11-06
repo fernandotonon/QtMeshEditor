@@ -41,7 +41,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--photo IMAGE [--fit-face]] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
+        "                        [--photo IMAGE [--fit-face] [--project-face]] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -78,7 +78,7 @@ int run(int argc, char* argv[])
     QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
     bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
-    bool fitFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    bool fitFace = false, projectFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -117,6 +117,7 @@ int run(int argc, char* argv[])
         }
         else if (a == "--photo") photoArg = next();
         else if (a == "--fit-face") fitFace = true;
+        else if (a == "--project-face") projectFace = true;
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -438,6 +439,14 @@ int run(int argc, char* argv[])
                 if (ce.bottomColour.ok) p.bottomColour = ce.bottomColour.colour;
                 CLIPipeline::writeCliError(QStringLiteral("Photo clothing: top %1 %2, bottom %3 %4\n").arg(ce.top, ce.topColour.ok ? hex(ce.topColour) : QStringLiteral("-"), ce.bottom, ce.bottomColour.ok ? hex(ce.bottomColour) : QStringLiteral("-")));
             }
+        }
+        if (projectFace) {
+            const PhotoAppearance::FaceProjection fp = PhotoAppearance::projectFace(photo, matte,
+                PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height()),
+                sr.body.posedVertices, sr.body.triangles, sr.body.camT, sr.body.focalPx, fa.landmarks);
+            if (fp.ok) { p.facePhoto = photo; p.facePhotoPixel = fp.pixel; p.facePhotoWeight = fp.weight;
+                CLIPipeline::writeCliError(QStringLiteral("Face texture: %1 vertices projected from the photo\n").arg(fp.visible)); }
+            else CLIPipeline::writeCliError(QStringLiteral("Warning: face texture skipped: the head is not visible enough in the photo\n"));
         }
         p.bodyShape = sr.body.shape;
         if (fitFace) {

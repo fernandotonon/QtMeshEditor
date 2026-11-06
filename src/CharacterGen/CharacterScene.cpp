@@ -259,6 +259,7 @@ QString bakeSkinFile(const Dna::Rig& rig, const Params& params, const QString& u
     options.hairDensity = build.bodyHair;
     options.scalp = build.scalp;
     options.scalpColour = params.hairColour;
+    options.photo = params.facePhoto; options.photoPixel = params.facePhotoPixel; options.photoWeight = params.facePhotoWeight;
     if (params.openEyes) options.brows = build.brows;   // the closed lids have no layer to frame the brows on
     const QImage image = bakeSkinAlbedo(rig.meshes.front(), params.skin, options);
     if (image.isNull()) return QString();
