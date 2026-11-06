@@ -31,11 +31,6 @@ struct SkinTextureOptions {
     std::vector<float> hairDensity; ///< 0..1 per POSITION vertex of the baked mesh: where body hair may grow
     std::vector<float> scalp;       ///< 0..1 per POSITION vertex: the scalp (hair-covered skin of the head), painted in `scalpColour`
     Rgb scalpColour{0.24f, 0.145f, 0.09f};   ///< the hair colour the scalp is shaded towards
-    QImage photo;                   ///< valid = project this photo onto the vertices that have a weight
-    std::vector<float> photoPixel;  ///< 2 per POSITION vertex: where the vertex lands in `photo` (pixels)
-    std::vector<float> photoWeight; ///< 0..1 per POSITION vertex: how much the photo replaces the procedural skin
-    float photoTolerance = 0.24f;   ///< RGB distance from the skin tone beyond which a photo pixel fades out (hair, hats, make-up)
-    float photoStrength = 0.92f;    ///< cap of the blend (the rest keeps pores and lips from the procedural skin)
 };
 
 /// Bake the albedo of `body` (positions in metres, UVs + layouts + faces as the rig stores them: the V flip is applied here).

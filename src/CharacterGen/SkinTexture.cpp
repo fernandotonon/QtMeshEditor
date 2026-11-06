@@ -99,14 +99,13 @@ struct UvVertex {
     std::array<float, 3> position{};
     float hair = 0.0f;               // body-hair density at the vertex
     float scalp = 0.0f;              // scalp coverage at the vertex
-    std::array<float, 3> photo{};    // photo pixel x, y and projection weight at the vertex
 };
 
 // Rasterise one triangle: texels whose centre is inside it take the interpolated surface position; texels up to a pixel OUTSIDE it
 // take the extrapolated position (the colour is a function of the 3D point, so it continues smoothly past the island border and
 // filtering across a seam does not pull in a different colour). An inside texel is never overwritten by an extrapolated one.
 void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size, std::vector<std::array<float, 3>>& surface,
-               std::vector<float>& hair, std::vector<float>& scalp, std::vector<std::array<float, 3>>& photo, std::vector<char>& covered)
+               std::vector<float>& hair, std::vector<float>& scalp, std::vector<char>& covered)
 {
     const float area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     if (std::fabs(area) < 1e-9f) return;
@@ -137,7 +136,6 @@ void rasterise(const UvVertex& a, const UvVertex& b, const UvVertex& c, int size
             surface[i] = p;
             hair[i] = std::clamp(a.hair * w0 + b.hair * w1 + c.hair * w2, 0.0f, 1.0f);
             scalp[i] = std::clamp(a.scalp * w0 + b.scalp * w1 + c.scalp * w2, 0.0f, 1.0f);
-            for (size_t k = 0; k < 3; ++k) photo[i][k] = a.photo[k] * w0 + b.photo[k] * w1 + c.photo[k] * w2;
             covered[i] = inside ? 2 : 1;
         }
 }
@@ -360,24 +358,6 @@ Rgb skinColourAt(const std::array<float, 3>& p, const Rgb& skin, const SkinTextu
     return c;
 }
 
-namespace {
-/// Bilinear photo sample (pixel coordinates, centre of pixel = +0.5) averaged over a small footprint so JPEG noise and the photo's
-/// own resolution do not turn into speckle on the texture.
-Rgb samplePhoto(const QImage& img, float x, float y)
-{
-    Rgb sum{0, 0, 0};
-    float n = 0;
-    for (int dy = -1; dy <= 1; ++dy)
-        for (int dx = -1; dx <= 1; ++dx) {
-            const int px = std::clamp(int(std::lround(x)) + dx, 0, img.width() - 1);
-            const int py = std::clamp(int(std::lround(y)) + dy, 0, img.height() - 1);
-            const QRgb q = img.pixel(px, py);
-            sum[0] += qRed(q) / 255.0f; sum[1] += qGreen(q) / 255.0f; sum[2] += qBlue(q) / 255.0f; n += 1;
-        }
-    return {sum[0] / n, sum[1] / n, sum[2] / n};
-}
-}  // namespace
-
 QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureOptions& options)
 {
     const int size = std::clamp(options.size, 64, 8192);
@@ -386,9 +366,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
     std::vector<std::array<float, 3>> surface(texels);
     std::vector<float> hair(texels, 0.0f);
     std::vector<float> scalpCover(texels, 0.0f);
-    std::vector<std::array<float, 3>> photo(texels);
     std::vector<char> covered(texels, 0);
-    const bool havePhoto = !options.photo.isNull() && options.photoWeight.size() * 3 <= body.positions.size() + 2 && options.photoPixel.size() == options.photoWeight.size() * 2 && !options.photoWeight.empty();
     const bool haveHair = options.bodyHair > 0.0f && options.hairDensity.size() * 3 >= body.positions.size();
     const bool haveScalp = options.scalp.size() * 3 >= body.positions.size();
 
@@ -401,8 +379,6 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
         for (size_t k = 0; k < 3; ++k) out.position[k] = body.positions[size_t(l.position) * 3 + k];
         out.hair = haveHair ? options.hairDensity[l.position] : 0.0f;
         out.scalp = haveScalp ? options.scalp[l.position] : 0.0f;
-        if (havePhoto && size_t(l.position) < options.photoWeight.size())
-            out.photo = {options.photoPixel[size_t(l.position) * 2], options.photoPixel[size_t(l.position) * 2 + 1], options.photoWeight[l.position]};
         return true;
     };
     for (const auto& face : body.faces) {
@@ -410,7 +386,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
             UvVertex a;
             UvVertex b;
             UvVertex c;
-            if (vertexOf(face[0], a) && vertexOf(face[i], b) && vertexOf(face[i + 1], c)) rasterise(a, b, c, size, surface, hair, scalpCover, photo, covered);
+            if (vertexOf(face[0], a) && vertexOf(face[i], b) && vertexOf(face[i + 1], c)) rasterise(a, b, c, size, surface, hair, scalpCover, covered);
         }
     }
 
@@ -420,16 +396,7 @@ QImage bakeSkinAlbedo(const Dna::Mesh& body, const Rgb& skin, const SkinTextureO
         for (int x = 0; x < size; ++x) {
             const size_t i = size_t(y) * size_t(size) + size_t(x);
             if (!covered[i]) continue;
-            Rgb c = skinColourAt(surface[i], skin, options, hair[i], scalpCover[i]);
-            if (havePhoto && photo[i][2] > 0.0f) {
-                // hair, hats and make-up in the photo are not skin: fade the projection where the photo colour is far from the skin tone
-                const Rgb ph = samplePhoto(options.photo, photo[i][0], photo[i][1]);
-                const float dist = std::sqrt((ph[0] - skin[0]) * (ph[0] - skin[0]) + (ph[1] - skin[1]) * (ph[1] - skin[1]) + (ph[2] - skin[2]) * (ph[2] - skin[2]));
-                const float keep = 1.0f - smoothRange(options.photoTolerance, options.photoTolerance * 1.6f, dist);
-                // the photo's expression is not the neutral mouth the mesh has: keep the procedural lips where the lip band is
-                const float mouth = options.lips.valid ? lipMask(surface[i], options.lips) : 0.0f;
-                c = mix(c, ph, std::clamp(photo[i][2], 0.0f, 1.0f) * options.photoStrength * keep * (1.0f - 0.9f * mouth));
-            }
+            const Rgb c = skinColourAt(surface[i], skin, options, hair[i], scalpCover[i]);
             image.setPixel(x, y, qRgb(int(std::lround(c[0] * 255.0f)), int(std::lround(c[1] * 255.0f)), int(std::lround(c[2] * 255.0f))));
         }
     dilate(image, covered, 4);

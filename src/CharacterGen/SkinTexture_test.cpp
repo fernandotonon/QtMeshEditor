@@ -206,37 +206,3 @@ TEST(CharacterModel, BodyHairDensityFollowsTheRegion)
     EXPECT_EQ(bodyHairDensityOfJoint(QStringLiteral("SomethingElse")), 0.0f);
     EXPECT_GT(bodyHairDensityOfJoint(QStringLiteral("Spine2")), 0.0f);
 }
-
-TEST(SkinTexture, ProjectedPhotoReplacesSkinOnlyWhereItLooksLikeSkin)
-{
-    // the photo's left half is skin-like, its right half is bright green (hair, a hat, make-up): the green must not be painted
-    QImage photo(100, 100, QImage::Format_RGB888);
-    for (int y = 0; y < 100; ++y)
-        for (int x = 0; x < 100; ++x) photo.setPixel(x, y, x < 50 ? qRgb(178, 128, 102) : qRgb(0, 255, 0));
-    SkinTextureOptions o;
-    o.size = 128;
-    o.poreStrength = 0.0f;
-    o.freckles = 0.0f;
-    o.photo = photo;
-    o.photoPixel = {10, 50,  90, 50,  90, 50,  10, 50};   // left edge of the quad -> x 10, right edge -> x 90 (the middle texel of each row)
-    o.photoWeight = {1, 1, 1, 1};
-    const Rgb skin{0.80f, 0.60f, 0.48f};
-    const QImage img = bakeSkinAlbedo(quad(), skin, o);
-    ASSERT_FALSE(img.isNull());
-    const QRgb left = img.pixel(10, 64);     // photo x ~ 20: skin-like photo colour
-    const QRgb right = img.pixel(120, 64);   // photo x ~ 85: green, faded out
-    EXPECT_NEAR(qRed(left) / 255.0f, 178 / 255.0f, 0.08f);
-    EXPECT_LT(qGreen(right), 200);
-    EXPECT_NEAR(qGreen(right) / 255.0f, skin[1], 0.12f);
-}
-
-TEST(SkinTexture, PhotoWithoutWeightsChangesNothing)
-{
-    SkinTextureOptions plain;
-    plain.size = 64;
-    SkinTextureOptions withPhoto = plain;
-    withPhoto.photo = QImage(10, 10, QImage::Format_RGB888);
-    withPhoto.photo.fill(Qt::green);
-    const Rgb skin{0.80f, 0.60f, 0.48f};
-    EXPECT_EQ(bakeSkinAlbedo(quad(), skin, plain), bakeSkinAlbedo(quad(), skin, withPhoto));
-}

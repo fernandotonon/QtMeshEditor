@@ -9,6 +9,7 @@
 #include "Clothing.h"
 #include "HairTint.h"
 #include "PhotoAppearance.h"
+#include "PhotoCharacter.h"
 #include "MouthFit.h"
 #include "BodyShape.h"
 #include "Proportions.h"
@@ -44,7 +45,7 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--photo IMAGE [--fit-face] [--project-face]] [--height F] [--legs F] [--arms F] [--torso F] [--shoulders F] [--head-size F] [--mouth-report] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
+        "                        [--photo IMAGE [--fit-face]] [--height F] [--legs F] [--arms F] [--torso F] [--shoulders F] [--head-size F] [--mouth-report] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
@@ -82,7 +83,7 @@ int run(int argc, char* argv[])
     QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
     bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
-    std::vector<float> samBodyCm; Proportions prop; bool haveProp = false; bool measureBody = false, mouthReport = false, fitFace = false, projectFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    std::vector<float> samBodyCm; Proportions prop; bool haveProp = false; bool measureBody = false, mouthReport = false, fitFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -123,7 +124,6 @@ int run(int argc, char* argv[])
         else if (a == "--fit-face") fitFace = true;
         else if (a == "--mouth-report") mouthReport = true;
         else if (a == "--measure-body") measureBody = true;
-        else if (a == "--project-face") projectFace = true;
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -393,120 +393,31 @@ int run(int argc, char* argv[])
         p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);
     }
     if (!photoArg.isEmpty()) {
-        // Photo -> MHR identity (SAM 3D Body): its 45 shape coefficients are this generator's body-shape modes. --body still overrides.
+        // Photo -> character (PhotoCharacter.h). --body / --skin / --eye / --hair* / --top* / --bottom* still win over what the photo says.
         QImageReader reader(photoArg);
         reader.setAutoTransform(true);
         const QImage photo = reader.read();
         if (photo.isNull()) { CLIPipeline::writeCliError(QStringLiteral("Error: cannot read the image %1\n").arg(photoArg)); return 1; }
         QString fetchErr;
-        if (!SamBody::ensureModelsBlocking(&fetchErr)) { CLIPipeline::writeCliError(QStringLiteral("Error: SAM 3D Body models unavailable: %1\n").arg(fetchErr)); return 1; }
-        SamBody::Options so;   // the neutral mesh + topology are needed for the clothing regions
-        const SamBody::Result sr = SamBody::predict(photo, so);
-        if (!sr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(sr.error)); return 1; }
-        if (!sr.warning.isEmpty()) CLIPipeline::writeCliError(QStringLiteral("Warning: %1\n").arg(sr.warning));
-        // Appearance from the same photo (skin tone, hair colour, iris colour); explicit --skin/--eye/--hair-colour still win.
-        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR")) {
-            float mnx = 1e9f, mxx = -1e9f, mny = 1e9f, mxy = -1e9f, mnz = 1e9f, mxz = -1e9f;
-            for (size_t i = 0; i + 2 < sr.body.posedVertices.size(); i += 3) {
-                mnx = std::min(mnx, sr.body.posedVertices[i]); mxx = std::max(mxx, sr.body.posedVertices[i]);
-                mny = std::min(mny, sr.body.posedVertices[i + 1]); mxy = std::max(mxy, sr.body.posedVertices[i + 1]);
-                mnz = std::min(mnz, sr.body.posedVertices[i + 2]); mxz = std::max(mxz, sr.body.posedVertices[i + 2]);
-            }
-            fprintf(stderr, "sam: camT %.3f %.3f %.3f focal %.1f photo %dx%d verts x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]\n", double(sr.body.camT[0]), double(sr.body.camT[1]), double(sr.body.camT[2]),
-                    double(sr.body.focalPx), photo.width(), photo.height(), double(mnx), double(mxx), double(mny), double(mxy), double(mnz), double(mxz));
-            QImage dbg = photo.convertToFormat(QImage::Format_RGB888);
-            QPainter pt(&dbg);
-            const QRectF hb = PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height());
-            pt.setPen(QPen(Qt::red, 4)); pt.drawRect(hb);
-            pt.setPen(QPen(Qt::green, 4)); pt.drawRect(sr.bboxUsed);
-            pt.end();
-            dbg.save(QDir(qEnvironmentVariable("QTMESH_PHOTO_DEBUG_DIR")).filePath(QFileInfo(photoArg).baseName() + QStringLiteral("_head.png")));
-        }
-        QImage matte;
-        const PhotoAppearance::FaceAppearance fa = PhotoAppearance::estimate(photo, sr.bboxUsed,
-            PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height()), &matte);
-        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR") && !fa.landmarks.empty()) {
-            QFile lf(QDir(qEnvironmentVariable("QTMESH_PHOTO_DEBUG_DIR")).filePath(QFileInfo(photoArg).baseName() + QStringLiteral("_landmarks.f32")));
-            if (lf.open(QIODevice::WriteOnly)) lf.write(reinterpret_cast<const char*>(fa.landmarks.data()), qint64(fa.landmarks.size() * sizeof(std::array<float, 3>)));
-        }
-        auto hex = [](const PhotoAppearance::ColourEstimate& c) { return QColor::fromRgbF(double(c.colour[0]), double(c.colour[1]), double(c.colour[2])).name(); };
-        if (fa.skin.ok) { p.skin = fa.skin.colour; }
-        if (fa.hair.ok) {
-            if (hairColourArg.isEmpty()) p.hairColour = fa.hair.colour;   // an explicit --hair-colour (or the one of a loaded config) wins
-            if (hairArg.isEmpty() && p.nativeHead) {
-                const PhotoAppearance::HairChoice hc = PhotoAppearance::chooseHair(fa);
-                if (!hc.preset.isEmpty() && !qEnvironmentVariableIsSet("QTMESH_PHOTO_BUNDLE_HAIR")) {
-                    // Hair Studio: a procedural preset, shaped by what the photo shows
-                    p.hairStyle = QStringLiteral("proc:") + hc.preset;
-                    p.hairProcedural = Hair::presetParams(hc.preset);
-                    if (hc.length >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("length"), double(hc.length));
-                    if (hc.volume >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("volume"), double(hc.volume));
-                    if (hc.curliness >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("curliness"), double(hc.curliness));
-                    if (hc.fringe >= 0.0f) Hair::setParam(p.hairProcedural, QStringLiteral("fringe"), double(hc.fringe));
-                    hairArg = p.hairStyle;
-                    CLIPipeline::writeCliError(QStringLiteral("Photo hair: %1 (length %2 m, volume %3, curliness %4, fringe %5) from top %6, side %7, lowest %8, fringe %9, coherence %10\n")
-                        .arg(p.hairStyle).arg(double(p.hairProcedural.length), 0, 'f', 2).arg(double(p.hairProcedural.volume), 0, 'f', 2).arg(double(p.hairProcedural.curliness), 0, 'f', 2).arg(double(p.hairProcedural.fringe), 0, 'f', 2)
-                        .arg(double(fa.hairTop), 0, 'f', 2).arg(double(fa.hairSide), 0, 'f', 2).arg(double(fa.hairLowest), 0, 'f', 2).arg(double(fa.hairFringe), 0, 'f', 2).arg(double(fa.hairCoherence), 0, 'f', 2));
-                } else {
-                    const char* const styles[] = {"", "short02", "bob01", "long01"};
-                    if (data.hairStyle(QString::fromLatin1(styles[fa.hairLength]))) { hairArg = QString::fromLatin1(styles[fa.hairLength]); p.hairStyle = hairArg; }
-                }
-            }
-        }
-        if (fa.iris.ok) { p.eye = fa.iris.colour; }
-        CLIPipeline::writeCliError(QStringLiteral("Photo appearance: face %1, skin %2 (%3 px), hair %4 (%5 px, length %6, side %7), iris %8 %9\n")
-            .arg(fa.faceFound ? QStringLiteral("found") : QStringLiteral("NOT found"), fa.skin.ok ? hex(fa.skin) : QStringLiteral("-")).arg(fa.skin.samples)
-            .arg(fa.hair.ok ? hex(fa.hair) : QStringLiteral("-")).arg(fa.hair.samples).arg(fa.hairLength).arg(double(fa.sideHairFraction), 0, 'f', 2)
-            .arg(fa.iris.ok ? hex(fa.iris) : QStringLiteral("-"), fa.note));
-        if (topArg.isEmpty() && bottomArg.isEmpty() && fa.skin.ok) {
-            const PhotoAppearance::ClothingEstimate ce = PhotoAppearance::estimateClothing(photo, matte, p.skin, sr.body.neutralVertices, sr.body.posedVertices,
-                                                                                               sr.body.triangles, sr.body.camT, sr.body.focalPx);
-            if (ce.ok) {
-                p.topStyle = ce.top; p.bottomStyle = ce.bottom;
-                if (ce.topColour.ok && topColourArg.isEmpty()) p.topColour = ce.topColour.colour;
-                if (ce.bottomColour.ok && bottomColourArg.isEmpty()) p.bottomColour = ce.bottomColour.colour;
-                CLIPipeline::writeCliError(QStringLiteral("Photo clothing: top %1 %2, bottom %3 %4\n").arg(ce.top, ce.topColour.ok ? hex(ce.topColour) : QStringLiteral("-"), ce.bottom, ce.bottomColour.ok ? hex(ce.bottomColour) : QStringLiteral("-")));
-            }
-        }
-        if (projectFace) {
-            const PhotoAppearance::FaceProjection fp = PhotoAppearance::projectFace(photo, matte,
-                PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height()),
-                sr.body.posedVertices, sr.body.triangles, sr.body.camT, sr.body.focalPx, fa.landmarks);
-            if (fp.ok) { p.facePhoto = photo; p.facePhotoPixel = fp.pixel; p.facePhotoWeight = fp.weight;
-                CLIPipeline::writeCliError(QStringLiteral("Face texture: %1 vertices projected from the photo\n").arg(fp.visible)); }
-            else CLIPipeline::writeCliError(QStringLiteral("Warning: face texture skipped: the head is not visible enough in the photo\n"));
-        }
-        p.bodyShape = sr.body.shape;
-        {
-            // Fit to SAM's neutral body: widths through the identity coefficients, lengths through the proportions (explicit flags win).
-            BodyShape::Model bm;
-            if (bm.build(data) && !qEnvironmentVariableIsSet("QTMESH_NO_PROPORTION_FIT")) {
-                std::vector<float> samCm(sr.body.neutralVertices);
-                for (float& v : samCm) v *= 100.0f;
-                const auto before = bm.measure(p.bodyShape);
-                const BodyShape::BodyFit bf = BodyShape::fitToBody(bm, data, samCm, p.bodyShape);
-                if (bf.ok) {
-                    p.bodyShape = bf.coefficients;
-                    if (!haveProp) p.proportions = bf.proportions;
-                    const auto sam = bm.measurePositions(samCm);
-                    const auto now = bm.measure(p.bodyShape);
-                    QString line = QStringLiteral("Body fit (cm) SAM / shape-only -> fitted:");
-                    for (int m = 0; m < BodyShape::MeasureCount; ++m) line += QStringLiteral(" %1 %2/%3->%4").arg(QLatin1String(BodyShape::info(BodyShape::Measure(m)).id)).arg(double(sam[size_t(m)]), 0, 'f', 1).arg(double(before[size_t(m)]), 0, 'f', 1).arg(double(now[size_t(m)]), 0, 'f', 1);
-                    CLIPipeline::writeCliError(line + QLatin1Char('\n'));
-                    const Proportions& pr = p.proportions;
-                    CLIPipeline::writeCliError(QStringLiteral("Proportions: height %1 legs %2 arms %3 torso %4 shoulders %5 head %6\n").arg(double(pr.height), 0, 'f', 3).arg(double(pr.legs), 0, 'f', 3).arg(double(pr.arms), 0, 'f', 3).arg(double(pr.torso), 0, 'f', 3).arg(double(pr.shoulders), 0, 'f', 3).arg(double(pr.head), 0, 'f', 3));
-                }
-                if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR")) samBodyCm = samCm;
-            }
-        }
-        if (fitFace) {
-            const PhotoAppearance::FaceFit ff = PhotoAppearance::fitFaceCoefficients(fa.landmarks, p.bodyShape);
-            if (ff.ok) {
-                p.bodyShape = ff.coefficients;
-                CLIPipeline::writeCliError(QStringLiteral("Face fit: landmark error %1 -> %2 (of the inter-ocular distance, %3 modes)\n").arg(double(ff.errBefore), 0, 'f', 4).arg(double(ff.errAfter), 0, 'f', 4).arg(ff.modesUsed));
-            } else CLIPipeline::writeCliError(QStringLiteral("Warning: face fit skipped: %1\n").arg(ff.note));
-        }
-        p.bodyShape.resize(size_t(data.mhrShapes), 0.0f);
+        if (!PhotoCharacter::prepareModels(&fetchErr)) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fetchErr)); return 1; }
+        PhotoCharacter::Options po;
+        po.fitFace = fitFace;
+        po.bundleHair = qEnvironmentVariableIsSet("QTMESH_PHOTO_BUNDLE_HAIR");
+        po.debugName = QFileInfo(photoArg).baseName();
+        const PhotoCharacter::Result pr = PhotoCharacter::estimate(photo, data, po, [](const QString& line) { CLIPipeline::writeCliError(line + QLatin1Char('\n')); });
+        if (!pr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(pr.error)); return 1; }
+        PhotoCharacter::Keep keep;
+        keep.skin = !skinArg.isEmpty();
+        keep.eye = !eyeArg.isEmpty();
+        keep.hairColour = !hairColourArg.isEmpty();
+        keep.hairStyle = !hairArg.isEmpty();
+        keep.clothes = !topArg.isEmpty() || !bottomArg.isEmpty();
+        keep.topColour = !topColourArg.isEmpty();
+        keep.bottomColour = !bottomColourArg.isEmpty();
+        keep.proportions = haveProp;
+        PhotoCharacter::apply(pr, p, keep);
+        if (pr.haveHairStyle && !keep.hairStyle) hairArg = p.hairStyle;
+        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR")) samBodyCm = pr.samBodyCm;
         p.faceIdentity.clear();
         if (!ictHead) p.nativeHead = !data.mhrArkit.empty();
         CLIPipeline::writeCliError(QStringLiteral("Photo shape coefficients: %1\n").arg([&] { QStringList l; for (float v : p.bodyShape) l << QString::number(double(v), 'f', 3); return l.join(QLatin1Char(',')); }()));

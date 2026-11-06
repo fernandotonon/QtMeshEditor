@@ -114,50 +114,6 @@ TEST(PhotoAppearance, FaceFitWithoutLandmarksIsNotOk)
 }
 
 namespace {
-// a 12 x 12 grid of vertices in the xy plane at z = 0, 0.1 m apart, centred on the origin
-void gridMesh(std::vector<float>& v, std::vector<int>& tris)
-{
-    for (int j = 0; j < 12; ++j)
-        for (int i = 0; i < 12; ++i) { v.push_back((float(i) - 5.5f) * 0.1f); v.push_back((float(j) - 5.5f) * 0.1f); v.push_back(0.0f); }
-    for (int j = 0; j < 11; ++j)
-        for (int i = 0; i < 11; ++i) {
-            const int a = j * 12 + i;
-            tris.insert(tris.end(), {a, a + 1, a + 12, a + 1, a + 13, a + 12});
-        }
-}
-}  // namespace
-
-TEST(PhotoAppearance, ProjectFaceUsesTheSamCameraAndSeesTheFrontOfASurface)
-{
-    std::vector<float> v;
-    std::vector<int> tris;
-    gridMesh(v, tris);
-    QImage photo(200, 200, QImage::Format_RGB888);
-    photo.fill(Qt::gray);
-    const auto fp = CharacterGen::PhotoAppearance::projectFace(photo, QImage(), QRectF(0, 0, 200, 200), v, tris, {0.0f, 0.0f, 2.0f}, 100.0f);
-    ASSERT_TRUE(fp.ok);
-    EXPECT_GT(fp.visible, 100);
-    // vertex (i=6, j=6) = (0.05, 0.05, 0): X = 0.05, Y = -0.05 + 0 (the y flip), Z = 2 -> (100*0.05/2 + 100, 100*-0.05/2 + 100)
-    const size_t k = size_t(6 * 12 + 6);
-    EXPECT_NEAR(fp.pixel[k * 2], 102.5f, 0.01f);
-    EXPECT_NEAR(fp.pixel[k * 2 + 1], 97.5f, 0.01f);
-    EXPECT_GT(fp.weight[k], 0.9f);
-}
-
-TEST(PhotoAppearance, ProjectFaceIgnoresVerticesOutsideTheMatteOrTheHeadBox)
-{
-    std::vector<float> v;
-    std::vector<int> tris;
-    gridMesh(v, tris);
-    QImage photo(200, 200, QImage::Format_RGB888);
-    photo.fill(Qt::gray);
-    QImage none(200, 200, QImage::Format_Grayscale8);
-    none.fill(0);   // nobody in the photo
-    EXPECT_FALSE(CharacterGen::PhotoAppearance::projectFace(photo, none, QRectF(0, 0, 200, 200), v, tris, {0.0f, 0.0f, 2.0f}, 100.0f).ok);
-    EXPECT_FALSE(CharacterGen::PhotoAppearance::projectFace(photo, QImage(), QRectF(0, 0, 20, 20), v, tris, {0.0f, 0.0f, 2.0f}, 100.0f).ok);
-}
-
-namespace {
 CharacterGen::PhotoAppearance::FaceAppearance shape(float top, float side, float lowest, float fringe, float coherence)
 {
     CharacterGen::PhotoAppearance::FaceAppearance fa;

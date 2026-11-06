@@ -154,9 +154,6 @@ struct Params {
     /// Bake a procedural skin texture (tone variation, blush, freckles, pores) for the body's own UVs instead of a flat colour.
     /// Only for the native head (the ICT head has a different UV layout).
     bool skinTexture = true;
-    QImage facePhoto;                   ///< optional: projected onto the skin texture where facePhotoWeight > 0 (native head)
-    std::vector<float> facePhotoPixel;  ///< 2 per body vertex: pixel in facePhoto
-    std::vector<float> facePhotoWeight; ///< per body vertex 0..1
     int skinTextureSize = 1024;
     /// 0..1 amount of body hair painted into the skin texture (arms, legs, chest, abdomen; sparse on hands and feet). 0 = none.
     float bodyHair = 0.5f;

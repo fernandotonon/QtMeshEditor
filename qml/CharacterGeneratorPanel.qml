@@ -22,6 +22,7 @@ Column {
     property var coeffs: new Array(45).fill(0)
     property bool live: true
     property string customSkin: ""   // #rrggbb picked by hand; wins over the named skin
+    property string customEye: ""    // #rrggbb read from a photo; wins over the named eye colour
     function reseed() { coeffs = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0); liveUpdate() }
     // every coefficient is sent, zeros included: the sliders are authoritative (a zero must not fall back to the seed's random value)
     function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
@@ -29,7 +30,7 @@ Column {
     function generate(replace) {
         seed = parseInt(seedField.text) || 0   // take the seed as typed even if the field has not lost focus yet
         CharacterController.generate(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, bodyString(), "",
-                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), pick(eyeBox, CharacterController.eyeNames), replace)
+                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), (customEye !== "" ? customEye : pick(eyeBox, CharacterController.eyeNames)), replace)
     }
     // live preview: swap the character this panel made (merged into one undo step) once a slider is released
     function liveUpdate() { if (live && CharacterController.hasCharacter()) generate(true) }
@@ -118,6 +119,41 @@ Column {
 
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
 
+    Label { height: 18; font.bold: true; text: "From a photo" }
+    Row {
+        spacing: 6
+        ToolBtn {
+            label: CharacterController.photoPath === "" ? "Load photo…" : "Change photo…"
+            enabled: !CharacterController.busy
+            onClicked: { var f = CharacterController.pickPhoto(); if (f !== "") CharacterController.generateFromPhoto(f) }
+        }
+        ToolBtn { label: "Clear photo"; enabled: CharacterController.photoPath !== "" && !CharacterController.busy; onClicked: CharacterController.clearPhoto() }
+    }
+    Row {
+        visible: CharacterController.photoPath !== ""
+        spacing: 6
+        Image {
+            width: 56; height: 56
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            cache: false
+            sourceSize.width: 112; sourceSize.height: 112
+            source: CharacterController.photoUrl
+        }
+        Note { width: sec.width - 62; text: CharacterController.photoPath.split("/").pop() }
+    }
+    Note { visible: CharacterController.busy; text: CharacterController.status }
+    Note { text: "Reads the body and its proportions, the skin, hair, eyes and clothes from one photo of a person (about 40 s; the models download once). A front view in good light works best. The sliders below then show what it found." }
+    Connections {
+        target: CharacterController
+        function onPhotoFitted(coefficients, skin, eye) {
+            sec.coeffs = coefficients
+            if (skin !== "") sec.customSkin = skin
+            sec.customEye = eye
+            sec.generate(CharacterController.hasCharacter())
+        }
+    }
+
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Seed" }
@@ -142,7 +178,7 @@ Column {
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Eyes" }
-        ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onCurrentIndexChanged: sec.liveUpdate() }
+        ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onActivated: { sec.customEye = ""; sec.liveUpdate() } onCurrentIndexChanged: sec.liveUpdate() }
     }
     Row {
         visible: CharacterController.hairNames.length > 0
@@ -531,7 +567,7 @@ Column {
     Label { height: 18; font.bold: true; text: "Body shape" }
     ShapeSlider { mode: 0 }
     Repeater { model: CharacterController.measureCount(); delegate: MeasureSlider { required property int modelData; idx: modelData } }
-    CheckBox { height: 22; text: "Advanced: all shape modes"; checked: sec.showAdvancedShape; onToggled: sec.showAdvancedShape = checked }
+    InspectorCheckBox { text: "Advanced: all shape modes"; checked: sec.showAdvancedShape; onToggled: sec.showAdvancedShape = checked }
     Repeater { model: sec.showAdvancedShape ? sec.bodyModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
     Repeater { model: sec.showAdvancedShape ? sec.headModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
     Repeater { model: sec.showAdvancedShape ? sec.armModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }

@@ -105,18 +105,6 @@ QImage personMatte(const QImage& photo);
 /// Full pipeline: photo + person box (photo px; empty = whole photo) -> face found by landmarks, matte by BackgroundRemover.
 FaceAppearance estimate(const QImage& photo, const QRectF& personBox, const QRectF& headBox = QRectF(), QImage* matteOut = nullptr);
 
-/// Where each MHR vertex of the PERSON'S posed mesh lands in the photo, and how well the photo sees it (facing the camera, inside the
-/// head box, on the person matte; with the face's landmarks, inside the face oval so hair, ears and the neck keep the procedural skin). The character's skin bake maps these onto its own body by vertex id.
-struct FaceProjection {
-    bool ok = false;
-    std::vector<float> pixel;    ///< 2 per vertex
-    std::vector<float> weight;   ///< 1 per vertex, 0..1
-    int visible = 0;             ///< vertices with weight > 0.5
-};
-FaceProjection projectFace(const QImage& photo, const QImage& personMatte, const QRectF& headBox, const std::vector<float>& posedVertices,
-                           const std::vector<int>& triangles, const std::array<float, 3>& camT, float focalPx,
-                           const std::vector<std::array<float, 3>>& landmarks = {});
-
 }  // namespace PhotoAppearance
 }  // namespace CharacterGen
 

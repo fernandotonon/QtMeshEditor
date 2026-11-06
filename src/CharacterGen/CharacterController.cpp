@@ -1,4 +1,8 @@
 #include "CharacterController.h"
+#include <QFileDialog>
+#include <QThread>
+#include <QPointer>
+#include <QImageReader>
 #include "Proportions.h"
 
 #include "CharacterAssets.h"
@@ -264,6 +268,78 @@ QString CharacterController::skinColourHex(const QString& name) const
     if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
     return QColor::fromRgbF(c[0], c[1], c[2]).name();
 }
+QString CharacterController::pickPhoto() const
+{
+    static QString lastDir;
+    const QString f = QFileDialog::getOpenFileName(QApplication::activeWindow(), tr("Choose a photo of a person"), lastDir,
+                                                   tr("Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff)"), nullptr, QFileDialog::DontUseNativeDialog);
+    if (!f.isEmpty()) lastDir = QFileInfo(f).absolutePath();
+    return f;
+}
+
+void CharacterController::clearPhoto()
+{
+    m_photoPath.clear();
+    emit photoChanged();
+}
+
+void CharacterController::generateFromPhoto(const QString& path)
+{
+    using namespace CharacterGen;
+    if (m_busy) return;
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.from_photo"));
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    const QImage photo = reader.read();
+    if (photo.isNull()) { setStatus(tr("That image could not be read: %1").arg(reader.errorString()), false); return; }
+    QString err;
+    if (!prepareAssets(&err)) return;   // (sets the status)
+    // the models download on the main thread (the downloader's thread); the worker then finds them on disk
+    setStatus(tr("Checking the photo models (they download on first use)…"), true);
+    if (!PhotoCharacter::prepareModels(&err)) { setStatus(err, false); return; }
+    setStatus(tr("Reading the photo…"), true);
+    const std::shared_ptr<Assets> assets = m_assets;
+    PhotoCharacter::Options options;
+    QPointer<CharacterController> self(this);
+    QThread* worker = QThread::create([self, assets, photo, options, path] {
+        auto result = std::make_shared<PhotoCharacter::Result>(PhotoCharacter::estimate(photo, *assets, options, [self](const QString& line) {
+            // only the stage lines (they end with an ellipsis) go to the status; the measurements are for the CLI log
+            if (self && line.endsWith(QChar(0x2026))) QMetaObject::invokeMethod(self.data(), [self, line] { if (self) self->setStatus(line, true); }, Qt::QueuedConnection);
+        }));
+        if (self) QMetaObject::invokeMethod(self.data(), [self, result, path] { if (self) self->finishPhoto(result, path); }, Qt::QueuedConnection);
+    });
+    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
+    worker->start();
+}
+
+void CharacterController::finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result, const QString& path)
+{
+    using namespace CharacterGen;
+    if (!result->ok) { setStatus(tr("The photo could not be used: %1").arg(result->error), false); return; }
+    const PhotoCharacter::Result& r = *result;
+    auto hex = [](const Rgb& c) { return QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name(); };
+    // the controller's own state first (proportions, hair, clothes, face texture), then the panel gets the coefficients and colours
+    m_proportions = {double(r.proportions.height), double(r.proportions.legs), double(r.proportions.arms), double(r.proportions.torso), double(r.proportions.shoulders), double(r.proportions.head)};
+    emit proportionsChanged();
+    if (r.haveHairStyle) {
+        if (r.hairStyle.startsWith(QLatin1String("proc:"))) m_hairParams = r.hairProcedural;
+        setHairStyle(r.hairStyle);
+    }
+    if (r.haveHairColour) setHairColour(hex(r.hairColour));
+    if (r.haveClothes) {
+        setTopStyle(r.topStyle);
+        setBottomStyle(r.bottomStyle);
+        if (r.haveTopColour) setTopColour(hex(r.topColour));
+        if (r.haveBottomColour) setBottomColour(hex(r.bottomColour));
+    }
+    m_photoPath = path;
+    emit photoChanged();
+    QVariantList coefficients;
+    for (float v : r.bodyShape) coefficients << double(v);
+    setStatus(tr("Photo read: building the character…"), false);
+    emit photoFitted(coefficients, r.haveSkin ? hex(r.skin) : QString(), r.haveEye ? hex(r.eye) : QString());
+}
+
 QString CharacterController::pickColour(const QString& initial) const
 {
     const QColor c = QColorDialog::getColor(QColor(initial), QApplication::activeWindow(), QStringLiteral("Colour"),
@@ -473,16 +549,10 @@ void CharacterController::onModelDownloadProgress(const QString& name, qint64 re
     setStatus(tr("Downloading %1…").arg(name), true);
 }
 
-QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
-                                      const QString& eye, bool replace)
+// The character bundles on disk, verified and loaded (downloads on first use). MAIN THREAD. Sets the status line; false with `err` on failure.
+bool CharacterController::prepareAssets(QString* err)
 {
     using namespace CharacterGen;
-    variety = std::min(5.0, std::max(0.0, variety));
-    if (m_busy) return QStringLiteral("busy");
-    if (!Manager::getSingletonPtr()) return QStringLiteral("No active scene.");
-    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
-    QString err;
-
     {   // always verify (cheap, cached): a corrupted default bundle is re-fetched; a custom directory is used as it is.
         // Busy for EVERY ensureBlocking call — present() only checks body+head, but ensureBlocking can still fetch a
         // missing licence/hair file or re-fetch a digest mismatch, and its nested event loop would otherwise leave
@@ -497,13 +567,13 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             progressConn = connect(dl, &ModelDownloader::downloadProgressUpdated, this,
                                    &CharacterController::onModelDownloadProgress);
         }
-        const bool ok = CharacterAssets::ensureBlocking(&err);
+        const bool ok = CharacterAssets::ensureBlocking(err);
         m_watchingDownload = false;
         if (progressConn) disconnect(progressConn);
         clearDownloadProgress();
         if (!ok) {
-            setStatus(tr("Character assets unavailable: %1").arg(err), false);
-            return err;
+            setStatus(tr("Character assets unavailable: %1").arg(*err), false);
+            return false;
         }
     }
     // the optional hair bundle may have arrived with this ensureBlocking (a first run without hair): reload the cached assets so
@@ -512,9 +582,9 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     if (!m_assets) {
         setStatus(tr("Loading character assets…"), true);
         auto a = std::make_shared<Assets>();
-        if (!loadAssetsFromDir(CharacterAssets::dir(), *a, &err)) {
-            setStatus(tr("Character assets could not be loaded: %1").arg(err), false);
-            return err;
+        if (!loadAssetsFromDir(CharacterAssets::dir(), *a, err)) {
+            setStatus(tr("Character assets could not be loaded: %1").arg(*err), false);
+            return false;
         }
         m_assets = std::move(a);
         m_shapeModel.reset();
@@ -524,6 +594,21 @@ QString CharacterController::generate(int seed, double variety, const QString& b
         m_hairNamesSeen = CharacterAssets::hairStyleNames();
         emit hairNamesChanged();
     }
+
+    return true;
+}
+
+QString CharacterController::generate(int seed, double variety, const QString& body, const QString& face, const QString& skin,
+                                      const QString& eye, bool replace)
+{
+    using namespace CharacterGen;
+    variety = std::min(5.0, std::max(0.0, variety));
+    if (m_busy) return QStringLiteral("busy");
+    if (!Manager::getSingletonPtr()) return QStringLiteral("No active scene.");
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("character.generate"));
+    QString err;
+
+    if (!prepareAssets(&err)) return err;
 
     Params p;
     p.nativeHead = !m_assets->mhrArkit.empty();
