@@ -293,3 +293,21 @@ TEST(PartUnwrapTest, TinyPiecesAreLeftToXatlas)
     EXPECT_FALSE(a.usedPartIslands);   // nothing made here -> plain xatlas
     EXPECT_GE(a.chartCount, 1);
 }
+
+TEST(PartUnwrapTest, TightLimitsStillCoverAlmostEverything)
+{
+    // A tight distortion limit rejects every large piece of a sphere: the
+    // unwrap keeps splitting instead of handing rejected regions to xatlas.
+    // (The degenerate-split fallback this exercises on real noisy meshes —
+    // 2295 -> 586 leftover faces on a TRELLIS.2 character — does not trigger
+    // on a smooth sphere, so this pins coverage, not that fallback.)
+    const Mesh m = sphere(32, 48);
+    PartUnwrap::Options o;
+    o.maxAreaDistortion = 0.02f;
+    o.minChartFaces = 8;
+    const PartUnwrap::Result r = PartUnwrap::unwrap(m.pos, m.idx, {}, {}, o);
+    checkCommon(m, r);
+    EXPECT_GT(r.rejectedDistortion, 0);
+    EXPECT_LT(double(r.facesToXatlas), 0.02 * double(m.idx.size() / 3))
+        << r.facesToXatlas << " of " << m.idx.size() / 3;
+}

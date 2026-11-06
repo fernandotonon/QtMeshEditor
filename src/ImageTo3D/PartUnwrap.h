@@ -84,6 +84,8 @@ struct Result {
     int charts = 0;            // islands made here
     int colourRegions = 0;     // regions after colour segmentation + merging
     int facesToXatlas = 0;     // faces left to xatlas's own charting
+    // Why candidate charts were split (diagnostics / tuning).
+    int rejectedTopology = 0, rejectedFolds = 0, rejectedDistortion = 0, rejectedOverlap = 0;
 };
 
 // `faceRgb` is 3 floats (0..1, sRGB) per input triangle, or empty.

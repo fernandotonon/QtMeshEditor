@@ -1013,6 +1013,49 @@ std::vector<int> twoMeans(const MeshTopo& m, const std::vector<uint32_t>& faces)
     return lab;
 }
 
+// Fallback split: halve the region at the area-weighted median along its
+// longest principal axis (proxy centroids). Always yields two non-empty
+// halves when the region has more than one face.
+std::vector<int> medianSplit(const MeshTopo& m, const std::vector<uint32_t>& faces)
+{
+    const size_t n = faces.size();
+    Vec3 mean{0, 0, 0};
+    double wsum = 0;
+    for (uint32_t f : faces) {
+        const Vec3 c = proxyCentroidOf(m, f);
+        for (int k = 0; k < 3; ++k) mean[k] += m.area[f] * c[k];
+        wsum += m.area[f];
+    }
+    for (int k = 0; k < 3; ++k) mean[k] /= std::max(wsum, 1e-300);
+    double C[3][3] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
+    for (uint32_t f : faces) {
+        const Vec3 d = sub(proxyCentroidOf(m, f), mean);
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b) C[a][b] += m.area[f] * d[a] * d[b];
+    }
+    Vec3 axis{1, 0.5, 0.25};   // power iteration for the dominant axis
+    for (int it = 0; it < 50; ++it) {
+        Vec3 nx{0, 0, 0};
+        for (int a = 0; a < 3; ++a)
+            for (int b = 0; b < 3; ++b) nx[a] += C[a][b] * axis[b];
+        const double l = norm(nx);
+        if (!(l > 0)) break;
+        axis = {nx[0] / l, nx[1] / l, nx[2] / l};
+    }
+    std::vector<std::pair<double, size_t>> proj(n);
+    for (size_t i = 0; i < n; ++i)
+        proj[i] = {dot(sub(proxyCentroidOf(m, faces[i]), mean), axis), i};
+    std::sort(proj.begin(), proj.end());
+    std::vector<int> lab(n, 1);
+    double acc = 0;
+    for (size_t i = 0; i < n; ++i) {
+        lab[proj[i].second] = 0;
+        acc += m.area[faces[proj[i].second]];
+        if (acc >= 0.5 * wsum && i + 1 < n) break;
+    }
+    return lab;
+}
+
 // Relabel fragments much smaller than their half into the surrounding label,
 // so a split yields two pieces instead of a spray of slivers.
 void absorbFragments(Workspace& ws, const std::vector<uint32_t>& faces, std::vector<int>& lab)
@@ -1052,16 +1095,87 @@ struct Unwrapper {
 
     Unwrapper(const MeshTopo& m, const Options& o) : ws(m, o) {}
 
+    int rejTopology = 0, rejFolds = 0, rejDistortion = 0, rejOverlap = 0;
+
     bool tryFlatten(Chart& c, const std::vector<uint32_t>& loop)
     {
         c.uv = tutte(ws.m, c, loop);
         arap(c, localFrames(ws.m, c), c.uv, ws.opts.arapIterations);
-        for (double v : c.uv)
-            if (!std::isfinite(v)) return false;
+        if (!std::all_of(c.uv.begin(), c.uv.end(), [](double v) { return std::isfinite(v); })) {
+            ++rejFolds;
+            return false;
+        }
         const Quality q = evaluate(ws.m, c, c.uv);
-        return q.flipFraction <= ws.opts.maxFlipFraction
-            && q.distortion <= ws.opts.maxAreaDistortion
-            && q.overlap <= ws.opts.maxOverlapFraction;
+        if (q.flipFraction > ws.opts.maxFlipFraction) { ++rejFolds; return false; }
+        if (q.distortion > ws.opts.maxAreaDistortion) { ++rejDistortion; return false; }
+        if (q.overlap > ws.opts.maxOverlapFraction) { ++rejOverlap; return false; }
+        return true;
+    }
+
+    // Cut `faces` to a disc and flatten it. On failure the cuts made here are
+    // undone (a split's children cut themselves).
+    bool flattenRegion(const std::vector<uint32_t>& faces, Chart& c)
+    {
+        c = buildChart(ws, faces);
+        std::vector<uint32_t> loop;
+        std::vector<int32_t> cuts;
+        if (!isDisc(c, &loop)) {
+            cuts = cutGraph(ws, faces);
+            for (int32_t e : cuts) ws.seam[e] = 1;
+            c = buildChart(ws, faces);
+        }
+        const bool disc = (cuts.empty() || isDisc(c, &loop)) && !loop.empty();
+        if (!disc) ++rejTopology;
+        if (disc && tryFlatten(c, loop)) return true;
+        for (int32_t e : cuts) ws.seam[e] = 0;
+        return false;
+    }
+
+    // Neighbouring charts of a leftover piece, most shared edges first.
+    std::vector<int> neighbourCharts(const std::vector<uint32_t>& piece,
+                                     const std::vector<int>& chartOf) const
+    {
+        std::unordered_map<int, int> shared;
+        for (uint32_t f : piece)
+            for (int k = 0; k < 3; ++k) {
+                const int32_t g = ws.m.nbr[f * 3 + k];
+                if (g >= 0 && chartOf[g] >= 0) ++shared[chartOf[g]];
+            }
+        std::vector<std::pair<int, int>> order(shared.begin(), shared.end());
+        std::sort(order.begin(), order.end(),
+                  [](const auto& a, const auto& b) { return a.second > b.second || (a.second == b.second && a.first < b.first); });
+        std::vector<int> out;
+        for (const auto& kv : order) out.push_back(kv.first);
+        return out;
+    }
+
+    // Attach each leftover piece (a fragment under minChartFaces, or a split
+    // that failed) to the chart it borders most when the merged chart still
+    // flattens within the limits; xatlas only gets what cannot be attached.
+    void absorbLeftovers()
+    {
+        if (leftover.empty() || charts.empty()) return;
+        std::vector<int> chartOf(ws.m.nF, -1);
+        for (size_t i = 0; i < charts.size(); ++i)
+            for (uint32_t f : charts[i].faces) chartOf[f] = int(i);
+        const std::vector<int> same(leftover.size(), 0);
+        std::vector<uint32_t> still;
+        for (const auto& piece : faceComponents(ws, leftover, same)) {
+            if (cancelled || (ws.opts.cancelled && ws.opts.cancelled())) { cancelled = true; return; }
+            bool attached = false;
+            const std::vector<int> cand = neighbourCharts(piece, chartOf);
+            for (size_t k = 0; k < cand.size() && k < 2 && !attached; ++k) {
+                std::vector<uint32_t> merged = charts[cand[k]].faces;
+                merged.insert(merged.end(), piece.begin(), piece.end());
+                Chart c;
+                if (!flattenRegion(merged, c)) continue;
+                for (uint32_t f : piece) chartOf[f] = cand[k];
+                charts[cand[k]] = std::move(c);
+                attached = true;
+            }
+            if (!attached) still.insert(still.end(), piece.begin(), piece.end());
+        }
+        leftover.swap(still);
     }
 
     void process(const std::vector<uint32_t>& faces, int depth)
@@ -1071,22 +1185,20 @@ struct Unwrapper {
             leftover.insert(leftover.end(), faces.begin(), faces.end());
             return;
         }
-        Chart c = buildChart(ws, faces);
-        std::vector<uint32_t> loop;
-        std::vector<int32_t> cuts;
-        if (!isDisc(c, &loop)) {
-            cuts = cutGraph(ws, faces);
-            for (int32_t e : cuts) ws.seam[e] = 1;
-            c = buildChart(ws, faces);
-        }
-        if ((cuts.empty() || isDisc(c, &loop)) && !loop.empty() && tryFlatten(c, loop)) {
+        Chart c;
+        if (flattenRegion(faces, c)) {
             charts.push_back(std::move(c));
             return;
         }
-        for (int32_t e : cuts) ws.seam[e] = 0;   // children cut themselves
         std::vector<int> lab = twoMeans(ws.m, faces);
         absorbFragments(ws, faces, lab);
-        const auto parts = faceComponents(ws, faces, lab);
+        auto parts = faceComponents(ws, faces, lab);
+        if (parts.size() < 2) {
+            // 2-means found no split (or fragment absorption undid it): cut at
+            // the median instead of handing the whole region to xatlas.
+            lab = medianSplit(ws.m, faces);
+            parts = faceComponents(ws, faces, lab);
+        }
         if (parts.size() < 2) {
             leftover.insert(leftover.end(), faces.begin(), faces.end());
             return;
@@ -1151,6 +1263,10 @@ void assemble(const MeshTopo& m, Unwrapper& u, Result& r)
         }
     r.charts = int(u.charts.size());
     r.facesToXatlas = int(u.leftover.size());
+    r.rejectedTopology = u.rejTopology;
+    r.rejectedFolds = u.rejFolds;
+    r.rejectedDistortion = u.rejDistortion;
+    r.rejectedOverlap = u.rejOverlap;
 }
 
 }  // namespace
@@ -1230,6 +1346,7 @@ Result unwrap(const std::vector<float>& positions,
         for (const auto& piece : faceComponents(u.ws, faces, same)) u.process(piece, 0);
         if (u.cancelled) break;
     }
+    if (!u.cancelled) u.absorbLeftovers();
     if (u.cancelled) {
         r = Result{};
         r.cancelled = true;
