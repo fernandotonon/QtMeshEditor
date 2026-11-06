@@ -1,5 +1,7 @@
 #include "BodyShape.h"
 
+#include "Proportions.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -96,7 +98,7 @@ bool Model::build(const Assets& a)
     m_vertices = a.mhrVertices;
     m_shapes = a.mhrShapes;
     if (m_vertices <= 0 || m_shapes <= 0 || a.mhrBase.size() != size_t(m_vertices) * 3 || a.skinStart.size() != size_t(m_vertices) + 1 ||
-        a.mhrShapeVectors.size() != size_t(m_shapes) * size_t(m_vertices) * 3)
+        a.mhrShapeVectors.size() != size_t(m_shapes) * size_t(m_vertices) * 3 || !skinArraysValid(a, size_t(m_vertices)))
         return false;
     m_base = a.mhrBase;
     m_vectors = a.mhrShapeVectors;
@@ -142,45 +144,76 @@ float Model::offset(Measure m, const std::vector<float>& c) const
     return v;
 }
 
+namespace {
+/// Solve the symmetric positive-definite system A y = d (n x n, row-major) by Gauss-Jordan with partial pivoting; false when singular.
+bool solveSymmetric(std::vector<double> A, std::vector<double> d, std::vector<double>& y)
+{
+    const int n = int(d.size());
+    for (int col = 0; col < n; ++col) {
+        int piv = col;
+        for (int r = col + 1; r < n; ++r) if (std::fabs(A[size_t(r) * size_t(n) + size_t(col)]) > std::fabs(A[size_t(piv) * size_t(n) + size_t(col)])) piv = r;
+        if (std::fabs(A[size_t(piv) * size_t(n) + size_t(col)]) < 1e-12) return false;
+        if (piv != col) {
+            for (int k = 0; k < n; ++k) std::swap(A[size_t(piv) * size_t(n) + size_t(k)], A[size_t(col) * size_t(n) + size_t(k)]);
+            std::swap(d[size_t(piv)], d[size_t(col)]);
+        }
+        const double div = A[size_t(col) * size_t(n) + size_t(col)];
+        for (int k = 0; k < n; ++k) A[size_t(col) * size_t(n) + size_t(k)] /= div;
+        d[size_t(col)] /= div;
+        for (int r = 0; r < n; ++r) {
+            if (r == col) continue;
+            const double f = A[size_t(r) * size_t(n) + size_t(col)];
+            if (f == 0.0) continue;
+            for (int k = 0; k < n; ++k) A[size_t(r) * size_t(n) + size_t(k)] -= f * A[size_t(col) * size_t(n) + size_t(k)];
+            d[size_t(r)] -= f * d[size_t(col)];
+        }
+    }
+    y = std::move(d);
+    return true;
+}
+}  // namespace
+
 std::vector<float> Model::withOffset(Measure m, float target, const std::vector<float>& coefficients, float limit) const
 {
     std::vector<float> out = coefficients;
     out.resize(size_t(std::max(m_shapes, int(coefficients.size()))), 0.0f);
     if (!m_valid) return out;
     const int n = MeasureCount;
-    // dc = J^T (J J^T + lambda I)^-1 (d e_m)
-    std::vector<double> A(size_t(n) * size_t(n) * 2, 0.0);   // [A | I] for Gauss-Jordan
-    double trace = 0.0;
-    for (int i = 0; i < n; ++i)
-        for (int k = 0; k < n; ++k) {
-            double s = 0.0;
-            for (int j = 0; j < m_shapes; ++j) s += double(m_J[size_t(i) * size_t(m_shapes) + size_t(j)]) * double(m_J[size_t(k) * size_t(m_shapes) + size_t(j)]);
-            A[size_t(i) * size_t(2 * n) + size_t(k)] = s;
-            if (i == k) trace += s;
+    // the offsets to reach: `m` at the target, every other measurement where it is now
+    std::array<double, MeasureCount> want{};
+    for (int i = 0; i < n; ++i) want[size_t(i)] = double(offset(Measure(i), coefficients));
+    want[size_t(m)] = double(target);
+    // dc = Jf^T (Jf Jf^T + lambda I)^-1 (want - offsets of the current coefficients), over the modes that are not at their bounds. A mode
+    // that the solve pushes past +-limit is pinned there and the rest are solved again, so they compensate for it (clipping afterwards
+    // would change the other measurements).
+    std::vector<char> pinned(size_t(m_shapes), 0);
+    for (int pass = 0; pass < 8; ++pass) {
+        std::vector<double> need(static_cast<size_t>(n), 0.0);
+        for (int i = 0; i < n; ++i) need[size_t(i)] = want[size_t(i)] - double(offset(Measure(i), out));
+        std::vector<double> A(size_t(n) * size_t(n), 0.0);
+        double trace = 0.0;
+        for (int i = 0; i < n; ++i)
+            for (int k = 0; k < n; ++k) {
+                double sum = 0.0;
+                for (int j = 0; j < m_shapes; ++j)
+                    if (!pinned[size_t(j)]) sum += double(m_J[size_t(i) * size_t(m_shapes) + size_t(j)]) * double(m_J[size_t(k) * size_t(m_shapes) + size_t(j)]);
+                A[size_t(i) * size_t(n) + size_t(k)] = sum;
+                if (i == k) trace += sum;
+            }
+        const double lambda = 1e-3 * trace / double(n) + 1e-9;
+        for (int i = 0; i < n; ++i) A[size_t(i) * size_t(n) + size_t(i)] += lambda;
+        std::vector<double> y;
+        if (!solveSymmetric(A, need, y)) return out;
+        bool pinnedAny = false;
+        for (int j = 0; j < m_shapes; ++j) {
+            if (pinned[size_t(j)]) continue;
+            double dc = 0.0;
+            for (int i = 0; i < n; ++i) dc += double(m_J[size_t(i) * size_t(m_shapes) + size_t(j)]) * y[size_t(i)];
+            const float v = out[size_t(j)] + float(dc);
+            if (std::fabs(v) > limit) { out[size_t(j)] = v > 0 ? limit : -limit; pinned[size_t(j)] = 1; pinnedAny = true; }
+            else out[size_t(j)] = v;
         }
-    const double lambda = 1e-3 * trace / double(n) + 1e-9;
-    for (int i = 0; i < n; ++i) { A[size_t(i) * size_t(2 * n) + size_t(i)] += lambda; A[size_t(i) * size_t(2 * n) + size_t(n + i)] = 1.0; }
-    for (int col = 0; col < n; ++col) {
-        int piv = col;
-        for (int r = col + 1; r < n; ++r) if (std::fabs(A[size_t(r) * size_t(2 * n) + size_t(col)]) > std::fabs(A[size_t(piv) * size_t(2 * n) + size_t(col)])) piv = r;
-        if (std::fabs(A[size_t(piv) * size_t(2 * n) + size_t(col)]) < 1e-12) return out;
-        if (piv != col) for (int k = 0; k < 2 * n; ++k) std::swap(A[size_t(piv) * size_t(2 * n) + size_t(k)], A[size_t(col) * size_t(2 * n) + size_t(k)]);
-        const double d = A[size_t(col) * size_t(2 * n) + size_t(col)];
-        for (int k = 0; k < 2 * n; ++k) A[size_t(col) * size_t(2 * n) + size_t(k)] /= d;
-        for (int r = 0; r < n; ++r) {
-            if (r == col) continue;
-            const double f = A[size_t(r) * size_t(2 * n) + size_t(col)];
-            if (f == 0.0) continue;
-            for (int k = 0; k < 2 * n; ++k) A[size_t(r) * size_t(2 * n) + size_t(k)] -= f * A[size_t(col) * size_t(2 * n) + size_t(k)];
-        }
-    }
-    const double want = double(target) - double(offset(m, coefficients));
-    std::vector<double> y(static_cast<size_t>(n), 0.0);   // column m of the inverse, times want
-    for (int i = 0; i < n; ++i) y[size_t(i)] = A[size_t(i) * size_t(2 * n) + size_t(n + int(m))] * want;
-    for (int j = 0; j < m_shapes; ++j) {
-        double dc = 0.0;
-        for (int i = 0; i < n; ++i) dc += double(m_J[size_t(i) * size_t(m_shapes) + size_t(j)]) * y[size_t(i)];
-        out[size_t(j)] = std::clamp(out[size_t(j)] + float(dc), -limit, limit);
+        if (!pinnedAny) break;
     }
     return out;
 }

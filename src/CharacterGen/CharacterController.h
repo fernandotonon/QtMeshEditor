@@ -152,6 +152,9 @@ public:
     // ---- named shape controls (BodyShape.h, Proportions.h) ----
     /// The proportion factors [height, legs, arms, torso, shoulders, head] (1 = the mean body).
     Q_PROPERTY(QVariantList proportions READ proportions NOTIFY proportionsChanged)
+    /// Bumped when the shape model (labels, measured sliders) becomes available or changes: bindings that call the measure functions depend on it.
+    Q_PROPERTY(int shapeRevision READ shapeRevision NOTIFY shapeRevisionChanged)
+    int shapeRevision() const { return m_shapeRevision; }
     QVariantList proportions() const;
     Q_INVOKABLE int proportionCount() const { return 6; }
     Q_INVOKABLE QString proportionLabel(int i) const;
@@ -195,6 +198,7 @@ signals:
     void hairLibraryChanged();
     void bodyHairChanged();
     void proportionsChanged();
+    void shapeRevisionChanged();
     void eyelashesChanged();
     void clothesChanged();
 
@@ -227,6 +231,8 @@ private:
     std::array<double, 6> m_proportions{1, 1, 1, 1, 1, 1};
     mutable std::shared_ptr<CharacterGen::BodyShape::Model> m_shapeModel;   // built from the loaded assets on first use
     const CharacterGen::BodyShape::Model* shapeModel() const;
+    int m_shapeRevision = 0;
+    void bumpShapeRevision() { ++m_shapeRevision; emit shapeRevisionChanged(); }
     bool m_eyelashes = true;
     QString m_topStyle = QStringLiteral("none");
     QString m_bottomStyle = QStringLiteral("none");

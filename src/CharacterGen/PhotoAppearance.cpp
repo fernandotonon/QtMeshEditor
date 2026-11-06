@@ -250,11 +250,11 @@ FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<f
             const int left = std::max(0, int(fb.left() - 1.2 * Wf)), right = std::min(W - 1, int(fb.right() + 1.2 * Wf));
             // top of the hair above the middle of the face
             double topY = fb.top();
-            for (int y = top; y < int(fb.top()); ++y) {
+            for (int y = top; y < std::min(H, int(fb.top())); ++y) {
                 const uchar* sl = img.constScanLine(y);
                 int n = 0;
-                for (int x = int(fb.center().x() - 0.3 * Wf); x <= int(fb.center().x() + 0.3 * Wf); ++x)
-                    if (x >= 0 && x < W && on(matte, x, y) && isHair(sl, x)) ++n;
+                for (int x = std::max(0, int(fb.center().x() - 0.3 * Wf)); x <= std::min(W - 1, int(fb.center().x() + 0.3 * Wf)); ++x)
+                    if (on(matte, x, y) && isHair(sl, x)) ++n;
                 if (n >= std::max(3, int(0.06 * Wf))) { topY = y; break; }
             }
             fa.hairTop = float(std::clamp((fb.top() - topY) / Hf, 0.0, 1.6));
@@ -264,7 +264,7 @@ FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<f
             double lowest = fb.top();
             int gapRows = 0;
             const int maxGap = std::max(2, int(0.3 * Hf));   // a strand run ends at the first gap this tall (shadows and clothes further down are not hair)
-            for (int y = int(fb.top()); y <= bottom && gapRows <= maxGap; ++y) {
+            for (int y = std::max(0, int(fb.top())); y <= bottom && gapRows <= maxGap; ++y) {
                 const uchar* sl = img.constScanLine(y);
                 int leftN = 0, rightN = 0, leftEdge = int(fb.left()), rightEdge = int(fb.right());
                 const bool belowChin = y > int(fb.bottom());
@@ -285,9 +285,9 @@ FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<f
             fa.hairLowest = float(std::clamp((lowest - fb.top()) / Hf, 0.0, 3.5));
             // fringe: hair-coloured pixels in the CENTRAL strip of the forehead (hair at its sides is a side sweep or a parting, not bangs)
             long fringeTotal = 0, fringeHair = 0;
-            for (int y = int(fb.top() + 0.08 * Hf); y <= int(eyeY - 0.25 * Hf); ++y) {
+            for (int y = std::max(0, int(fb.top() + 0.08 * Hf)); y <= std::min(H - 1, int(eyeY - 0.25 * Hf)); ++y) {
                 const uchar* sl = img.constScanLine(y);
-                for (int x = int(fb.center().x() - 0.22 * Wf); x <= int(fb.center().x() + 0.22 * Wf); ++x) {
+                for (int x = std::max(0, int(fb.center().x() - 0.22 * Wf)); x <= std::min(W - 1, int(fb.center().x() + 0.22 * Wf)); ++x) {
                     if (!on(ovalMask, x, y)) continue;
                     ++fringeTotal;
                     if (isHair(sl, x)) ++fringeHair;
@@ -451,6 +451,8 @@ QImage rasterRegion(int W, int H, const std::vector<Pt2>& proj, const std::vecto
     p.setBrush(Qt::white);
     for (size_t t = 0; t + 2 < tris.size(); t += 3) {
         const int a = tris[t], b = tris[t + 1], c = tris[t + 2];
+        const int n = int(std::min(proj.size(), inSet.size()));
+        if (a < 0 || b < 0 || c < 0 || a >= n || b >= n || c >= n) continue;   // a corrupt index must not read past the arrays
         if (!inSet[size_t(a)] || !inSet[size_t(b)] || !inSet[size_t(c)]) continue;
         QPolygonF pf;
         pf << QPointF(proj[size_t(a)].x, proj[size_t(a)].y) << QPointF(proj[size_t(b)].x, proj[size_t(b)].y) << QPointF(proj[size_t(c)].x, proj[size_t(c)].y);

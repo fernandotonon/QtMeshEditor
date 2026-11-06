@@ -17,6 +17,7 @@ Column {
     // Names and tooltips come from measuring each mode (CharacterController.shapeLabel / shapeHint).
     readonly property var bodyModes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
     readonly property var headModes: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+    readonly property var armModes: [40, 41, 42, 43, 44]
     property bool showAdvancedShape: false
     property var coeffs: new Array(45).fill(0)
     property bool live: true
@@ -468,9 +469,9 @@ Column {
         spacing: 6
         Label {
             width: 118; height: 22; elide: Text.ElideRight
-            text: CharacterController.shapeLabel(row.mode)
+            text: { CharacterController.shapeRevision; return CharacterController.shapeLabel(row.mode) }
             HoverHandler { id: hh }
-            ToolTip.visible: hh.hovered; ToolTip.delay: 500; ToolTip.text: CharacterController.shapeHint(row.mode)
+            ToolTip.visible: hh.hovered; ToolTip.delay: 500; ToolTip.text: { CharacterController.shapeRevision; return CharacterController.shapeHint(row.mode) }
         }
         Slider {
             id: sl
@@ -519,7 +520,7 @@ Column {
             width: sec.width - 118 - 52 - 12
             height: 22
             from: -CharacterController.measureRange(mrow.idx); to: CharacterController.measureRange(mrow.idx); stepSize: 0.1
-            value: CharacterController.measureOffset(mrow.idx, sec.coeffs)
+            value: { CharacterController.shapeRevision; return CharacterController.measureOffset(mrow.idx, sec.coeffs) }
             onMoved: sec.coeffs = CharacterController.coefficientsWithMeasure(mrow.idx, value, sec.coeffs)
             onPressedChanged: if (!pressed) sec.liveUpdate()
         }
@@ -533,6 +534,7 @@ Column {
     CheckBox { height: 22; text: "Advanced: all shape modes"; checked: sec.showAdvancedShape; onToggled: sec.showAdvancedShape = checked }
     Repeater { model: sec.showAdvancedShape ? sec.bodyModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
     Repeater { model: sec.showAdvancedShape ? sec.headModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
+    Repeater { model: sec.showAdvancedShape ? sec.armModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
     Row {
         spacing: 4
         ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); CharacterController.resetProportions(); sec.liveUpdate() } }

@@ -98,3 +98,22 @@ TEST(BodyShape, RmsDistance)
     EXPECT_FLOAT_EQ(BodyShape::rmsDistance({0, 0, 0, 3, 4, 0}, {0, 0, 0, 0, 0, 0}), std::sqrt(12.5f));
     EXPECT_LT(BodyShape::rmsDistance({0, 0, 0}, {0, 0, 0, 1, 1, 1}), 0.0f);
 }
+
+TEST(BodyShape, ABoundedModeIsPinnedAndTheOthersCompensate)
+{
+    const Assets a = tiny();
+    BodyShape::Model m;
+    ASSERT_TRUE(m.build(a));
+    // waist +6 cm needs mode 1 at 1.5; with a limit of 1.0 the mode is pinned and the result still holds at its bound (no silent clip of another measurement)
+    const auto c = m.withOffset(BodyShape::WaistWidth, 6.0f, {0.0f, 0.0f}, 1.0f);
+    EXPECT_LE(std::fabs(c[1]), 1.0f + 1e-6f);
+    EXPECT_NEAR(m.offset(BodyShape::Height, c), 0.0f, 0.5f);
+}
+
+TEST(BodyShape, MalformedSkinArraysAreRejected)
+{
+    Assets a = tiny();
+    a.skinStart[3] = 99;   // beyond the joint / weight arrays
+    BodyShape::Model m;
+    EXPECT_FALSE(m.build(a));
+}

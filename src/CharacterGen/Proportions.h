@@ -18,6 +18,9 @@ struct ProportionFrame {
     float lift = 0.0f;                                   ///< cm
 };
 
+/// The per-vertex skin arrays of `a` are consistent for `vertices` vertices (monotone prefix sums that stay inside the joint / weight arrays).
+bool skinArraysValid(const Assets& a, size_t vertices);
+
 /// Scale the joint hierarchy (`gt`: world positions in cm, parents before children) and warp `positions` (3 floats per vertex, cm) by
 /// linear blend skinning with the assets' weights. `gt` is replaced by the new joint positions. Returns an inactive frame (and leaves
 /// everything alone) when `p.isDefault()` or the assets lack skin weights.

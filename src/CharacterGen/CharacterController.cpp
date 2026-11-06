@@ -303,6 +303,8 @@ const CharacterGen::BodyShape::Model* CharacterController::shapeModel() const
     }
     m_shapeModel = std::make_shared<CharacterGen::BodyShape::Model>();
     if (!m_shapeModel->build(*a)) return nullptr;
+    // (a lookup made while the panel was already showing: the bindings that read the model must run again)
+    QMetaObject::invokeMethod(const_cast<CharacterController*>(this), [this] { const_cast<CharacterController*>(this)->bumpShapeRevision(); }, Qt::QueuedConnection);
     return m_shapeModel.get();
 }
 
@@ -516,6 +518,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
         }
         m_assets = std::move(a);
         m_shapeModel.reset();
+        bumpShapeRevision();
     }
     if (m_hairNamesSeen != CharacterAssets::hairStyleNames()) {
         m_hairNamesSeen = CharacterAssets::hairStyleNames();

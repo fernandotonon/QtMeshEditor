@@ -112,6 +112,8 @@ std::array<float, 3> clearanceShift(const Dna::Mesh& skin, const std::vector<flo
     std::sort(verts.begin(), verts.end());
     verts.erase(std::unique(verts.begin(), verts.end()), verts.end());
     const size_t step = size_t(std::max(1, stride)) * 3;
+    std::array<float, 3> bestShift = shift;
+    int bestOutside = std::numeric_limits<int>::max();
     for (int iter = 0; iter <= maxIterations; ++iter) {
         double dir[3] = {0, 0, 0};
         int outside = 0;
@@ -130,14 +132,15 @@ std::array<float, 3> clearanceShift(const Dna::Mesh& skin, const std::vector<flo
             if (bp) for (int k = 0; k < 3; ++k) dir[k] += double(bp[k] - p[k]);
         }
         if (iter == 0 && outsideBefore) *outsideBefore = outside;
-        if (outsideAfter) *outsideAfter = outside;
+        if (outside < bestOutside) { bestOutside = outside; bestShift = shift; }   // the iteration can overshoot: keep the best placement seen
+        if (outsideAfter) *outsideAfter = bestOutside;
         if (outside == 0 || iter == maxIterations) break;
         const double len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
         if (len < 1e-9) break;
         const double mean = len / double(outside);   // distance to the skin, averaged over the outside vertices
         for (int k = 0; k < 3; ++k) shift[size_t(k)] = std::clamp(shift[size_t(k)] + float(dir[k] / len * (mean + double(margin))), -maxShift, maxShift);
     }
-    return shift;
+    return bestShift;
 }
 
 float chooseJawFollow(const Dna::Mesh& skin, const std::vector<float>& skinDelta, const std::vector<float>& interior, const std::vector<float>& interiorDelta,

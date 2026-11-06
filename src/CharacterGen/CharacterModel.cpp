@@ -817,7 +817,7 @@ std::array<float, 3> turnedTipDelta(const LashMesh& lm, uint32_t tip, const std:
 // Every strip vertex is rooted on a lid-margin body vertex: it takes that vertex's delta in every ARKit shape, so the lashes follow
 // the blink, squint, brow and cheek shapes exactly as the lid does (tips of the blink channels turn, see turnedTipDelta).
 void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& arkit, int expressions, int vertexCount,
-                    const std::array<EyeSeat, 2>& seats, const std::array<int, 2>& blinkChannels)
+                    const std::array<EyeSeat, 2>& seats, const std::array<int, 2>& blinkChannels, float deltaScale = 1.0f)
 {
     const uint32_t nv = uint32_t(lm.positions.size() / 3);
     for (int e = 0; e < expressions; ++e) {
@@ -827,7 +827,7 @@ void addLashTargets(Dna::Mesh& m, const LashMesh& lm, const std::vector<float>& 
         for (uint32_t i = 0; i < nv; ++i) {
             const float* dv = d + size_t(lm.sourceVertex[i]) * 3;
             if (dv[0] == 0.0f && dv[1] == 0.0f && dv[2] == 0.0f) continue;
-            std::array<float, 3> delta{dv[0] * kCmToM, dv[1] * kCmToM, dv[2] * kCmToM};
+            std::array<float, 3> delta{dv[0] * kCmToM * deltaScale, dv[1] * kCmToM * deltaScale, dv[2] * kCmToM * deltaScale};
             const size_t side = lm.positions[size_t(i) * 3] > 0.0f ? 0 : 1;
             const bool tipOfBlink = (i & 1u) != 0 && e == blinkChannels[side] && seats[side].seated;
             if (tipOfBlink) delta = turnedTipDelta(lm, i, delta, seats[side].centre);
@@ -2023,7 +2023,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         const LashMesh lm = buildLashes(body.positions, a.mhrFaces, a.mhrEyeDrop, lashEyesOf(eyeSeat));
         if (!lm.indices.empty()) {
             Dna::Mesh m = lashDnaMesh(lm, body);
-            if (arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) addLashTargets(m, lm, *arkit, a.ictExpressions, V, eyeSeat, lidChannels.blink);
+            if (arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) addLashTargets(m, lm, *arkit, a.ictExpressions, V, eyeSeat, lidChannels.blink, bodyArkitScale);
             rep.headVertices += int(m.positions.size() / 3);
             rep.headTriangles += int(m.faces.size());
             rep.meshNames << m.name;

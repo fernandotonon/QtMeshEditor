@@ -432,7 +432,7 @@ int run(int argc, char* argv[])
         auto hex = [](const PhotoAppearance::ColourEstimate& c) { return QColor::fromRgbF(double(c.colour[0]), double(c.colour[1]), double(c.colour[2])).name(); };
         if (fa.skin.ok) { p.skin = fa.skin.colour; }
         if (fa.hair.ok) {
-            p.hairColour = fa.hair.colour;
+            if (hairColourArg.isEmpty()) p.hairColour = fa.hair.colour;   // an explicit --hair-colour (or the one of a loaded config) wins
             if (hairArg.isEmpty() && p.nativeHead) {
                 const PhotoAppearance::HairChoice hc = PhotoAppearance::chooseHair(fa);
                 if (!hc.preset.isEmpty() && !qEnvironmentVariableIsSet("QTMESH_PHOTO_BUNDLE_HAIR")) {
@@ -463,8 +463,8 @@ int run(int argc, char* argv[])
                                                                                                sr.body.triangles, sr.body.camT, sr.body.focalPx);
             if (ce.ok) {
                 p.topStyle = ce.top; p.bottomStyle = ce.bottom;
-                if (ce.topColour.ok) p.topColour = ce.topColour.colour;
-                if (ce.bottomColour.ok) p.bottomColour = ce.bottomColour.colour;
+                if (ce.topColour.ok && topColourArg.isEmpty()) p.topColour = ce.topColour.colour;
+                if (ce.bottomColour.ok && bottomColourArg.isEmpty()) p.bottomColour = ce.bottomColour.colour;
                 CLIPipeline::writeCliError(QStringLiteral("Photo clothing: top %1 %2, bottom %3 %4\n").arg(ce.top, ce.topColour.ok ? hex(ce.topColour) : QStringLiteral("-"), ce.bottom, ce.bottomColour.ok ? hex(ce.bottomColour) : QStringLiteral("-")));
             }
         }

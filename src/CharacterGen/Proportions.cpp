@@ -9,6 +9,14 @@ void Proportions::clamp()
     for (float* f : {&height, &legs, &arms, &torso, &shoulders, &head}) *f = std::clamp(*f, 0.6f, 1.6f);
 }
 
+bool skinArraysValid(const Assets& a, size_t vertices)
+{
+    if (a.skinStart.size() != vertices + 1) return false;
+    for (size_t v = 0; v < vertices; ++v)
+        if (a.skinStart[v] > a.skinStart[v + 1]) return false;
+    return a.skinStart[vertices] <= a.skinJoint.size() && a.skinStart[vertices] <= a.skinWeight.size();
+}
+
 ProportionFrame applyProportions(const Assets& a, const Proportions& pIn, std::vector<std::array<float, 3>>& gt, std::vector<float>& positions)
 {
     ProportionFrame fr;
@@ -16,7 +24,7 @@ ProportionFrame applyProportions(const Assets& a, const Proportions& pIn, std::v
     p.clamp();
     const size_t J = a.jointParents.size();
     const size_t V = positions.size() / 3;
-    if (p.isDefault() || gt.size() != J || a.jointNames.size() != int(J) || a.skinStart.size() != V + 1) return fr;
+    if (p.isDefault() || gt.size() != J || a.jointNames.size() != int(J) || !skinArraysValid(a, V)) return fr;
 
     // per joint: inherited uniform scale (own) and bone-length factor
     std::vector<float> own(J, 1.0f), length(J, 1.0f);
