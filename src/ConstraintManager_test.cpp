@@ -898,24 +898,38 @@ TEST_F(ConstraintSceneTest, RequestedHandlePlacementIsPartOfTheUndoStep)
 
 TEST_F(ConstraintSceneTest, AFractionalJointLimitBlendsOnceUnderIk)
 {
-    // The limit range excludes Mid's current rotation, at half influence.
+    // A half-strength IK, then a half-strength limit on its middle joint whose
+    // range excludes the solved rotation. The limit must blend ONCE, on the
+    // IK result — not also on the pre-IK pose that the IK blends from.
+    // (A fractional limit is not idempotent: re-applied to a pose that
+    // already contains it, it moves further. So "once" is defined against
+    // the same evaluation without the limit, never against a previous frame.)
     Ogre::Entity* e = makeChainEntity("IK_Frac");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Frac/End"), true, false,
+                                        Ogre::Vector3(0.4f, 1.4f, 0.3f));
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_TRUE(mgr()->setParams(r.id, {{QStringLiteral("influence"), QStringLiteral("0.5")}}, nullptr, false).ok);
+    mgr()->evaluate();
+    const Ogre::Quaternion withoutLimit = e->getSkeleton()->getBone("Mid")->getOrientation();
+
     Constraint lim;
     lim.type = Type::LimitRotation;
     ASSERT_TRUE(parseRef(QStringLiteral("bone:IK_Frac/Mid"), &lim.owner));
-    lim.minDeg = Ogre::Vector3(-90, -90, 20);
-    lim.maxDeg = Ogre::Vector3(90, 90, 40);
+    // A range 15..25 degrees past the solved Z angle (X/Y left free).
+    Ogre::Matrix3 m;
+    withoutLimit.ToRotationMatrix(m);
+    Ogre::Radian rx, ry, rz;
+    m.ToEulerAnglesXYZ(rx, ry, rz);
+    const float z = rz.valueDegrees() > 120.0f ? rz.valueDegrees() - 40.0f : rz.valueDegrees() + 15.0f;
+    lim.minDeg = Ogre::Vector3(-180, -180, z);
+    lim.maxDeg = Ogre::Vector3(180, 180, z + 10.0f);
     lim.influence = 0.5;
+    const Ogre::Quaternion clamped = limitRotation(withoutLimit, lim);
+    ASSERT_LT(std::abs(clamped.Dot(withoutLimit)), 0.9999f) << "precondition: the limit has something to do";
     ASSERT_TRUE(mgr()->add(lim, false).ok);
     mgr()->evaluate();
-    const Ogre::Quaternion limited = e->getSkeleton()->getBone("Mid")->getOrientation();
-    const Ogre::Vector3 end = boneWorld(e, "End");
-    // The chain's target starts where the end bone already is, so the IK
-    // reproduces the pose — and the limit must not blend a second time.
-    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Frac/End"), true, false, end);
-    ASSERT_TRUE(r.ok) << r.error.toStdString();
-    mgr()->evaluate();
-    EXPECT_GT(std::abs(e->getSkeleton()->getBone("Mid")->getOrientation().Dot(limited)), 0.9999f);
+    const Ogre::Quaternion once = blend(withoutLimit, clamped, 0.5);
+    EXPECT_GT(std::abs(e->getSkeleton()->getBone("Mid")->getOrientation().Dot(once)), 0.99999f);
 }
 
 TEST_F(ConstraintSceneTest, AConstraintOwnedByAHandleKeepsItsHandle)
