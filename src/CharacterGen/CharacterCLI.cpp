@@ -8,13 +8,18 @@
 #include "CharacterScene.h"
 #include "Clothing.h"
 #include "HairTint.h"
+#include "PhotoAppearance.h"
 #include "../CLIPipeline.h"
 #include "../MeshImporterExporter.h"
 #include "../SentryReporter.h"
+#include "../BodyFromPhoto/SamBodyPredictor.h"
 
 #include <QColor>
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
+#include <QPainter>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -55,7 +60,7 @@ QString assetsDir() { return CharacterAssets::dir(); }
 
 int run(int argc, char* argv[])
 {
-    QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
+    QString photoArg, outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
     QString hairArg;
     QString topArg;
     QString bottomArg;
@@ -108,6 +113,7 @@ int run(int argc, char* argv[])
             if (!ok) { CLIPipeline::writeCliError(QStringLiteral("Error: --variety expects a number.\n")); return 2; }
             variety = float(d);
         }
+        else if (a == "--photo") photoArg = next();
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -368,6 +374,69 @@ int run(int argc, char* argv[])
     if (haveSeed) {
         p.bodyShape = randomCoefficients(seed * 2u + 1u, data.mhrShapes, variety, 16);
         p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);
+    }
+    if (!photoArg.isEmpty()) {
+        // Photo -> MHR identity (SAM 3D Body): its 45 shape coefficients are this generator's body-shape modes. --body still overrides.
+        QImageReader reader(photoArg);
+        reader.setAutoTransform(true);
+        const QImage photo = reader.read();
+        if (photo.isNull()) { CLIPipeline::writeCliError(QStringLiteral("Error: cannot read the image %1\n").arg(photoArg)); return 1; }
+        QString fetchErr;
+        if (!SamBody::ensureModelsBlocking(&fetchErr)) { CLIPipeline::writeCliError(QStringLiteral("Error: SAM 3D Body models unavailable: %1\n").arg(fetchErr)); return 1; }
+        SamBody::Options so;   // the neutral mesh + topology are needed for the clothing regions
+        const SamBody::Result sr = SamBody::predict(photo, so);
+        if (!sr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(sr.error)); return 1; }
+        if (!sr.warning.isEmpty()) CLIPipeline::writeCliError(QStringLiteral("Warning: %1\n").arg(sr.warning));
+        // Appearance from the same photo (skin tone, hair colour, iris colour); explicit --skin/--eye/--hair-colour still win.
+        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR")) {
+            float mnx = 1e9f, mxx = -1e9f, mny = 1e9f, mxy = -1e9f, mnz = 1e9f, mxz = -1e9f;
+            for (size_t i = 0; i + 2 < sr.body.posedVertices.size(); i += 3) {
+                mnx = std::min(mnx, sr.body.posedVertices[i]); mxx = std::max(mxx, sr.body.posedVertices[i]);
+                mny = std::min(mny, sr.body.posedVertices[i + 1]); mxy = std::max(mxy, sr.body.posedVertices[i + 1]);
+                mnz = std::min(mnz, sr.body.posedVertices[i + 2]); mxz = std::max(mxz, sr.body.posedVertices[i + 2]);
+            }
+            fprintf(stderr, "sam: camT %.3f %.3f %.3f focal %.1f photo %dx%d verts x[%.2f %.2f] y[%.2f %.2f] z[%.2f %.2f]\n", double(sr.body.camT[0]), double(sr.body.camT[1]), double(sr.body.camT[2]),
+                    double(sr.body.focalPx), photo.width(), photo.height(), double(mnx), double(mxx), double(mny), double(mxy), double(mnz), double(mxz));
+            QImage dbg = photo.convertToFormat(QImage::Format_RGB888);
+            QPainter pt(&dbg);
+            const QRectF hb = PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height());
+            pt.setPen(QPen(Qt::red, 4)); pt.drawRect(hb);
+            pt.setPen(QPen(Qt::green, 4)); pt.drawRect(sr.bboxUsed);
+            pt.end();
+            dbg.save(QDir(qEnvironmentVariable("QTMESH_PHOTO_DEBUG_DIR")).filePath(QFileInfo(photoArg).baseName() + QStringLiteral("_head.png")));
+        }
+        QImage matte;
+        const PhotoAppearance::FaceAppearance fa = PhotoAppearance::estimate(photo, sr.bboxUsed,
+            PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height()), &matte);
+        auto hex = [](const PhotoAppearance::ColourEstimate& c) { return QColor::fromRgbF(double(c.colour[0]), double(c.colour[1]), double(c.colour[2])).name(); };
+        if (fa.skin.ok) { p.skin = fa.skin.colour; }
+        if (fa.hair.ok) {
+            p.hairColour = fa.hair.colour;
+            if (hairArg.isEmpty() && p.nativeHead) {
+                const char* const styles[] = {"", "short02", "bob01", "long01"};
+                if (data.hairStyle(QString::fromLatin1(styles[fa.hairLength]))) { hairArg = QString::fromLatin1(styles[fa.hairLength]); p.hairStyle = hairArg; }
+            }
+        }
+        if (fa.iris.ok) { p.eye = fa.iris.colour; }
+        CLIPipeline::writeCliError(QStringLiteral("Photo appearance: face %1, skin %2 (%3 px), hair %4 (%5 px, length %6, side %7), iris %8 %9\n")
+            .arg(fa.faceFound ? QStringLiteral("found") : QStringLiteral("NOT found"), fa.skin.ok ? hex(fa.skin) : QStringLiteral("-")).arg(fa.skin.samples)
+            .arg(fa.hair.ok ? hex(fa.hair) : QStringLiteral("-")).arg(fa.hair.samples).arg(fa.hairLength).arg(double(fa.sideHairFraction), 0, 'f', 2)
+            .arg(fa.iris.ok ? hex(fa.iris) : QStringLiteral("-"), fa.note));
+        if (topArg.isEmpty() && bottomArg.isEmpty() && fa.skin.ok) {
+            const PhotoAppearance::ClothingEstimate ce = PhotoAppearance::estimateClothing(photo, matte, p.skin, sr.body.neutralVertices, sr.body.posedVertices,
+                                                                                               sr.body.triangles, sr.body.camT, sr.body.focalPx);
+            if (ce.ok) {
+                p.topStyle = ce.top; p.bottomStyle = ce.bottom;
+                if (ce.topColour.ok) p.topColour = ce.topColour.colour;
+                if (ce.bottomColour.ok) p.bottomColour = ce.bottomColour.colour;
+                CLIPipeline::writeCliError(QStringLiteral("Photo clothing: top %1 %2, bottom %3 %4\n").arg(ce.top, ce.topColour.ok ? hex(ce.topColour) : QStringLiteral("-"), ce.bottom, ce.bottomColour.ok ? hex(ce.bottomColour) : QStringLiteral("-")));
+            }
+        }
+        p.bodyShape = sr.body.shape;
+        p.bodyShape.resize(size_t(data.mhrShapes), 0.0f);
+        p.faceIdentity.clear();
+        if (!ictHead) p.nativeHead = !data.mhrArkit.empty();
+        CLIPipeline::writeCliError(QStringLiteral("Photo shape coefficients: %1\n").arg([&] { QStringList l; for (float v : p.bodyShape) l << QString::number(double(v), 'f', 3); return l.join(QLatin1Char(',')); }()));
     }
     if (!CharacterGen::parseCoefficients(bodyArg, p.bodyShape, data.mhrShapes, &err) || !CharacterGen::parseCoefficients(faceArg, p.faceIdentity, data.ictIdentities, &err)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err));
