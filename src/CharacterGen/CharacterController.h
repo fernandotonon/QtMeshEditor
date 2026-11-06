@@ -8,12 +8,14 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
 namespace CharacterGen {
 struct Assets;
 }
 #include "CharacterModel.h"
+#include "BodyShape.h"
 
 /// Inspector "Character Generator" (Object mode): random / hand-tuned body + face, skin and eye colour, one undoable Generate.
 /// Assets are fetched on first use (CharacterAssets); the heavy build runs on the main thread (Ogre) in ~1-2 s.
@@ -147,6 +149,23 @@ public:
                                  const QString& eye, bool replace = false);
     /// A character made by this panel is still in the scene (so a slider change can edit it in place).
     Q_INVOKABLE bool hasCharacter() const;
+    // ---- named shape controls (BodyShape.h, Proportions.h) ----
+    /// The proportion factors [height, legs, arms, torso, shoulders, head] (1 = the mean body).
+    Q_PROPERTY(QVariantList proportions READ proportions NOTIFY proportionsChanged)
+    QVariantList proportions() const;
+    Q_INVOKABLE int proportionCount() const { return 6; }
+    Q_INVOKABLE QString proportionLabel(int i) const;
+    Q_INVOKABLE QString proportionHint(int i) const;
+    Q_INVOKABLE void setProportion(int i, double value);
+    Q_INVOKABLE void resetProportions();
+    /// The measured sliders (chest, waist, hips, belly, bust): index -> label / hint / range in cm either side of the mean body.
+    Q_INVOKABLE int measureCount() const { return 5; }
+    Q_INVOKABLE QString measureLabel(int i) const;
+    Q_INVOKABLE QString measureHint(int i) const;
+    Q_INVOKABLE double measureRange(int i) const;
+    /// Offset in cm of measurement `i` for these 45 coefficients, and the coefficients that put it at `target` cm without moving the others.
+    Q_INVOKABLE double measureOffset(int i, const QVariantList& coefficients) const;
+    Q_INVOKABLE QVariantList coefficientsWithMeasure(int i, double target, const QVariantList& coefficients) const;
     /// A short human name for body-shape mode `mode` (what it mostly changes), and what it does in a sentence.
     Q_INVOKABLE QString shapeLabel(int mode) const;
     Q_INVOKABLE QString shapeHint(int mode) const;
@@ -175,6 +194,7 @@ signals:
     void hairParamsChanged();
     void hairLibraryChanged();
     void bodyHairChanged();
+    void proportionsChanged();
     void eyelashesChanged();
     void clothesChanged();
 
@@ -204,6 +224,9 @@ private:
     QStringList m_hairNamesSeen;   ///< the hairstyles the panel was last told about (hairNamesChanged)
     QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;
+    std::array<double, 6> m_proportions{1, 1, 1, 1, 1, 1};
+    mutable std::shared_ptr<CharacterGen::BodyShape::Model> m_shapeModel;   // built from the loaded assets on first use
+    const CharacterGen::BodyShape::Model* shapeModel() const;
     bool m_eyelashes = true;
     QString m_topStyle = QStringLiteral("none");
     QString m_bottomStyle = QStringLiteral("none");

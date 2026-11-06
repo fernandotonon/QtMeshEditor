@@ -61,7 +61,6 @@ public:
 private:
     bool m_valid = false;
     int m_shapes = 0, m_vertices = 0;
-    const Assets* m_assets = nullptr;
     std::vector<float> m_base;
     std::vector<float> m_vectors;
     std::vector<uint8_t> m_class;   ///< per vertex: 0 torso/pelvis, 1 leg, 2 arm, 3 collar bone, 4 neck, 5 head

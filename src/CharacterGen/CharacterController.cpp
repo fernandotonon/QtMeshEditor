@@ -1,4 +1,5 @@
 #include "CharacterController.h"
+#include "Proportions.h"
 
 #include "CharacterAssets.h"
 #include "CharacterModel.h"
@@ -291,29 +292,145 @@ bool CharacterController::hasCharacter() const
 
 // What each MHR body-shape mode does, from measuring it: displacement per body region, height and girth change of each mode
 // (modes 0-19 shape the torso, 20-39 the head and neck, 40-44 the arms; the later modes of each group are small refinements).
+const CharacterGen::BodyShape::Model* CharacterController::shapeModel() const
+{
+    if (m_shapeModel) return m_shapeModel->valid() ? m_shapeModel.get() : nullptr;
+    std::shared_ptr<CharacterGen::Assets> a = m_assets;
+    if (!a) {
+        if (!CharacterGen::CharacterAssets::present()) return nullptr;   // never downloads from a label lookup
+        a = std::make_shared<CharacterGen::Assets>();
+        if (!CharacterGen::loadAssetsFromDir(CharacterGen::CharacterAssets::dir(), *a, nullptr)) return nullptr;
+    }
+    m_shapeModel = std::make_shared<CharacterGen::BodyShape::Model>();
+    if (!m_shapeModel->build(*a)) return nullptr;
+    return m_shapeModel.get();
+}
+
+namespace {
+const CharacterGen::BodyShape::Measure kSliderMeasures[5] = {CharacterGen::BodyShape::ChestWidth, CharacterGen::BodyShape::WaistWidth, CharacterGen::BodyShape::HipsWidth, CharacterGen::BodyShape::BellyDepth, CharacterGen::BodyShape::ChestDepth};
+}
+
+QVariantList CharacterController::proportions() const
+{
+    QVariantList l;
+    for (double v : m_proportions) l << v;
+    return l;
+}
+
+QString CharacterController::proportionLabel(int i) const
+{
+    static const char* k[] = {"Height", "Leg length", "Arm length", "Torso length", "Shoulder width", "Head size"};
+    return (i >= 0 && i < 6) ? tr(k[i]) : QString();
+}
+
+QString CharacterController::proportionHint(int i) const
+{
+    switch (i) {
+    case 0: return tr("Overall height: the whole body scales, feet on the floor. 100% is the mean body (about 173 cm).");
+    case 1: return tr("Leg length (the legs scale about the hips).");
+    case 2: return tr("Arm length (the arms and hands scale about the shoulders).");
+    case 3: return tr("Torso length: the spine between the pelvis and the neck.");
+    case 4: return tr("Shoulder width: how far the shoulders sit from the spine.");
+    case 5: return tr("Head size (the head scales about the neck).");
+    default: return QString();
+    }
+}
+
+void CharacterController::setProportion(int i, double value)
+{
+    if (i < 0 || i >= 6) return;
+    value = std::clamp(value, 0.6, 1.6);
+    if (value == m_proportions[size_t(i)]) return;
+    m_proportions[size_t(i)] = value;
+    emit proportionsChanged();
+}
+
+void CharacterController::resetProportions()
+{
+    m_proportions = {1, 1, 1, 1, 1, 1};
+    emit proportionsChanged();
+}
+
+QString CharacterController::measureLabel(int i) const
+{
+    return (i >= 0 && i < 5) ? tr(CharacterGen::BodyShape::info(kSliderMeasures[i]).label) : QString();
+}
+
+QString CharacterController::measureHint(int i) const
+{
+    return (i >= 0 && i < 5) ? tr(CharacterGen::BodyShape::info(kSliderMeasures[i]).hint) : QString();
+}
+
+double CharacterController::measureRange(int i) const
+{
+    return (i >= 0 && i < 5) ? double(CharacterGen::BodyShape::info(kSliderMeasures[i]).range) : 0.0;
+}
+
+static std::vector<float> floatsOf(const QVariantList& l)
+{
+    std::vector<float> v;
+    v.reserve(size_t(l.size()));
+    for (const QVariant& x : l) v.push_back(x.toFloat());
+    return v;
+}
+
+double CharacterController::measureOffset(int i, const QVariantList& coefficients) const
+{
+    const CharacterGen::BodyShape::Model* m = shapeModel();
+    return (m && i >= 0 && i < 5) ? double(m->offset(kSliderMeasures[i], floatsOf(coefficients))) : 0.0;
+}
+
+QVariantList CharacterController::coefficientsWithMeasure(int i, double target, const QVariantList& coefficients) const
+{
+    const CharacterGen::BodyShape::Model* m = shapeModel();
+    if (!m || i < 0 || i >= 5) return coefficients;
+    const std::vector<float> c = m->withOffset(kSliderMeasures[i], float(target), floatsOf(coefficients));
+    QVariantList out;
+    for (float v : c) out << double(v);
+    return out;
+}
+
 QString CharacterController::shapeLabel(int m) const
 {
+    // measured with `qtmesh character --measure-body` (see BodyShape.h): what one unit of each identity mode does to the body
     static const char* k[] = {
-        "Weight (belly, chest)", "Hips and waist width", "Bust and hips balance", "Belly depth", "Waist width", "Hips depth",
-        "Chest shape", "Chest and belly", "Waist detail", "Hips detail", "Torso detail 11", "Torso detail 12", "Hips detail 13",
-        "Hips detail 14", "Hips detail 15", "Torso detail 16", "Torso detail 17", "Torso detail 18", "Torso detail 19", "Chest detail 20",
-        "Neck length, head height", "Neck and head size", "Head shape 3", "Head shape 4", "Age (face)", "Head shape 6",
-        "Head shape 7", "Head shape 8", "Head shape 9", "Head shape 10", "Head shape 11", "Head shape 12", "Head shape 13",
-        "Head shape 14", "Head shape 15", "Head shape 16", "Head shape 17", "Head shape 18", "Head shape 19", "Head shape 20",
-        "Arms", "Arms detail 2", "Arms detail 3", "Arms detail 4", "Arms detail 5"};
-    return (m >= 0 && m < 45) ? QString::fromLatin1(k[m]) : QStringLiteral("Shape %1").arg(m + 1);
+        "Weight (overall girth)", "Hips vs shoulders", "Bust vs hips", "Belly depth", "Waist width", "Hips vs belly",
+        "Chest depth", "Hips narrowness", "Torso detail", "Waist vs hips"};
+    if (m >= 0 && m < 10) return tr(k[m]);
+    static const char* head[] = {"Head size and height", "Neck length", "Head roundness", "Narrow, tall head", "Face age", "Narrow head"};
+    if (m >= 20 && m < 26) return tr(head[m - 20]);
+    if (const CharacterGen::BodyShape::Model* model = shapeModel(); model && m >= 0 && m < model->shapes()) {
+        int best = -1;
+        float bestScore = 0.0f;
+        for (int q = 0; q < CharacterGen::BodyShape::MeasureCount; ++q) {
+            const float score = std::fabs(model->effect(CharacterGen::BodyShape::Measure(q), m)) / CharacterGen::BodyShape::info(CharacterGen::BodyShape::Measure(q)).range;
+            if (score > bestScore) { bestScore = score; best = q; }
+        }
+        if (best >= 0 && bestScore > 0.004f) return tr("%1 detail").arg(tr(CharacterGen::BodyShape::info(CharacterGen::BodyShape::Measure(best)).label));
+    }
+    if (m >= 40 && m < 45) return tr("Arm detail %1").arg(m - 39);
+    if (m >= 10 && m < 20) return tr("Torso detail %1").arg(m + 1);
+    if (m >= 20 && m < 40) return tr("Head detail %1").arg(m - 19);
+    return tr("Shape %1").arg(m + 1);
 }
 
 QString CharacterController::shapeHint(int m) const
 {
-    if (m == 0) return tr("The biggest body change: overall weight, mostly belly and chest.");
-    if (m == 1) return tr("Hips and waist width: negative = narrow hips and waist (more masculine), positive = wider hips and waist (more feminine).");
-    if (m == 2) return tr("Bust and hips balance: positive = a fuller, more forward bust with slimmer, flatter hips, negative = the opposite.");
-    if (m >= 3 && m < 8) return tr("Torso proportions: waist, hips, belly or chest.");
-    if (m < 20) return tr("A smaller refinement of the torso and hips.");
-    if (m == 20 || m == 21) return tr("Neck length and the size of the head.");
-    if (m < 40) return tr("A subtle change of the head's shape.");
-    return tr("A subtle change of the arms.");
+    const CharacterGen::BodyShape::Model* model = shapeModel();
+    if (!model || m < 0 || m >= model->shapes()) return tr("A change of the body's shape.");
+    std::vector<std::pair<float, int>> eff;
+    for (int q = 0; q < CharacterGen::BodyShape::MeasureCount; ++q) {
+        const float e = model->effect(CharacterGen::BodyShape::Measure(q), m);
+        if (std::fabs(e) >= 0.05f) eff.push_back({std::fabs(e), q});
+    }
+    std::sort(eff.rbegin(), eff.rend());
+    if (eff.empty()) return tr("A very subtle change (under a millimetre per step).");
+    QStringList parts;
+    for (size_t i = 0; i < std::min<size_t>(3, eff.size()); ++i) {
+        const auto q = CharacterGen::BodyShape::Measure(eff[i].second);
+        parts << QStringLiteral("%1 %2 cm %3").arg(model->effect(q, m) >= 0 ? QStringLiteral("+") : QStringLiteral("−")).arg(double(eff[i].first), 0, 'f', 1).arg(tr(CharacterGen::BodyShape::info(q).label).toLower());
+    }
+    return tr("Per +1.0 on the slider: %1.").arg(parts.join(QStringLiteral(", ")));
 }
 
 void CharacterController::setStatus(const QString& s, bool busy)
@@ -398,6 +515,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
             return err;
         }
         m_assets = std::move(a);
+        m_shapeModel.reset();
     }
     if (m_hairNamesSeen != CharacterAssets::hairStyleNames()) {
         m_hairNamesSeen = CharacterAssets::hairStyleNames();
@@ -413,6 +531,7 @@ QString CharacterController::generate(int seed, double variety, const QString& b
     p.hairFit = m_hairFit;
     CharacterGen::parseHairColour(m_hairColour, &p.hairColour);
     p.bodyHair = float(m_bodyHair);
+    p.proportions = Proportions{float(m_proportions[0]), float(m_proportions[1]), float(m_proportions[2]), float(m_proportions[3]), float(m_proportions[4]), float(m_proportions[5])};
     p.eyelashes = m_eyelashes;
     p.topStyle = m_topStyle;
     p.bottomStyle = m_bottomStyle;
