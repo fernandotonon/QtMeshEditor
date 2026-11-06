@@ -5125,6 +5125,382 @@ Rectangle {
                 }
             }
 
+            Rectangle {
+                width: skeletonToolsCol.width - 16
+                height: 1
+                color: PropertiesPanelController.borderColor
+                opacity: 0.5
+            }
+
+            CollapsibleSection {
+                title: "Bone Display"
+                expanded: false
+                width: skeletonToolsCol.width
+                Component.onCompleted: content = boneDisplayForm
+            }
+
+            Component {
+                id: boneDisplayForm
+                Column {
+                    width: skeletonToolsCol.width
+                    spacing: 6
+                    padding: 4
+
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                opacity: 0.75
+                text: "Shape, colour, groups, and the 32 display layers are saved with the asset."
+            }
+
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 6
+                Text {
+                    text: "Shape"
+                    width: 52
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - 58
+                    height: 22
+                    font.pixelSize: 11
+                    model: BoneDisplayController.shapeIds
+                    currentIndex: BoneDisplayController.shapeIndex
+                    enabled: BoneDisplayController.hasBone
+                    onActivated: function(index) { BoneDisplayController.setShapeIndex(index) }
+                }
+            }
+
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 6
+                visible: BoneDisplayController.shapeIds[BoneDisplayController.shapeIndex] === "custom-mesh"
+                Text {
+                    text: "Mesh"
+                    width: 52
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - 58
+                    height: 22
+                    font.pixelSize: 11
+                    model: BoneDisplayController.proxyChoices
+                    currentIndex: Math.max(0, BoneDisplayController.customMeshIndex)
+                    enabled: BoneDisplayController.hasBone
+                    onActivated: function(index) { BoneDisplayController.setCustomMeshIndex(index) }
+                }
+            }
+
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 4
+                Text { text: "Scale"; width: 52; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.scaleX.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setScaleAxis(0, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.scaleY.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setScaleAxis(1, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.scaleZ.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setScaleAxis(2, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+            }
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 4
+                Text { text: "Offset"; width: 52; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.offsetX.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setOffsetAxis(0, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.offsetY.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setOffsetAxis(1, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.offsetZ.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setOffsetAxis(2, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+            }
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 4
+                Text { text: "Rotate"; width: 52; color: PropertiesPanelController.textColor; font.pixelSize: 11; anchors.verticalCenter: parent.verticalCenter }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.rotationX.toFixed(0)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setRotationAxis(0, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.rotationY.toFixed(0)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setRotationAxis(1, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                TextField {
+                    width: (parent.width - 60) / 3; height: 22; font.pixelSize: 11
+                    text: BoneDisplayController.rotationZ.toFixed(0)
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    onEditingFinished: BoneDisplayController.setRotationAxis(2, parseFloat(text))
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+            }
+
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 6
+                Rectangle {
+                    width: 18; height: 18; radius: 2
+                    color: BoneDisplayController.colorHex
+                    border.color: PropertiesPanelController.borderColor
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                TextField {
+                    width: parent.width - 24
+                    height: 22
+                    font.pixelSize: 11
+                    text: BoneDisplayController.colorHex
+                    color: PropertiesPanelController.textColor
+                    enabled: BoneDisplayController.hasBone
+                    placeholderText: "#rrggbb"
+                    onEditingFinished: BoneDisplayController.setColorHex(text)
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+            }
+            InspectorCheckBox {
+                text: "Use group colour"
+                enabled: BoneDisplayController.hasBone
+                checked: BoneDisplayController.useGroupColor
+                onToggled: BoneDisplayController.setUseGroupColor(checked)
+            }
+            InspectorCheckBox {
+                text: "Visible"
+                enabled: BoneDisplayController.hasBone
+                checked: BoneDisplayController.boneVisible
+                onToggled: BoneDisplayController.setBoneVisible(checked)
+            }
+            InspectorCheckBox {
+                text: "Lock from selection"
+                enabled: BoneDisplayController.hasBone
+                checked: BoneDisplayController.selectionLocked
+                onToggled: BoneDisplayController.setSelectionLocked(checked)
+            }
+            Row {
+                spacing: 8
+                InspectorCheckBox {
+                    text: "Lock T"
+                    enabled: BoneDisplayController.hasBone
+                    checked: BoneDisplayController.lockTranslation
+                    onToggled: BoneDisplayController.setLockTranslation(checked)
+                }
+                InspectorCheckBox {
+                    text: "Lock R"
+                    enabled: BoneDisplayController.hasBone
+                    checked: BoneDisplayController.lockRotation
+                    onToggled: BoneDisplayController.setLockRotation(checked)
+                }
+                InspectorCheckBox {
+                    text: "Lock S"
+                    enabled: BoneDisplayController.hasBone
+                    checked: BoneDisplayController.lockScale
+                    onToggled: BoneDisplayController.setLockScale(checked)
+                }
+            }
+
+            Text {
+                text: "Bone layers"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Grid {
+                columns: 8
+                spacing: 2
+                Repeater {
+                    model: 32
+                    delegate: Rectangle {
+                        required property int index
+                        width: 18; height: 16; radius: 2
+                        color: BoneDisplayController.boneLayerBits.charAt(index) === "1"
+                               ? PropertiesPanelController.highlightColor
+                               : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: index
+                            font.pixelSize: 8
+                            color: PropertiesPanelController.textColor
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: BoneDisplayController.hasBone
+                            onClicked: BoneDisplayController.setBoneOnLayer(
+                                           index, BoneDisplayController.boneLayerBits.charAt(index) !== "1")
+                        }
+                    }
+                }
+            }
+            Text {
+                text: "Visible layers"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Grid {
+                columns: 8
+                spacing: 2
+                Repeater {
+                    model: 32
+                    delegate: Rectangle {
+                        required property int index
+                        width: 18; height: 16; radius: 2
+                        color: BoneDisplayController.visibleLayerBits.charAt(index) === "1"
+                               ? PropertiesPanelController.highlightColor
+                               : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: index
+                            font.pixelSize: 8
+                            color: PropertiesPanelController.textColor
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: BoneDisplayController.setLayerVisible(
+                                           index, BoneDisplayController.visibleLayerBits.charAt(index) !== "1")
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "Groups"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+            }
+            Row {
+                width: skeletonToolsCol.width - 16
+                spacing: 4
+                TextField {
+                    id: newBoneGroupName
+                    width: parent.width - 52
+                    height: 22
+                    font.pixelSize: 11
+                    placeholderText: "Face Controls"
+                    color: PropertiesPanelController.textColor
+                    background: Rectangle { color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.borderColor; radius: 3 }
+                }
+                Rectangle {
+                    width: 48; height: 22; radius: 3
+                    color: PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { anchors.centerIn: parent; text: "Add"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: {
+                            BoneDisplayController.addGroup(newBoneGroupName.text)
+                            newBoneGroupName.text = ""
+                        }
+                    }
+                }
+            }
+            Repeater {
+                model: BoneDisplayController.groupNames
+                delegate: Row {
+                    required property int index
+                    required property string modelData
+                    width: skeletonToolsCol.width - 16
+                    spacing: 4
+                    TextField {
+                        width: 64
+                        height: 20
+                        font.pixelSize: 9
+                        text: BoneDisplayController.groupColors[index]
+                        color: PropertiesPanelController.textColor
+                        onEditingFinished: BoneDisplayController.setGroupColorHex(modelData, text)
+                        background: Rectangle {
+                            color: PropertiesPanelController.inputColor
+                            border.color: BoneDisplayController.groupColors[index]
+                            border.width: 2
+                            radius: 2
+                        }
+                    }
+                    InspectorCheckBox {
+                        text: modelData
+                        width: parent.width - 168
+                        enabled: BoneDisplayController.hasBone
+                        checked: BoneDisplayController.boneGroups.indexOf(modelData) >= 0
+                        onToggled: BoneDisplayController.setGroupMember(modelData, checked)
+                    }
+                    Rectangle {
+                        width: 52; height: 20; radius: 3
+                        color: PropertiesPanelController.headerColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text {
+                            anchors.centerIn: parent
+                            text: BoneDisplayController.isolatedGroup === modelData ? "Show all" : "Isolate"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: BoneDisplayController.isolateGroup(modelData)
+                        }
+                    }
+                    Rectangle {
+                        width: 20; height: 20; radius: 3
+                        color: PropertiesPanelController.headerColor
+                        border.color: PropertiesPanelController.borderColor
+                        Text { anchors.centerIn: parent; text: "×"; color: PropertiesPanelController.textColor; font.pixelSize: 12 }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: BoneDisplayController.removeGroup(modelData)
+                        }
+                    }
+                }
+            }
+
+                }
+            }
+
             // Bone action buttons — two rows so labels stay readable in the
             // narrow Inspector dock.
             Column {

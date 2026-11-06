@@ -69,6 +69,7 @@ private:
     Ogre::MeshPtr mJointMeshPtr;
     Ogre::MeshPtr mLinkMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
+    std::map<std::string, Ogre::MaterialPtr, std::less<>> mColorMaterials;
     Ogre::SceneManager *mSceneMan;
 
     Ogre::Real mScaleAxes;
@@ -84,6 +85,8 @@ private:
     void createBoneMesh();
     void createJointMesh();
     void createLinkMesh();
+    void createShapeMeshes();
+    Ogre::MaterialPtr materialForColor(float r, float g, float b, float a);
     std::map<std::string, Ogre::Entity*, std::less<>> createBoneVisuals();
     void createChildLinks(const Ogre::Bone* pBone);
     void ensureGhostVisuals();
