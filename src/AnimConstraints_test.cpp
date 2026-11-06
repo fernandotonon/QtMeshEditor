@@ -241,6 +241,18 @@ TEST(AnimConIk, DefaultPoleFollowsTheCurrentBend)
     EXPECT_GT(slight.z, 0.4f);
 }
 
+TEST(AnimConIk, TinySegmentsStayFiniteAndDefined)
+{
+    // Both bones ~2e-5 long: |a-b| + margin exceeds a+b (the clamp bounds
+    // used to cross, which is undefined behaviour).
+    const Ogre::Vector3 A(0, 0, 0), B(0, 2e-5f, 0), C(0, 4e-5f, 0);
+    const IkSolution s = solveTwoBone(A, B, C, Ogre::Vector3(0, 1, 0), Ogre::Vector3(1, 0, 0), true);
+    ASSERT_TRUE(s.valid);
+    EXPECT_FALSE(s.newMid.isNaN());
+    EXPECT_FALSE(s.newEnd.isNaN());
+    EXPECT_LE((s.newEnd - A).length(), 4e-5f + 1e-7f) << "never past full reach";
+}
+
 TEST(AnimConIk, AStraightChainAtFullReachStaysStraight)
 {
     const Ogre::Vector3 A(0, 0, 0), B(0, 1, 0), C(0, 2, 0);

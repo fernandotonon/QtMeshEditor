@@ -1156,6 +1156,18 @@ struct HandleUse {
     Slot slot;
 };
 
+// A handle hung from a node that the import renamed (it collided with an
+// existing one) goes back under the RENAMED node, not the other character's.
+QJsonObject withRenamedParent(QJsonObject entry, const std::function<Ref(Ref)>& rename)
+{
+    const QString parent = entry.value(QStringLiteral("parent")).toString();
+    if (parent.isEmpty()) return entry;
+    Ref r;
+    r.object = parent;
+    entry[QStringLiteral("parent")] = rename(r).object;
+    return entry;
+}
+
 // The live handle an already-loaded copy of the same chain uses, if any.
 QString existingHandleForChain(const std::vector<Constraint>& cons, const QList<HandleUse>& uses)
 {
@@ -1200,7 +1212,7 @@ QHash<QString, QString> ConstraintManager::importSidecarHandles(const QJsonArray
         if (!actual.isEmpty())
             m_handles.insert(actual, o.value(QStringLiteral("role")).toString(QStringLiteral("target")));
         else
-            actual = createHandleFromJson(o, name, &clips);   // suffixes a taken name
+            actual = createHandleFromJson(withRenamedParent(o, rename), name, &clips);   // suffixes a taken name
         if (!actual.isEmpty() && actual != name) out.insert(name, actual);
     }
     return out;

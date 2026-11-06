@@ -981,6 +981,29 @@ TEST_F(ConstraintSceneTest, HandleComesBackUnderItsParentAfterUndo)
     EXPECT_EQ(liveNode(r.target)->getParent(), rig) << "local keys need the same parent";
 }
 
+TEST_F(ConstraintSceneTest, AnImportedHandleHangsFromTheRenamedParent)
+{
+    makeChainEntity("IK_ParB");
+    const auto rb = mgr()->createIkChain(QStringLiteral("bone:IK_ParB/End"), true, false);
+    ASSERT_TRUE(rb.ok);
+    Ogre::SceneNode* rigB = makeNode("IK_ParRig", Ogre::Vector3(3, 0, 0));
+    ASSERT_TRUE(Manager::getSingleton()->reparentNode(liveNode(rb.target), rigB));
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("parb.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset, {QStringLiteral("IK_ParB")}));
+    ASSERT_TRUE(mgr()->remove(rb.id, false).ok);
+
+    // The import renamed the rig (it collided with the one already here).
+    Ogre::SceneNode* rigNew = makeNode("IK_ParRig_Imported", Ogre::Vector3(-3, 0, 0));
+    QString err;
+    ASSERT_EQ(mgr()->loadSidecar(asset, {{QStringLiteral("IK_ParRig"), QStringLiteral("IK_ParRig_Imported")}}, &err), 1)
+        << err.toStdString();
+    ASSERT_EQ(mgr()->count(), 1);
+    Ogre::SceneNode* target = liveNode(mgr()->constraints().front().target.object);
+    ASSERT_TRUE(target);
+    EXPECT_EQ(target->getParent(), rigNew) << "the handle hangs from the renamed rig, not the other one";
+}
+
 TEST_F(ConstraintSceneTest, AnImportedCharactersHandleClipStaysSeparate)
 {
     makeChainEntity("IK_ClipB");

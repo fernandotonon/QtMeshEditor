@@ -246,7 +246,10 @@ IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Og
     Ogre::Vector3 dir = dist > kEps ? dvec / dist : (C - A).normalisedCopy();
     // Full extension is a valid pose: clamping below a + b bent a straight
     // chain (by ~0.01 of a 2-unit limb) on the first solve.
-    const float lo = std::abs(a - b) + 1e-4f, hi = a + b;
+    // lo is capped at hi: for a segment shorter than ~5e-5 the margin would
+    // put lo above hi, and std::clamp with lo > hi is undefined.
+    const float hi = a + b;
+    const float lo = std::min(std::abs(a - b) + 1e-4f, hi);
     s.reached = dist >= std::abs(a - b) - 1e-4f && dist <= a + b + 1e-4f;
     const float d = std::clamp(dist, lo, hi);
 
