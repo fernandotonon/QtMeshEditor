@@ -5150,6 +5150,15 @@ static std::vector<aiAnimation*> buildNodeClipAnimations(
 }
 
 // ─── Scene-level export: all scene nodes → single glTF ──────────────
+// The entity a scene export writes for node `sn`: the one named like the
+// node, or null — also for editor-only IK handles (#560).
+static Ogre::Entity* exportableSceneEntity(const Ogre::SceneNode* sn)
+{
+    Ogre::SceneManager* scene = Manager::getSingleton()->getSceneMgr();
+    if (!scene->hasEntity(sn->getName()) || ConstraintManager::isHandleNode(sn)) return nullptr;
+    return scene->getEntity(sn->getName());
+}
+
 static aiScene* buildSceneAiScene()
 {
     auto* manager = Manager::getSingleton();
@@ -5177,12 +5186,7 @@ static aiScene* buildSceneAiScene()
     std::vector<NodeEntityPair> nodeEntities;
     for (auto* sn : sceneNodes)
     {
-        if (!manager->getSceneMgr()->hasEntity(sn->getName()))
-            continue;
-        if (ConstraintManager::isHandleNode(sn))   // editor-only IK handle (#560)
-            continue;
-        auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
-        if (entity)
+        if (auto* entity = exportableSceneEntity(sn))
             nodeEntities.push_back({sn, entity});
     }
 
@@ -5403,12 +5407,7 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         std::vector<std::pair<Ogre::SceneNode*, Ogre::Entity*>> entities;
         for (auto* sn : sceneNodes)
         {
-            if (!manager->getSceneMgr()->hasEntity(sn->getName()))
-                continue;
-            if (ConstraintManager::isHandleNode(sn))   // editor-only IK handle (#560)
-                continue;
-            auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
-            if (entity)
+            if (auto* entity = exportableSceneEntity(sn))
                 entities.emplace_back(sn, entity);
         }
 

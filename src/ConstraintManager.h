@@ -56,6 +56,8 @@ The MIT License
 
 #include "AnimConstraints.h"
 
+#include <functional>
+#include <optional>
 #include <vector>
 
 class QQmlEngine;
@@ -121,7 +123,12 @@ public:
         bool ok = false;
         QString id, target, pole, error;
     };
-    IkChainResult createIkChain(const QString& ownerRef, bool withPole = true, bool undoable = true);
+    /// `targetPos` / `polePos` override the default handle placement (world
+    /// space); they are applied BEFORE the undo step is recorded, so redo
+    /// reproduces the requested pose.
+    IkChainResult createIkChain(const QString& ownerRef, bool withPole = true, bool undoable = true,
+                                const std::optional<Ogre::Vector3>& targetPos = std::nullopt,
+                                const std::optional<Ogre::Vector3>& polePos = std::nullopt);
 
     /// Handles are ordinary scene nodes (so the gizmo, the Scene tree and
     /// node-anim work on them) carrying a small sphere entity of a reserved
@@ -202,6 +209,21 @@ private:
     /// where the user put them); with `destroyUnlisted`, remove our handles
     /// the list no longer names.
     void reconcileHandles(const QJsonArray& wanted, bool destroyUnlisted);
+    /// Create a handle from its `handles` entry (position, radius, role and
+    /// any node-animation `tracks`); returns the actual node name.
+    /// Recreate a sidecar's handles for its `incoming` constraints: a name
+    /// already used by ANOTHER chain gets a fresh handle. Returns old -> new
+    /// names for the references to rewrite.
+    QHash<QString, QString> importSidecarHandles(const QJsonArray& handles,
+                                                 const std::vector<AnimCon::Constraint>& incoming,
+                                                 const std::function<AnimCon::Ref(AnimCon::Ref)>& rename);
+    /// Owner ref of the chain whose target/pole is `handle` ("" if none).
+    QString chainOwnerOfHandle(const QString& handle) const;
+    QString createHandleFromJson(const QJsonObject& entry, const QString& name);
+    /// Node-animation tracks (scene clips) that drive handle `node`, so a
+    /// handle destroyed by undo/redo or saved to a sidecar keeps its motion.
+    static QJsonArray handleTracksJson(const Ogre::SceneNode* node);
+    static void restoreHandleTracks(const QString& nodeName, const QJsonArray& tracks);
     QString createHandle(const QString& name, const QString& role, const Ogre::Vector3& pos, float radius);
     void destroyHandle(const QString& name);
     /// Destroy handles no constraint references any more.

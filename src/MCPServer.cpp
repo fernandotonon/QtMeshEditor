@@ -11507,15 +11507,12 @@ QJsonObject MCPServer::toolCreateIkChain(const QJsonObject& args)
     if (args.contains("pole_position") && !withPole) return makeErrorResult("Error: 'pole_position' needs pole: true");
 
     auto* cm = ConstraintManager::instance();
-    const auto r = cm->createIkChain(owner, withPole);
+    // Placement goes INTO the creation (before its undo step is recorded), so
+    // undo + redo reproduces the requested handle positions.
+    const auto r = cm->createIkChain(owner, withPole, /*undoable=*/true,
+                                     args.contains("target_position") ? std::optional(targetPos) : std::nullopt,
+                                     args.contains("pole_position") ? std::optional(polePos) : std::nullopt);
     if (!r.ok) return makeErrorResult("Error: " + r.error);
-    // Optional placement after creation (still the same scene nodes, so a
-    // later transform_mesh {name, position} moves them the same way).
-    auto place = [](const QString& name, const Ogre::Vector3& p) {
-        if (Ogre::SceneNode* n = findSceneNodeByName(name)) n->setPosition(p);
-    };
-    if (args.contains("target_position")) place(r.target, targetPos);
-    if (args.contains("pole_position")) place(r.pole, polePos);
     cm->evaluate();
     QJsonObject content{{"ok", true}, {"id", r.id}, {"target_handle", r.target}, {"pole_handle", r.pole},
                         {"constraint", constraintJson(*cm->find(r.id))},

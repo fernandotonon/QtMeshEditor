@@ -780,6 +780,117 @@ TEST_F(ConstraintSceneTest, SelectingAHandleShowsItsChain)
     EXPECT_EQ(mgr()->ownerFromSelection(), QStringLiteral("bone:IK_Sel/End"));
 }
 
+namespace {
+// Key `node` at t=0 and t=1 on a fresh node clip.
+void keyHandle(const QString& clip, const QString& node, const Ogre::Vector3& a, const Ogre::Vector3& b)
+{
+    auto* nam = NodeAnimationManager::instance();
+    ASSERT_TRUE(nam->createClip(clip, 1.0));
+    ASSERT_TRUE(nam->addKeyframe(clip, node, 0.0, a, Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE));
+    ASSERT_TRUE(nam->addKeyframe(clip, node, 1.0, b, Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE));
+}
+} // namespace
+
+TEST_F(ConstraintSceneTest, UndoingAChainRemovalBringsBackItsHandleAnimation)
+{
+    makeChainEntity("IK_AnimUndo");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_AnimUndo/End"), true, false);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    const Ogre::Vector3 a(0.2f, 1.5f, 0.1f), b(0.7f, 1.2f, -0.3f);
+    keyHandle(QStringLiteral("Reach"), r.target, a, b);
+
+    ASSERT_TRUE(mgr()->remove(r.id, true).ok);
+    EXPECT_FALSE(liveNode(r.target));
+    EXPECT_TRUE(NodeAnimationManager::instance()->keyTimesForNode(QStringLiteral("Reach"), r.target).isEmpty())
+        << "destroying the handle drops its track (NodeAnimationManager)";
+
+    UndoManager::getSingleton()->undo();
+    ASSERT_TRUE(liveNode(r.target));
+    const QList<double> keys = NodeAnimationManager::instance()->keyTimesForNode(QStringLiteral("Reach"), r.target);
+    ASSERT_EQ(keys.size(), 2) << "undo restores the handle's keyframes";
+    EXPECT_NEAR(keys.back(), 1.0, 1e-6);
+    const QVariantMap kf = NodeAnimationManager::instance()->nodeKeyframeTRS(QStringLiteral("Reach"), r.target, 1.0);
+    ASSERT_FALSE(kf.isEmpty());
+    EXPECT_NEAR(kf.value(QStringLiteral("tx")).toDouble(), b.x, 1e-5);
+    EXPECT_NEAR(kf.value(QStringLiteral("tz")).toDouble(), b.z, 1e-5);
+}
+
+TEST_F(ConstraintSceneTest, HandleAnimationSurvivesTheSidecar)
+{
+    makeChainEntity("IK_AnimSide");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_AnimSide/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    keyHandle(QStringLiteral("Wave"), r.pole, Ogre::Vector3(1, 1, 0), Ogre::Vector3(-1, 1, 0));
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("scene.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset));
+
+    mgr()->clear();
+    EXPECT_FALSE(NodeAnimationManager::instance()->listClips().contains(QStringLiteral("Wave")))
+        << "the clip only drove the handle, so it went with it";
+    QString err;
+    ASSERT_EQ(mgr()->loadSidecar(asset, {}, &err), 1) << err.toStdString();
+    ASSERT_TRUE(liveNode(r.pole));
+    EXPECT_EQ(NodeAnimationManager::instance()->keyTimesForNode(QStringLiteral("Wave"), r.pole).size(), 2)
+        << "reopening the saved scene keeps the authored handle motion";
+}
+
+TEST_F(ConstraintSceneTest, ImportingACharacterWithTheSameBoneNamesGetsItsOwnHandles)
+{
+    // Character B's chain, saved on its own: its handles are IK_End_target/_pole.
+    makeChainEntity("IK_TwinB");
+    const auto rb = mgr()->createIkChain(QStringLiteral("bone:IK_TwinB/End"), true, false);
+    ASSERT_TRUE(rb.ok);
+    const Ogre::Vector3 bGoal(-0.4f, 1.3f, 0.5f);
+    liveNode(rb.target)->setPosition(bGoal);
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("b.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset, {QStringLiteral("IK_TwinB")}));
+    ASSERT_TRUE(mgr()->remove(rb.id, false).ok);
+    ASSERT_FALSE(liveNode(rb.target));
+
+    // Character A takes the same handle names in this session.
+    makeChainEntity("IK_TwinA");
+    const auto ra = mgr()->createIkChain(QStringLiteral("bone:IK_TwinA/End"), true, false);
+    ASSERT_TRUE(ra.ok);
+    ASSERT_EQ(ra.target, rb.target) << "precondition: the names collide";
+    const Ogre::Vector3 aGoal(0.6f, 1.1f, 0.1f);
+    liveNode(ra.target)->setPosition(aGoal);
+
+    QString err;
+    ASSERT_EQ(mgr()->loadSidecar(asset, {}, &err), 1) << err.toStdString();
+    const Constraint* a = nullptr;
+    const Constraint* b = nullptr;
+    for (const auto& c : mgr()->constraints()) (c.owner.object == QLatin1String("IK_TwinA") ? a : b) = &c;
+    ASSERT_TRUE(a && b);
+    EXPECT_EQ(a->target.object, ra.target);
+    EXPECT_NE(b->target.object, ra.target) << "B must not drive A's handle";
+    EXPECT_NE(b->pole.object, ra.pole);
+    ASSERT_TRUE(liveNode(b->target.object));
+    EXPECT_TRUE(ConstraintManager::isHandleNode(liveNode(b->target.object)));
+    EXPECT_LT((liveNode(b->target.object)->getPosition() - bGoal).length(), 1e-5f) << "B keeps its saved position";
+    EXPECT_LT((liveNode(ra.target)->getPosition() - aGoal).length(), 1e-5f) << "A's handle is untouched";
+    EXPECT_EQ(mgr()->handleNames().size(), 4);
+
+    // Loading B's sidecar again is a reload of the same chain: nothing new.
+    EXPECT_EQ(mgr()->loadSidecar(asset, {}, &err), 0);
+    EXPECT_EQ(mgr()->handleNames().size(), 4);
+}
+
+TEST_F(ConstraintSceneTest, RequestedHandlePlacementIsPartOfTheUndoStep)
+{
+    makeChainEntity("IK_Place");
+    const Ogre::Vector3 goal(0.5f, 1.4f, 0.2f), pole(2.0f, 1.0f, 0.0f);
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Place/End"), true, true, goal, pole);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_LT((liveNode(r.target)->getPosition() - goal).length(), 1e-5f);
+    UndoManager::getSingleton()->undo();
+    UndoManager::getSingleton()->redo();
+    ASSERT_TRUE(liveNode(r.target) && liveNode(r.pole));
+    EXPECT_LT((liveNode(r.target)->getPosition() - goal).length(), 1e-5f) << "redo reproduces the requested target";
+    EXPECT_LT((liveNode(r.pole)->getPosition() - pole).length(), 1e-5f) << "and the requested pole";
+}
+
 TEST_F(ConstraintSceneTest, PanelQmlLoadsWithoutErrors)
 {
     qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",

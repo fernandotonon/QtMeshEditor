@@ -35,7 +35,11 @@ The handles belong to the constraints:
 - they are created and destroyed with the constraint that references them, and every step is undoable
   (creation is ONE step, handles included);
 - scene export skips them, so they never become geometry;
-- they are saved in the sidecar's `handles` array and recreated on import.
+- they are saved in the sidecar's `handles` array and recreated on import, together with the
+  node-animation keys that move them (a keyframed target survives Save Scene / Open Scene, and
+  undoing a removed chain brings its keys back);
+- importing a second character with the same bone names gives it its own handles
+  (`IK_<bone>_target1`, …); re-loading the same chain reuses the existing ones.
 
 **FK ↔ IK** is the constraint's `influence`: 0 = the clip (FK), 1 = pure IK, in between a
 blend. **Bake** turns the IK into FK keys and mutes the constraint. Engines without runtime IK
@@ -92,7 +96,7 @@ glTF/FBX can't store constraints. **Export** therefore asks whether to *Bake & E
 
 Constraints are saved in `<file>.constraints.json` (schema `qtmesh-anim-constraints-v1`)
 next to every export, together with the IK handles they reference (`handles`: name, role,
-world position, radius), and loaded again on import:
+world position, radius, node-animation `tracks`), and loaded again on import:
 
 - A single-entity export keeps the constraints owned by that entity or its node.
 - `meta` records the exported names, so a renamed re-import rebinds the constraints.
