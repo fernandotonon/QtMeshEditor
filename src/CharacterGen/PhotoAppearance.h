@@ -43,12 +43,27 @@ std::vector<QPointF> scaledPolygon(const std::vector<QPointF>& polygon, double f
 struct FaceAppearance {
     ColourEstimate skin, hair, iris;
     /// 0 = no hair found (bald / hat), 1 = short, 2 = chin length, 3 = long (hair hanging beside the neck)
+    std::vector<std::array<float, 3>> landmarks;   ///< the 478 MediaPipe landmarks in photo px (x, y, relative z), empty when no face
     int hairLength = 0;
     float sideHairFraction = 0.0f;
     bool faceFound = false;
     QRectF faceBox;          ///< photo px
     QString note;
 };
+
+struct FaceFit {
+    bool ok = false;
+    std::vector<float> coefficients;   ///< the 45 MHR shape coefficients after the fit (only the face modes changed)
+    float errBefore = 0.0f, errAfter = 0.0f;   ///< mean landmark error / inter-ocular distance in the model's face space
+    int modesUsed = 0;
+    QString note;
+};
+
+/// Refine SAM's 45 coefficients so the MHR head's MediaPipe landmarks match the photo's (3D-similarity aligned): a linear model
+/// landmarks(c) = L0 + A c, regressed on 160 rendered identities (resources/face_landmark_fit.bin, detector = face_landmarks.onnx),
+/// solved by ridge towards SAM's values, restricted to the `modes` coefficients that move the face most. Measured on 16 portraits
+/// (re-rendered and re-detected): landmark error 0.0431 -> 0.0377 of the inter-ocular distance, better on 16/16; the mean face scores 0.0426.
+FaceFit fitFaceCoefficients(const std::vector<std::array<float, 3>>& photoLandmarks, const std::vector<float>& sam, int modes = 12, float lambda = 0.05f);
 
 /// Everything from the 478 MediaPipe landmarks of one face (photo px) + a person matte (255 = person; may be empty = unknown).
 FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<float, 3>>& landmarks, const QImage& personMatte);

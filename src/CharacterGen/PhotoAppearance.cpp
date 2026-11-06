@@ -2,6 +2,9 @@
 
 #include "../FaceRig/FaceLandmarkDetector.h"
 #include "../ImageTo3D/BackgroundRemover.h"
+#include "../Mocap/FaceCapPose.h"
+
+#include <QFile>
 
 #include <QPainter>
 #include <QPainterPath>
@@ -160,6 +163,7 @@ FaceAppearance fromLandmarks(const QImage& photo, const std::vector<std::array<f
     const int W = photo.width(), H = photo.height();
     const std::vector<QPointF> oval = pts(lm, kOval);
     fa.faceFound = true;
+    fa.landmarks = lm;
     fa.faceBox = bounds(oval);
 
     // ---- skin: the face oval shrunk away from the hairline/jaw edge, minus eyes, brows and lips (grown a little) ----
@@ -433,6 +437,165 @@ ClothingEstimate estimateClothing(const QImage& photo, const QImage& matte, cons
     }
     ce.ok = true;
     return ce;
+}
+
+namespace {
+struct FitModel {
+    bool ok = false;
+    std::vector<float> w;          // (modes + 1) x (points * 3): the mode rows, then the mean (intercept) row
+    int modes = 0, points = 0;
+    std::vector<int> order;        // modes by influence on the landmarks (largest first)
+};
+const FitModel& fitModel()
+{
+    static const FitModel m = [] {
+        FitModel f;
+        QFile file(QStringLiteral(":/character/face_landmark_fit.bin"));
+        if (!file.open(QIODevice::ReadOnly)) return f;
+        const QByteArray b = file.readAll();
+        if (b.size() < 12 || b.left(4) != "MFL1") return f;
+        int32_t modes = 0, pts = 0;
+        memcpy(&modes, b.constData() + 4, 4);
+        memcpy(&pts, b.constData() + 8, 4);
+        const size_t n = size_t(modes + 1) * size_t(pts) * 3;
+        if (modes <= 0 || pts <= 0 || size_t(b.size()) != 12 + n * 4) return f;
+        f.w.resize(n);
+        memcpy(f.w.data(), b.constData() + 12, n * 4);
+        f.modes = modes; f.points = pts;
+        std::vector<double> infl(size_t(modes), 0.0);
+        for (int m2 = 0; m2 < modes; ++m2)
+            for (int p = 0; p < pts; ++p)
+                for (int k = 0; k < 2; ++k) { const double v = double(f.w[size_t(m2) * size_t(pts) * 3 + size_t(p) * 3 + size_t(k)]); infl[size_t(m2)] += v * v; }
+        f.order.resize(size_t(modes));
+        for (int i = 0; i < modes; ++i) f.order[size_t(i)] = i;
+        std::sort(f.order.begin(), f.order.end(), [&](int a, int b2) { return infl[size_t(a)] > infl[size_t(b2)]; });
+        f.ok = true;
+        return f;
+    }();
+    return m;
+}
+
+// Landmarks centred and scaled to unit xy RMS radius.
+std::vector<float> normalizedLandmarks(const std::vector<std::array<float, 3>>& lm, int points)
+{
+    std::vector<float> q(size_t(points) * 3);
+    double c[3] = {0, 0, 0};
+    for (int i = 0; i < points; ++i) for (int k = 0; k < 3; ++k) c[k] += double(lm[size_t(i)][size_t(k)]);
+    for (double& v : c) v /= points;
+    double r2 = 0;
+    for (int i = 0; i < points; ++i) {
+        for (int k = 0; k < 3; ++k) q[size_t(i) * 3 + size_t(k)] = float(double(lm[size_t(i)][size_t(k)]) - c[k]);
+        r2 += double(q[size_t(i) * 3]) * double(q[size_t(i) * 3]) + double(q[size_t(i) * 3 + 1]) * double(q[size_t(i) * 3 + 1]);
+    }
+    const float s = float(std::sqrt(r2 / points));
+    if (s > 1e-6f) for (float& v : q) v /= s;
+    return q;
+}
+
+void modelLandmarks(const FitModel& m, const std::vector<float>& c, std::vector<float>& out)
+{
+    const size_t n = size_t(m.points) * 3;
+    out.assign(m.w.begin() + long(size_t(m.modes) * n), m.w.begin() + long(size_t(m.modes + 1) * n));
+    for (int i = 0; i < m.modes; ++i)
+        for (size_t j = 0; j < n; ++j) out[j] += c[size_t(i)] * m.w[size_t(i) * n + j];
+}
+
+// photo landmarks (normalised) aligned onto the model's by a 3D similarity.
+std::vector<float> alignedTo(const FitModel& m, const std::vector<float>& photoN, const std::vector<float>& model)
+{
+    std::vector<float> ones(size_t(m.points), 1.0f);
+    const FaceCapPose::Result r = FaceCapPose::solve(photoN.data(), model.data(), ones.data(), m.points);
+    std::vector<float> a(photoN.size());
+    if (!r.ok) return photoN;
+    const float x = r.rotation[0], y = r.rotation[1], z = r.rotation[2], w = r.rotation[3];
+    const float R[9] = {1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w),
+                        2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w),
+                        2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)};
+    for (int i = 0; i < m.points; ++i)
+        for (int k = 0; k < 3; ++k)
+            a[size_t(i) * 3 + size_t(k)] = r.scale * (R[k * 3] * photoN[size_t(i) * 3] + R[k * 3 + 1] * photoN[size_t(i) * 3 + 1] + R[k * 3 + 2] * photoN[size_t(i) * 3 + 2]) + r.translation[size_t(k)];
+    return a;
+}
+
+float landmarkError(const FitModel& m, const std::vector<float>& aligned, const std::vector<float>& model)
+{
+    // mean xy distance / inter-ocular distance (MediaPipe outer eye corners 33 and 263)
+    const double iod = std::hypot(double(model[33 * 3] - model[263 * 3]), double(model[33 * 3 + 1] - model[263 * 3 + 1]));
+    double e = 0;
+    for (int i = 0; i < m.points; ++i) e += std::hypot(double(aligned[size_t(i) * 3] - model[size_t(i) * 3]), double(aligned[size_t(i) * 3 + 1] - model[size_t(i) * 3 + 1]));
+    return float(e / m.points / std::max(iod, 1e-9));
+}
+
+// Solve the small SPD system A x = b (Gaussian elimination with partial pivoting).
+bool solveDense(std::vector<double> A, std::vector<double> b, int n, std::vector<double>& x)
+{
+    for (int c = 0; c < n; ++c) {
+        int p = c;
+        for (int r = c + 1; r < n; ++r) if (std::fabs(A[size_t(r) * size_t(n) + size_t(c)]) > std::fabs(A[size_t(p) * size_t(n) + size_t(c)])) p = r;
+        if (std::fabs(A[size_t(p) * size_t(n) + size_t(c)]) < 1e-12) return false;
+        if (p != c) { for (int k = 0; k < n; ++k) std::swap(A[size_t(p) * size_t(n) + size_t(k)], A[size_t(c) * size_t(n) + size_t(k)]); std::swap(b[size_t(p)], b[size_t(c)]); }
+        for (int r = c + 1; r < n; ++r) {
+            const double f = A[size_t(r) * size_t(n) + size_t(c)] / A[size_t(c) * size_t(n) + size_t(c)];
+            for (int k = c; k < n; ++k) A[size_t(r) * size_t(n) + size_t(k)] -= f * A[size_t(c) * size_t(n) + size_t(k)];
+            b[size_t(r)] -= f * b[size_t(c)];
+        }
+    }
+    x.assign(size_t(n), 0.0);
+    for (int r = n - 1; r >= 0; --r) {
+        double s = b[size_t(r)];
+        for (int k = r + 1; k < n; ++k) s -= A[size_t(r) * size_t(n) + size_t(k)] * x[size_t(k)];
+        x[size_t(r)] = s / A[size_t(r) * size_t(n) + size_t(r)];
+    }
+    return true;
+}
+}  // namespace
+
+FaceFit fitFaceCoefficients(const std::vector<std::array<float, 3>>& photo, const std::vector<float>& sam, int modes, float lambda)
+{
+    FaceFit ff;
+    const FitModel& m = fitModel();
+    if (!m.ok) { ff.note = QStringLiteral("face-fit model resource missing"); return ff; }
+    if (photo.size() < size_t(m.points) || sam.size() < size_t(m.modes)) { ff.note = QStringLiteral("no face landmarks"); return ff; }
+    const int K = std::clamp(modes, 1, m.modes);
+    const std::vector<float> pn = normalizedLandmarks(photo, m.points);
+    const size_t n = size_t(m.points) * 3;
+    std::vector<float> c(sam.begin(), sam.begin() + m.modes), model;
+    std::vector<char> inSet(size_t(m.modes), 0);
+    for (int i = 0; i < K; ++i) inSet[size_t(m.order[size_t(i)])] = 1;
+    modelLandmarks(m, c, model);
+    ff.errBefore = landmarkError(m, alignedTo(m, pn, model), model);
+    for (int it = 0; it < 6; ++it) {
+        modelLandmarks(m, c, model);
+        const std::vector<float> a = alignedTo(m, pn, model);
+        // target for the free modes: aligned photo - mean - contribution of the frozen modes
+        std::vector<double> y(n);
+        for (size_t j = 0; j < n; ++j) {
+            double v = double(a[j]) - double(m.w[size_t(m.modes) * n + j]);
+            for (int i = 0; i < m.modes; ++i) if (!inSet[size_t(i)]) v -= double(sam[size_t(i)]) * double(m.w[size_t(i) * n + j]);
+            y[j] = v;
+        }
+        std::vector<double> A(size_t(K) * size_t(K), 0.0), b(size_t(K), 0.0);
+        for (size_t j = 0; j < n; ++j) {
+            const double wt = (j % 3 == 2) ? 0.25 : 1.0;   // the detector's depth is the least reliable axis
+            for (int p = 0; p < K; ++p) {
+                const double wp = double(m.w[size_t(m.order[size_t(p)]) * n + j]) * wt;
+                b[size_t(p)] += wp * y[j];
+                for (int q = 0; q < K; ++q) A[size_t(p) * size_t(K) + size_t(q)] += wp * double(m.w[size_t(m.order[size_t(q)]) * n + j]);
+            }
+        }
+        for (int p = 0; p < K; ++p) { A[size_t(p) * size_t(K) + size_t(p)] += double(lambda); b[size_t(p)] += double(lambda) * double(sam[size_t(m.order[size_t(p)])]); }
+        std::vector<double> x;
+        if (!solveDense(A, b, K, x)) { ff.note = QStringLiteral("singular fit"); return ff; }
+        c.assign(sam.begin(), sam.begin() + m.modes);
+        for (int p = 0; p < K; ++p) c[size_t(m.order[size_t(p)])] = float(std::clamp(x[size_t(p)], -3.0, 3.0));
+    }
+    modelLandmarks(m, c, model);
+    ff.errAfter = landmarkError(m, alignedTo(m, pn, model), model);
+    ff.coefficients = sam;
+    for (int i = 0; i < m.modes; ++i) ff.coefficients[size_t(i)] = c[size_t(i)];
+    ff.modesUsed = K;
+    ff.ok = true;
+    return ff;
 }
 
 }  // namespace PhotoAppearance

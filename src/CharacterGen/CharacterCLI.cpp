@@ -16,6 +16,7 @@
 
 #include <QColor>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QImage>
 #include <QPainter>
@@ -40,12 +41,13 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
+        "                        [--photo IMAGE [--fit-face]] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
         "separate parts (100 face identity modes, the 51 ARKit expression shapes as morph targets). --seed picks a random body and\n"
         "face (--variety scales the spread, default 1.0); --body / --face set individual mode coefficients (index=value).\n"
+        "--photo derives body shape (SAM 3D Body), skin, hair, iris and clothes from a photo; --fit-face (experimental) also refines the face shape against the photo's landmarks.\n"
         "--bust keeps only the head and shoulders (previews, thumbnails). Skin and eye colours tint the parts. The character faces -Z like the rest of the editor (--facing-z keeps +Z).\n"
         "Hair Studio: --hair proc:<preset> (procedural hair cards: --list-hair-presets) or lib:<id> (imported library hairstyle: --list-hair-library),\n"
         "tuned with --hair-param key=value (length, density, volume, curliness, clumping, frizz, parting, layers, taper, ... seed) and --hair-fit key=value\n"
@@ -76,7 +78,7 @@ int run(int argc, char* argv[])
     QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
     bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
-    bool skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    bool fitFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -114,6 +116,7 @@ int run(int argc, char* argv[])
             variety = float(d);
         }
         else if (a == "--photo") photoArg = next();
+        else if (a == "--fit-face") fitFace = true;
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -408,6 +411,10 @@ int run(int argc, char* argv[])
         QImage matte;
         const PhotoAppearance::FaceAppearance fa = PhotoAppearance::estimate(photo, sr.bboxUsed,
             PhotoAppearance::headBoxFromBody(sr.body.posedVertices, sr.body.camT, sr.body.focalPx, photo.width(), photo.height()), &matte);
+        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR") && !fa.landmarks.empty()) {
+            QFile lf(QDir(qEnvironmentVariable("QTMESH_PHOTO_DEBUG_DIR")).filePath(QFileInfo(photoArg).baseName() + QStringLiteral("_landmarks.f32")));
+            if (lf.open(QIODevice::WriteOnly)) lf.write(reinterpret_cast<const char*>(fa.landmarks.data()), qint64(fa.landmarks.size() * sizeof(std::array<float, 3>)));
+        }
         auto hex = [](const PhotoAppearance::ColourEstimate& c) { return QColor::fromRgbF(double(c.colour[0]), double(c.colour[1]), double(c.colour[2])).name(); };
         if (fa.skin.ok) { p.skin = fa.skin.colour; }
         if (fa.hair.ok) {
@@ -433,6 +440,13 @@ int run(int argc, char* argv[])
             }
         }
         p.bodyShape = sr.body.shape;
+        if (fitFace) {
+            const PhotoAppearance::FaceFit ff = PhotoAppearance::fitFaceCoefficients(fa.landmarks, p.bodyShape);
+            if (ff.ok) {
+                p.bodyShape = ff.coefficients;
+                CLIPipeline::writeCliError(QStringLiteral("Face fit: landmark error %1 -> %2 (of the inter-ocular distance, %3 modes)\n").arg(double(ff.errBefore), 0, 'f', 4).arg(double(ff.errAfter), 0, 'f', 4).arg(ff.modesUsed));
+            } else CLIPipeline::writeCliError(QStringLiteral("Warning: face fit skipped: %1\n").arg(ff.note));
+        }
         p.bodyShape.resize(size_t(data.mhrShapes), 0.0f);
         p.faceIdentity.clear();
         if (!ictHead) p.nativeHead = !data.mhrArkit.empty();
