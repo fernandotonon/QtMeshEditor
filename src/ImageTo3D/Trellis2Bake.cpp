@@ -2246,6 +2246,41 @@ std::vector<float> creaseAwareVertexNormals(
     return tNormals;
 }
 
+// Base colour + metallic at each target face for the part islands, through the
+// same closest-point volume lookup the texels use (metallic separates metal
+// from cloth of a similar colour). The lookup is filtered by the target face's
+// normal, like the texel lookup, so a thin part does not read the colour of
+// the opposite sheet. Returns false when cancelled (polled every 4096 faces).
+static bool sampleFaceAttributes(const std::vector<float>& targetPositions,
+                                 const std::vector<uint32_t>& targetIndices,
+                                 const TriangleGrid& grid, const SparseVolumeSampler& volume,
+                                 const std::function<bool()>& cancelled,
+                                 std::vector<float>& faceRgb, std::vector<float>& faceMetal)
+{
+    const size_t nf = targetIndices.size() / 3;
+    const std::vector<float> cent = PartUnwrap::faceCentroids(targetPositions, targetIndices);
+    faceRgb.assign(nf * 3, 0.5f);
+    faceMetal.assign(nf, 0.0f);
+    for (size_t f = 0; f < nf; ++f) {
+        if ((f & 4095) == 0 && cancelled && cancelled()) return false;
+        const float* a = &targetPositions[targetIndices[f * 3] * 3];
+        const float* b = &targetPositions[targetIndices[f * 3 + 1] * 3];
+        const float* c = &targetPositions[targetIndices[f * 3 + 2] * 3];
+        const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const float e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2],
+                      e1[0] * e2[1] - e1[1] * e2[0]};
+        normalize3(n);
+        float S[3], sb[3], attr[6];
+        int sTri = grid.closest(&cent[f * 3], S, sb, n);
+        if (sTri < 0) sTri = grid.closest(&cent[f * 3], S, sb);
+        volume.sample(sTri >= 0 ? S : &cent[f * 3], attr);   // neutral when empty
+        for (int k = 0; k < 3; ++k) faceRgb[f * 3 + k] = attr[k];
+        faceMetal[f] = attr[3];
+    }
+    return true;
+}
+
 // ---- bake ---------------------------------------------------------------------
 BakeResult bake(const std::vector<float>& targetPositions,
                 const std::vector<uint32_t>& targetIndices,
@@ -2285,25 +2320,6 @@ BakeResult bake(const std::vector<float>& targetPositions,
     // islands here as well as the texel loop below.
     TriangleGrid grid;
     grid.build(sourcePositions, sourceIndices);
-    std::vector<float> faceRgb, faceMetal;
-    if (opts.partIslands) {
-        // base colour + metallic at each target face, the same closest-point
-        // volume lookup the texels use (metallic separates metal from cloth
-        // of a similar colour)
-        const size_t nf = targetIndices.size() / 3;
-        const std::vector<float> cent = PartUnwrap::faceCentroids(targetPositions, targetIndices);
-        faceRgb.resize(nf * 3);
-        faceMetal.resize(nf);
-        for (size_t f = 0; f < nf; ++f) {
-            float S[3], sb[3], attr[6];
-            const int sTri = grid.closest(&cent[f * 3], S, sb);
-            volume.sample(sTri >= 0 ? S : &cent[f * 3], attr);   // neutral when empty
-            faceRgb[f * 3] = attr[0];
-            faceRgb[f * 3 + 1] = attr[1];
-            faceRgb[f * 3 + 2] = attr[2];
-            faceMetal[f] = attr[3];
-        }
-    }
     PartUnwrap::AtlasOptions ao;
     ao.textureSize = texSize;
     ao.padding = std::max(1, opts.dilatePx);
@@ -2313,9 +2329,15 @@ BakeResult bake(const std::vector<float>& targetPositions,
     // reached the sampling phase).
     if (opts.progress)
         ao.cancelled = [&opts]() { return !opts.progress(0, 1); };
-    const PartUnwrap::Atlas xa =
-        PartUnwrap::buildAtlas(targetPositions, targetIndices, faceRgb, faceMetal, ao);
-    if (xa.cancelled) {
+    std::vector<float> faceRgb, faceMetal;
+    bool faceSampleCancelled = false;
+    if (opts.partIslands && targetIndices.size() / 3 <= ao.parts.maxFaces)
+        faceSampleCancelled = !sampleFaceAttributes(targetPositions, targetIndices, grid, volume,
+                                                    ao.cancelled, faceRgb, faceMetal);
+    const PartUnwrap::Atlas xa = faceSampleCancelled
+        ? PartUnwrap::Atlas{}
+        : PartUnwrap::buildAtlas(targetPositions, targetIndices, faceRgb, faceMetal, ao);
+    if (faceSampleCancelled || xa.cancelled) {
         r = BakeResult{};
         r.cancelled = true;
         r.error = QStringLiteral("cancelled");

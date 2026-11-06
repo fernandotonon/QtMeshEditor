@@ -134,14 +134,19 @@ void checkCommon(const Mesh& m, const PartUnwrap::Result& r)
     }
     const std::vector<int> chart = chartOfFace(r.indices, r.xref.size());
     std::map<int, std::pair<double, double>> areas;   // chart -> (uv, 3D)
+    std::map<int, double> signedAreas;                 // chart -> signed uv area
     for (size_t f = 0; f < m.idx.size() / 3; ++f) {
         const double a = uvArea(r.uvs, r.indices[f * 3], r.indices[f * 3 + 1], r.indices[f * 3 + 2]);
         const double a3 = triArea3(m, m.idx[f * 3], m.idx[f * 3 + 1], m.idx[f * 3 + 2]);
         if (a == 0.0) continue;   // left to xatlas
         areas[chart[f]].first += std::fabs(a);
+        signedAreas[chart[f]] += a;
         areas[chart[f]].second += a3;
     }
     for (const auto& [c, a] : areas) EXPECT_NEAR(a.first / a.second, 1.0, 1e-3) << "chart " << c;
+    // every island winds counter-clockwise (folded faces allowed, a mirrored
+    // island not: xatlas's flood never crosses a winding change)
+    for (const auto& [c, a] : signedAreas) EXPECT_GT(a, 0.0) << "chart " << c;
 }
 
 }  // namespace

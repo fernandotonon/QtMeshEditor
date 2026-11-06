@@ -3281,6 +3281,12 @@ QJsonObject MCPServer::toolGeneratePbrMaps(const QJsonObject &args)
 #endif
 }
 
+namespace {
+// Above this many UV islands the atlas is fragmented enough for the
+// target_tris note below (seam lines at sane texture sizes).
+constexpr int kFragmentedAtlasCharts = 1500;
+}  // namespace
+
 QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
 {
     // NOT blanket-gated on ENABLE_ONNX: the TRELLIS.2 backend runs through an
@@ -3300,6 +3306,12 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 "'game_preset' must be one of: %1 (got '%2').")
                 .arg(GameReady::ids().join(", "), requested));
     }
+    // uv_layout too, for the same reason: a bad value must not cost a prompt
+    // image generation first.
+    bool partUvIslands = true;
+    if (args.contains("uv_layout")
+        && !MeshGenPredictor::parseUvLayout(args["uv_layout"].toString(), &partUvIslands))
+        return makeErrorResult("'uv_layout' must be 'parts' or 'xatlas'.");
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
     if (!genPrompt.isEmpty()) {
@@ -3364,12 +3376,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("resolution")) opts.sdfResolution = args["resolution"].toInt(256);
     if (args.contains("vertex_color")) opts.vertexColor = args["vertex_color"].toBool();
     if (args.contains("remove_bg")) opts.removeBackground = args["remove_bg"].toBool();
-    if (args.contains("uv_layout")) {
-        const QString v = args["uv_layout"].toString().toLower();
-        if (v == "parts") opts.partUvIslands = true;
-        else if (v == "xatlas") opts.partUvIslands = false;
-        else return makeErrorResult("'uv_layout' must be 'parts' or 'xatlas'.");
-    }
+    if (args.contains("uv_layout")) opts.partUvIslands = partUvIslands;
     // #1016 matting tier: Best (BiRefNet) is the Options default; only an
     // explicit "fast" opts out to U²-Net. Anything else is rejected like the
     // CLI's --matting, so a typo cannot start the ~930 MB BiRefNet download.
@@ -3781,8 +3788,11 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     // Join the predictor's own warning with the atlas-density note so a
     // caller never loses either one.
     QString warn = res.warning;
-    // Drop the note when nothing was actually textured (see above).
-    if (res.texture.isNull())
+    // Drop the note when nothing was actually textured (see above), and when
+    // the atlas did not fragment: part islands keep a dense mesh to a few
+    // hundred islands, while at native density they still reach thousands
+    // (measured 2,541 on the 300k-tri goblin), so the count decides.
+    if (res.texture.isNull() || (res.uvCharts > 0 && res.uvCharts < kFragmentedAtlasCharts))
         densityWarning.clear();
     if (!gamePresetNote.isEmpty()) {
         if (!warn.isEmpty()) warn += QStringLiteral(" ");

@@ -8,7 +8,6 @@
 #include <limits>
 #include <numeric>
 #include <queue>
-#include <random>
 #include <unordered_map>
 
 namespace PartUnwrap {
@@ -97,7 +96,7 @@ void buildEdges(MeshTopo& m)
 
 // Taubin-smoothed copy of the positions: decides geometric splits on the
 // shape rather than on triangle-scale noise.
-void buildProxy(MeshTopo& m, int passes)
+bool buildProxy(MeshTopo& m, int passes, const std::function<bool()>& cancelled)
 {
     std::vector<double> P(m.nV * 3);
     for (size_t i = 0; i < m.nV * 3; ++i) P[i] = (*m.pos)[i];
@@ -108,6 +107,7 @@ void buildProxy(MeshTopo& m, int passes)
     }
     std::vector<double> acc(m.nV * 3);
     for (int it = 0; it < passes; ++it) {
+        if (cancelled && cancelled()) return false;
         for (const double lam : {0.5, -0.53}) {
             std::fill(acc.begin(), acc.end(), 0.0);
             for (size_t e = 0; e < m.edgeFaces.size(); ++e) {
@@ -139,6 +139,7 @@ void buildProxy(MeshTopo& m, int passes)
             m.proxyNormal[f * 3 + k] = l > 0 ? n[k] / l : 0.0;
         }
     }
+    return true;
 }
 
 void buildAreas(MeshTopo& m)
@@ -184,27 +185,34 @@ double dist2(const std::array<double, 4>& a, const std::array<double, 4>& b)
 
 using Feature = std::array<double, 4>;
 
-// k-means++ seeding (area-weighted D^2), deterministic.
+// Deterministic farthest-point seeding: the first centre is the face closest
+// to the area-weighted mean colour, each next one the face with the largest
+// area-weighted squared distance to every centre so far. No random draws, so
+// the same mesh always gets the same regions.
 std::vector<Feature> seedCentres(const std::vector<Feature>& feat, const std::vector<double>& w,
                                  int K)
 {
     const size_t n = feat.size();
-    std::mt19937 rng(12345);
-    std::vector<Feature> c{feat[std::uniform_int_distribution<size_t>(0, n - 1)(rng)]};
+    Feature mean{0, 0, 0, 0};
+    double wsum = 0;
+    for (size_t i = 0; i < n; ++i) {
+        for (int k = 0; k < 4; ++k) mean[k] += w[i] * feat[i][k];
+        wsum += w[i];
+    }
+    for (double& v : mean) v /= std::max(wsum, 1e-300);
+    size_t first = 0;
+    for (size_t i = 1; i < n; ++i)
+        if (dist2(feat[i], mean) < dist2(feat[first], mean)) first = i;
+    std::vector<Feature> c{feat[first]};
     std::vector<double> d(n, std::numeric_limits<double>::max());
     while (int(c.size()) < K) {
-        double sum = 0;
+        size_t pick = 0;
+        double best = 0;
         for (size_t i = 0; i < n; ++i) {
             d[i] = std::min(d[i], dist2(feat[i], c.back()));
-            sum += d[i] * w[i];
+            if (d[i] * w[i] > best) { best = d[i] * w[i]; pick = i; }
         }
-        if (!(sum > 0)) break;
-        double r = std::uniform_real_distribution<double>(0, sum)(rng);
-        size_t pick = n - 1;
-        for (size_t i = 0; i < n && r > 0; ++i) {
-            r -= d[i] * w[i];
-            pick = i;
-        }
+        if (!(best > 0)) break;
         c.push_back(feat[pick]);
     }
     return c;
@@ -300,11 +308,13 @@ void mergeSmallRegions(const MeshTopo& m, std::vector<int>& comp, int n, double 
 {
     std::vector<double> ra(n, 0.0);
     for (size_t f = 0; f < m.nF; ++f) ra[comp[f]] += m.area[f];
-    std::vector<std::unordered_map<int, int>> border(n);
+    // shared border LENGTH per neighbour (each manifold edge seen from both sides)
+    std::vector<std::unordered_map<int, double>> border(n);
     for (size_t f = 0; f < m.nF; ++f)
         for (int k = 0; k < 3; ++k) {
             const int32_t g = m.nbr[f * 3 + k];
-            if (g >= 0 && comp[g] != comp[f]) ++border[comp[f]][comp[g]];
+            if (g < 0 || comp[g] == comp[f]) continue;
+            border[comp[f]][comp[g]] += norm(sub(m.p(m.fv(f, k)), m.p(m.fv(f, (k + 1) % 3))));
         }
     UnionFind uf(n);
     using Item = std::pair<double, int>;
@@ -315,7 +325,8 @@ void mergeSmallRegions(const MeshTopo& m, std::vector<int>& comp, int n, double 
         const auto [a, c] = heap.top();
         heap.pop();
         if (int(uf.find(c)) != c || a != ra[c] || border[c].empty()) continue;
-        int target = -1, best = -1;
+        int target = -1;
+        double best = -1;
         for (const auto& [k, w] : border[c])
             if (w > best || (w == best && k < target)) { best = w; target = k; }
         uf.unite(c, target);   // c -> target
@@ -895,7 +906,9 @@ double overlapFraction(const Chart& c, const std::vector<double>& uv,
         }
     const double ext = std::max(hi[0] - lo[0], hi[1] - lo[1]);
     if (!(ext > 0)) return 1.0;
-    Raster ras(128);
+    // ~8 texels per triangle edge across the chart (128..1024): a fixed 128
+    // raster let narrow overlaps of large charts fall between texel centres
+    Raster ras(std::clamp(int(8.0 * std::sqrt(double(c.faces.size()))), 128, 1024));
     const double sc = (ras.n - 1) / ext;
     for (size_t t = 0; t < c.faces.size(); ++t) {
         if (!(sa[t] > 0)) continue;
@@ -1329,7 +1342,11 @@ Result unwrap(const std::vector<float>& positions,
     const bool haveExtra = haveRgb && faceExtra.size() == m.nF;
     buildEdges(m);
     buildAreas(m);
-    buildProxy(m, std::max(0, opts.proxySmoothPasses));
+    if (!buildProxy(m, std::max(0, opts.proxySmoothPasses), opts.cancelled)) {
+        r.cancelled = true;
+        r.error = QStringLiteral("cancelled");
+        return r;
+    }
 
     int regionCount = 0;
     const std::vector<int> region = initialRegions(
@@ -1369,7 +1386,11 @@ bool partIslandCharts(const std::vector<float>& positions, const std::vector<uin
                       std::vector<uint32_t>& idx, std::vector<float>& uv)
 {
     Options po = opts.parts;
-    if (!po.cancelled) po.cancelled = opts.cancelled;
+    const std::function<bool()> partCancel = opts.parts.cancelled;
+    const std::function<bool()> atlasCancel = opts.cancelled;
+    po.cancelled = [partCancel, atlasCancel]() {
+        return (partCancel && partCancel()) || (atlasCancel && atlasCancel());
+    };
     Result pr = unwrap(positions, indices, faceRgb, faceExtra, po);
     if (pr.cancelled) {
         out.cancelled = true;
@@ -1451,7 +1472,8 @@ Atlas buildAtlas(const std::vector<float>& positions,
         return out;
     }
     // ComputeCharts can run for minutes on dense meshes: xatlas's progress
-    // callback returning false aborts it (throttled).
+    // callback returning false aborts it. xatlas reports per percent of each
+    // stage, so polling every notification is cheap.
     struct CancelCtx { const std::function<bool()>* cancelled; int counter; bool hit; } cc{
         &opts.cancelled, 0, false};
     if (opts.cancelled) {
@@ -1459,7 +1481,7 @@ Atlas buildAtlas(const std::vector<float>& positions,
             atlas,
             [](xatlas::ProgressCategory, int, void* user) -> bool {
                 auto* c = static_cast<CancelCtx*>(user);
-                if ((++c->counter & 63) != 0) return true;
+                ++c->counter;
                 if ((*c->cancelled)()) { c->hit = true; return false; }
                 return true;
             },
@@ -1472,7 +1494,7 @@ Atlas buildAtlas(const std::vector<float>& positions,
     pack.padding = uint32_t(std::max(1, opts.padding));
     pack.bilinear = true;
     xatlas::Generate(atlas, chart, pack);
-    if (cc.hit) {
+    if (cc.hit || (opts.cancelled && opts.cancelled())) {
         xatlas::Destroy(atlas);
         out = Atlas{};
         out.cancelled = true;

@@ -44,28 +44,38 @@ Result bake(const std::vector<float>& positions,
     const int texSize = std::clamp(opts.textureSize, 64, 8192);
 
     // ---- 1. unwrap + pack (PartUnwrap::buildAtlas) -------------------------
-    // Part islands need a colour per face: one sampler call over the face
-    // centroids (a sampler failure just means geometry-only islands — a real
-    // cancel is caught by the texel pass below).
-    std::vector<float> faceRgb;
-    if (opts.partIslands) {
-        const std::vector<float> cent = PartUnwrap::faceCentroids(positions, indices);
-        const size_t nf = indices.size() / 3;
-        faceRgb.resize(nf * 3);
-        const size_t fchunk = opts.chunkPoints > 0 ? size_t(opts.chunkPoints) : nf;
-        for (size_t s0 = 0; s0 < nf; s0 += fchunk) {
-            const size_t n = std::min(fchunk, nf - s0);
-            if (!sampler(cent.data() + s0 * 3, n, faceRgb.data() + s0 * 3)) {
-                faceRgb.clear();
-                break;
-            }
-        }
-    }
+    // Part islands need a colour per face: one sampler pass over the face
+    // centroids. The sampler returning false is a cancel (the same contract as
+    // the texel pass below), so it ends the bake here rather than after the
+    // unwrap. Above the part limit the unwrap falls back to xatlas anyway, so
+    // the colours are not sampled at all (buildAtlas still reports why).
     PartUnwrap::AtlasOptions ao;
     ao.textureSize = texSize;
     ao.padding = std::max(1, opts.dilatePx);
     ao.partIslands = opts.partIslands;
+    if (opts.progress)
+        ao.cancelled = [&opts]() { return !opts.progress(0, 1); };
+    auto cancelledResult = []() {
+        Result c;
+        c.cancelled = true;
+        c.error = QStringLiteral("cancelled");
+        return c;
+    };
+    std::vector<float> faceRgb;
+    const size_t nf = indices.size() / 3;
+    if (opts.partIslands && nf <= ao.parts.maxFaces) {
+        const std::vector<float> cent = PartUnwrap::faceCentroids(positions, indices);
+        faceRgb.resize(nf * 3);
+        const size_t fchunk = opts.chunkPoints > 0 ? size_t(opts.chunkPoints) : nf;
+        for (size_t s0 = 0; s0 < nf; s0 += fchunk) {
+            const size_t n = std::min(fchunk, nf - s0);
+            if (!sampler(cent.data() + s0 * 3, n, faceRgb.data() + s0 * 3))
+                return cancelledResult();
+        }
+    }
     const PartUnwrap::Atlas xa = PartUnwrap::buildAtlas(positions, indices, faceRgb, {}, ao);
+    if (xa.cancelled)
+        return cancelledResult();
     if (!xa.ok) {
         r.error = QStringLiteral("bake: %1").arg(xa.error);
         return r;

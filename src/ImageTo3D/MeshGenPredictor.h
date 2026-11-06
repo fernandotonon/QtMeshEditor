@@ -84,6 +84,11 @@ public:
     // Trellis2 when its runtime is available on this machine, else TripoSR.
     static Backend defaultBackend();
 
+    // Parses a UV layout name ("parts" / "xatlas", case-insensitive) into
+    // Options::partUvIslands. Returns false (and leaves *partIslands alone)
+    // for anything else. Shared by the CLI --uv-layout and MCP uv_layout.
+    static bool parseUvLayout(const QString& name, bool* partIslands);
+
     struct Options {
         Options();                    // out-of-line (same idiom as UniRig::Options)
         int     sdfResolution = 256;  // marching-cubes grid resolution (128 = fast)
@@ -127,8 +132,11 @@ public:
         // (PartUnwrap — regions by colour, cut to discs, area-preserving
         // flattening), so the texture reads as face / hands / clothes and can
         // be painted on; false: plain xatlas charts (hundreds of near-planar
-        // scraps, ~10 % tighter packing). Every backend; falls back to xatlas
-        // on its own when the unwrap cannot handle a mesh.
+        // scraps, ~10 % tighter packing). Applies wherever a texture is baked
+        // (TRELLIS.2, Pixal3D, TripoSR, TripoSplat, TripoSG's GUI colour
+        // bake); no effect when nothing is baked (TripoSG on CLI/MCP is
+        // geometry-only). Falls back to xatlas on its own when the unwrap
+        // cannot handle a mesh.
         bool partUvIslands = true;
         // #1017: after baking, AI-fill the texels no chart covered (the atlas
         // gutter) with LaMa, so bilinear filtering and MIPs pull continued

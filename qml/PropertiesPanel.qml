@@ -2970,6 +2970,7 @@ Rectangle {
                                          label: "PBR maps from AI texture" })
                     }
                     mgRoot.mgSteps = steps
+                    mgWarning.text = ""
                     mgRoot.mgActiveIdx = 0
                     mgRoot.mgActiveProgress = -1
                     mgRoot.mgAiPending = aiTex   // gate onCompleted's AI kickoff
@@ -3095,6 +3096,21 @@ Rectangle {
                 // there is a selection; Cmd+A selects the whole message.
                 persistentSelection: true
             }
+            // Generation warning (e.g. part UV islands fell back to xatlas).
+            TextEdit {
+                id: mgWarning
+                width: parent.width - 16
+                wrapMode: TextEdit.Wrap
+                visible: text.length > 0
+                color: "#d9a441"
+                font.pixelSize: 10
+                text: ""
+                readOnly: true
+                selectByMouse: true
+                activeFocusOnPress: true
+                cursorVisible: false
+                persistentSelection: true
+            }
 
             // Cancel (only while busy)
             InspectorButton {
@@ -3125,6 +3141,10 @@ Rectangle {
                     mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
                     mgStatus.text = "Done: " + result.vertexCount + " verts, "
                         + result.triangleCount + " tris"
+                    // Non-fatal degradations (e.g. the part UV layout fell back
+                    // to xatlas) stay in their own line: later AI-texture status
+                    // updates replace mgStatus, not this.
+                    mgWarning.text = result.warning ? "Warning: " + result.warning : ""
 
                     // Optional AI texture pass: front from the input photo,
                     // back/sides SD-generated (depth-ControlNet), then PBR from

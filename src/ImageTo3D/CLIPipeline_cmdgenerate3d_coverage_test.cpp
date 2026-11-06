@@ -16,6 +16,7 @@
 #include <initializer_list>
 
 #include "CLIPipeline.h"
+#include "ImageTo3D/MeshGenPredictor.h"
 
 namespace {
 
@@ -93,6 +94,22 @@ TEST(CLIPipelineCmdGenerate3dCoverage, UvLayoutIsValidated)
         Gen3dArgv a({"generate3d", kMissingImage, "--uv-layout", ok});
         EXPECT_EQ(CLIPipeline::cmdGenerate3d(a.argc(), a.argv()), 1) << ok;
     }
+}
+
+TEST(CLIPipelineCmdGenerate3dCoverage, UvLayoutMapsToTheBakeOption)
+{
+    // The parser both --uv-layout and MCP uv_layout use: the two layouts must
+    // select DIFFERENT values (the CLI cases above stop at the missing image).
+    bool parts = false;
+    ASSERT_TRUE(MeshGenPredictor::parseUvLayout("parts", &parts));
+    EXPECT_TRUE(parts);
+    bool xatlas = true;
+    ASSERT_TRUE(MeshGenPredictor::parseUvLayout(" XAtlas ", &xatlas));
+    EXPECT_FALSE(xatlas);
+    bool untouched = true;
+    EXPECT_FALSE(MeshGenPredictor::parseUvLayout("islands", &untouched));
+    EXPECT_TRUE(untouched);
+    EXPECT_FALSE(MeshGenPredictor::parseUvLayout("", nullptr));
 }
 
 // ── Runtime failures (return 1), no crash ───────────────────────────────────

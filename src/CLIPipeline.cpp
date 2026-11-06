@@ -13310,10 +13310,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (arg == "--no-bake-texture") { bake = false; continue; }
         if (arg == "--inpaint-seams") { inpaintSeams = true; continue; }   // #1017
         if (arg == "--uv-layout") {
-            const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]).toLower() : QString();
-            if (v == "parts") { partUvIslands = true; }
-            else if (v == "xatlas") { partUvIslands = false; }
-            else {
+            const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]) : QString();
+            if (!MeshGenPredictor::parseUvLayout(v, &partUvIslands)) {
                 err() << "Error: --uv-layout must be 'parts' or 'xatlas'." << Qt::endl;
                 return 2;
             }

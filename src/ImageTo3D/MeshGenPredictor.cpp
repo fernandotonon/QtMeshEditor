@@ -79,6 +79,16 @@ QString MeshGenPredictor::decoderModelPath()
 
 QString MeshGenPredictor::modelPath() { return encoderModelPath(Quality::Fp32); }
 
+bool MeshGenPredictor::parseUvLayout(const QString& name, bool* partIslands)
+{
+    const QString v = name.trimmed().toLower();
+    if (v != QLatin1String("parts") && v != QLatin1String("xatlas"))
+        return false;
+    if (partIslands)
+        *partIslands = v == QLatin1String("parts");
+    return true;
+}
+
 bool MeshGenPredictor::modelsPresent(Quality q)
 {
     return QFileInfo::exists(encoderModelPath(q))
