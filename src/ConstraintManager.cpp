@@ -330,6 +330,7 @@ QSet<QString> referencedNodes(const std::vector<Constraint>& cs)
 {
     QSet<QString> out;
     for (const auto& c : cs) {
+        if (!c.owner.isEmpty() && !c.owner.isBone()) out.insert(c.owner.object);   // a handle may OWN a constraint too
         if (!c.target.isEmpty() && !c.target.isBone()) out.insert(c.target.object);
         if (!c.pole.isEmpty() && !c.pole.isBone()) out.insert(c.pole.object);
     }
@@ -445,14 +446,41 @@ void ConstraintManager::preUpdateSceneGraph(Ogre::SceneManager* source, Ogre::Ca
 // ---------------------------------------------------------------------------
 
 namespace {
-// Joint limits (#560): re-apply the limit-rotation constraints of `bones`
-// (an IK's root + middle joint) after the IK solve overrode them.
-void reapplyJointLimits(Ogre::Entity* e, const QString& entity, std::initializer_list<Ogre::Bone*> bones,
-                        const QHash<QString, std::vector<const Constraint*>>& stacks)
+using Stacks = QHash<QString, std::vector<const Constraint*>>;
+
+QString boneKey(const QString& entity, const Ogre::Node* bone)
+{
+    return QStringLiteral("bone:%1/%2").arg(entity, QString::fromStdString(bone->getName()));
+}
+
+// Joint limits (#560): a limit-rotation on an IK chain's root or middle joint
+// is DEFERRED until after the solve (the IK overrides whatever ran before it),
+// so a fractional limit blends exactly once. These are the deferred keys.
+QSet<QString> ikJointKeys(Ogre::Entity* e, const QString& entity, const QStringList& keys, const Stacks& stacks)
+{
+    QSet<QString> out;
+    for (const QString& k : keys) {
+        const auto& stack = stacks[k];
+        const bool hasIk = std::any_of(stack.begin(), stack.end(), [](const Constraint* c) { return c->type == Type::IK; });
+        const Ogre::Bone* end = hasIk ? boneOf(e, stack.front()->owner.bone) : nullptr;
+        const Ogre::Node* mid = end ? end->getParent() : nullptr;
+        const Ogre::Node* root = mid ? mid->getParent() : nullptr;
+        if (!root) continue;
+        out.insert(boneKey(entity, mid));
+        out.insert(boneKey(entity, root));
+    }
+    return out;
+}
+
+// Apply the deferred limit-rotation constraints of `bones` once each.
+void applyDeferredLimits(Ogre::Entity* e, const QString& entity, std::initializer_list<Ogre::Bone*> bones,
+                         const Stacks& stacks, QSet<QString>* applied)
 {
     for (Ogre::Bone* jb : bones) {
-        const auto js = stacks.constFind(QStringLiteral("bone:%1/%2").arg(entity, QString::fromStdString(jb->getName())));
-        if (js == stacks.constEnd()) continue;
+        const QString key = boneKey(entity, jb);
+        const auto js = stacks.constFind(key);
+        if (!jb || js == stacks.constEnd() || applied->contains(key)) continue;
+        applied->insert(key);
         for (auto lit = js->rbegin(); lit != js->rend(); ++lit)
             if ((*lit)->type == Type::LimitRotation)
                 writeLocal(jb, applyLocal(**lit, boneParentWorld(e, jb), localOf(jb)));
@@ -522,6 +550,8 @@ void ConstraintManager::evaluate()
             return d;
         };
         std::stable_sort(keys.begin(), keys.end(), [&](const QString& a, const QString& b) { return depth(a) < depth(b); });
+        const QSet<QString> deferredLimits = ikJointKeys(e, it.key(), keys, stacks);
+        QSet<QString> limitsApplied;
 
         for (const QString& k : keys) {
             const auto& stack = stacks[k];
@@ -529,6 +559,7 @@ void ConstraintManager::evaluate()
             if (!bone) continue;
             for (auto cit = stack.rbegin(); cit != stack.rend(); ++cit) {
                 const Constraint& c = **cit;
+                if (c.type == Type::LimitRotation && deferredLimits.contains(k)) continue;   // after the IK
                 if (c.type != Type::IK) {
                     const Transform out = applyLocal(c, boneParentWorld(e, bone), localOf(bone));
                     writeLocal(bone, out);
@@ -556,14 +587,15 @@ void ConstraintManager::evaluate()
                 const Ogre::Quaternion midLocal = midParent.rotation.Inverse() * midWorld;
                 mid->setOrientation(blend(mid->getOrientation(), midLocal, c.influence));
                 refreshSubtree(root);
-                // Joint limits (#560): a limit-rotation on the root or middle
-                // bone runs BEFORE this IK in depth order, so the IK would
-                // override it — re-apply it to the solved joints.
-                reapplyJointLimits(e, it.key(), {root, mid}, stacks);
+                applyDeferredLimits(e, it.key(), {root, mid}, stacks, &limitsApplied);
                 m_touchedBones.insert(it.key() + QLatin1Char('/') + QString::fromStdString(root->getName()));
                 m_touchedBones.insert(it.key() + QLatin1Char('/') + QString::fromStdString(mid->getName()));
             }
         }
+        // Deferred limits whose IK did not run (no target this frame).
+        for (const QString& k : deferredLimits)
+            if (stacks.contains(k))
+                applyDeferredLimits(e, it.key(), {boneOf(e, stacks[k].front()->owner.bone)}, stacks, &limitsApplied);
         // Entity::_updateAnimation only re-reads the skeleton when the state
         // set is dirty — without this a paused clip would never show the
         // constrained pose.
@@ -1111,40 +1143,64 @@ bool ConstraintManager::writeSidecar(const QString& assetPath, const QStringList
     return f.commit();
 }
 
+namespace {
+// How a constraint uses a node: its owner, target or pole slot.
+enum class Slot { Owner, Target, Pole };
+const Ref& refIn(const Constraint& c, Slot s)
+{
+    return s == Slot::Owner ? c.owner : s == Slot::Target ? c.target : c.pole;
+}
+struct HandleUse {
+    QString owner;   // the constraint's owner (after the import rename)
+    Type type;
+    Slot slot;
+};
+
+// The live handle an already-loaded copy of the same chain uses, if any.
+QString existingHandleForChain(const std::vector<Constraint>& cons, const QList<HandleUse>& uses)
+{
+    // The same chain is already in the scene when a constraint with the same
+    // owner and type uses a live handle in the same slot — whatever that
+    // handle is called now (an earlier import may have renamed it).
+    for (const HandleUse& u : uses)
+        for (const auto& c : cons) {
+            const Ref& r = refIn(c, u.slot);
+            if (c.type != u.type || formatRef(c.owner) != u.owner || r.isEmpty() || r.isBone()) continue;
+            if (const Ogre::SceneNode* n = nodeByName(r.object); n && ConstraintManager::isHandleNode(n)) return r.object;
+        }
+    return {};
+}
+} // namespace
+
 QHash<QString, QString> ConstraintManager::importSidecarHandles(const QJsonArray& handles,
                                                                 const std::vector<Constraint>& incoming,
                                                                 const std::function<Ref(Ref)>& rename)
 {
-    // Owners (after the entity rename) of the incoming constraints that use
-    // each handle name: the chain that handle belongs to.
-    QHash<QString, QSet<QString>> incomingOwners;
+    QHash<QString, QList<HandleUse>> uses;   // file handle name -> how the file's constraints use it
+    ClipImport clips;
     for (const auto& c : incoming) {
-        const QString owner = formatRef(rename(c.owner));
-        for (const Ref& r : {c.target, c.pole})
-            if (!r.isEmpty() && !r.isBone()) incomingOwners[r.object].insert(owner);
+        const Ref owner = rename(c.owner);
+        for (Slot s : {Slot::Owner, Slot::Target, Slot::Pole}) {
+            const Ref& r = refIn(c, s);
+            if (!r.isEmpty() && !r.isBone()) uses[r.object].append({formatRef(owner), c.type, s});
+        }
+        // The chain's own nodes: a same-named clip that animates them is OURS.
+        clips.nodes.insert(owner.object);
+        if (const Ogre::Entity* e = owner.isBone() ? entityByName(owner.object) : nullptr; e && e->getParentSceneNode())
+            clips.nodes.insert(QString::fromStdString(e->getParentSceneNode()->getName()));
     }
     QHash<QString, QString> out;
     for (const QJsonValue& v : handles) {
         const QJsonObject o = v.toObject();
         const QString name = o.value(QStringLiteral("name")).toString();
         if (name.isEmpty()) continue;
-        if (Ogre::SceneNode* existing = nodeByName(name); existing && isHandleNode(existing)) {
-            // Reuse only for a reload of the SAME chain: an existing constraint
-            // on one of this handle's owners already references it. Another
-            // character with the same bone names gets its own handles.
-            const QSet<QString> owners = incomingOwners.value(name);
-            const bool sameChain = std::any_of(m_cons.begin(), m_cons.end(), [&](const Constraint& c) {
-                return owners.contains(formatRef(c.owner))
-                    && ((!c.target.isBone() && c.target.object == name) || (!c.pole.isBone() && c.pole.object == name));
-            });
-            if (sameChain) {
-                m_handles.insert(name, o.value(QStringLiteral("role")).toString(QStringLiteral("target")));
-                continue;
-            }
-        }
-        // createHandle suffixes a taken name, so this never binds to a node
-        // someone else owns.
-        const QString actual = createHandleFromJson(o, name);
+        // Reload of a chain that is already here: reuse its handle. Anything
+        // else (e.g. another character with the same bone names) gets its own.
+        QString actual = existingHandleForChain(m_cons, uses.value(name));
+        if (!actual.isEmpty())
+            m_handles.insert(actual, o.value(QStringLiteral("role")).toString(QStringLiteral("target")));
+        else
+            actual = createHandleFromJson(o, name, &clips);   // suffixes a taken name
         if (!actual.isEmpty() && actual != name) out.insert(name, actual);
     }
     return out;
@@ -1183,7 +1239,7 @@ int ConstraintManager::loadSidecar(const QString& assetPath, const QHash<QString
     };
     int added = 0;
     for (Constraint c : file) {
-        c.owner = ren(c.owner);
+        c.owner = renHandle(ren(c.owner));
         c.target = renHandle(ren(c.target));
         c.pole = renHandle(ren(c.pole));
         if (std::any_of(next.begin(), next.end(), [&](const Constraint& x) { return sameContent(x, c); })) continue;
@@ -1307,7 +1363,8 @@ QString ConstraintManager::ownerFromSelection() const
 QString ConstraintManager::chainOwnerOfHandle(const QString& handle) const
 {
     const auto it = std::find_if(m_cons.begin(), m_cons.end(), [&](const Constraint& c) {
-        return (!c.target.isBone() && c.target.object == handle) || (!c.pole.isBone() && c.pole.object == handle);
+        return c.type == Type::IK
+            && ((!c.target.isBone() && c.target.object == handle) || (!c.pole.isBone() && c.pole.object == handle));
     });
     return it == m_cons.end() ? QString() : formatRef(it->owner);
 }
@@ -1421,6 +1478,10 @@ QStringList ConstraintManager::handleNames() const
     return out;
 }
 
+namespace {
+QString parentNameOf(const Ogre::SceneNode* n);
+} // namespace
+
 QJsonArray ConstraintManager::handlesJson(const std::vector<Constraint>& only) const
 {
     QJsonArray arr;
@@ -1435,6 +1496,7 @@ QJsonArray ConstraintManager::handlesJson(const std::vector<Constraint>& only) c
                                {QStringLiteral("role"), m_handles.value(name)},
                                {QStringLiteral("position"), QJsonArray{p.x, p.y, p.z}},
                                {QStringLiteral("radius"), double(n->getScale().x)},
+                               {QStringLiteral("parent"), parentNameOf(n)},
                                {QStringLiteral("tracks"), handleTracksJson(n)}});
     }
     return arr;
@@ -1473,49 +1535,104 @@ QJsonArray ConstraintManager::handleTracksJson(const Ogre::SceneNode* node)
     return out;
 }
 
-void ConstraintManager::restoreHandleTracks(const QString& nodeName, const QJsonArray& tracks)
+namespace {
+// The parent a handle hangs from, "" for the scene root.
+QString parentNameOf(const Ogre::SceneNode* n)
+{
+    const Ogre::Node* p = n ? n->getParent() : nullptr;
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!p || !mgr || p == mgr->getSceneMgr()->getRootSceneNode()) return {};
+    return QString::fromStdString(p->getName());
+}
+
+bool readFiniteVec(const QJsonValue& v, float def, Ogre::Vector3* out)
+{
+    const QJsonArray a = v.toArray();
+    for (int i = 0; i < 3; ++i) {
+        const double d = a.at(i).toDouble(def);
+        if (!std::isfinite(float(d))) return false;   // also rejects 1e300 (inf as a float)
+        (*out)[i] = float(d);
+    }
+    return true;
+}
+
+// Which clip a restored track goes into. Undo/redo (no import context) puts
+// it back in the clip it came from. A sidecar import puts it in the clip of
+// that name only when the clip already animates THIS chain (Open Scene
+// rebuilt it from the file); an unrelated clip of the same name — another
+// character's — gets a fresh, separate clip so both keep their own playback.
+QString clipForImport(const QString& clip, ConstraintManager::ClipImport* ctx, Ogre::SceneManager* scene)
+{
+    if (!ctx) return clip;
+    if (auto it = ctx->rename.constFind(clip); it != ctx->rename.constEnd()) return *it;
+    QString target = clip;
+    if (scene->hasAnimation(clip.toStdString())) {
+        const QStringList animated = NodeAnimationManager::instance()->animatedNodes(clip);
+        const bool ours = std::any_of(animated.begin(), animated.end(), [&](const QString& n) { return ctx->nodes.contains(n); });
+        for (int n = 1; !ours && scene->hasAnimation(target.toStdString()); ++n) target = clip + QString::number(n);
+    }
+    ctx->rename.insert(clip, target);
+    return target;
+}
+} // namespace
+
+void ConstraintManager::restoreHandleTracks(const QString& nodeName, const QJsonArray& tracks, ClipImport* ctx)
 {
     Manager* mgr = Manager::getSingletonPtr();
     Ogre::SceneManager* scene = mgr ? mgr->getSceneMgr() : nullptr;
     NodeAnimationManager* nam = NodeAnimationManager::instance();
     if (!scene || !nam) return;
-    auto vec = [](const QJsonValue& v, float def) {
-        const QJsonArray a = v.toArray();
-        return Ogre::Vector3(float(a.at(0).toDouble(def)), float(a.at(1).toDouble(def)), float(a.at(2).toDouble(def)));
-    };
     for (const QJsonValue& tv : tracks) {
         const QJsonObject t = tv.toObject();
-        const QString clip = t.value(QStringLiteral("clip")).toString();
+        const QString clip = clipForImport(t.value(QStringLiteral("clip")).toString(), ctx, scene);
         const double length = t.value(QStringLiteral("length")).toDouble(1.0);
-        if (clip.isEmpty() || length <= 0) continue;
-        const bool created = !scene->hasAnimation(clip.toStdString());
-        if (created) {
+        if (clip.isEmpty() || !(length > 0) || !std::isfinite(float(length))) continue;
+        if (!scene->hasAnimation(clip.toStdString())) {
             if (!nam->createClip(clip, length)) continue;
         } else if (Ogre::Animation* a = scene->getAnimation(clip.toStdString()); a->getLength() < length) {
-            a->setLength(float(length));   // the clip may have been rebuilt shorter without this node
+            // The clip was rebuilt shorter without this node: extend it AND its
+            // state, or playback wraps before the handle's later keys.
+            a->setLength(float(length));
+            if (scene->hasAnimationState(clip.toStdString()))
+                scene->getAnimationState(clip.toStdString())->setLength(float(length));
         }
         for (const QJsonValue& kv : t.value(QStringLiteral("keys")).toArray()) {
             const QJsonObject k = kv.toObject();
+            Ogre::Vector3 pos, sc;
             const QJsonArray r = k.value(QStringLiteral("r")).toArray();
             const Ogre::Quaternion q(float(r.at(0).toDouble(1)), float(r.at(1).toDouble()),
                                      float(r.at(2).toDouble()), float(r.at(3).toDouble()));
-            nam->addKeyframe(clip, nodeName, k.value(QStringLiteral("time")).toDouble(),
-                             vec(k.value(QStringLiteral("t")), 0.0f), q, vec(k.value(QStringLiteral("s")), 1.0f));
+            if (!readFiniteVec(k.value(QStringLiteral("t")), 0.0f, &pos) || !readFiniteVec(k.value(QStringLiteral("s")), 1.0f, &sc)
+                || q.isNaN())
+                continue;
+            nam->addKeyframe(clip, nodeName, k.value(QStringLiteral("time")).toDouble(), pos, q, sc);
         }
-        if (created && t.value(QStringLiteral("enabled")).toBool(false)) nam->setClipEnabled(clip, true);
+        // Playing stays playing, also in a clip something else rebuilt; a
+        // stopped saved clip never stops a clip that is running.
+        if (t.value(QStringLiteral("enabled")).toBool(false)) nam->setClipEnabled(clip, true);
         emit nam->keyframesChanged(clip);
     }
     if (!tracks.isEmpty()) emit nam->clipsChanged();
 }
 
-QString ConstraintManager::createHandleFromJson(const QJsonObject& o, const QString& name)
+QString ConstraintManager::createHandleFromJson(const QJsonObject& o, const QString& name, ClipImport* ctx)
 {
     const QString role = o.value(QStringLiteral("role")).toString(QStringLiteral("target"));
-    const QJsonArray p = o.value(QStringLiteral("position")).toArray();
-    const Ogre::Vector3 pos(float(p.at(0).toDouble()), float(p.at(1).toDouble()), float(p.at(2).toDouble()));
+    Ogre::Vector3 pos;
     const double r = o.value(QStringLiteral("radius")).toDouble(0.05);
+    if (!readFiniteVec(o.value(QStringLiteral("position")), 0.0f, &pos) || !std::isfinite(float(r))) {
+        setStatus(QStringLiteral("IK handle '%1' has an invalid position or radius; skipped").arg(name), false);
+        return {};
+    }
     const QString actual = createHandle(name, role, pos, float(r > 0 ? r : 0.05));
-    if (!actual.isEmpty()) restoreHandleTracks(actual, o.value(QStringLiteral("tracks")).toArray());
+    if (actual.isEmpty()) return actual;
+    // Back under the node it hung from (world position kept), so its LOCAL
+    // keys drive the same trajectory as before.
+    const QString parent = o.value(QStringLiteral("parent")).toString();
+    if (Ogre::SceneNode* pn = parent.isEmpty() ? nullptr : nodeByName(parent))
+        if (Manager* mgr = Manager::getSingletonPtr()) mgr->reparentNode(nodeByName(actual), pn);
+    if (ctx) ctx->nodes.insert(actual);
+    restoreHandleTracks(actual, o.value(QStringLiteral("tracks")).toArray(), ctx);
     return actual;
 }
 
@@ -1545,7 +1662,19 @@ void ConstraintManager::destroyHandle(const QString& name)
     Manager* mgr = Manager::getSingletonPtr();
     Ogre::SceneNode* n = nodeByName(name);
     if (!mgr || !n || !isHandleNode(n)) return;   // never destroy a node the user owns
-    if (SelectionSet* sel = SelectionSet::getSingletonPtr()) sel->clear();
+    if (SelectionSet* sel = SelectionSet::getSingletonPtr()) {
+        // Only what dies with the handle leaves the selection.
+        sel->removeOne(n);
+        for (Ogre::MovableObject* o : n->getAttachedObjects())
+            if (auto* ent = dynamic_cast<Ogre::Entity*>(o)) sel->removeOne(ent);
+    }
+    // A prop the user parented under the handle outlives it (world transform
+    // kept): it moves up to the handle's parent instead of being destroyed.
+    std::vector<Ogre::SceneNode*> children;
+    for (Ogre::Node* c : n->getChildren())
+        if (auto* sn = dynamic_cast<Ogre::SceneNode*>(c)) children.push_back(sn);
+    auto* up = static_cast<Ogre::SceneNode*>(n->getParent());
+    for (Ogre::SceneNode* c : children) mgr->reparentNode(c, up ? up : mgr->getSceneMgr()->getRootSceneNode());
     mgr->destroySceneNode(n);
     SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.ik.handle"), QStringLiteral("destroy %1").arg(name));
 }
@@ -1571,7 +1700,7 @@ void ConstraintManager::reconcileHandles(const QJsonArray& wanted, bool destroyU
             if (isHandleNode(existing)) m_handles.insert(name, role);
             continue;
         }
-        createHandleFromJson(o, name);
+        createHandleFromJson(o, name, nullptr);
     }
     if (destroyUnlisted)
         for (const QString& name : m_handles.keys())
@@ -1611,9 +1740,14 @@ ConstraintManager::IkChainResult ConstraintManager::createIkChain(const QString&
     const Ogre::Vector3 B = compose(ew, derivedOf(mid)).position;
     const Ogre::Vector3 C = compose(ew, derivedOf(end)).position;
     const float chain = (B - A).length() + (C - B).length();
-    if (chain < 1e-6f) return fail(QStringLiteral("the chain ending at '%1' has zero length").arg(owner.bone));
+    if ((B - A).length() < 1e-6f || (C - B).length() < 1e-6f)
+        return fail(QStringLiteral("the chain ending at '%1' has a zero-length segment: IK cannot bend it").arg(owner.bone));
     const float radius = chain * 0.06f;
 
+    for (const auto* v : {&targetPos, &polePos})
+        if (*v && (v->value().isNaN() || !std::isfinite(v->value().x) || !std::isfinite(v->value().y)
+                   || !std::isfinite(v->value().z)))
+            return fail(QStringLiteral("handle positions must be finite numbers"));
     const QJsonObject before = document();
     const QString base = QStringLiteral("IK_%1").arg(owner.bone);
     r.target = createHandle(base + QStringLiteral("_target"), QStringLiteral("target"), targetPos.value_or(C), radius);

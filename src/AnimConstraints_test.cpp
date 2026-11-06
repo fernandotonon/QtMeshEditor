@@ -234,4 +234,19 @@ TEST(AnimConIk, DefaultPoleFollowsTheCurrentBend)
     EXPECT_LT(elbow.z, -0.4f);
     // The pole never lies on the chain axis.
     EXPECT_GT(std::abs(elbow.z), 0.0f);
+
+    // A NEARLY straight arm bent slightly forward keeps bending forward, even
+    // though the facing fallback would choose back.
+    const Ogre::Vector3 slight = defaultPolePosition({0, 1, 0}, {0.5f, 1, 0.0005f}, {1, 1, 0}, fwd, up, 0.5f);
+    EXPECT_GT(slight.z, 0.4f);
+}
+
+TEST(AnimConIk, AStraightChainAtFullReachStaysStraight)
+{
+    const Ogre::Vector3 A(0, 0, 0), B(0, 1, 0), C(0, 2, 0);
+    const IkSolution s = solveTwoBone(A, B, C, C, Ogre::Vector3(1, 1, 0), true);
+    ASSERT_TRUE(s.valid);
+    EXPECT_TRUE(s.reached);
+    EXPECT_LT((s.newMid - B).length(), 1e-5f) << "no bend introduced at full extension";
+    EXPECT_LT((s.newEnd - C).length(), 1e-5f);
 }

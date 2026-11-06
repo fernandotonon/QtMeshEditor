@@ -119,6 +119,13 @@ public:
     /// node at the end bone's current world position and (when `withPole`) a
     /// pole node on the current bend side of the middle joint — so nothing
     /// moves until a handle is dragged. One undo step (handles included).
+    /// Sidecar import state for handle clips: the import's own nodes and the
+    /// clip names it was given (an unrelated clip of the same name is not
+    /// merged into).
+    struct ClipImport {
+        QSet<QString> nodes;
+        QHash<QString, QString> rename;
+    };
     struct IkChainResult {
         bool ok = false;
         QString id, target, pole, error;
@@ -219,11 +226,11 @@ private:
                                                  const std::function<AnimCon::Ref(AnimCon::Ref)>& rename);
     /// Owner ref of the chain whose target/pole is `handle` ("" if none).
     QString chainOwnerOfHandle(const QString& handle) const;
-    QString createHandleFromJson(const QJsonObject& entry, const QString& name);
+    QString createHandleFromJson(const QJsonObject& entry, const QString& name, ClipImport* clips);
     /// Node-animation tracks (scene clips) that drive handle `node`, so a
     /// handle destroyed by undo/redo or saved to a sidecar keeps its motion.
     static QJsonArray handleTracksJson(const Ogre::SceneNode* node);
-    static void restoreHandleTracks(const QString& nodeName, const QJsonArray& tracks);
+    static void restoreHandleTracks(const QString& nodeName, const QJsonArray& tracks, ClipImport* clips = nullptr);
     QString createHandle(const QString& name, const QString& role, const Ogre::Vector3& pos, float radius);
     void destroyHandle(const QString& name);
     /// Destroy handles no constraint references any more.

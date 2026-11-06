@@ -3,6 +3,11 @@
 
 #include <gtest/gtest.h>
 
+#include <QJsonArray>
+#include <QJsonObject>
+
+#include <limits>
+
 #include "AnimConstraints.h"
 #include "AnimationControlController.h"
 #include "ConstraintManager.h"
@@ -889,6 +894,134 @@ TEST_F(ConstraintSceneTest, RequestedHandlePlacementIsPartOfTheUndoStep)
     ASSERT_TRUE(liveNode(r.target) && liveNode(r.pole));
     EXPECT_LT((liveNode(r.target)->getPosition() - goal).length(), 1e-5f) << "redo reproduces the requested target";
     EXPECT_LT((liveNode(r.pole)->getPosition() - pole).length(), 1e-5f) << "and the requested pole";
+}
+
+TEST_F(ConstraintSceneTest, AFractionalJointLimitBlendsOnceUnderIk)
+{
+    // The limit range excludes Mid's current rotation, at half influence.
+    Ogre::Entity* e = makeChainEntity("IK_Frac");
+    Constraint lim;
+    lim.type = Type::LimitRotation;
+    ASSERT_TRUE(parseRef(QStringLiteral("bone:IK_Frac/Mid"), &lim.owner));
+    lim.minDeg = Ogre::Vector3(-90, -90, 20);
+    lim.maxDeg = Ogre::Vector3(90, 90, 40);
+    lim.influence = 0.5;
+    ASSERT_TRUE(mgr()->add(lim, false).ok);
+    mgr()->evaluate();
+    const Ogre::Quaternion limited = e->getSkeleton()->getBone("Mid")->getOrientation();
+    const Ogre::Vector3 end = boneWorld(e, "End");
+    // The chain's target starts where the end bone already is, so the IK
+    // reproduces the pose — and the limit must not blend a second time.
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Frac/End"), true, false, end);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    mgr()->evaluate();
+    EXPECT_GT(std::abs(e->getSkeleton()->getBone("Mid")->getOrientation().Dot(limited)), 0.9999f);
+}
+
+TEST_F(ConstraintSceneTest, AConstraintOwnedByAHandleKeepsItsHandle)
+{
+    makeChainEntity("IK_Own");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Own/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    Ogre::SceneNode* follow = makeNode("IK_Own_Follow", Ogre::Vector3(1, 2, 3));
+    ASSERT_TRUE(mgr()->add(make(Type::CopyPosition, QStringLiteral("node:") + r.pole, nodeRef(follow)), false).ok);
+    ASSERT_TRUE(mgr()->remove(r.id, false).ok);
+    EXPECT_FALSE(liveNode(r.target)) << "nothing uses the target any more";
+    EXPECT_TRUE(liveNode(r.pole)) << "the pole still owns a constraint";
+}
+
+TEST_F(ConstraintSceneTest, SelectingAHandleShowsItsIkChainNotAnEarlierReference)
+{
+    makeChainEntity("IK_SelIk");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_SelIk/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    Ogre::SceneNode* watcher = makeNode("IK_SelIk_Watcher", Ogre::Vector3(0, 3, 0));
+    // An unrelated look-at aimed at the target, listed BEFORE the IK.
+    ASSERT_TRUE(mgr()->add(make(Type::LookAt, nodeRef(watcher), QStringLiteral("node:") + r.target), false).ok);
+    QJsonObject doc = mgr()->document();
+    QJsonArray list = doc.value(QStringLiteral("constraints")).toArray();
+    ASSERT_EQ(list.size(), 2);
+    doc[QStringLiteral("constraints")] = QJsonArray{list.at(1), list.at(0)};
+    ASSERT_TRUE(mgr()->applyDocument(doc));
+    ASSERT_EQ(mgr()->constraints().front().type, Type::LookAt) << "precondition";
+    SelectionSet::getSingleton()->selectOne(liveNode(r.target));
+    EXPECT_EQ(mgr()->ownerFromSelection(), QStringLiteral("bone:IK_SelIk/End"));
+}
+
+TEST_F(ConstraintSceneTest, RemovingAHandleKeepsUnrelatedSelectionAndUserChildren)
+{
+    makeChainEntity("IK_Kids");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Kids/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    Ogre::SceneNode* other = makeNode("IK_Kids_Other", Ogre::Vector3(5, 0, 0));
+    Ogre::SceneNode* prop = makeNode("IK_Kids_Prop", Ogre::Vector3::ZERO);
+    ASSERT_TRUE(Manager::getSingleton()->reparentNode(prop, liveNode(r.target)));
+    prop->setPosition(0.1f, 0.0f, 0.0f);
+    prop->_update(true, true);
+    const Ogre::Vector3 propWorld = prop->_getDerivedPosition();
+    SelectionSet::getSingleton()->selectOne(other);
+
+    ASSERT_TRUE(mgr()->remove(r.id, false).ok);
+    EXPECT_FALSE(liveNode(r.target));
+    ASSERT_TRUE(liveNode(QStringLiteral("IK_Kids_Prop"))) << "a prop under the handle survives it";
+    EXPECT_LT((liveNode(QStringLiteral("IK_Kids_Prop"))->_getDerivedPosition() - propWorld).length(), 1e-4f);
+    EXPECT_TRUE(SelectionSet::getSingleton()->contains(other)) << "the selection is not wiped";
+}
+
+TEST_F(ConstraintSceneTest, HandleComesBackUnderItsParentAfterUndo)
+{
+    makeChainEntity("IK_Par");
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Par/End"), true, false);
+    ASSERT_TRUE(r.ok);
+    Ogre::SceneNode* rig = makeNode("IK_Par_Rig", Ogre::Vector3(2, 0, 0));
+    ASSERT_TRUE(Manager::getSingleton()->reparentNode(liveNode(r.target), rig));
+    ASSERT_TRUE(mgr()->remove(r.id, true).ok);
+    UndoManager::getSingleton()->undo();
+    ASSERT_TRUE(liveNode(r.target));
+    EXPECT_EQ(liveNode(r.target)->getParent(), rig) << "local keys need the same parent";
+}
+
+TEST_F(ConstraintSceneTest, AnImportedCharactersHandleClipStaysSeparate)
+{
+    makeChainEntity("IK_ClipB");
+    const auto rb = mgr()->createIkChain(QStringLiteral("bone:IK_ClipB/End"), true, false);
+    ASSERT_TRUE(rb.ok);
+    keyHandle(QStringLiteral("Reach"), rb.target, Ogre::Vector3(0, 1, 0), Ogre::Vector3(0, 2, 0));
+    QTemporaryDir dir;
+    const QString asset = dir.filePath(QStringLiteral("clipb.glb"));
+    ASSERT_TRUE(mgr()->writeSidecar(asset, {QStringLiteral("IK_ClipB")}));
+    ASSERT_TRUE(mgr()->remove(rb.id, false).ok);
+
+    makeChainEntity("IK_ClipA");
+    const auto ra = mgr()->createIkChain(QStringLiteral("bone:IK_ClipA/End"), true, false);
+    ASSERT_TRUE(ra.ok);
+    keyHandle(QStringLiteral("Reach"), ra.target, Ogre::Vector3(1, 1, 0), Ogre::Vector3(1, 2, 0));
+
+    QString err;
+    ASSERT_EQ(mgr()->loadSidecar(asset, {}, &err), 1) << err.toStdString();
+    auto* nam = NodeAnimationManager::instance();
+    EXPECT_EQ(nam->animatedNodes(QStringLiteral("Reach")), QStringList{ra.target}) << "A's clip is not shared";
+    QString bClip;
+    for (const QString& c : nam->listClips())
+        if (c != QLatin1String("Reach") && c.startsWith(QLatin1String("Reach"))) bClip = c;
+    ASSERT_FALSE(bClip.isEmpty()) << "B's tracks get their own clip";
+    EXPECT_EQ(nam->animatedNodes(bClip).size(), 1);
+}
+
+TEST_F(ConstraintSceneTest, IkChainRejectsZeroLengthSegmentsAndInvalidPlacement)
+{
+    makeChainEntity("IK_Inv");
+    const float inf = std::numeric_limits<float>::infinity();
+    EXPECT_FALSE(mgr()->createIkChain(QStringLiteral("bone:IK_Inv/End"), true, false, Ogre::Vector3(inf, 0, 0)).ok);
+    EXPECT_TRUE(mgr()->handleNames().isEmpty()) << "nothing is left behind";
+
+    Ogre::Entity* e = makeChainEntity("IK_Zero");
+    e->getSkeleton()->getBone("End")->setPosition(Ogre::Vector3::ZERO);   // End sits on Mid
+    e->getSkeleton()->getBone("End")->setManuallyControlled(true);
+    const auto r = mgr()->createIkChain(QStringLiteral("bone:IK_Zero/End"), true, false);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("zero-length"))) << r.error.toStdString();
+    EXPECT_TRUE(mgr()->handleNames().isEmpty());
 }
 
 TEST_F(ConstraintSceneTest, PanelQmlLoadsWithoutErrors)

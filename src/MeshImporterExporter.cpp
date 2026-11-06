@@ -4078,6 +4078,11 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
         QMessageBox::warning(parent,"No object","Which object are you trying to export?",QMessageBox::Ok);
         return QString();
     }
+    if (ConstraintManager::isHandleNode(_sn)) {
+        QMessageBox::information(parent, QObject::tr("IK handle"),
+                                 QObject::tr("IK handles are editor-only and are not exported. Select the character instead."));
+        return QString();
+    }
 
     if (Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) {
         if (auto* tpc = TexturePaintController::instance()) {
@@ -4145,6 +4150,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     }
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
     if (!e) return -1;
+    if (ConstraintManager::isHandleNode(_sn)) return -1;   // editor-only IK handle (#560): never exported as geometry
 
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
@@ -4189,6 +4195,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         }
 
         exportMaterial(e, file);
+        writeConstraintSidecar(_uri, e);   // IK chains + handles ride along like the binary .mesh export
     }
     else if(_format.contains("mesh"))
     {

@@ -244,7 +244,9 @@ IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Og
     Ogre::Vector3 dvec = T - A;
     float dist = dvec.length();
     Ogre::Vector3 dir = dist > kEps ? dvec / dist : (C - A).normalisedCopy();
-    const float lo = std::abs(a - b) + 1e-4f, hi = a + b - 1e-4f;
+    // Full extension is a valid pose: clamping below a + b bent a straight
+    // chain (by ~0.01 of a 2-unit limb) on the first solve.
+    const float lo = std::abs(a - b) + 1e-4f, hi = a + b;
     s.reached = dist >= std::abs(a - b) - 1e-4f && dist <= a + b + 1e-4f;
     const float d = std::clamp(dist, lo, hi);
 
@@ -279,7 +281,9 @@ Ogre::Vector3 defaultPolePosition(const Ogre::Vector3& A, const Ogre::Vector3& B
     auto offAxis = [&](const Ogre::Vector3& v) { return v - axis * v.dotProduct(axis); };
     // The current bend: the middle joint's offset from the A-C line.
     Ogre::Vector3 dir = offAxis(B - A);
-    if (dir.length() < 1e-3f * std::max(chain, 1e-6f)) {
+    // Any measurable bend wins (a near-straight elbow keeps bending the way
+    // it already does); the facing fallback is only for a truly straight one.
+    if (dir.length() < 1e-5f * std::max(chain, 1e-6f)) {
         const bool hangsDown = axis.dotProduct(up) < -0.7f;
         dir = offAxis(hangsDown ? forward : -forward);
         if (dir.squaredLength() < 1e-12f) dir = offAxis(up);

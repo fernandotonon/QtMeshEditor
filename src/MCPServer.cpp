@@ -1961,6 +1961,10 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
             targetNode->setScale(scale);
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
+        // The node may be an IK handle or another constraint's target: solve
+        // now, so a call right after this one (save_pose, a screenshot) sees
+        // the new pose instead of waiting for the next frame.
+        if (ConstraintManager* cm = ConstraintManager::instance(); cm->count() > 0) cm->evaluate();
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
             .arg(QString::fromStdString(targetNode->getName()), transforms.join("\n")));
     } catch (const Ogre::Exception& e) {
@@ -11497,6 +11501,10 @@ QJsonObject MCPServer::toolCreateIkChain(const QJsonObject& args)
             return false;
         }
         *out = Ogre::Vector3(float(a.at(0).toDouble()), float(a.at(1).toDouble()), float(a.at(2).toDouble()));
+        if (!std::isfinite(out->x) || !std::isfinite(out->y) || !std::isfinite(out->z)) {
+            *error = QStringLiteral("'%1' is out of range").arg(QLatin1String(key));   // e.g. 1e300 overflows a float
+            return false;
+        }
         return true;
     };
     Ogre::Vector3 targetPos, polePos;
