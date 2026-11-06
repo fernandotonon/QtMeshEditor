@@ -186,7 +186,8 @@ public:
     /// Ray-pick a skeleton-debug bone at `pos`. Only succeeds when the hit
     /// entity has its skeleton overlay visible. Selects the owning entity and
     /// bone in the animation controller. Returns false on miss.
-    bool tryPickBoneAt(const QPoint& pos, SelectionMode mode = NEW_SELECT);
+    bool tryPickBoneAt(const QPoint& pos, SelectionMode mode = NEW_SELECT,
+                       bool* refusedSelection = nullptr);
 private:
     //Ogre::SceneNode*                        m_pSelectedNode;
     Ogre::RaySceneQuery*                    m_pRayQuery  = nullptr;

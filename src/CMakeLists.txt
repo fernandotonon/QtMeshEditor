@@ -20,6 +20,8 @@ OgreWidget.cpp
 QtInputManager.cpp
 SpaceCamera.cpp
 SkeletonDebug.cpp
+BoneDisplay.cpp
+BoneDisplayController.cpp
 SkeletonTransform.cpp
 SkeletonEditor.cpp
 MeshImporterExporter.cpp

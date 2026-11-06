@@ -5,6 +5,7 @@
 #include "Manager.h"
 #include "PropertiesPanelController.h"
 #include "SelectionSet.h"
+#include "BoneDisplayController.h"
 #include "SkeletonEditor.h"
 #include "SentryReporter.h"
 #include "UndoManager.h"
@@ -251,6 +252,8 @@ void RenameBoneCommand::redo()
     if (!entity) return;
     const auto result = SkeletonEditor::renameBone(entity, m_oldName, m_newName);
     if (!result.ok) return;
+    if (auto* display = BoneDisplayController::instance())
+        display->rekeyBone(entity, m_oldName, m_newName);
     m_applied = true;
     SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.bone.rename"),
         QStringLiteral("%1: %2 → %3").arg(QString::fromStdString(m_entityName), m_oldName, m_newName));
@@ -263,7 +266,10 @@ void RenameBoneCommand::undo()
 {
     Ogre::Entity* entity = resolveEntityByName(m_entityName);
     if (!entity) return;
-    SkeletonEditor::renameBone(entity, m_newName, m_oldName);
+    if (SkeletonEditor::renameBone(entity, m_newName, m_oldName).ok) {
+        if (auto* display = BoneDisplayController::instance())
+            display->rekeyBone(entity, m_newName, m_oldName);
+    }
     SkeletonEditor::refreshAfterEdit(m_entityName, m_oldName);
     m_applied = false;
 }
