@@ -141,6 +141,15 @@ struct IkSolution {
 IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Ogre::Vector3& C,
                         const Ogre::Vector3& T, const Ogre::Vector3& P, bool hasPole);
 
+/// Default POLE position for a new IK chain (#560): on the side the middle
+/// joint already bends to, `distance` away from it, so adding the pole does
+/// not change the pose. A straight chain has no bend side; then the pole goes
+/// along `forward` (the character's facing) for a chain hanging DOWN (a leg:
+/// knees bend forward) and against it otherwise (an arm: elbows bend back),
+/// projected off the chain axis.
+Ogre::Vector3 defaultPolePosition(const Ogre::Vector3& A, const Ogre::Vector3& B, const Ogre::Vector3& C,
+                                  const Ogre::Vector3& forward, const Ogre::Vector3& up, float distance);
+
 /// Clamp a LOCAL rotation's Euler XYZ angles (degrees) on the enabled axes.
 Ogre::Quaternion limitRotation(const Ogre::Quaternion& local, const Constraint& c);
 

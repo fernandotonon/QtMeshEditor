@@ -230,6 +230,32 @@ Column {
         Component.onCompleted: pickFromSelection()
     }
 
+    // ---- IK chain (#560) ----
+    // One click: a 2-bone IK on the owner (the END bone) with auto-created
+    // viewport handles — an orange target at the hand/foot and a cyan pole
+    // on the side the elbow/knee already bends to. Nothing moves until a
+    // handle is dragged; selecting a handle shows its chain here.
+    Row {
+        visible: conSection.ownerRef.indexOf("bone:") === 0
+        spacing: 6
+        ToolBtn {
+            label: "Create IK chain"
+            accent: true
+            tip: "2-bone IK on this END bone (hand / foot) with draggable target + pole handles. One undo step"
+            onClicked: {
+                if (ConstraintManager.createIkChainFromUi(conSection.ownerRef, ikPoleBox.checked)) {
+                    var rows = ConstraintManager.rowsFor(conSection.ownerRef)
+                    if (rows.length > 0) conSection.selectedId = rows[0].id
+                }
+            }
+        }
+        InspectorCheckBox {
+            id: ikPoleBox
+            text: "with pole"
+            checked: true
+        }
+    }
+
     // ---- Add ----
     Column {
         id: addCol

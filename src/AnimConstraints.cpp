@@ -244,7 +244,12 @@ IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Og
     Ogre::Vector3 dvec = T - A;
     float dist = dvec.length();
     Ogre::Vector3 dir = dist > kEps ? dvec / dist : (C - A).normalisedCopy();
-    const float lo = std::abs(a - b) + 1e-4f, hi = a + b - 1e-4f;
+    // Full extension is a valid pose: clamping below a + b bent a straight
+    // chain (by ~0.01 of a 2-unit limb) on the first solve.
+    // lo is capped at hi: for a segment shorter than ~5e-5 the margin would
+    // put lo above hi, and std::clamp with lo > hi is undefined.
+    const float hi = a + b;
+    const float lo = std::min(std::abs(a - b) + 1e-4f, hi);
     s.reached = dist >= std::abs(a - b) - 1e-4f && dist <= a + b + 1e-4f;
     const float d = std::clamp(dist, lo, hi);
 
@@ -266,6 +271,29 @@ IkSolution solveTwoBone(const Ogre::Vector3& A, const Ogre::Vector3& B, const Og
     s.midDelta = lowerAfterRoot.getRotationTo(s.newEnd - s.newMid);
     s.valid = true;
     return s;
+}
+
+Ogre::Vector3 defaultPolePosition(const Ogre::Vector3& A, const Ogre::Vector3& B, const Ogre::Vector3& C,
+                                  const Ogre::Vector3& forward, const Ogre::Vector3& up, float distance)
+{
+    Ogre::Vector3 axis = C - A;
+    const float chain = (B - A).length() + (C - B).length();
+    if (axis.squaredLength() < 1e-12f) axis = B - A;
+    if (axis.squaredLength() < 1e-12f) return B + up * distance;
+    axis.normalise();
+    auto offAxis = [&](const Ogre::Vector3& v) { return v - axis * v.dotProduct(axis); };
+    // The current bend: the middle joint's offset from the A-C line.
+    Ogre::Vector3 dir = offAxis(B - A);
+    // Any measurable bend wins (a near-straight elbow keeps bending the way
+    // it already does); the facing fallback is only for a truly straight one.
+    if (dir.length() < 1e-5f * std::max(chain, 1e-6f)) {
+        const bool hangsDown = axis.dotProduct(up) < -0.7f;
+        dir = offAxis(hangsDown ? forward : -forward);
+        if (dir.squaredLength() < 1e-12f) dir = offAxis(up);
+        if (dir.squaredLength() < 1e-12f) dir = axis.perpendicular();
+    }
+    dir.normalise();
+    return B + dir * distance;
 }
 
 Ogre::Quaternion limitRotation(const Ogre::Quaternion& local, const Constraint& c)

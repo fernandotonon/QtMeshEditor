@@ -4078,6 +4078,11 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
         QMessageBox::warning(parent,"No object","Which object are you trying to export?",QMessageBox::Ok);
         return QString();
     }
+    if (ConstraintManager::isHandleNode(_sn)) {
+        QMessageBox::information(parent, QObject::tr("IK handle"),
+                                 QObject::tr("IK handles are editor-only and are not exported. Select the character instead."));
+        return QString();
+    }
 
     if (Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) {
         if (auto* tpc = TexturePaintController::instance()) {
@@ -4145,6 +4150,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     }
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
     if (!e) return -1;
+    if (ConstraintManager::isHandleNode(_sn)) return -1;   // editor-only IK handle (#560): never exported as geometry
 
     // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
     EditModeController::instance()->flushPendingVertexPaintForEntity(
@@ -4189,6 +4195,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         }
 
         exportMaterial(e, file);
+        writeConstraintSidecar(_uri, e);   // IK chains + handles ride along like the binary .mesh export
     }
     else if(_format.contains("mesh"))
     {
@@ -5150,6 +5157,15 @@ static std::vector<aiAnimation*> buildNodeClipAnimations(
 }
 
 // ─── Scene-level export: all scene nodes → single glTF ──────────────
+// The entity a scene export writes for node `sn`: the one named like the
+// node, or null — also for editor-only IK handles (#560).
+static Ogre::Entity* exportableSceneEntity(const Ogre::SceneNode* sn)
+{
+    Ogre::SceneManager* scene = Manager::getSingleton()->getSceneMgr();
+    if (!scene->hasEntity(sn->getName()) || ConstraintManager::isHandleNode(sn)) return nullptr;
+    return scene->getEntity(sn->getName());
+}
+
 static aiScene* buildSceneAiScene()
 {
     auto* manager = Manager::getSingleton();
@@ -5177,10 +5193,7 @@ static aiScene* buildSceneAiScene()
     std::vector<NodeEntityPair> nodeEntities;
     for (auto* sn : sceneNodes)
     {
-        if (!manager->getSceneMgr()->hasEntity(sn->getName()))
-            continue;
-        auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
-        if (entity)
+        if (auto* entity = exportableSceneEntity(sn))
             nodeEntities.push_back({sn, entity});
     }
 
@@ -5401,10 +5414,7 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
         std::vector<std::pair<Ogre::SceneNode*, Ogre::Entity*>> entities;
         for (auto* sn : sceneNodes)
         {
-            if (!manager->getSceneMgr()->hasEntity(sn->getName()))
-                continue;
-            auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
-            if (entity)
+            if (auto* entity = exportableSceneEntity(sn))
                 entities.emplace_back(sn, entity);
         }
 
