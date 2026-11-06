@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
+#include <QSet>
 
 #include <algorithm>
 #include <cmath>
@@ -702,6 +703,35 @@ bool fromJson(const QJsonObject& obj, Document* out, QString* error)
         return false;
     }
     return fillDocument(obj, out, error);
+}
+
+Document prefixBoneNames(const Document& doc, const QString& prefix)
+{
+    if (prefix.isEmpty() || doc.bones.isEmpty()) return doc;
+    Document out = doc;
+    out.bones.clear();
+    for (auto it = doc.bones.cbegin(); it != doc.bones.cend(); ++it)
+        out.bones.insert(prefix + it.key(), it.value());
+    return out;
+}
+
+Document matchImportedBoneNames(const Document& doc, const QString& prefix,
+                                const QStringList& skeletonBones)
+{
+    if (prefix.isEmpty() || doc.bones.isEmpty() || skeletonBones.isEmpty()) return doc;
+    const QSet<QString> names(skeletonBones.cbegin(), skeletonBones.cend());
+    Document out = doc;
+    out.bones.clear();
+    for (auto it = doc.bones.cbegin(); it != doc.bones.cend(); ++it) {
+        QString key = it.key();
+        if (!names.contains(key)) {
+            const QString prefixed = prefix + key;
+            if (names.contains(prefixed))
+                key = prefixed;
+        }
+        out.bones.insert(key, it.value());
+    }
+    return out;
 }
 
 QJsonObject sceneToJson(const QList<NamedDocument>& entities)

@@ -5142,9 +5142,16 @@ Rectangle {
             Component {
                 id: boneDisplayForm
                 Column {
+                    id: boneDisplayFields
                     width: skeletonToolsCol.width
                     spacing: 6
                     padding: 4
+                    // colorToHex writes #rrggbbaa. Qt Quick reads #aarrggbb.
+                    function displayColor(hex) {
+                        if (hex.length === 9 && hex.charAt(0) === "#")
+                            return "#" + hex.substring(7, 9) + hex.substring(1, 7)
+                        return hex
+                    }
 
             Text {
                 width: parent.width - 16
@@ -5291,7 +5298,7 @@ Rectangle {
                 spacing: 6
                 Rectangle {
                     width: 18; height: 18; radius: 2
-                    color: BoneDisplayController.colorHex
+                    color: boneDisplayFields.displayColor(BoneDisplayController.colorHex)
                     border.color: PropertiesPanelController.borderColor
                     anchors.verticalCenter: parent.verticalCenter
                 }
@@ -5458,7 +5465,7 @@ Rectangle {
                         onEditingFinished: BoneDisplayController.setGroupColorHex(modelData, text)
                         background: Rectangle {
                             color: PropertiesPanelController.inputColor
-                            border.color: BoneDisplayController.groupColors[index]
+                            border.color: boneDisplayFields.displayColor(BoneDisplayController.groupColors[index])
                             border.width: 2
                             radius: 2
                         }

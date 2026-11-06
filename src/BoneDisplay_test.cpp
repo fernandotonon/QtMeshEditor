@@ -151,6 +151,32 @@ TEST(BoneDisplayJson, RoundTripsShapesLayersLocksAndCustomMesh)
     EXPECT_FALSE(setScale(&doc, QStringLiteral("Hand.L"), Vec3{0.f, 1.f, 1.f}));
 }
 
+TEST(BoneDisplaySceneNames, PrefixMatchesTheExportedSkeleton)
+{
+    Document doc;
+    EXPECT_TRUE(setShape(&doc, QStringLiteral("Jaw"), Shape::Sphere));
+    EXPECT_TRUE(setColor(&doc, QStringLiteral("Jaw"), Color{1.f, 0.f, 0.f, 0.65f}));
+    EXPECT_TRUE(addGroup(&doc, QStringLiteral("Face"), Color{1.f, 0.85f, 0.2f, 0.7f}));
+    EXPECT_TRUE(setMembership(&doc, QStringLiteral("Jaw"), QStringLiteral("Face"), true));
+
+    const Document exported = prefixBoneNames(doc, QStringLiteral("Hero_"));
+    EXPECT_EQ(boneOrDefault(exported, QStringLiteral("Hero_Jaw")).shape, Shape::Sphere);
+    EXPECT_FALSE(exported.bones.contains(QStringLiteral("Jaw")));
+    EXPECT_EQ(boneOrDefault(exported, QStringLiteral("Hero_Jaw")).groups,
+              QStringList({QStringLiteral("Face")}));
+
+    const QStringList imported {QStringLiteral("Hero_Jaw"), QStringLiteral("Hero_Head")};
+    const Document reconciled = matchImportedBoneNames(doc, QStringLiteral("Hero_"), imported);
+    EXPECT_EQ(boneOrDefault(reconciled, QStringLiteral("Hero_Jaw")).shape, Shape::Sphere);
+    EXPECT_FALSE(reconciled.bones.contains(QStringLiteral("Jaw")));
+
+    const Document already = matchImportedBoneNames(exported, QStringLiteral("Hero_"), imported);
+    EXPECT_TRUE(already.bones.contains(QStringLiteral("Hero_Jaw")));
+    EXPECT_FALSE(already.bones.contains(QStringLiteral("Hero_Hero_Jaw")));
+
+    EXPECT_TRUE(matchImportedBoneNames(doc, QString(), imported).bones.contains(QStringLiteral("Jaw")));
+}
+
 TEST(BoneDisplaySceneJson, RoundTripsPerNodeDocuments)
 {
     NamedDocument hero;

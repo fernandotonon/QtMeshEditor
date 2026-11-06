@@ -149,6 +149,12 @@ bool setGroupColor(Document* doc, const QString& name, const Color& color);
 bool setMembership(Document* doc, const QString& bone, const QString& group, bool member);
 bool setIsolatedGroup(Document* doc, const QString& name);
 
+// Multi-entity scene export names each bone "<sceneNode>_<bone>". The live
+// document keeps the skeleton's own names; these two map between the two.
+Document prefixBoneNames(const Document& doc, const QString& prefix);
+Document matchImportedBoneNames(const Document& doc, const QString& prefix,
+                                const QStringList& skeletonBones);
+
 QJsonObject toJson(const Document& doc);
 bool fromJson(const QJsonObject& obj, Document* out, QString* error = nullptr);
 

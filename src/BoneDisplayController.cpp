@@ -10,7 +10,25 @@
 #include <QJsonArray>
 #include <QQmlEngine>
 
+#include <OgreEntity.h>
+#include <OgreSkeleton.h>
+
 namespace {
+QStringList skeletonBoneNames(Ogre::Entity* entity)
+{
+    QStringList names;
+    if (!entity || !entity->hasSkeleton() || !entity->getMesh()) return names;
+    const Ogre::SkeletonPtr skeleton = entity->getMesh()->getSkeleton();
+    if (!skeleton) return names;
+    const unsigned short count = skeleton->getNumBones();
+    names.reserve(count);
+    for (unsigned short i = 0; i < count; ++i) {
+        if (Ogre::Bone* bone = skeleton->getBone(i))
+            names.append(QString::fromStdString(bone->getName()));
+    }
+    return names;
+}
+
 const BoneDisplay::Color kGroupPalette[] = {
     {1.f, 0.85f, 0.2f, 0.7f},
     {0.35f, 0.75f, 1.f, 0.7f},
@@ -573,9 +591,15 @@ bool BoneDisplayController::saveScene(const QHash<QString, Ogre::Entity*>& nodes
 {
     if (scenePath.isEmpty()) return false;
     QList<BoneDisplay::NamedDocument> entities;
+    // buildSceneAiScene prefixes every bone with "<node>_" once a scene has
+    // more than one entity. Write those exported names so a reload finds them.
+    const bool prefixBones = nodesToEntities.size() > 1;
     for (auto it = nodesToEntities.cbegin(); it != nodesToEntities.cend(); ++it) {
         if (!it.value()) continue;
-        entities.append(BoneDisplay::NamedDocument{it.key(), documentFor(it.value())});
+        BoneDisplay::Document doc = documentFor(it.value());
+        if (prefixBones && it.value()->hasSkeleton())
+            doc = BoneDisplay::prefixBoneNames(doc, it.key() + QLatin1Char('_'));
+        entities.append(BoneDisplay::NamedDocument{it.key(), doc});
     }
     const QJsonObject json = BoneDisplay::sceneToJson(entities);
     const QString path = BoneDisplay::sidecarPath(scenePath);
@@ -628,8 +652,13 @@ bool BoneDisplayController::loadScene(const QHash<QString, Ogre::Entity*>& nodes
     for (const BoneDisplay::NamedDocument& item : scene) {
         Ogre::Entity* entity = nodesToEntities.value(item.node);
         if (!entity) continue;
-        if (BoneDisplay::isDefault(item.document)) m_docs.remove(entity);
-        else m_docs.insert(entity, item.document);
+        BoneDisplay::Document doc = item.document;
+        if (nodesToEntities.size() > 1) {
+            doc = BoneDisplay::matchImportedBoneNames(
+                doc, item.node + QLatin1Char('_'), skeletonBoneNames(entity));
+        }
+        if (BoneDisplay::isDefault(doc)) m_docs.remove(entity);
+        else m_docs.insert(entity, doc);
     }
     note(QStringLiteral("scene.skel.display.load"), path);
     emit displayChanged();
