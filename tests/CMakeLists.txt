@@ -31,6 +31,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtInputManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SpaceCamera.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonDebug.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneDisplay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneDisplayController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SkeletonEditor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshImporterExporter.cpp

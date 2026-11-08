@@ -89,6 +89,7 @@ THE SOFTWARE.
 #include "Assimp/MaterialProcessor.h"
 #include "NodeAnimationManager.h"
 #include "PoseLibrary.h"
+#include "BoneDisplayController.h"
 #include "AnimGeneratorManager.h"
 #include "ConstraintManager.h"
 #include "MotionGraphManager.h"
@@ -2765,6 +2766,48 @@ static void loadPoseLibrarySidecar(const QString& meshPath, Ogre::Entity* en)
     lib->loadPoseLibrary(en, sidecarPath);
 }
 
+static void writeBoneDisplaySidecar(const QString& meshPath, Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !en) return;
+    auto* display = BoneDisplayController::instance();
+    if (!display) return;
+    if (!display->saveEntity(en, meshPath)) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "Bone display sidecar write failed: " + meshPath.toStdString());
+    }
+}
+
+static void loadBoneDisplaySidecar(const QString& meshPath, Ogre::Entity* en)
+{
+    if (meshPath.isEmpty() || !en) return;
+    auto* display = BoneDisplayController::instance();
+    if (!display) return;
+    display->loadEntity(en, meshPath);
+}
+
+static void writeSceneBoneDisplaySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty()) return;
+    auto* display = BoneDisplayController::instance();
+    if (!display) return;
+    if (!display->saveScene(nodesToEntities, scenePath)) {
+        Ogre::LogManager::getSingleton().logWarning(
+            "Scene bone display sidecar write failed: " + scenePath.toStdString());
+    }
+}
+
+static void loadSceneBoneDisplaySidecar(
+    const QString& scenePath,
+    const QHash<QString, Ogre::Entity*>& nodesToEntities)
+{
+    if (scenePath.isEmpty() || nodesToEntities.isEmpty()) return;
+    auto* display = BoneDisplayController::instance();
+    if (!display) return;
+    display->loadScene(nodesToEntities, scenePath);
+}
+
 // Scene variants (#521 follow-up). A scene export has many entities and
 // one file, so the sidecar nests each entity's library under its SCENE
 // NODE name (see PoseLibrary::saveSceneLibraries). Same path convention
@@ -3539,6 +3582,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             // applying a pose writes to the skeleton. Loading only stores
             // data against the pointer, but the API is shared.
             loadPoseLibrarySidecar(file.filePath(), const_cast<Ogre::Entity*>(en));
+            loadBoneDisplaySidecar(file.filePath(), const_cast<Ogre::Entity*>(en));
             // Procedural generators (#524) — after the poses and node clips
             // they may target exist.
             loadGeneratorSidecar(file.filePath(), en);
@@ -4196,6 +4240,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
         exportMaterial(e, file);
         writeConstraintSidecar(_uri, e);   // IK chains + handles ride along like the binary .mesh export
+        writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
     }
     else if(_format.contains("mesh"))
     {
@@ -4229,6 +4274,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // Pose libraries have no representation in any mesh format —
         // persist them beside the asset so they survive save/reopen (#521).
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
         writeMotionGraphSidecar(_uri, e);
@@ -4251,6 +4297,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // Pose libraries have no representation in any mesh format —
         // persist them beside the asset so they survive save/reopen (#521).
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
+        writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
         writeMotionGraphSidecar(_uri, e);
@@ -4765,6 +4812,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     if (!poseNames.empty())
                         FaceRig::writeArkitSidecar(file.filePath(), poseNames);
                 }
+                writeBoneDisplaySidecar(_uri, const_cast<Ogre::Entity*>(e));
             }
 
             delete scene;
@@ -4780,6 +4828,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // persist them beside the asset so they survive save/reopen
         // (#521). The .mesh / FBX branches above return before here and
         // write their own; this covers the Assimp-backed formats.
+        // Bone display is written only after a successful Assimp export,
+        // inside the success branch above, so a failed overwrite cannot
+        // replace the sidecar of the file that is still on disk.
         writePoseLibrarySidecar(_uri, const_cast<Ogre::Entity*>(e));
         writeGeneratorSidecar(_uri, e);
         writeConstraintSidecar(_uri, e);
@@ -5488,6 +5539,7 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
                                            entityPair);
             }
             writeScenePoseLibrarySidecar(_uri, nodesToEntities);
+            writeSceneBoneDisplaySidecar(_uri, nodesToEntities);
             writeGeneratorSidecar(_uri, nullptr);
             writeConstraintSidecar(_uri, nullptr);
             writeMotionGraphSidecar(_uri, nullptr);
@@ -5937,6 +5989,7 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
         // library, so this is what makes Save Scene / Open Scene keep
         // them. Missing sidecar returns -1 and is a silent no-op.
         loadScenePoseLibrarySidecar(_uri, sceneNodeEntities);
+        loadSceneBoneDisplaySidecar(_uri, sceneNodeEntities);
         loadGeneratorSidecar(_uri, nullptr);
         loadConstraintSidecar(_uri, nullptr);
         loadMotionGraphSidecar(_uri, nullptr);

@@ -1,11 +1,19 @@
 #include "SkeletonDebug.h"
 #include "GlobalDefinitions.h"
+#include "BoneDisplay.h"
+#include "BoneDisplayController.h"
+#include "Manager.h"
+
+#include <OgreRTShaderSystem.h>
 
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cmath>
+#include <cstdint>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace {
 constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
@@ -58,6 +66,7 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
     createBoneMesh();
     createJointMesh();
     createLinkMesh();
+    createShapeMeshes();
 
     mBoneVisualByName = createBoneVisuals();
 
@@ -77,39 +86,60 @@ void SkeletonDebug::onTimerTick()
     short currentSelected = -1;
     std::string selectedName;
 
-    for (auto* ent : mBoneEntities) {
-        ent->setMaterial(mBoneMatPtr);
-        ent->setVisible(mShowBones);
-    }
-    // Dim hierarchy links so joint spheres read as the bone location.
-    for (auto* ent : mBoneEntities) {
-        if (ent->getMesh() && ent->getMesh()->getName() == "SkeletonDebug/LinkMesh")
-            ent->setMaterial(mLinkMatPtr);
-    }
-
+    const BoneDisplay::Document display = BoneDisplayController::instance()->documentFor(mEntity);
+    std::unordered_set<std::string> rootNames;
     for (Ogre::Bone* root : mEntity->getSkeleton()->getRootBones()) {
-        auto it = mBoneVisualByName.find(root->getName());
-        if (it != mBoneVisualByName.end() && it->second) {
-            it->second->setMaterial(mBoneMatRootPtr);
-            it->second->setVisible(mShowBones);
-        }
+        if (root) rootNames.insert(root->getName());
     }
     for (auto* bone : mEntity->getSkeleton()->getBones()) {
         if (!bone->getUserObjectBindings().getUserAny("selected").has_value())
             continue;
         if (!Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
             continue;
-
         currentSelected = bone->getHandle();
         selectedName = bone->getName();
+        break;
+    }
 
-        // Highlight the joint and its outbound links (not sibling links).
-        for (auto* ent : mBoneEntities) {
-            if (boneNameForMovable(ent) == selectedName) {
-                ent->setMaterial(mBoneMatSelectedPtr);
-                ent->setVisible(mShowBones);
-            }
+    for (auto* ent : mBoneEntities) {
+        const std::string name = boneNameForMovable(ent);
+        const bool shown = mShowBones && BoneDisplay::isVisible(display, QString::fromStdString(name));
+        ent->setVisible(shown);
+        ent->setQueryFlags(shown ? BONE_QUERY_FLAGS : 0);
+        if (!shown) continue;
+
+        const bool link = ent->getMesh() && ent->getMesh()->getName() == "SkeletonDebug/LinkMesh";
+        const bool selected = !selectedName.empty() && name == selectedName;
+        bool hasColor = false;
+        const BoneDisplay::Color color = BoneDisplay::effectiveColor(
+            display, QString::fromStdString(name), &hasColor);
+        Ogre::MaterialPtr mat;
+        if (hasColor) {
+            // Keep the chosen hue on the selected bone. The red selection
+            // material used to replace it, so editing the swatch looked like
+            // it did nothing.
+            mat = materialForColor(color.r, color.g, color.b, selected ? std::max(color.a, 0.95f) : color.a);
+        } else if (selected) {
+            mat = mBoneMatSelectedPtr;
+        } else if (link) {
+            mat = mLinkMatPtr;
+        } else if (rootNames.count(name) != 0) {
+            mat = mBoneMatRootPtr;
+        } else {
+            mat = mBoneMatPtr;
         }
+        ent->setMaterial(mat);
+        for (unsigned i = 0; i < ent->getNumSubEntities(); ++i)
+            ent->getSubEntity(i)->setMaterial(mat);
+    }
+    for (auto* axes : mAxisEntities) {
+        const bool shown = BoneDisplay::isVisible(
+            display, QString::fromStdString(boneNameForMovable(axes)));
+        axes->setVisible(mShowAxes && shown);
+        if (!shown)
+            axes->setQueryFlags(0);
+        else
+            axes->setQueryFlags(BONE_QUERY_FLAGS);
     }
 
     if (currentSelected != mLastSelectedBone) {
@@ -218,6 +248,7 @@ void SkeletonDebug::createChildLinks(const Ogre::Bone* pBone)
 std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisuals()
 {
     std::map<std::string, Ogre::Entity*, std::less<>> mapEntities;
+    const BoneDisplay::Document display = BoneDisplayController::instance()->documentFor(mEntity);
     int numBones = mEntity->getSkeleton()->getNumBones();
 
     Ogre::Vector3 entityScale = Ogre::Vector3::UNIT_SCALE;
@@ -261,10 +292,75 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
         const float jointScale = std::clamp(length * mBoneSize, mBoneSize * 0.2f, mBoneSize * 0.75f)
             * invEntScale;
 
-        Ogre::Entity* joint = mSceneMan->createEntity("SkeletonDebug/JointMesh");
+        const QString boneName = QString::fromStdString(pBone->getName());
+        const BoneDisplay::Bone displayBone = BoneDisplay::boneOrDefault(display, boneName);
+        Ogre::MeshPtr customMesh;
+        if (displayBone.shape == BoneDisplay::Shape::CustomMesh && !displayBone.customMesh.isEmpty()) {
+            if (auto* mgr = Manager::getSingletonPtr()) {
+                for (Ogre::Entity* candidate : mgr->getEntities()) {
+                    if (!candidate || candidate == mEntity || !candidate->getMesh()) continue;
+                    if (QString::fromStdString(candidate->getName()) == displayBone.customMesh) {
+                        customMesh = candidate->getMesh();
+                        break;
+                    }
+                }
+            }
+        }
+
+        const char* shapeMesh = "SkeletonDebug/JointMesh";
+        switch (displayBone.shape) {
+        case BoneDisplay::Shape::Sphere: shapeMesh = "SkeletonDebug/SphereMesh"; break;
+        case BoneDisplay::Shape::Cube: shapeMesh = "SkeletonDebug/CubeMesh"; break;
+        case BoneDisplay::Shape::Arrow: shapeMesh = "SkeletonDebug/ArrowMesh"; break;
+        case BoneDisplay::Shape::Line: shapeMesh = "SkeletonDebug/LineMesh"; break;
+        case BoneDisplay::Shape::Circle: shapeMesh = "SkeletonDebug/CircleMesh"; break;
+        case BoneDisplay::Shape::Ring: shapeMesh = "SkeletonDebug/RingMesh"; break;
+        case BoneDisplay::Shape::CustomMesh:
+        case BoneDisplay::Shape::Octahedron: shapeMesh = "SkeletonDebug/JointMesh"; break;
+        }
+
+        Ogre::Entity* joint = nullptr;
+        if (customMesh) {
+            try {
+                joint = mSceneMan->createEntity(customMesh);
+            } catch (const Ogre::Exception&) {
+                joint = nullptr;
+            }
+        }
+        if (!joint)
+            joint = mSceneMan->createEntity(shapeMesh);
         joint->setRenderQueueGroup(Ogre::RENDER_QUEUE_MAIN + 3);
         auto* jointTp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)joint);
-        jointTp->setScale(jointScale, jointScale, jointScale);
+
+        const bool arrowLike = displayBone.shape == BoneDisplay::Shape::Arrow
+            || displayBone.shape == BoneDisplay::Shape::Line;
+        Ogre::Quaternion align = Ogre::Quaternion::IDENTITY;
+        if (arrowLike && numChildren > 0) {
+            if (auto* child = pBone->getChild(0)) {
+                const Ogre::Vector3 dir = child->getInitialPosition();
+                if (dir.squaredLength() > 1e-10f)
+                    align = Ogre::Vector3::UNIT_Y.getRotationTo(dir.normalisedCopy());
+            }
+        }
+        const Ogre::Quaternion user =
+            Ogre::Quaternion(Ogre::Degree(displayBone.rotationDeg.x), Ogre::Vector3::UNIT_X)
+            * Ogre::Quaternion(Ogre::Degree(displayBone.rotationDeg.y), Ogre::Vector3::UNIT_Y)
+            * Ogre::Quaternion(Ogre::Degree(displayBone.rotationDeg.z), Ogre::Vector3::UNIT_Z);
+        jointTp->setOrientation(align * user);
+        const Ogre::Vector3 localOffset(displayBone.offset.x, displayBone.offset.y, displayBone.offset.z);
+        const float sx = displayBone.scale.x;
+        const float sy = displayBone.scale.y;
+        const float sz = displayBone.scale.z;
+        if (customMesh) {
+            jointTp->setScale(sx, sy, sz);
+            jointTp->setPosition(align * localOffset);
+        } else if (arrowLike) {
+            jointTp->setScale(jointScale * sx, std::max(length, mBoneSize) * sy, jointScale * sz);
+            jointTp->setPosition(align * localOffset * jointScale);
+        } else {
+            jointTp->setScale(jointScale * sx, jointScale * sy, jointScale * sz);
+            jointTp->setPosition(align * localOffset * jointScale);
+        }
         mBoneEntities.push_back(joint);
         tagBoneVisual(joint, pBone->getName(), mEntity->getName());
         mapEntities[pBone->getName().data()] = joint;
@@ -825,4 +921,212 @@ void SkeletonDebug::createAxesMesh()
 
         mAxesMeshPtr = mo.convertToMesh(meshName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
     }
+}
+
+void SkeletonDebug::createShapeMeshes()
+{
+    const Ogre::ColourValue white(1.f, 1.f, 1.f, 1.f);
+    auto finish = [&](Ogre::ManualObject& mo, int triangles) {
+        for (int i = 0; i < triangles; ++i)
+            mo.triangle(static_cast<uint32_t>(i * 3),
+                        static_cast<uint32_t>(i * 3 + 1),
+                        static_cast<uint32_t>(i * 3 + 2));
+        mo.end();
+    };
+    auto ensure = [&](const char* meshName, const char* tmpName, const auto& build) {
+        if (Ogre::MeshManager::getSingleton().resourceExists(meshName))
+            return;
+        Ogre::ManualObject mo(tmpName);
+        mo.begin(mBoneMatPtr->getName());
+        const int triangles = build(mo);
+        finish(mo, triangles);
+        mo.convertToMesh(meshName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+    };
+
+    ensure("SkeletonDebug/SphereMesh", "tmpBoneSphere", [&](Ogre::ManualObject& mo) {
+        const int stacks = 6;
+        const int slices = 10;
+        int triangles = 0;
+        auto pos = [](float phi, float theta) {
+            return Ogre::Vector3(std::sin(phi) * std::cos(theta),
+                                 std::cos(phi),
+                                 std::sin(phi) * std::sin(theta));
+        };
+        for (int s = 0; s < stacks; ++s) {
+            const float phi0 = Ogre::Math::PI * static_cast<float>(s) / stacks;
+            const float phi1 = Ogre::Math::PI * static_cast<float>(s + 1) / stacks;
+            for (int i = 0; i < slices; ++i) {
+                const float th0 = Ogre::Math::TWO_PI * static_cast<float>(i) / slices;
+                const float th1 = Ogre::Math::TWO_PI * static_cast<float>(i + 1) / slices;
+                const Ogre::Vector3 p00 = pos(phi0, th0);
+                const Ogre::Vector3 p10 = pos(phi0, th1);
+                const Ogre::Vector3 p01 = pos(phi1, th0);
+                const Ogre::Vector3 p11 = pos(phi1, th1);
+                if (s == 0) {
+                    mo.position(p00); mo.colour(white);
+                    mo.position(p01); mo.colour(white);
+                    mo.position(p11); mo.colour(white);
+                    ++triangles;
+                } else if (s == stacks - 1) {
+                    mo.position(p00); mo.colour(white);
+                    mo.position(p11); mo.colour(white);
+                    mo.position(p10); mo.colour(white);
+                    ++triangles;
+                } else {
+                    mo.position(p00); mo.colour(white);
+                    mo.position(p01); mo.colour(white);
+                    mo.position(p11); mo.colour(white);
+                    mo.position(p00); mo.colour(white);
+                    mo.position(p11); mo.colour(white);
+                    mo.position(p10); mo.colour(white);
+                    triangles += 2;
+                }
+            }
+        }
+        return triangles;
+    });
+
+    ensure("SkeletonDebug/CubeMesh", "tmpBoneCube", [&](Ogre::ManualObject& mo) {
+        const Ogre::Vector3 v[8] = {
+            {-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
+            {-1, -1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1},
+        };
+        const int faces[12][3] = {
+            {0, 2, 1}, {0, 3, 2}, {4, 5, 6}, {4, 6, 7},
+            {0, 1, 5}, {0, 5, 4}, {3, 6, 2}, {3, 7, 6},
+            {0, 4, 7}, {0, 7, 3}, {1, 2, 6}, {1, 6, 5},
+        };
+        for (const auto& f : faces) {
+            mo.position(v[f[0]]); mo.colour(white);
+            mo.position(v[f[1]]); mo.colour(white);
+            mo.position(v[f[2]]); mo.colour(white);
+        }
+        return 12;
+    });
+
+    auto addBox = [&](Ogre::ManualObject& mo, float y0, float y1, float rx, float rz) {
+        const Ogre::Vector3 v[8] = {
+            {-rx, y0, -rz}, {rx, y0, -rz}, {rx, y1, -rz}, {-rx, y1, -rz},
+            {-rx, y0, rz}, {rx, y0, rz}, {rx, y1, rz}, {-rx, y1, rz},
+        };
+        const int faces[12][3] = {
+            {0, 1, 2}, {0, 2, 3}, {4, 6, 5}, {4, 7, 6},
+            {0, 4, 5}, {0, 5, 1}, {3, 2, 6}, {3, 6, 7},
+            {0, 3, 7}, {0, 7, 4}, {1, 5, 6}, {1, 6, 2},
+        };
+        for (const auto& f : faces) {
+            mo.position(v[f[0]]); mo.colour(white);
+            mo.position(v[f[1]]); mo.colour(white);
+            mo.position(v[f[2]]); mo.colour(white);
+        }
+    };
+    ensure("SkeletonDebug/LineMesh", "tmpBoneLine", [&](Ogre::ManualObject& mo) {
+        addBox(mo, 0.f, 1.f, 0.08f, 0.08f);
+        return 12;
+    });
+    ensure("SkeletonDebug/ArrowMesh", "tmpBoneArrow", [&](Ogre::ManualObject& mo) {
+        addBox(mo, 0.f, 0.68f, 0.1f, 0.1f);
+        const int slices = 10;
+        int triangles = 12;
+        const Ogre::Vector3 tip(0.f, 1.f, 0.f);
+        const Ogre::Vector3 baseCenter(0.f, 0.62f, 0.f);
+        for (int i = 0; i < slices; ++i) {
+            const float a0 = Ogre::Math::TWO_PI * static_cast<float>(i) / slices;
+            const float a1 = Ogre::Math::TWO_PI * static_cast<float>(i + 1) / slices;
+            const Ogre::Vector3 p0(std::cos(a0) * 0.32f, 0.62f, std::sin(a0) * 0.32f);
+            const Ogre::Vector3 p1(std::cos(a1) * 0.32f, 0.62f, std::sin(a1) * 0.32f);
+            mo.position(tip); mo.colour(white);
+            mo.position(p0); mo.colour(white);
+            mo.position(p1); mo.colour(white);
+            mo.position(baseCenter); mo.colour(white);
+            mo.position(p1); mo.colour(white);
+            mo.position(p0); mo.colour(white);
+            triangles += 2;
+        }
+        return triangles;
+    });
+
+    ensure("SkeletonDebug/CircleMesh", "tmpBoneCircle", [&](Ogre::ManualObject& mo) {
+        const int slices = 16;
+        const Ogre::Vector3 center(0.f, 0.f, 0.f);
+        for (int i = 0; i < slices; ++i) {
+            const float a0 = Ogre::Math::TWO_PI * static_cast<float>(i) / slices;
+            const float a1 = Ogre::Math::TWO_PI * static_cast<float>(i + 1) / slices;
+            mo.position(center); mo.colour(white);
+            mo.position(std::cos(a0), 0.f, std::sin(a0)); mo.colour(white);
+            mo.position(std::cos(a1), 0.f, std::sin(a1)); mo.colour(white);
+            mo.position(center); mo.colour(white);
+            mo.position(std::cos(a1), 0.f, std::sin(a1)); mo.colour(white);
+            mo.position(std::cos(a0), 0.f, std::sin(a0)); mo.colour(white);
+        }
+        return slices * 2;
+    });
+    ensure("SkeletonDebug/RingMesh", "tmpBoneRing", [&](Ogre::ManualObject& mo) {
+        const int slices = 16;
+        const float inner = 0.55f;
+        for (int i = 0; i < slices; ++i) {
+            const float a0 = Ogre::Math::TWO_PI * static_cast<float>(i) / slices;
+            const float a1 = Ogre::Math::TWO_PI * static_cast<float>(i + 1) / slices;
+            const Ogre::Vector3 o0(std::cos(a0), 0.f, std::sin(a0));
+            const Ogre::Vector3 o1(std::cos(a1), 0.f, std::sin(a1));
+            const Ogre::Vector3 i0 = o0 * inner;
+            const Ogre::Vector3 i1 = o1 * inner;
+            mo.position(o0); mo.colour(white);
+            mo.position(i0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
+            mo.position(o0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
+            mo.position(o1); mo.colour(white);
+            mo.position(o0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
+            mo.position(i0); mo.colour(white);
+            mo.position(o1); mo.colour(white);
+            mo.position(o0); mo.colour(white);
+            mo.position(i1); mo.colour(white);
+        }
+        return slices * 4;
+    });
+}
+
+Ogre::MaterialPtr SkeletonDebug::materialForColor(float r, float g, float b, float a)
+{
+    const auto quant = [](float v) {
+        return static_cast<int>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f));
+    };
+    const std::string key = std::to_string(quant(r)) + "_" + std::to_string(quant(g)) + "_"
+        + std::to_string(quant(b)) + "_" + std::to_string(quant(a));
+    const auto found = mColorMaterials.find(key);
+    if (found != mColorMaterials.end())
+        return found->second;
+
+    const Ogre::String matName = "SkeletonDebug/BoneColor/" + key;
+    Ogre::MaterialPtr mat = Ogre::static_pointer_cast<Ogre::Material>(
+        Ogre::MaterialManager::getSingleton().getByName(matName));
+    if (!mat) {
+        mat = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().create(
+                matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
+        // Lighting stays on with tracking off so the baked vertex colours in
+        // the bone meshes do not replace this swatch. Emissive carries the
+        // colour; diffuse stays zero so scene lights do not wash it out.
+        pass->setLightingEnabled(true);
+        pass->setDepthWriteEnabled(false);
+        pass->setDepthCheckEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setCullingMode(Ogre::CULL_NONE);
+        pass->setVertexColourTracking(Ogre::TVC_NONE);
+        pass->setAmbient(0.f, 0.f, 0.f);
+        pass->setDiffuse(0.f, 0.f, 0.f, a);
+        pass->setEmissive(r, g, b);
+        pass->setSelfIllumination(r, g, b);
+        if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+            const Ogre::String scheme = Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME;
+            shaderGen->createShaderBasedTechnique(
+                *mat, Ogre::MaterialManager::DEFAULT_SCHEME_NAME, scheme);
+            shaderGen->validateMaterial(scheme, *mat);
+        }
+    }
+    mColorMaterials.emplace(key, mat);
+    return mat;
 }

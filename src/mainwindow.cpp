@@ -134,6 +134,7 @@
 #include "LightPropertiesController.h"
 #include "AutoRigController.h"
 #include "SkeletonEditor.h"
+#include "BoneDisplayController.h"
 #include "MeshDepthRenderer.h"
 #include "MaterialPresetLibrary.h"
 #include "PaintChannelPresets.h"
@@ -1188,6 +1189,11 @@ void MainWindow::initToolBar()
             "PropertiesPanel", 1, 0, "SkeletonEditor",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return SkeletonEditor::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<BoneDisplayController>(
+            "PropertiesPanel", 1, 0, "BoneDisplayController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return BoneDisplayController::qmlInstance(engine, nullptr);
             });
 #ifdef ENABLE_AUTO_UPDATER
         qmlRegisterSingletonType<UpdaterController>(

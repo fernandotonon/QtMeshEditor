@@ -38,6 +38,7 @@
 #include "FaceRigController.h"
 #include "TexturePaintController.h"
 #include "AnimationControlController.h"
+#include "BoneDisplayController.h"
 #include "PropertiesPanelController.h"
 #include "SkeletonDebug.h"
 #include "SkeletonEditor.h"
@@ -124,6 +125,8 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     // position and only snaps to the bone on the first drag event).
     connect(AnimationControlController::instance(),
             &AnimationControlController::boneListChanged,
+            this, &TransformOperator::onSelectionChanged);
+    connect(BoneDisplayController::instance(), &BoneDisplayController::displayChanged,
             this, &TransformOperator::onSelectionChanged);
 
     // Update gizmo when edit mode selection changes (vertices selected/deselected)
@@ -614,7 +617,11 @@ void TransformOperator::updateGizmo()
     bool editModeHasSelection = EditModeController::instance()->isEditModeActive()
         && !EditModeController::instance()->selectedVertices().empty();
     const bool boneSelected = AnimationControlController::instance()->selectedBonePtr() != nullptr
-                              && AnimationControlController::instance()->selectedEntity() != nullptr;
+                              && AnimationControlController::instance()->selectedEntity() != nullptr
+                              && BoneDisplayController::instance()->isBoneShown(
+                                     AnimationControlController::instance()->selectedEntity(),
+                                     QString::fromStdString(AnimationControlController::instance()
+                                                                ->selectedBonePtr()->getName()));
 
     if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()
        ||SelectionSet::getSingleton()->hasSubEntities()||editModeHasSelection||boneSelected)
@@ -1003,8 +1010,9 @@ Ogre::MovableObject* TransformOperator::performRaySelection(const QPoint& pos, b
     return nullptr;
 }
 
-bool TransformOperator::tryPickBoneAt(const QPoint& pos, SelectionMode mode)
+bool TransformOperator::tryPickBoneAt(const QPoint& pos, SelectionMode mode, bool* refusedSelection)
 {
+    if (refusedSelection) *refusedSelection = false;
     if (!m_pRayQuery || !m_pActiveWidget || mode == DEL_SELECT)
         return false;
 
@@ -1049,6 +1057,17 @@ bool TransformOperator::tryPickBoneAt(const QPoint& pos, SelectionMode mode)
         }
         if (!ent || !ent->getParentSceneNode())
             continue;
+
+        const QString boneQ = QString::fromStdString(boneName);
+        auto* display = BoneDisplayController::instance();
+        if (!display->isBoneShown(ent, boneQ))
+            continue;
+        if (!display->canSelectBone(ent, boneQ)) {
+            SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.display.lock"),
+                QStringLiteral("refused selection of %1").arg(boneQ));
+            if (refusedSelection) *refusedSelection = true;
+            return true;
+        }
 
         // Keep the mesh selection stable when the hit entity is already
         // selected. clear()+append of the same node briefly empties
@@ -1143,6 +1162,57 @@ void TransformOperator::performBoxSelection(const QPoint& first, const QPoint& s
         else
             SelectionSet::getSingleton()->append((*iter)->getParentSceneNode());
 
+    // Bones inside the box are selectable when the skeleton overlay is up.
+    // Locked and hidden bones are skipped, so a box cannot grab a shielded bone.
+    if (mode != DEL_SELECT && PropertiesPanelController::instance()->hasAnySkeletonDebugActive()) {
+        m_pVolQuery->setQueryMask(BONE_QUERY_FLAGS);
+        Ogre::SceneQueryResult boneHits = m_pVolQuery->execute();
+        QString chosenBone;
+        QString chosenEntity;
+        Ogre::Entity* chosen = nullptr;
+        for (Ogre::MovableObject* movable : boneHits.movables) {
+            const Ogre::String boneName = SkeletonDebug::boneNameForMovable(movable);
+            const Ogre::String entityName = SkeletonDebug::entityNameForMovable(movable);
+            if (boneName.empty() || entityName.empty())
+                continue;
+            const QString entityQ = QString::fromStdString(entityName);
+            if (!PropertiesPanelController::instance()->isSkeletonDebugActive(entityQ))
+                continue;
+            Ogre::Entity* ent = nullptr;
+            for (Ogre::Entity* candidate : Manager::getSingleton()->getEntities()) {
+                if (candidate && candidate->getName() == entityName) {
+                    ent = candidate;
+                    break;
+                }
+            }
+            if (!ent)
+                continue;
+            const QString boneQ = QString::fromStdString(boneName);
+            auto* display = BoneDisplayController::instance();
+            if (!display->canSelectBone(ent, boneQ))
+                continue;
+            chosenBone = boneQ;
+            chosenEntity = entityQ;
+            chosen = ent;
+        }
+        if (chosen && !chosenBone.isEmpty()) {
+            bool alreadySelected = false;
+            for (Ogre::Entity* selected : SelectionSet::getSingleton()->getResolvedEntities()) {
+                if (selected == chosen) {
+                    alreadySelected = true;
+                    break;
+                }
+            }
+            if (!alreadySelected) {
+                if (mode == NEW_SELECT)
+                    SelectionSet::getSingleton()->clear();
+                SelectionSet::getSingleton()->append(chosen->getParentSceneNode());
+            }
+            auto* anim = AnimationControlController::instance();
+            anim->bindSkeletonForEntity(chosenEntity);
+            anim->selectBone(chosenBone);
+        }
+    }
 }
 
 void TransformOperator::mousePressEvent(QMouseEvent *e)
@@ -1151,8 +1221,11 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
     // hierarchy context menu (Inspector-styled).
     if (e->button() == Qt::RightButton)
     {
-        if (tryPickBoneAt(e->pos()))
+        bool refusedSelection = false;
+        if (tryPickBoneAt(e->pos(), NEW_SELECT, &refusedSelection))
         {
+            if (refusedSelection)
+                return;
             if (m_pActiveWidget) {
                 const QPoint global = m_pActiveWidget->mapToGlobal(e->pos());
                 if (auto* skelEd = SkeletonEditor::getSingletonPtr())
@@ -1417,6 +1490,25 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             // go through the bone path because that's the primary
             // posing workflow.
             Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+            Ogre::Entity* lockedEnt = AnimationControlController::instance()->selectedEntity();
+            if (bone && lockedEnt) {
+                if (!BoneDisplayController::instance()->isBoneShown(
+                        lockedEnt, QString::fromStdString(bone->getName())))
+                    return;
+                const BoneDisplay::Channel channel =
+                    mTransformState == TS_TRANSLATE ? BoneDisplay::Channel::Translation
+                    : mTransformState == TS_ROTATE ? BoneDisplay::Channel::Rotation
+                                                   : BoneDisplay::Channel::Scale;
+                if (BoneDisplayController::instance()->isChannelLocked(
+                        lockedEnt, QString::fromStdString(bone->getName()), channel)) {
+                    const char* which = mTransformState == TS_TRANSLATE ? "translation"
+                        : mTransformState == TS_ROTATE ? "rotation" : "scale";
+                    SentryReporter::addBreadcrumb(QStringLiteral("scene.skel.display.lock"),
+                        QStringLiteral("refused %1 on %2")
+                            .arg(QLatin1String(which), QString::fromStdString(bone->getName())));
+                    return;
+                }
+            }
             mBoneDragActive       = true;
             mBoneStartPos         = bone->getPosition();
             mBoneStartOrient      = bone->getOrientation();
