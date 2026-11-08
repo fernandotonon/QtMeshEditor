@@ -1,5 +1,5 @@
 #include "CharacterController.h"
-#include <QFileDialog>
+#include "../ImageTo3D/ImageSourceController.h"
 #include <QThread>
 #include <QPointer>
 #include <QImageReader>
@@ -268,21 +268,6 @@ QString CharacterController::skinColourHex(const QString& name) const
     if (!CharacterGen::parseColour(name, CharacterGen::ColourKind::Skin, &c)) return QString();
     return QColor::fromRgbF(c[0], c[1], c[2]).name();
 }
-QString CharacterController::pickPhoto() const
-{
-    static QString lastDir;
-    const QString f = QFileDialog::getOpenFileName(QApplication::activeWindow(), tr("Choose a photo of a person"), lastDir,
-                                                   tr("Images (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff)"), nullptr, QFileDialog::DontUseNativeDialog);
-    if (!f.isEmpty()) lastDir = QFileInfo(f).absolutePath();
-    return f;
-}
-
-void CharacterController::clearPhoto()
-{
-    m_photoPath.clear();
-    emit photoChanged();
-}
-
 void CharacterController::generateFromPhoto(const QString& path)
 {
     using namespace CharacterGen;
@@ -300,21 +285,23 @@ void CharacterController::generateFromPhoto(const QString& path)
     setStatus(tr("Reading the photo…"), true);
     const std::shared_ptr<Assets> assets = m_assets;
     PhotoCharacter::Options options;
+    ImageSourceController::instance()->setLocked(this, true);   // the image cannot be swapped under the job
     QPointer<CharacterController> self(this);
-    QThread* worker = QThread::create([self, assets, photo, options, path] {
+    QThread* worker = QThread::create([self, assets, photo, options] {
         auto result = std::make_shared<PhotoCharacter::Result>(PhotoCharacter::estimate(photo, *assets, options, [self](const QString& line) {
             // only the stage lines (they end with an ellipsis) go to the status; the measurements are for the CLI log
             if (self && line.endsWith(QChar(0x2026))) QMetaObject::invokeMethod(self.data(), [self, line] { if (self) self->setStatus(line, true); }, Qt::QueuedConnection);
         }));
-        if (self) QMetaObject::invokeMethod(self.data(), [self, result, path] { if (self) self->finishPhoto(result, path); }, Qt::QueuedConnection);
+        if (self) QMetaObject::invokeMethod(self.data(), [self, result] { if (self) self->finishPhoto(result); }, Qt::QueuedConnection);
     });
     connect(worker, &QThread::finished, worker, &QObject::deleteLater);
     worker->start();
 }
 
-void CharacterController::finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result, const QString& path)
+void CharacterController::finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result)
 {
     using namespace CharacterGen;
+    ImageSourceController::instance()->setLocked(this, false);
     if (!result->ok) { setStatus(tr("The photo could not be used: %1").arg(result->error), false); return; }
     const PhotoCharacter::Result& r = *result;
     auto hex = [](const Rgb& c) { return QColor::fromRgbF(double(c[0]), double(c[1]), double(c[2])).name(); };
@@ -332,8 +319,6 @@ void CharacterController::finishPhoto(const std::shared_ptr<CharacterGen::PhotoC
         if (r.haveTopColour) setTopColour(hex(r.topColour));
         if (r.haveBottomColour) setBottomColour(hex(r.bottomColour));
     }
-    m_photoPath = path;
-    emit photoChanged();
     QVariantList coefficients;
     for (float v : r.bodyShape) coefficients << double(v);
     setStatus(tr("Photo read: building the character…"), false);

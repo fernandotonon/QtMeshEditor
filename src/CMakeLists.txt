@@ -312,6 +312,7 @@ ImageTo3D/Trellis2Bake.cpp
 ImageTo3D/Trellis2Predictor.cpp
 ImageTo3D/MeshGenBuilder.cpp
 ImageTo3D/MeshGenController.cpp
+ImageTo3D/ImageSourceController.cpp
 ImageTo3D/BackgroundRemover.cpp
 ImageTo3D/ImageCaptioner.cpp
 PbrMapSynth.cpp
@@ -584,6 +585,7 @@ ModelTurntableRenderer.h
 ModelIsometricRenderer.h
 IsometricSpritesController.h
 ImageTo3D/MeshGenController.h
+ImageTo3D/ImageSourceController.h
 EditableMesh.h
 EditModeController.h
 EditorModeController.h

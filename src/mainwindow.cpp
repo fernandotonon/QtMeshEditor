@@ -158,6 +158,7 @@
 #include "CharacterGen/CharacterController.h"
 #include "MotionGraphManager.h"
 #include "ImageTo3D/MeshGenController.h"
+#include "ImageTo3D/ImageSourceController.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
@@ -905,6 +906,7 @@ MainWindow::~MainWindow()
         CharacterController::kill();
         MotionGraphManager::kill();
         MeshGenController::kill();
+        ImageSourceController::kill();
         MocapController::kill();
         MeshDepthRenderer::shutdown();
         MeshValidator::kill();

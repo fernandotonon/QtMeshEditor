@@ -1,6 +1,17 @@
 #include <gtest/gtest.h>
 
 #include "CharacterController.h"
+#include "AnimationControlController.h"
+#include "PropertiesPanelController.h"
+#include "TestHelpers.h"
+#include "ThemeManager.h"
+#include "../ImageTo3D/ImageSourceController.h"
+
+#include <QCoreApplication>
+#include <QQmlComponent>
+#include <QQmlEngine>
+
+#include <memory>
 
 using namespace CharacterGen;
 
@@ -48,4 +59,27 @@ TEST(CharacterShapeControls, MeasureHelpersAreInertWithoutAssets)
     const QVariantList out = c->coefficientsWithMeasure(1, 2.0, coefficients);
     EXPECT_EQ(out.size(), 45);
     EXPECT_EQ(c->coefficientsWithMeasure(99, 2.0, coefficients), coefficients);
+}
+
+// The whole panel (it embeds the shared image picker through a Loader) must instantiate against the controllers without errors.
+TEST(CharacterShapeControls, PanelQmlLoadsWithoutErrors)
+{
+    ASSERT_TRUE(tryInitOgre());   // PropertiesPanelController builds the TransformOperator, which needs the Manager
+    qmlRegisterSingletonType<ThemeManager>("ThemeManager", 1, 0, "ThemeManager",
+        [](QQmlEngine* e, QJSEngine* s) -> QObject* { return ThemeManager::qmlInstance(e, s); });
+    qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
+        [](QQmlEngine* e, QJSEngine* s) -> QObject* { return AnimationControlController::qmlInstance(e, s); });
+    qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
+        [](QQmlEngine* e, QJSEngine*) -> QObject* { return PropertiesPanelController::qmlInstance(e, nullptr); });
+    qmlRegisterSingletonType<CharacterController>("PropertiesPanel", 1, 0, "CharacterController",
+        [](QQmlEngine* e, QJSEngine* s) -> QObject* { return CharacterController::qmlInstance(e, s); });
+    qmlRegisterSingletonType<ImageSourceController>("PropertiesPanel", 1, 0, "ImageSourceController",
+        [](QQmlEngine* e, QJSEngine* s) -> QObject* { return ImageSourceController::create(e, s); });
+    QQmlEngine engine;
+    engine.addImportPath(QStringLiteral("qrc:/"));
+    QQmlComponent component(&engine, QUrl(QStringLiteral("qrc:/AnimationControl/CharacterGeneratorPanel.qml")));
+    while (component.isLoading()) QCoreApplication::processEvents();
+    ASSERT_FALSE(component.isError()) << component.errorString().toStdString();
+    std::unique_ptr<QObject> obj(component.create());
+    ASSERT_NE(obj, nullptr) << component.errorString().toStdString();
 }

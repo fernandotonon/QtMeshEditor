@@ -119,31 +119,20 @@ Column {
 
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
 
-    Label { height: 18; font.bold: true; text: "From a photo" }
-    Row {
-        spacing: 6
-        ToolBtn {
-            label: CharacterController.photoPath === "" ? "Load photo…" : "Change photo…"
-            enabled: !CharacterController.busy
-            onClicked: { var f = CharacterController.pickPhoto(); if (f !== "") CharacterController.generateFromPhoto(f) }
-        }
-        ToolBtn { label: "Clear photo"; enabled: CharacterController.photoPath !== "" && !CharacterController.busy; onClicked: CharacterController.clearPhoto() }
+    Label { height: 18; font.bold: true; text: "From an image" }
+    // the same source as Image → 3D: pick a file, or create / edit one from a prompt (shared selection, preview, viewer, caption)
+    Loader {
+        width: sec.width
+        source: "qrc:/AnimationControl/ImageSourcePicker.qml"
     }
-    Row {
-        visible: CharacterController.photoPath !== ""
-        spacing: 6
-        Image {
-            width: 56; height: 56
-            fillMode: Image.PreserveAspectCrop
-            asynchronous: true
-            cache: false
-            sourceSize.width: 112; sourceSize.height: 112
-            source: CharacterController.photoUrl
-        }
-        Note { width: sec.width - 62; text: CharacterController.photoPath.split("/").pop() }
+    ToolBtn {
+        label: "Create character from this image"
+        accent: true
+        enabled: ImageSourceController.selectedImagePath !== "" && !CharacterController.busy
+        onClicked: CharacterController.generateFromPhoto(ImageSourceController.selectedImagePath)
     }
     Note { visible: CharacterController.busy; text: CharacterController.status }
-    Note { text: "Reads the body and its proportions, the skin, hair, eyes and clothes from one photo of a person (about 40 s; the models download once). A front view in good light works best. The sliders below then show what it found." }
+    Note { text: "Reads the body and its proportions, the skin, hair, eyes and clothes from the image (about 40 s; the models download once). A front view of a person in good light works best. The sliders below then show what was found." }
     Connections {
         target: CharacterController
         function onPhotoFitted(coefficients, skin, eye) {

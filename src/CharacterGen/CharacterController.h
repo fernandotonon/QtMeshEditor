@@ -172,19 +172,11 @@ public:
     /// Offset in cm of measurement `i` for these 45 coefficients, and the coefficients that put it at `target` cm without moving the others.
     Q_INVOKABLE double measureOffset(int i, const QVariantList& coefficients) const;
     Q_INVOKABLE QVariantList coefficientsWithMeasure(int i, double target, const QVariantList& coefficients) const;
-    // ---- from a photo (PhotoCharacter.h) ----
-    /// The photo the character was last made from ("" = none) and whether its face is projected onto the skin.
-    Q_PROPERTY(QString photoPath READ photoPath NOTIFY photoChanged)
-    QString photoPath() const { return m_photoPath; }
-    Q_PROPERTY(QUrl photoUrl READ photoUrl NOTIFY photoChanged)
-    QUrl photoUrl() const { return m_photoPath.isEmpty() ? QUrl() : QUrl::fromLocalFile(m_photoPath); }
-    /// A file dialog for an image (non-native, like the colour picker); "" when cancelled.
-    Q_INVOKABLE QString pickPhoto() const;
-    /// Read the body, skin, hair, eyes and clothes from the photo on a worker thread (the models download on first use); the status line
-    /// reports the steps. When it is done `photoFitted` carries the body coefficients and colours for the panel and the panel builds the character.
+    // ---- from an image (PhotoCharacter.h) ----
+    /// Read the body, skin, hair, eyes and clothes from the image on a worker thread (the models download on first use); the status line
+    /// reports the steps. The image comes from the shared source (ImageSourceController: a file, or one generated from a prompt).
+    /// When it is done `photoFitted` carries the body coefficients and colours for the panel and the panel builds the character.
     Q_INVOKABLE void generateFromPhoto(const QString& path);
-    /// Forget the photo (the thumbnail and its name).
-    Q_INVOKABLE void clearPhoto();
     /// A short human name for body-shape mode `mode` (what it mostly changes), and what it does in a sentence.
     Q_INVOKABLE QString shapeLabel(int mode) const;
     Q_INVOKABLE QString shapeHint(int mode) const;
@@ -214,7 +206,6 @@ signals:
     void hairLibraryChanged();
     void bodyHairChanged();
     void proportionsChanged();
-    void photoChanged();
     /// The photo was read: the 45 body coefficients and the skin / eye colours ("#rrggbb", empty = not found) to put in the panel.
     void photoFitted(const QVariantList& coefficients, const QString& skin, const QString& eye);
     void shapeRevisionChanged();
@@ -252,8 +243,7 @@ private:
     const CharacterGen::BodyShape::Model* shapeModel() const;
     int m_shapeRevision = 0;
     bool prepareAssets(QString* err);
-    void finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result, const QString& path);
-    QString m_photoPath;
+    void finishPhoto(const std::shared_ptr<CharacterGen::PhotoCharacter::Result>& result);
     void bumpShapeRevision() { ++m_shapeRevision; emit shapeRevisionChanged(); }
     bool m_eyelashes = true;
     QString m_topStyle = QStringLiteral("none");
