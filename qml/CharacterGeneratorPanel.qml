@@ -13,12 +13,16 @@ Column {
     width: parent ? parent.width : 300
     spacing: 6
     property int seed: 1
-    // slider rows: the MHR body-shape modes worth exposing (0-9 shape the torso, 20-27 the head and neck)
-    readonly property var bodyModes: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-    readonly property var headModes: [20, 21, 22, 23, 24, 25, 26, 27]
+    // the raw MHR identity modes (Advanced): 1-19 shape the torso and hips (mode 0 is the Weight slider), 20-39 the head and neck.
+    // Names and tooltips come from measuring each mode (CharacterController.shapeLabel / shapeHint).
+    readonly property var bodyModes: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    readonly property var headModes: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39]
+    readonly property var armModes: [40, 41, 42, 43, 44]
+    property bool showAdvancedShape: false
     property var coeffs: new Array(45).fill(0)
     property bool live: true
     property string customSkin: ""   // #rrggbb picked by hand; wins over the named skin
+    property string customEye: ""    // #rrggbb read from a photo; wins over the named eye colour
     function reseed() { coeffs = CharacterController.seedBody(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0); liveUpdate() }
     // every coefficient is sent, zeros included: the sliders are authoritative (a zero must not fall back to the seed's random value)
     function bodyString() { var parts = []; for (var i = 0; i < coeffs.length; ++i) parts.push(i + "=" + coeffs[i].toFixed(3)); return parts.join(",") }
@@ -26,7 +30,7 @@ Column {
     function generate(replace) {
         seed = parseInt(seedField.text) || 0   // take the seed as typed even if the field has not lost focus yet
         CharacterController.generate(averageBox.checked ? -1 : seed, parseFloat(varietyField.text) || 1.0, bodyString(), "",
-                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), pick(eyeBox, CharacterController.eyeNames), replace)
+                                     (customSkin !== "" ? customSkin : pick(skinBox, CharacterController.skinNames)), (customEye !== "" ? customEye : pick(eyeBox, CharacterController.eyeNames)), replace)
     }
     // live preview: swap the character this panel made (merged into one undo step) once a slider is released
     function liveUpdate() { if (live && CharacterController.hasCharacter()) generate(true) }
@@ -115,6 +119,30 @@ Column {
 
     Note { text: "Generates a rigged human: body + head as separate parts, standard 52-joint skeleton, 51 ARKit expression shapes." }
 
+    Label { height: 18; font.bold: true; text: "From an image" }
+    // the same source as Image → 3D: pick a file, or create / edit one from a prompt (shared selection, preview, viewer, caption)
+    Loader {
+        width: sec.width
+        source: "qrc:/AnimationControl/ImageSourcePicker.qml"
+    }
+    ToolBtn {
+        label: "Create character from this image"
+        accent: true
+        enabled: ImageSourceController.selectedImagePath !== "" && !CharacterController.busy
+        onClicked: CharacterController.generateFromPhoto(ImageSourceController.selectedImagePath)
+    }
+    Note { visible: CharacterController.busy; text: CharacterController.status }
+    Note { text: "Reads the body and its proportions, the skin, hair, eyes and clothes from the image (about 40 s; the models download once). A front view of a person in good light works best. The sliders below then show what was found." }
+    Connections {
+        target: CharacterController
+        function onPhotoFitted(coefficients, skin, eye) {
+            sec.coeffs = coefficients
+            if (skin !== "") sec.customSkin = skin
+            sec.customEye = eye
+            sec.generate(CharacterController.hasCharacter())
+        }
+    }
+
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Seed" }
@@ -139,7 +167,7 @@ Column {
     Row {
         spacing: 4
         Label { width: 52; height: 22; text: "Eyes" }
-        ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onCurrentIndexChanged: sec.liveUpdate() }
+        ThemedComboBox { id: eyeBox; width: sec.width - 60; height: 22; font.pixelSize: 11; model: ["(default)"].concat(CharacterController.eyeNames); onActivated: { sec.customEye = ""; sec.liveUpdate() } onCurrentIndexChanged: sec.liveUpdate() }
     }
     Row {
         visible: CharacterController.hairNames.length > 0
@@ -466,9 +494,9 @@ Column {
         spacing: 6
         Label {
             width: 118; height: 22; elide: Text.ElideRight
-            text: CharacterController.shapeLabel(row.mode)
+            text: { CharacterController.shapeRevision; return CharacterController.shapeLabel(row.mode) }
             HoverHandler { id: hh }
-            ToolTip.visible: hh.hovered; ToolTip.delay: 500; ToolTip.text: CharacterController.shapeHint(row.mode)
+            ToolTip.visible: hh.hovered; ToolTip.delay: 500; ToolTip.text: { CharacterController.shapeRevision; return CharacterController.shapeHint(row.mode) }
         }
         Slider {
             id: sl
@@ -481,13 +509,60 @@ Column {
         }
         Label { width: 32; height: 22; horizontalAlignment: Text.AlignRight; text: sl.value.toFixed(1) }
     }
-    Label { height: 18; font.bold: true; text: "Body" }
-    Repeater { model: sec.bodyModes; delegate: ShapeSlider { required property int modelData; mode: modelData } }
-    Label { height: 18; font.bold: true; text: "Head and neck" }
-    Repeater { model: sec.headModes; delegate: ShapeSlider { required property int modelData; mode: modelData } }
+    component PropSlider: Row {
+        id: prow
+        required property int idx
+        spacing: 6
+        Label {
+            width: 118; height: 22; elide: Text.ElideRight
+            text: CharacterController.proportionLabel(prow.idx)
+            HoverHandler { id: phh }
+            ToolTip.visible: phh.hovered; ToolTip.delay: 500; ToolTip.text: CharacterController.proportionHint(prow.idx)
+        }
+        Slider {
+            id: psl
+            width: sec.width - 118 - 44 - 12
+            height: 22
+            from: 0.8; to: 1.2; stepSize: 0.01
+            value: CharacterController.proportions[prow.idx]
+            onMoved: CharacterController.setProportion(prow.idx, value)
+            onPressedChanged: if (!pressed) sec.liveUpdate()
+        }
+        Label { width: 40; height: 22; horizontalAlignment: Text.AlignRight; text: Math.round(psl.value * 100) + "%" }
+    }
+    component MeasureSlider: Row {
+        id: mrow
+        required property int idx
+        spacing: 6
+        Label {
+            width: 118; height: 22; elide: Text.ElideRight
+            text: CharacterController.measureLabel(mrow.idx)
+            HoverHandler { id: mhh }
+            ToolTip.visible: mhh.hovered; ToolTip.delay: 500; ToolTip.text: CharacterController.measureHint(mrow.idx)
+        }
+        Slider {
+            id: msl
+            width: sec.width - 118 - 52 - 12
+            height: 22
+            from: -CharacterController.measureRange(mrow.idx); to: CharacterController.measureRange(mrow.idx); stepSize: 0.1
+            value: { CharacterController.shapeRevision; return CharacterController.measureOffset(mrow.idx, sec.coeffs) }
+            onMoved: sec.coeffs = CharacterController.coefficientsWithMeasure(mrow.idx, value, sec.coeffs)
+            onPressedChanged: if (!pressed) sec.liveUpdate()
+        }
+        Label { width: 48; height: 22; horizontalAlignment: Text.AlignRight; text: (msl.value >= 0 ? "+" : "") + msl.value.toFixed(1) + " cm" }
+    }
+    Label { height: 18; font.bold: true; text: "Proportions" }
+    Repeater { model: CharacterController.proportionCount(); delegate: PropSlider { required property int modelData; idx: modelData } }
+    Label { height: 18; font.bold: true; text: "Body shape" }
+    ShapeSlider { mode: 0 }
+    Repeater { model: CharacterController.measureCount(); delegate: MeasureSlider { required property int modelData; idx: modelData } }
+    InspectorCheckBox { text: "Advanced: all shape modes"; checked: sec.showAdvancedShape; onToggled: sec.showAdvancedShape = checked }
+    Repeater { model: sec.showAdvancedShape ? sec.bodyModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
+    Repeater { model: sec.showAdvancedShape ? sec.headModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
+    Repeater { model: sec.showAdvancedShape ? sec.armModes : []; delegate: ShapeSlider { required property int modelData; mode: modelData } }
     Row {
         spacing: 4
-        ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); sec.liveUpdate() } }
+        ToolBtn { label: "Reset shape"; onClicked: { sec.coeffs = new Array(45).fill(0); CharacterController.resetProportions(); sec.liveUpdate() } }
         ToolBtn { label: "From seed"; onClicked: sec.reseed() }
     }
     InspectorCheckBox { text: "Skin texture (procedural)"; checked: CharacterController.skinTexture; onToggled: { CharacterController.skinTexture = checked; sec.liveUpdate() } }

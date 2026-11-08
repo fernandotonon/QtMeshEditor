@@ -8,13 +8,23 @@
 #include "CharacterScene.h"
 #include "Clothing.h"
 #include "HairTint.h"
+#include "PhotoAppearance.h"
+#include "PhotoCharacter.h"
+#include "MouthFit.h"
+#include "BodyShape.h"
+#include "Proportions.h"
 #include "../CLIPipeline.h"
 #include "../MeshImporterExporter.h"
 #include "../SentryReporter.h"
+#include "../BodyFromPhoto/SamBodyPredictor.h"
 
 #include <QColor>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QImage>
+#include <QPainter>
+#include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -35,12 +45,14 @@ void usage()
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh character -o <out.glb|fbx|...> [--seed N] [--variety S] [--body 0=1.2,3=-0.5] [--face 0=1,4=-0.8]\n"
         "                        [--skin <#rrggbb|pale|light|tan|brown|dark>] [--eye <#rrggbb|blue|green|brown|hazel|grey|dark>]\n"
-        "                        [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
+        "                        [--photo IMAGE [--fit-face]] [--height F] [--legs F] [--arms F] [--torso F] [--shoulders F] [--head-size F] [--mouth-report] [--facing-z] [--bust [--bust-depth M]] [--ict-head] [--closed-eyes] [--no-skin-texture] [--body-hair 0..1] [--top STYLE] [--bottom STYLE] [--top-colour C] [--bottom-colour C] [--list-clothes] [--no-eyelashes] [--hair STYLE|proc:PRESET|lib:ID [--hair-colour NAME|#rrggbb] [--hair-param k=v] [--hair-fit k=v] [--hair-config F] | --list-hair | --list-hair-presets | --list-hair-library | --list-hair-colours | --import-hair PATH] [--assets DIR] [--json]\n"
         "       qtmesh character --download\n"
         "\n"
         "Builds a rigged character: an MHR body (127-joint skeleton, 45 body shape modes) with an ICT-FaceKit head attached as\n"
         "separate parts (100 face identity modes, the 51 ARKit expression shapes as morph targets). --seed picks a random body and\n"
         "face (--variety scales the spread, default 1.0); --body / --face set individual mode coefficients (index=value).\n"
+        "--photo derives body shape (SAM 3D Body), skin, hair, iris and clothes from a photo; --fit-face (experimental) also refines the face shape against the photo's landmarks.\n"
+        "--height/--legs/--arms/--torso/--shoulders/--head-size are proportion factors (1 = the mean body, 0.6..1.6): the 45 body modes barely change them.\n"
         "--bust keeps only the head and shoulders (previews, thumbnails). Skin and eye colours tint the parts. The character faces -Z like the rest of the editor (--facing-z keeps +Z).\n"
         "Hair Studio: --hair proc:<preset> (procedural hair cards: --list-hair-presets) or lib:<id> (imported library hairstyle: --list-hair-library),\n"
         "tuned with --hair-param key=value (length, density, volume, curliness, clumping, frizz, parting, layers, taper, ... seed) and --hair-fit key=value\n"
@@ -55,7 +67,7 @@ QString assetsDir() { return CharacterAssets::dir(); }
 
 int run(int argc, char* argv[])
 {
-    QString outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
+    QString photoArg, outPath, bodyArg, faceArg, skinArg, eyeArg, assets = assetsDir();
     QString hairArg;
     QString topArg;
     QString bottomArg;
@@ -71,7 +83,7 @@ int run(int argc, char* argv[])
     QString hairConfigArg, saveHairConfigArg, importHairArg, hairAuthor, hairLicense, hairAttribution, hairSource;
     bool listHairPresets = false, listHairLibrary = false;
     float bodyHair = 0.5f;
-    bool skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
+    std::vector<float> samBodyCm; Proportions prop; bool haveProp = false; bool measureBody = false, mouthReport = false, fitFace = false, skinTexture = true, openEyes = true, ictHead = false, havePlusZ = false, json = false, haveSeed = false, bust = false, download = false, rawRig = false, fullSkeleton = false, noFold = false, keepAxes = false, keepNames = false;
     uint32_t seed = 0;
     float variety = 1.0f, bustDepth = 0.30f;
     for (int i = 1; i < argc; ++i) {
@@ -108,6 +120,10 @@ int run(int argc, char* argv[])
             if (!ok) { CLIPipeline::writeCliError(QStringLiteral("Error: --variety expects a number.\n")); return 2; }
             variety = float(d);
         }
+        else if (a == "--photo") photoArg = next();
+        else if (a == "--fit-face") fitFace = true;
+        else if (a == "--mouth-report") mouthReport = true;
+        else if (a == "--measure-body") measureBody = true;
         else if (a == "--body") bodyArg = next();
         else if (a == "--face") faceArg = next();
         else if (a == "--ict-head") ictHead = true;
@@ -133,6 +149,12 @@ int run(int argc, char* argv[])
         else if (a == "--list-clothes") listClothes = true;
         else if (a == "--hair-colour" || a == "--hair-color") hairColourArg = next();
         else if (a == "--list-hair-colours" || a == "--list-hair-colors") listHairColours = true;
+        else if ((a == "--height" || a == "--legs" || a == "--arms" || a == "--torso" || a == "--shoulders" || a == "--head-size") && i + 1 < argc) {
+            const float f = QString::fromLocal8Bit(argv[++i]).toFloat();
+            if (a == "--height") prop.height = f; else if (a == "--legs") prop.legs = f; else if (a == "--arms") prop.arms = f;
+            else if (a == "--torso") prop.torso = f; else if (a == "--shoulders") prop.shoulders = f; else prop.head = f;
+            haveProp = true;
+        }
         else if (a == "--body-hair" && i + 1 < argc) bodyHair = std::clamp(QString::fromLocal8Bit(argv[++i]).toFloat(), 0.0f, 1.0f);
         else if (a == "--closed-eyes") openEyes = false;
         else if (a == "--open-eyes") openEyes = true;
@@ -256,6 +278,7 @@ int run(int argc, char* argv[])
     p.openEyes = openEyes;
     p.skinTexture = skinTexture;
     p.bodyHair = bodyHair;
+    if (haveProp) p.proportions = prop;
     p.eyelashes = eyelashes;
     if (!topArg.isEmpty() && !parseTopStyle(topArg, nullptr)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: unknown top '%1' (%2).\n").arg(topArg, topStyleIds().join(QStringLiteral(", "))));
@@ -369,6 +392,36 @@ int run(int argc, char* argv[])
         p.bodyShape = randomCoefficients(seed * 2u + 1u, data.mhrShapes, variety, 16);
         p.faceIdentity = randomCoefficients(seed * 2u + 2u, data.ictIdentities, variety, 40);
     }
+    if (!photoArg.isEmpty()) {
+        // Photo -> character (PhotoCharacter.h). --body / --skin / --eye / --hair* / --top* / --bottom* still win over what the photo says.
+        QImageReader reader(photoArg);
+        reader.setAutoTransform(true);
+        const QImage photo = reader.read();
+        if (photo.isNull()) { CLIPipeline::writeCliError(QStringLiteral("Error: cannot read the image %1\n").arg(photoArg)); return 1; }
+        QString fetchErr;
+        if (!PhotoCharacter::prepareModels(&fetchErr)) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(fetchErr)); return 1; }
+        PhotoCharacter::Options po;
+        po.fitFace = fitFace;
+        po.bundleHair = qEnvironmentVariableIsSet("QTMESH_PHOTO_BUNDLE_HAIR");
+        po.debugName = QFileInfo(photoArg).baseName();
+        const PhotoCharacter::Result pr = PhotoCharacter::estimate(photo, data, po, [](const QString& line) { CLIPipeline::writeCliError(line + QLatin1Char('\n')); });
+        if (!pr.ok) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(pr.error)); return 1; }
+        PhotoCharacter::Keep keep;
+        keep.skin = !skinArg.isEmpty();
+        keep.eye = !eyeArg.isEmpty();
+        keep.hairColour = !hairColourArg.isEmpty();
+        keep.hairStyle = !hairArg.isEmpty();
+        keep.clothes = !topArg.isEmpty() || !bottomArg.isEmpty();
+        keep.topColour = !topColourArg.isEmpty();
+        keep.bottomColour = !bottomColourArg.isEmpty();
+        keep.proportions = haveProp;
+        PhotoCharacter::apply(pr, p, keep);
+        if (pr.haveHairStyle && !keep.hairStyle) hairArg = p.hairStyle;
+        if (qEnvironmentVariableIsSet("QTMESH_PHOTO_DEBUG_DIR")) samBodyCm = pr.samBodyCm;
+        p.faceIdentity.clear();
+        if (!ictHead) p.nativeHead = !data.mhrArkit.empty();
+        CLIPipeline::writeCliError(QStringLiteral("Photo shape coefficients: %1\n").arg([&] { QStringList l; for (float v : p.bodyShape) l << QString::number(double(v), 'f', 3); return l.join(QLatin1Char(',')); }()));
+    }
     if (!CharacterGen::parseCoefficients(bodyArg, p.bodyShape, data.mhrShapes, &err) || !CharacterGen::parseCoefficients(faceArg, p.faceIdentity, data.ictIdentities, &err)) {
         CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err));
         return 2;
@@ -382,6 +435,60 @@ int run(int argc, char* argv[])
         return 2;
     }
 
+    if (measureBody) {
+        // development: what each identity mode does, in named measurements (cm per +1 of the coefficient)
+        BodyShape::Model model;
+        if (!model.build(data)) { CLIPipeline::writeCliError(QStringLiteral("Error: the bundle cannot be measured\n")); return 1; }
+        CLIPipeline::writeCliError(QStringLiteral("joints: %1\n").arg(data.jointNames.join(QLatin1Char(' '))));
+        QString head = QStringLiteral("mean:");
+        for (int m = 0; m < BodyShape::MeasureCount; ++m) head += QStringLiteral(" %1=%2").arg(QLatin1String(BodyShape::info(BodyShape::Measure(m)).id)).arg(double(model.mean()[size_t(m)]), 0, 'f', 1);
+        CLIPipeline::writeCliError(head + QLatin1Char('\n'));
+        for (int s = 0; s < model.shapes(); ++s) {
+            QString line = QStringLiteral("mode %1:").arg(s);
+            for (int m = 0; m < BodyShape::MeasureCount; ++m) line += QStringLiteral(" %1").arg(double(model.effect(BodyShape::Measure(m), s)), 6, 'f', 2);
+            CLIPipeline::writeCliError(line + QLatin1Char('\n'));
+        }
+        return 0;
+    }
+    if (mouthReport) {
+        // development metric: how many mouth-interior vertices (teeth, gums, tongue) sit outside the head skin, at rest and per shape
+        const Dna::Rig rig = buildRig(data, p, nullptr, &err);
+        if (rig.meshes.empty()) { CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(err)); return 1; }
+        const std::vector<std::pair<QString, float>> shapes = {{"jawOpen", 1.0f}, {"mouthFunnel", 1.0f}, {"mouthPucker", 1.0f}, {"mouthSmileLeft", 1.0f},
+                                                               {"mouthLowerDownLeft", 1.0f}, {"jawForward", 1.0f}, {"mouthClose", 1.0f}};
+        int worstOutside = 0;
+        for (const auto& s : MouthFit::measure(rig, shapes)) {
+            worstOutside = std::max(worstOutside, s.outside);
+            CLIPipeline::writeCliError(QStringLiteral("mouth %1: %2/%3 outside, worst %4 mm, outside box (mm, from the interior centre) x[%5 %6] y[%7 %8] z[%9 %10]\n").arg(s.shape.isEmpty() ? QStringLiteral("rest") : s.shape).arg(s.outside).arg(s.interiorVertices).arg(double(s.worst) * 1000.0, 0, 'f', 1).arg(double(s.outsideMin[0]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[0]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMin[1]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[1]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMin[2]) * 1000.0, 0, 'f', 0).arg(double(s.outsideMax[2]) * 1000.0, 0, 'f', 0));
+        }
+        return worstOutside > 0 ? 3 : 0;
+    }
+    if (!samBodyCm.empty()) {
+        // development: per-vertex distance between the generated body and SAM's neutral body (the same MHR vertex ids), before and after the fit
+        BodyShape::Model bm;
+        if (bm.build(data)) {
+            auto bodyOf = [&](const Params& pp) {
+                std::vector<float> v;
+                const Dna::Rig rig = buildRig(data, pp, nullptr, nullptr);
+                if (!rig.meshes.empty()) {
+                    v = rig.meshes.front().positions;
+                    for (size_t i = 0; i + 2 < v.size(); i += 3) { if (!pp.facePlusZ) { v[i] = -v[i]; v[i + 2] = -v[i + 2]; } v[i] *= 100.0f; v[i + 1] *= 100.0f; v[i + 2] *= 100.0f; }
+                }
+                return v;
+            };
+            Params plain = p;
+            plain.proportions = Proportions();
+            const size_t n = size_t(data.mhrVertices) * 3;
+            const std::vector<float> withFit = bodyOf(p), without = bodyOf(plain);
+            if (withFit.size() >= n && without.size() >= n) {
+                // each mesh on its own floor (SAM's neutral body has its own origin)
+                auto grounded = [&](std::vector<float> v) { float lo = 1e9f; for (size_t i = 1; i < v.size(); i += 3) lo = std::min(lo, v[i]); for (size_t i = 1; i < v.size(); i += 3) v[i] -= lo; return v; };
+                const std::vector<float> samFloor = grounded(samBodyCm);
+                auto rms = [&](const std::vector<float>& v) { return BodyShape::rmsDistance(grounded(std::vector<float>(v.begin(), v.begin() + long(n))), samFloor); };
+                CLIPipeline::writeCliError(QStringLiteral("Body vs SAM neutral, RMS per vertex: %1 cm without the proportions, %2 cm with\n").arg(double(rms(without)), 0, 'f', 2).arg(double(rms(withFit)), 0, 'f', 2));
+            }
+        }
+    }
     if (!CLIPipeline::initOgreHeadless()) return 1;
     SceneBuild sb;
     Ogre::SceneNode* node = createCharacterInScene(data, p, QStringLiteral("character"), &sb, &err);

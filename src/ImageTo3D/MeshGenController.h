@@ -31,23 +31,6 @@ class MeshGenController : public QObject
 
     Q_PROPERTY(bool available READ available CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
-    // The currently-selected source image (empty until the user picks one). The
-    // panel's "Generate" button binds its enabled state to this being non-empty.
-    Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
-    // The same path as a proper file URL (QUrl::fromLocalFile) for QML Image
-    // sources — hand-building "file:///" strings breaks on Windows paths.
-    Q_PROPERTY(QString selectedImageUrl READ selectedImageUrl NOTIFY selectedImageChanged)
-    // A small preview thumbnail of the selected image as a data:image/png;base64
-    // URL the QML Image element can show directly (same idiom as the texture
-    // packer previews). Empty when no image is selected.
-    Q_PROPERTY(QString previewSource READ previewSource NOTIFY selectedImageChanged)
-    // Auto-generated caption of the selected image (SmolVLM), computed on a
-    // WORKER thread the moment an image is picked so it's ready by the time the
-    // (slow) mesh generation finishes — the AI texture pass reuses it instead
-    // of blocking the UI to caption. The panel shows it under the thumbnail.
-    // Empty until captioning completes (or if the captioner is unavailable).
-    Q_PROPERTY(QString caption READ caption NOTIFY captionChanged)
-    Q_PROPERTY(bool captioning READ captioning NOTIFY captionChanged)
 
 public:
     static MeshGenController* instance();
@@ -56,16 +39,6 @@ public:
 
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
-    QString selectedImagePath() const { return m_selectedImage; }
-    QString selectedImageUrl() const;
-    QString previewSource() const { return m_previewSource; }
-    QString caption() const { return m_caption; }
-    bool captioning() const { return m_captioning; }
-
-    // Open a native file dialog to pick a source image; stores it as the selected
-    // image and builds the preview thumbnail (does NOT start generation). Returns
-    // immediately.
-    Q_INVOKABLE void selectImage();
 
     // Generate from the currently-selected image (selectImage() first). No-op if
     // nothing selected or already busy. Emits progress → (completed | error).
@@ -115,46 +88,6 @@ public:
     Q_INVOKABLE QVariantList gameReadyPresets() const;
     Q_INVOKABLE int gameReadyDefaultIndex() const;
 
-    // ── Prompt-to-3D: generate the source image from a TEXT PROMPT instead
-    // of importing one (FLUX.2-klein-4B via stable-diffusion.cpp; falls back
-    // to whatever SD checkpoint the user has). generateSourceImage is async —
-    // it loads the model if needed, generates a 1024² image, then selects it
-    // exactly as selectImage() would (preview + caption + Generate enabled).
-    // Progress/result arrive via imageGenStatus.
-    Q_INVOKABLE bool imageGenAvailable() const;
-    Q_INVOKABLE QString imageGenModelName() const;
-    /// When an image is already selected, generateSourceImage EDITS it
-    /// (FLUX.2 kontext-style — the prompt describes the change); with no
-    /// image it generates from scratch. clearSelectedImage removes the
-    /// selection (the preview's 🗑 button) so the next prompt starts fresh.
-    Q_INVOKABLE void generateSourceImage(const QString& prompt);
-    Q_INVOKABLE void clearSelectedImage();
-
-    /// Copy the selected/generated source image to `destPath` (a plain path
-    /// or a file:// URL, as QML's FileDialog hands back). The generated
-    /// image otherwise lives only in AppData under a timestamped name and is
-    /// effectively disposable — saving it makes prompt-to-image useful on
-    /// its own, not just as a step of image-to-3D. Returns false and emits
-    /// `error` when there is nothing selected or the copy fails.
-    Q_INVOKABLE bool saveSelectedImageAs(const QString& destPath);
-    /// Ask for a destination with a native Save dialog and copy the image
-    /// there. Returns the saved path, or empty when cancelled/failed. The
-    /// panel calls this — the file dialog lives here rather than in QML to
-    /// match the project's existing openFileDialog convention.
-    Q_INVOKABLE QString saveSelectedImageInteractive();
-
-private:
-    /// Native generation resolution for a checkpoint: klein and SDXL train
-    /// at 1024², SD 1.x at 512².
-    static int imageGenSizeForModel(const QString& model);
-    /// file:// → path, and default a missing suffix to .png. Shared so the
-    /// path returned by the interactive save is the one actually written.
-    static QString normalisedSavePath(const QString& destPath);
-public:
-    /// A sensible default filename for the save dialog, derived from the
-    /// caption/prompt when there is one so saved images are identifiable.
-    Q_INVOKABLE QString suggestedImageFileName() const;
-
     Q_INVOKABLE bool modelsPresent(int quality = 0) const;
     // Download the decoder + the given tier's encoder (blocks on the caller's
     // event loop, driven by ModelDownloader → its progress bar updates in the
@@ -164,35 +97,15 @@ public:
 
 signals:
     void busyChanged();
-    void selectedImageChanged();
     // stage: "prep" | "background" | "encode" | "decode" | "surface" | "build"
     void progress(const QString& stage, int done, int total);
     void statusMessage(const QString& message);
     void completed(QVariantMap result);   // {vertexCount, triangleCount}
     void error(const QString& message);
     void modelDownloadFinished(bool ok);  // pre-download from AI Settings
-    void captionChanged();                 // caption / captioning state updated
-    void imageGenStatus(const QString& message, bool isError);  // prompt-to-3D
-    void imageGenProgress(int step, int total);                 // sampling ticks
-
-private slots:
-    // Prompt-to-3D chain (SDManager signal handlers; gated on m_imageGenActive
-    // so an unrelated texture generation never hijacks the selection).
-    void onImageGenModelLoaded();
-    void onImageGenCompleted(const QString& outputPath);
-    void onImageGenError(const QString& message);
 
 private:
     explicit MeshGenController(QObject* parent = nullptr);
-
-    // Store `path` as the selected source image: preview thumbnail, breadcrumb,
-    // signals, background caption. Shared by selectImage() and the prompt path.
-    void applySelectedImage(const QString& path);
-
-    // Kick off SmolVLM captioning of `path` on a detached worker thread; the
-    // result is marshalled back to the main thread (setCaptionResult).
-    void startCaptioning(const QString& path);
-    Q_INVOKABLE void setCaptionResult(const QString& caption, const QString& forPath);
 
     // Runs on the MAIN thread (queued from the worker) to build + attach the mesh.
     Q_INVOKABLE void buildOnMainThread();
@@ -201,20 +114,7 @@ private:
     bool ensureMatteModels(bool wantBest);
 
     bool m_busy = false;
-    bool m_imageGenActive = false;   // prompt-to-3D image generation in flight
-    QString m_imageGenPrompt;        // the (suffixed) prompt being generated
-    QString m_imageGenFileName;      // expected output file (signal correlation)
-    QString m_imageGenRef;           // edit mode: image being edited (else empty)
-    bool m_imageGenWired = false;    // SDManager signal wiring done once
-    int m_imageGenSize = 1024;       // 1024 for FLUX.2, 512 for SD checkpoints
     std::atomic<bool> m_cancel{false};
-    QString m_selectedImage;    // currently-selected source image path
-    QString m_previewSource;    // data:image/png;base64 thumbnail of it
-    QString m_caption;          // auto-caption of the selected image
-    bool    m_captioning = false;
-    // Guards against a stale caption landing after the image changed again:
-    // startCaptioning stamps the path, setCaptionResult drops mismatches.
-    QString m_captionForPath;
     MeshGenPredictor::Quality m_quality = MeshGenPredictor::Quality::Fp32;
     // Parsed pipeline options for the in-flight run (see generateSelected doc).
     bool m_generatePbr = true;          // consumed by buildOnMainThread

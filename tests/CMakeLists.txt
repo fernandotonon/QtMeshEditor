@@ -268,6 +268,17 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/LidClose_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Clothing_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoAppearance.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoCharacter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoCharacter_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/MouthFit.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/BodyShape.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Proportions.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/Proportions_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterShapeControls_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/BodyShape_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/MouthFit_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/PhotoAppearance_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/QmcBundle_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CharacterGen/CharacterModel_test.cpp
@@ -336,6 +347,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Predictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageSourceController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/BackgroundRemover.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageCaptioner.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PbrMapSynth.cpp
@@ -384,7 +396,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PhotoDepth_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint_test.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenControllerSave_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ImageSourceControllerSave_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshSegmenter.cpp
