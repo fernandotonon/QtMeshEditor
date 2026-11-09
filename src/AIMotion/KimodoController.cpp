@@ -225,25 +225,53 @@ bool KimodoController::parsePromptSegments(const QString& prompt, double default
     return true;
 }
 
+namespace {
+
+struct GuiRequest {
+    QString prompt;
+    double duration = 5.0;
+    int variations = 1;
+    int seed = -1;
+    bool rootMotion = false;
+    bool loop = false;
+};
+
+// Panel input -> validated Kimodo options (one segment per prompt line, "@SECONDS" per line).
+bool buildGuiOptions(const GuiRequest& req, KimodoPredictor::Options* o, QString* err)
+{
+    QStringList texts;
+    QList<double> durations;
+    if (!KimodoController::parsePromptSegments(req.prompt, req.duration > 0.0 ? req.duration : 5.0, &texts, &durations, err)) return false;
+    auto duration = durations.cbegin();
+    for (const QString& text : texts) o->segments.push_back({text, *duration++});
+    o->numSamples = qBound(1, req.variations, 16);
+    o->hasSeed = req.seed >= 0;
+    o->seed = qMax(0, req.seed);
+    o->rootMotion = req.rootMotion;
+    o->loop = req.loop;
+    return KimodoPredictor::validateOptions(*o, err);
+}
+
+} // namespace
+
 bool KimodoController::generate(const QString& prompt, double duration, int variations, int seed, bool rootMotion,
-                                bool footPin)
+                                bool footPin, bool loop)
 {
     if (m_busy) return false;
     refreshRuntime();
     Ogre::Entity* entity = targetEntity();
     if (!entity) { setStatus(QStringLiteral("Select a rigged mesh first: generated motion needs a skeleton."), false); return false; }
-    if (m_backend == QLatin1String("qtmesh_t2m")) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
+    if (m_backend == QLatin1String("qtmesh_t2m")) {
+        if (!loop) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
+        setStatus(QStringLiteral("Loop is a Kimodo option: pick the NVIDIA Kimodo model."), false);
+        return false;
+    }
 
     KimodoPredictor::Options o;
-    QStringList texts;
-    QList<double> durations;
-    QString err;
-    if (!parsePromptSegments(prompt, duration > 0.0 ? duration : 5.0, &texts, &durations, &err)) { setStatus(err, false); return false; }
-    for (int i = 0; i < texts.size(); ++i) o.segments.push_back({texts[i], durations[i]});
-    o.numSamples = qBound(1, variations, 16);
-    o.hasSeed = seed >= 0;
-    o.seed = qMax(0, seed);
-    o.rootMotion = rootMotion;
+    if (QString err; !buildGuiOptions({prompt, duration, variations, seed, rootMotion, loop}, &o, &err)) {
+        setStatus(err, false);
+        return false;
+    }
     if (!KimodoPredictor::mockRequested(o) && !m_runtimeAvailable) { setStatus(m_runtimeDescription, false); return false; }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
@@ -271,7 +299,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
             return !m_cancel.load();
         });
     });
-    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin]() {
+    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin, loop]() {
         if (!self) return;
         m_worker->deleteLater();
         m_worker = nullptr;
@@ -287,7 +315,8 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         m_lastMotionDir = result->outputDir;
         Ogre::Entity* target = entityByName(entityName);
         if (!target) { setStatus(QStringLiteral("The rig was removed while Kimodo ran; the motion is saved in %1.").arg(result->outputDir), false); return; }
-        applyFiles(target, result->files, rootMotion, footPin);
+        if (applyFiles(target, result->files, rootMotion, footPin, loop) && !result->loopSummaries.isEmpty())
+            setStatus(m_status + QStringLiteral(" Loop: ") + result->loopSummaries.join(QStringLiteral("; ")) + QLatin1Char('.'), true);
     });
     m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
     m_worker->start();
@@ -373,7 +402,7 @@ void KimodoController::cancel()
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Kimodo generation cancelled"));
 }
 
-bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin)
+bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop)
 {
     std::vector<Motion> motions;
     QString err;
@@ -381,6 +410,7 @@ bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files
     SceneApplyOptions so;
     so.rootMotion = rootMotion;
     so.footPin = footPin;
+    so.loop = loop;
     const SceneApplyResult r = applyMotionsToEntity(entity, motions, so);
     if (!r.ok) { setStatus(r.error, false); return false; }
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();

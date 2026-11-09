@@ -5777,6 +5777,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             return toolGenerateMotionT2M(args);
         if (backend == QLatin1String("kimodo") || args.contains(QStringLiteral("motion_files")))
             return toolGenerateMotionKimodo(args);
+        // A loop is a Kimodo feature: the template / model clips would come back looking successful but not seamless.
+        if (args.contains(QStringLiteral("loop")) || args.contains(QStringLiteral("loop_mode")))
+            return makeErrorResult("Error: 'loop' / 'loop_mode' need backend 'kimodo'.");
 
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
             QStringLiteral("MCP generate_motion"));
@@ -6133,8 +6136,10 @@ QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor
     } else {
         const QString prompt = args.value(QStringLiteral("prompt")).toString();
         if (prompt.trimmed().isEmpty()) return QStringLiteral("kimodo needs 'prompt' or 'segments'.");
-        const double d = args.value(QStringLiteral("duration")).toDouble(0.0);
-        o->segments.push_back({prompt, d > 0.0 ? d : 5.0});
+        // An absent duration defaults; an explicit one goes through as given so 0 / negative is refused, not
+        // silently turned into 5 s.
+        const double d = args.contains(QStringLiteral("duration")) ? args.value(QStringLiteral("duration")).toDouble(-1.0) : 5.0;
+        o->segments.push_back({prompt, d});
     }
     o->numSamples = args.value(QStringLiteral("variations")).toInt(1);
     if (args.contains(QStringLiteral("seed"))) {
@@ -6145,6 +6150,8 @@ QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor
     o->rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
     o->postprocess = args.value(QStringLiteral("postprocess")).toBool(true);
     o->runtime = args.value(QStringLiteral("runtime")).toString().toLower();
+    o->loopMode = args.value(QStringLiteral("loop_mode")).toString().toLower();
+    o->loop = args.value(QStringLiteral("loop")).toBool(false) || !o->loopMode.isEmpty();
     QString err;
     return AIMotion::KimodoPredictor::validateOptions(*o, &err) ? QString() : err;
 }
@@ -6228,7 +6235,7 @@ QJsonObject MCPServer::toolGenerateMotionT2M(const QJsonObject &args)
     using namespace AIMotion;
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return makeErrorResult("Error: Manager not available");
-    for (const char* k : {"segments", "diffusion_steps", "postprocess", "runtime", "motion_files"})
+    for (const char* k : {"segments", "diffusion_steps", "postprocess", "runtime", "motion_files", "loop", "loop_mode"})
         if (args.contains(QLatin1String(k)))
             return makeErrorResult(QStringLiteral("Error: '%1' is a Kimodo option; qtmesh_t2m generates one motion per prompt.").arg(QLatin1String(k)));
     const QString entityName = args.value(QStringLiteral("entity_name")).toString();
@@ -6316,6 +6323,7 @@ QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* 
     so.baseName = args.value(QStringLiteral("clip_name")).toString();
     so.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
     so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
+    so.loop = args.value(QStringLiteral("loop")).toBool(false) || args.contains(QStringLiteral("loop_mode"));
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return makeErrorResult(QStringLiteral("Error: %1").arg(applied.error));
 
@@ -13329,6 +13337,8 @@ QJsonArray MCPServer::buildToolsList()
         props["diffusion_steps"] = QJsonObject{{"type", "integer"}, {"description", "kimodo only: denoising steps (default: the model's own)."}};
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo / qtmesh_t2m: keep the root translation (Kimodo: its own, scaled to the rig's height; qtmesh_t2m: estimated from the planted foot). Default true; false = in-place motion."}};
         props["postprocess"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: Kimodo's own foot-skate cleanup. Default true."}};
+        props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only (native runtime, one prompt): make each variation a seamless loop about 'duration' seconds long (0.5..10). A cycle is cut from a first generation when one matches; otherwise the motion is generated again with the same pose pinned at both ends (one stride apart). A motion with no cycle (an attack) returns to its own start pose. The report's kimodo.loops says how each loop was made. Default false."}};
+        props["loop_mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "cut", "regenerate"}}, {"description", "kimodo loop: auto (default: cut when the cycle matches within 3 degrees, else regenerate), cut (always one generation), regenerate (always pin both ends). Implies loop:true."}};
         props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "kimodo / qtmesh_t2m / motion_files: base clip name (default generated_kimodo or generated_qtmesh_t2m)."}};
         props["runtime"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "native", "python"}},
             {"description", "kimodo only: 'auto' (default: native when its models are downloaded, else the Python sidecar), 'native' or 'python' (constraints files need python)."}};

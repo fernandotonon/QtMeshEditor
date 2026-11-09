@@ -10,6 +10,7 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <map>
 
 #include <OgreAnimation.h>
 #include <OgreEntity.h>
@@ -58,6 +59,74 @@ bool loadMotionFiles(const QStringList& files, std::vector<Motion>* out, QString
     return true;
 }
 
+namespace {
+
+// Per node track of a looped clip: how its last key relates to its first (a loop ends on its first pose plus the
+// stride), captured before foot pinning so that relation can be put back afterwards.
+struct LoopSeam {
+    std::map<unsigned short, std::pair<Ogre::Quaternion, Ogre::Vector3>> lastFromFirst;   ///< rotation, translation
+};
+
+LoopSeam captureLoopSeam(const Ogre::Skeleton* skel, const std::string& clip)
+{
+    LoopSeam seam;
+    if (!skel->hasAnimation(clip)) return seam;
+    for (const auto& [handle, track] : skel->getAnimation(clip)->_getNodeTrackList()) {
+        const auto n = static_cast<unsigned short>(track->getNumKeyFrames());
+        if (n < 2) continue;
+        const auto* first = track->getNodeKeyFrame(0);
+        const auto* last = track->getNodeKeyFrame(n - 1);
+        seam.lastFromFirst[handle] = {last->getRotation() * first->getRotation().Inverse(), last->getTranslate() - first->getTranslate()};
+    }
+    return seam;
+}
+
+// Blend the last keys of each track (6 at most, the last fully) so the last key is again its first key plus the
+// captured relation: the wrap of the loop stays seamless and the change is spread over a few frames, not a pop.
+void restoreLoopSeam(const Ogre::Skeleton* skel, const std::string& clip, const LoopSeam& seam)
+{
+    if (!skel->hasAnimation(clip)) return;
+    for (const auto& [handle, track] : skel->getAnimation(clip)->_getNodeTrackList()) {
+        const auto it = seam.lastFromFirst.find(handle);
+        const auto n = static_cast<unsigned short>(track->getNumKeyFrames());
+        if (it == seam.lastFromFirst.end() || n < 2) continue;
+        const auto* first = track->getNodeKeyFrame(0);
+        const auto* last = track->getNodeKeyFrame(n - 1);
+        const Ogre::Quaternion wantRot = it->second.first * first->getRotation();
+        const Ogre::Quaternion fixRot = wantRot * last->getRotation().Inverse();
+        const Ogre::Vector3 fixPos = first->getTranslate() + it->second.second - last->getTranslate();
+        const int k = std::min<int>(6, n - 1);
+        for (int j = 0; j < k; ++j) {
+            auto* kf = track->getNodeKeyFrame(static_cast<unsigned short>(n - k + j));
+            const float w = float(j + 1) / float(k);
+            kf->setRotation(Ogre::Quaternion::Slerp(w, Ogre::Quaternion::IDENTITY, fixRot, true) * kf->getRotation());
+            kf->setTranslate(kf->getTranslate() + fixPos * w);
+        }
+        track->_keyFrameDataChanged();
+    }
+}
+
+// Foot pinning, keeping a loop's seam (pinFeet anchors each contact span on its own and can rewrite the last frame).
+void pinFeetKeepingLoop(Ogre::Skeleton* skel, const std::string& clip, bool loop)
+{
+    const LoopSeam seam = loop ? captureLoopSeam(skel, clip) : LoopSeam{};
+    AnimationMerger::pinFeet(skel, clip);
+    if (loop) restoreLoopSeam(skel, clip, seam);
+}
+
+// One undo macro for the whole batch; returns the stack index after it (-1 = no undo stack).
+int pushUndoBatch(const Ogre::Entity* entity, const QStringList& clips)
+{
+    auto* um = UndoManager::getSingleton();
+    if (!um) return -1;
+    um->stack()->beginMacro(QStringLiteral("Kimodo motion (%1 clip%2)").arg(clips.size()).arg(clips.size() == 1 ? "" : "s"));
+    for (const QString& c : clips) um->push(new RetargetAnimationCommand(entity->getName(), c.toStdString(), true));
+    um->stack()->endMacro();
+    return um->stack()->index();
+}
+
+} // namespace
+
 SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Motion>& motions,
                                       const SceneApplyOptions& options)
 {
@@ -80,19 +149,13 @@ SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Mo
             r.error = motions.size() > 1 ? QStringLiteral("variation %1: %2").arg(v + 1).arg(out.error) : out.error;
             return r;
         }
-        if (options.footPin) AnimationMerger::pinFeet(skel, clip);
+        if (options.footPin) pinFeetKeepingLoop(skel, clip, options.loop);
         r.clips << QString::fromStdString(clip);
         r.outcomes.push_back(std::move(out));
     }
     entity->refreshAvailableAnimationState();
 
-    if (options.undoable)
-        if (auto* um = UndoManager::getSingleton()) {
-            um->stack()->beginMacro(QStringLiteral("Kimodo motion (%1 clip%2)").arg(r.clips.size()).arg(r.clips.size() == 1 ? "" : "s"));
-            for (const QString& c : r.clips) um->push(new RetargetAnimationCommand(entity->getName(), c.toStdString(), true));
-            um->stack()->endMacro();
-            r.undoIndexAfter = um->stack()->index();
-        }
+    if (options.undoable) r.undoIndexAfter = pushUndoBatch(entity, r.clips);
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
                                   QStringLiteral("applied %1 clip(s) to %2").arg(r.clips.size()).arg(QString::fromStdString(entity->getName())));
     r.ok = true;

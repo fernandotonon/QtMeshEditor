@@ -3525,7 +3525,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // flag as the value" (`--seed --no-root-motion` used to seed 0 and leave root motion on).
         if (arg == "--backend" || arg == "--apply-motion" || arg == "--segment" || arg == "--variations"
             || arg == "--seed" || arg == "--diffusion-steps" || arg == "--constraints" || arg == "--text-encoder-url"
-            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime") {
+            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime" || arg == "--loop-mode") {
             const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
             if (v.isEmpty() || (v.startsWith(QLatin1Char('-')) && arg != "--segment")) {
                 err() << "Error: " << arg << " needs a value." << Qt::endl;
@@ -3543,6 +3543,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             else if (arg == "--text-encoder-url") kimodoReq.textEncoderUrl = v;
             else if (arg == "--text-encoder-quant") kimodoReq.textEncoderQuant = v.toLower();
             else if (arg == "--runtime") kimodoReq.runtime = v.toLower();
+            else if (arg == "--loop-mode") kimodoReq.loopMode = v.toLower();
             else kimodoReq.name = v;
             if (!ok) {
                 err() << "Error: " << arg << " needs an integer, got '" << v << "'." << Qt::endl;
@@ -3551,6 +3552,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-root-motion") { kimodoReq.rootMotion = false; continue; }
+        // Kimodo: make each variation a seamless loop (KimodoLoop.h); --loop-mode auto|cut|regenerate.
+        if (arg == "--loop") { kimodoReq.loop = true; continue; }
         if (arg == "--no-postprocess") { kimodoReq.postprocess = false; continue; }
         // Native Kimodo: fetch its ~9 GB of models (an explicit request; generation never downloads on its own).
         if (arg == "--download") { kimodoReq.download = true; continue; }
@@ -3736,7 +3739,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         kimodoReq.rigPath = filePath;
         kimodoReq.outputPath = outputPath;
         kimodoReq.prompt = generatePrompt;
-        kimodoReq.duration = generateDuration > 0.0f ? generateDuration : 5.0;
+        // An explicit --duration goes through as given (0, -1 or "abc" is rejected), only an absent one defaults.
+        kimodoReq.duration = 5.0;
+        if (generateDurationSet) kimodoReq.duration = generateDurationValid ? double(generateDuration) : -1.0;
         kimodoReq.footPin = generateFootPin;
         kimodoReq.json = jsonOutput;
         return AIMotion::runCli(kimodoReq);
@@ -4142,6 +4147,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <rig> --generate \"<prompt>\" [--duration S] [-o <output>]   (template library; --model = experimental model)" << Qt::endl;
         err() << "       qtmesh anim <rig> --generate \"<prompt>\" --backend kimodo [--segment \"TEXT@SEC\"]... [--variations N] [--seed N]" << Qt::endl;
         err() << "                          [--diffusion-steps N] [--no-root-motion] [--no-postprocess] [--runtime auto|native|python]" << Qt::endl;
+        err() << "                          [--loop [--loop-mode auto|cut|regenerate]]  (seamless loop; --duration = preferred length)" << Qt::endl;
         err() << "                          [--download] [--name CLIP] [--json] -o <output>   (NVIDIA Kimodo; --download fetches ~9 GB once)" << Qt::endl;
         err() << "       qtmesh anim <rig> --apply-motion motion_00.npz [...] -o <output>   (re-apply a saved Kimodo motion)" << Qt::endl;
         return 2;

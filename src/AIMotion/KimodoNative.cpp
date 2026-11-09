@@ -1,6 +1,7 @@
 #include "KimodoNative.h"
 
 #include "KimodoCorrection.h"
+#include "KimodoLoop.h"
 #include "KimodoMath.h"
 #include "KimodoTextEncoder.h"
 #include "MotionInterchange.h"
@@ -419,8 +420,17 @@ struct StageTimer {
     }
 };
 
+// A full-body pin MotionCorrection must enforce: `count` frames from `frame`, hip positions [count*3] and
+// global joint rotations [count*J*4] (the transition graph's hip_input / rotations_input).
+struct Pin {
+    int frame = 0;
+    int count = 0;
+    const std::vector<float>* hipIn = nullptr;
+    const std::vector<float>* rotIn = nullptr;
+};
+
 // Kimodo post_process_motion: decode, MotionCorrection, re-encode (with the C++ smooth root).
-Feats postprocess(Runtime& rt, const Feats& f, const Runtime::Transition* tr)
+Feats postprocess(Runtime& rt, const Feats& f, const std::vector<Pin>& pins)
 {
     StageTimer timer("postprocess");
     const Meta& m = rt.meta();
@@ -437,12 +447,13 @@ Feats postprocess(Runtime& rt, const Feats& f, const Runtime::Transition* tr)
     std::vector<float> rotIn(size_t(T) * J * 4, 0.0f);
     for (int k = 0; k < T * J; ++k) rotIn[size_t(k) * 4] = 1.0f;
     KimodoCorrection::Masks masks;
-    if (tr) {
-        const int nt = std::min(m.transitionFrames, T);
-        masks.fullBody.assign(size_t(T), 0.0f);
-        std::fill_n(masks.fullBody.begin(), nt, 1.0f);
-        std::copy_n(tr->hipIn.begin(), size_t(nt) * 3, hipIn.begin());
-        std::copy_n(tr->rotIn.begin(), size_t(nt) * J * 4, rotIn.begin());
+    if (!pins.empty()) masks.fullBody.assign(size_t(T), 0.0f);
+    for (const Pin& p : pins) {
+        const int n = std::min(p.count, T - p.frame);
+        if (n <= 0) continue;
+        std::fill_n(masks.fullBody.begin() + p.frame, n, 1.0f);
+        std::copy_n(p.hipIn->begin(), size_t(n) * 3, hipIn.begin() + std::ptrdiff_t(size_t(p.frame) * 3));
+        std::copy_n(p.rotIn->begin(), size_t(n) * J * 4, rotIn.begin() + std::ptrdiff_t(size_t(p.frame) * J * 4));
     }
     KimodoCorrection::MotionArrays motion{&hip, &rot, &hipIn, &rotIn, &d.contacts};
     if (std::string err; !KimodoCorrection::correctMotion(motion, masks, m.rig, {m.contactThreshold, m.rootMargin}, &err))
@@ -548,7 +559,7 @@ void stitchSegment(Runtime& rt, std::vector<Feats>& generated, Feats motion, con
 {
     const Meta& m = rt.meta();
     if (s.first) {
-        generated.push_back(post ? postprocess(rt, motion, nullptr) : std::move(motion));
+        generated.push_back(post ? postprocess(rt, motion, {}) : std::move(motion));
         return;
     }
     for (int f = 0; f < s.length; ++f) {
@@ -556,7 +567,7 @@ void stitchSegment(Runtime& rt, std::vector<Feats>& generated, Feats motion, con
         motion.v[size_t(f) * m.D + size_t(m.smoothRootStart) + 2] += s.tr.root2d[1];
     }
     if (post) {
-        generated.push_back(postprocess(rt, motion, &s.tr));
+        generated.push_back(postprocess(rt, motion, {Pin{0, m.transitionFrames, &s.tr.hipIn, &s.tr.rotIn}}));
         return;
     }
     const int NT = m.transitionFrames;
@@ -565,7 +576,7 @@ void stitchSegment(Runtime& rt, std::vector<Feats>& generated, Feats motion, con
 }
 
 // kimodo_model._multiprompt, transcribed from scripts/verify_kimodo_native.py (Native.generate).
-Runtime::Decoded generateOne(Runtime& rt, const std::vector<int>& frames, const SampleInputs& in, int steps, bool post,
+Feats generateFeats(Runtime& rt, const std::vector<int>& frames, const SampleInputs& in, int steps, bool post,
                              const std::function<bool()>& onStep)
 {
     const KimodoMath::DdimSchedule sched = KimodoMath::ddimSchedule(rt.meta().acpBase, steps);
@@ -580,7 +591,176 @@ Runtime::Decoded generateOne(Runtime& rt, const std::vector<int>& frames, const 
         full.T += g.T;
         full.v.insert(full.v.end(), g.v.begin(), g.v.end());
     }
-    return rt.decode(full);
+    return full;
+}
+
+KimodoLoop::Motion motionOf(const Runtime::Decoded& d, int J)
+{
+    return {d.T, J, 4, d.local, d.root, d.contacts};
+}
+
+Runtime::Decoded decodedOf(const KimodoLoop::Motion& m)
+{
+    return {m.T, m.local, m.root, m.contacts};
+}
+
+struct LoopRun {
+    Runtime::Decoded motion;
+    QJsonObject report;   ///< how the loop was made (manifest "loops")
+    bool secondPass = false;   ///< a second generation ran (the progress counted one per variation)
+};
+
+// The clip's own pinned windows: `window` (a transition() of NT frames) at frame 0 and again at `period`, the
+// second shifted horizontally by `stride`. Returns the observed features (un-normalized) and the mask, [L*D].
+void pinWindows(const Meta& m, const Runtime::Transition& tr, int period, const std::array<float, 2>& stride, int L,
+                std::vector<float>* obs, std::vector<float>* mask)
+{
+    const int D = m.D;
+    const int NT = m.transitionFrames;
+    obs->assign(size_t(L) * D, 0.0f);
+    mask->assign(size_t(L) * D, 0.0f);
+    for (int f = 0; f < NT; ++f)
+        for (int k = 0; k < D; ++k) {
+            const size_t src = size_t(f) * D + size_t(k);
+            const size_t end = size_t(period + f) * D + size_t(k);
+            (*obs)[src] = tr.observed[src];
+            (*mask)[src] = tr.mask[src];
+            float v = tr.observed[src];
+            if (k == m.smoothRootStart) v += stride[0] * tr.mask[src];
+            if (k == m.smoothRootStart + 2) v += stride[1] * tr.mask[src];
+            (*obs)[end] = v;
+            (*mask)[end] = tr.mask[src];
+        }
+}
+
+// Reproducible diffusion noise from --seed: NOT a security context (no secret derives from it).
+std::vector<float> gaussianNoise(std::mt19937_64& rng, size_t n)   // NOSONAR (cpp:S2245) seeded, reproducible noise
+{
+    std::normal_distribution<float> gauss(0.0f, 1.0f);
+    std::vector<float> x(n);
+    for (float& v : x) v = gauss(rng);
+    return x;
+}
+
+// What every generation of one looped variation shares.
+struct LoopContext {
+    Runtime& rt;
+    const KimodoMath::DdimSchedule& sched;
+    const std::vector<float>& text;
+    std::mt19937_64& rng;   // NOSONAR (cpp:S2245) seeded, reproducible diffusion noise, not a security context
+    bool post = true;
+    const std::function<bool()>& onStep;
+};
+
+// Where the second generation pins the loop: the window of the first generation at `start`, again `period`
+// frames later shifted by `stride`; `cyclic` false = a return-to-start loop (zero stride).
+struct LoopPlan {
+    int start = 0;
+    int period = 0;
+    std::array<float, 2> stride = {0.0f, 0.0f};
+    bool cyclic = true;
+};
+
+// Second generation of a loop: the window of `first` starting at `plan.start` pinned at frame 0 and at
+// `plan.period` (shifted one stride), then closed so frame `period` equals frame 0 plus the stride.
+Runtime::Decoded regenerateLoop(const LoopContext& ctx, const Feats& first, const LoopPlan& plan)
+{
+    Runtime& rt = ctx.rt;
+    const int start = plan.start;
+    const int period = plan.period;
+    const std::array<float, 2>& stride = plan.stride;
+    const Meta& m = rt.meta();
+    const int D = m.D;
+    const int NT = m.transitionFrames;
+    const int L = period + NT;
+    const Feats window{NT, std::vector<float>(first.v.begin() + std::ptrdiff_t(size_t(start) * D),
+                                              first.v.begin() + std::ptrdiff_t(size_t(start + NT) * D))};
+    const Runtime::Transition tr = rt.transition(window);
+    SegmentSetup s;
+    s.first = false;
+    s.length = L;
+    s.heading = tr.heading;
+    s.constrained = true;
+    std::vector<float> obs;
+    pinWindows(m, tr, period, stride, L, &obs, &s.mask);
+    s.observedNorm.resize(obs.size());
+    for (size_t k = 0; k < obs.size(); ++k) s.observedNorm[k] = (obs[k] - m.mean[k % D]) / m.stdEps[k % D];
+    Feats motion = sampleSegment(rt, ctx.sched, ctx.text, gaussianNoise(ctx.rng, size_t(L) * D), s, ctx.onStep);
+    for (int f = 0; f < L; ++f) {
+        motion.v[size_t(f) * D + size_t(m.smoothRootStart)] += tr.root2d[0];
+        motion.v[size_t(f) * D + size_t(m.smoothRootStart) + 2] += tr.root2d[1];
+    }
+    if (ctx.post) {
+        std::vector<float> hipEnd = tr.hipIn;
+        for (int f = 0; f < NT; ++f) {
+            hipEnd[size_t(f) * 3] += stride[0];
+            hipEnd[size_t(f) * 3 + 2] += stride[1];
+        }
+        motion = postprocess(rt, motion, {Pin{0, NT, &tr.hipIn, &tr.rotIn}, Pin{period, NT, &hipEnd, &tr.rotIn}});
+    }
+    const KimodoLoop::Motion decoded = motionOf(rt.decode(motion), m.J30);
+    // A cyclic loop keeps the stride it actually travelled; a return-to-start loop must come back to x = z = 0
+    // (without post-processing the pinned end can drift, and with root motion the clip would jump on repeat).
+    std::array<float, 2> close = {0.0f, 0.0f};
+    if (plan.cyclic) close = KimodoLoop::strideOf(decoded, 0, period);
+    return decodedOf(KimodoLoop::closeLoop(decoded, period, close));
+}
+
+// One looped variation: a first generation, the cycle search, then the cut or a pinned second generation.
+LoopRun generateLoop(const LoopContext& ctx, int target, KimodoLoop::Mode mode)
+{
+    Runtime& rt = ctx.rt;
+    const Meta& m = rt.meta();
+    const int D = m.D;
+    const int NT = m.transitionFrames;
+    const auto lead = int(std::lround(0.5 * double(m.fps)));
+    const int firstLen = lead + int(std::lround(2.0 * target)) + NT;
+    std::vector<Feats> generated;
+    const SegmentSetup s = prepareSegment(rt, generated, firstLen);
+    Feats sampled = sampleSegment(rt, ctx.sched, ctx.text, gaussianNoise(ctx.rng, size_t(firstLen) * D), s, ctx.onStep);
+    const Feats first = ctx.post ? postprocess(rt, sampled, {}) : std::move(sampled);
+    const KimodoLoop::Motion m1 = motionOf(rt.decode(first), m.J30);
+
+    KimodoLoop::SearchOptions so;
+    so.window = NT;
+    so.minStart = lead;
+    // The requested duration is the loop length the user wants: stay near it (a walk of 2 s = two strides).
+    so.minPeriod = std::max(12, int(std::lround(0.7 * target)));
+    so.maxPeriod = std::max(so.minPeriod, int(std::lround(1.4 * target)));
+    so.targetPeriod = target;
+    const KimodoLoop::Cycle c = KimodoLoop::findCycle(m1, so);
+    const bool cyclic = c.found && c.costDeg <= KimodoLoop::kNoCycleThresholdDeg;
+    if (mode == KimodoLoop::Mode::Cut && !c.found)
+        throw KimodoFailure("no cycle to cut in this motion (loop mode 'cut' never generates twice): use 'auto' or 'regenerate'");
+    const bool cut = mode == KimodoLoop::Mode::Cut || (mode == KimodoLoop::Mode::Auto && KimodoLoop::cleanCut(c));
+    LoopRun out;
+    out.report = QJsonObject{{QStringLiteral("cycleCostDeg"), c.found ? c.costDeg : -1.0},
+                             {QStringLiteral("cycleRootDeg"), c.found ? c.rootDeg : -1.0},
+                             {QStringLiteral("cycleHeightCm"), c.found ? c.heightCm : -1.0},
+                             {QStringLiteral("cycleStartFrame"), c.start}};
+    if (cut) {
+        out.motion = decodedOf(KimodoLoop::cutLoop(m1, c.start, c.period, std::min(2 * NT, c.start)));
+        out.report.insert(QStringLiteral("method"), QStringLiteral("cut"));
+        out.report.insert(QStringLiteral("periodFrames"), c.period);
+        return out;
+    }
+    // No cycle (a one-shot motion): return to the first generation's own start pose.
+    LoopPlan plan;
+    plan.cyclic = cyclic;
+    plan.start = 0;
+    plan.period = std::max(target, 2 * NT + 2);
+    if (cyclic) {
+        plan.start = c.start;
+        plan.period = c.period;
+        const size_t a = size_t(plan.start) * D + size_t(m.smoothRootStart);
+        const size_t b = size_t(plan.start + plan.period) * D + size_t(m.smoothRootStart);
+        plan.stride = {first.v[b] - first.v[a], first.v[b + 2] - first.v[a + 2]};
+    }
+    out.motion = regenerateLoop(ctx, first, plan);
+    out.secondPass = true;
+    out.report.insert(QStringLiteral("method"), cyclic ? QStringLiteral("regenerate") : QStringLiteral("return_to_start"));
+    out.report.insert(QStringLiteral("periodFrames"), plan.period);
+    return out;
 }
 
 // SOMA-30 -> SOMA-77 interchange arrays (relaxed-hand rest rotations for the joints the model does not drive).
@@ -866,7 +1046,11 @@ KimodoPredictor::Result runVariations(const KimodoPredictor::Options& o, NativeJ
     }
     // Reproducible diffusion noise from --seed, NOT a security context (no secret derives from it).
     std::mt19937_64 rng(o.hasSeed ? uint64_t(uint32_t(o.seed)) : uint64_t(std::random_device{}()));   // NOSONAR
-    const int totalSteps = job.steps * int(job.frames.size()) * o.numSamples;
+    KimodoLoop::Mode loopMode = KimodoLoop::Mode::Auto;
+    KimodoLoop::modeFromId(o.loopMode, &loopMode);
+    // A loop takes up to two generations per variation (the second is skipped when the cut is clean).
+    const int perSample = o.loop ? 2 : int(job.frames.size());
+    const int totalSteps = job.steps * perSample * o.numSamples;
     int doneSteps = 0;
     const auto onStep = [&progress, &doneSteps, totalSteps] {
         ++doneSteps;
@@ -875,17 +1059,40 @@ KimodoPredictor::Result runVariations(const KimodoPredictor::Options& o, NativeJ
     const qint64 t0 = QDateTime::currentMSecsSinceEpoch();
     KimodoPredictor::Result result;
     result.outputDir = outDir;
+    QJsonArray loops;
     for (int v = 0; v < o.numSamples; ++v) {
-        SampleInputs in;
-        in.text = job.textFeat;
-        for (size_t s = 0; s < job.frames.size(); ++s) in.noise.push_back(noiseFor(job, rng, v, s));
-        const Runtime::Decoded d = generateOne(*rt, job.frames, in, job.steps, o.postprocess, onStep);
+        Runtime::Decoded d;
+        if (o.loop) {
+            const auto sched = KimodoMath::ddimSchedule(job.meta.acpBase, job.steps);
+            const std::function<bool()> step = onStep;   // the context holds a reference: keep it alive here
+            const LoopContext ctx{*rt, sched, job.textFeat.front(), rng, o.postprocess, step};
+            const LoopRun run = generateLoop(ctx, job.frames.front(), loopMode);
+            if (!run.secondPass) doneSteps += job.steps;   // the progress budgeted two generations
+            d = run.motion;
+            QJsonObject rep = run.report;
+            rep.insert(QStringLiteral("seconds"), double(d.T - 1) / double(job.meta.fps));
+            loops.append(rep);
+            const double cost = rep.value(QStringLiteral("cycleCostDeg")).toDouble();
+            result.loopSummaries << QStringLiteral("%1 s loop (%2%3)")
+                                        .arg(double(d.T - 1) / double(job.meta.fps), 0, 'f', 2)
+                                        .arg(rep.value(QStringLiteral("method")).toString())
+                                        .arg(cost >= 0.0 ? QStringLiteral(", cycle match %1 deg").arg(cost, 0, 'f', 1) : QString());
+        } else {
+            SampleInputs in;
+            in.text = job.textFeat;
+            for (size_t s = 0; s < job.frames.size(); ++s) in.noise.push_back(noiseFor(job, rng, v, s));
+            d = rt->decode(generateFeats(*rt, job.frames, in, job.steps, o.postprocess, onStep));
+        }
         const QString path = QDir(outDir).filePath(QStringLiteral("motion_%1.npz").arg(v, 2, 10, QLatin1Char('0')));
         if (QString err; !saveInterchange(path, toInterchange(job.meta, d, o.rootMotion), &err)) throw KimodoFailure(err.toStdString());
         result.files << path;
         if (progress) progress(QStringLiteral("write"), v + 1, o.numSamples);
     }
     result.manifest = manifestOf(o, job, result.files, double(QDateTime::currentMSecsSinceEpoch() - t0) / 1000.0);
+    if (o.loop) {
+        result.manifest.insert(QStringLiteral("loop_mode"), KimodoLoop::modeId(loopMode));
+        result.manifest.insert(QStringLiteral("loops"), loops);
+    }
     QFile mf(QDir(outDir).filePath(QStringLiteral("result.json")));
     if (mf.open(QIODevice::WriteOnly | QIODevice::Truncate)) mf.write(QJsonDocument(result.manifest).toJson());
     result.ok = true;

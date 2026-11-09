@@ -308,6 +308,21 @@ QString UniRigPredictor::applyLabeling(std::vector<Joint>& joints, int upAxis, L
 
 namespace {
 
+// Does an arm chain (proximal -> distal, from the spine) begin with a clavicle? The hand is where the chain fans
+// out into fingers: 4th joint = clavicle, upper arm, forearm, hand. Without a finger fan (UniRig sometimes gives a
+// hand one finger), a clavicle ROOT sits right beside the spine — within 15 % of the arm's sideways reach (`side`
+// = distance from the body's centre plane; a shoulder joint is half a chest away). Segment lengths alone are not
+// evidence: a short upper arm would read as a clavicle and shift every name outwards.
+template <typename KidList, typename SideFn>
+bool armStartsAtClavicle(const std::vector<int>& chain, const KidList& kids, const SideFn& side)
+{
+    if (chain.size() < 4) return false;
+    for (size_t i = 2; i < chain.size() && i < 5; ++i)
+        if (kids[size_t(chain[i])].size() >= 3) return i == 3;
+    const double reach = std::abs(side(chain.back()));
+    return reach > 1e-6 && std::abs(side(chain.front())) < 0.15 * reach;
+}
+
 // The facing vote of the legs' toe joints along the forward axis F: +1 / -1
 // when EVERY leg with a verified toe points the same way, 0 otherwise. A toe
 // is verified when the ankle has exactly one child (no competing branch the
@@ -447,7 +462,7 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
     // mis-naming them AND failing the plausibility check below. Which sign is
     // the character's LEFT is decided once the limb chains are known (below).
     const double sideOrigin = joints[root].pos[SIDE];
-    auto side = [&](int i) { return joints[i].pos[SIDE] - sideOrigin; };
+    auto side = [&joints, SIDE, sideOrigin](int i) { return joints[i].pos[SIDE] - sideOrigin; };
     // setName ENFORCES UNIQUENESS — Ogre::Skeleton::createBone rejects duplicate
     // names ("RightArm already exists"). When the geometric classification lands
     // two joints on the same anatomical role (e.g. a clavicle + upper-arm both
@@ -618,7 +633,13 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         const QString pre = left ? QStringLiteral("Left") : QStringLiteral("Right");
         const QStringList armN = { pre + "Arm", pre + "ForeArm", pre + "Hand" };
         const QStringList legN = { pre + "UpLeg", pre + "Leg", pre + "Foot" };
-        const QStringList& seq = l.isArm ? armN : legN;
+        // UniRig emits the mixamo template, whose arm starts at the CLAVICLE (Shoulder). Naming that joint "Arm"
+        // shifted every arm name one joint inwards (clavicle = Arm, upper arm = ForeArm, forearm = Hand), so a
+        // name-keyed retarget (Kimodo, #523) swung the clavicle as the upper arm and closed the arms.
+        const QStringList clavN = { pre + "Shoulder", pre + "Arm", pre + "ForeArm", pre + "Hand" };
+        const QStringList* seqp = &legN;
+        if (l.isArm) seqp = armStartsAtClavicle(l.chain, kids, side) ? &clavN : &armN;
+        const QStringList& seq = *seqp;
         for (int idx = 0; idx < static_cast<int>(l.chain.size()); ++idx) {
             if (idx < seq.size()) setName(l.chain[idx], seq[idx]);
             // extra distal joints (fingers/toes) keep their positional name

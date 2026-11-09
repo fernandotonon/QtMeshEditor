@@ -1,4 +1,6 @@
 #include "KimodoPredictor.h"
+
+#include "KimodoLoop.h"
 #include "KimodoNative.h"
 
 #include "../AppStorage.h"
@@ -126,30 +128,31 @@ QString KimodoPredictor::runtimeDescription()
     return pythonRuntimeDescription();
 }
 
+namespace {
+
+// No runtime: the reason goes to `why`, the result is empty.
+QString noRuntime(QString* why, const QString& reason)
+{
+    if (why) *why = reason;
+    return {};
+}
+
+} // namespace
+
 QString KimodoPredictor::resolveRuntime(const Options& o, QString* why)
 {
     const QString mode = o.runtime.isEmpty() ? QStringLiteral("auto") : o.runtime;
-    const bool nativeReady = KimodoNative::buildSupported() && KimodoNative::modelsInstalled();
     // The mock and constraints files live in the Python sidecar only.
-    const bool needsPython = mockRequested(o) || !o.constraintsPath.isEmpty();
-    if (mode == QLatin1String("python") || needsPython) {
-        if (mode == QLatin1String("native")) {
-            if (why) *why = QStringLiteral("constraints files and the mock need the Python runtime");
-            return {};
-        }
+    if (mode == QLatin1String("python") || mockRequested(o) || !o.constraintsPath.isEmpty()) {
+        if (mode == QLatin1String("native")) return noRuntime(why, QStringLiteral("constraints files and the mock need the Python runtime"));
         if (pythonRuntimeAvailable() || mockRequested(o)) return QStringLiteral("python");
-        if (why) *why = pythonRuntimeDescription();
-        return {};
+        return noRuntime(why, pythonRuntimeDescription());
     }
-    if (mode == QLatin1String("native")) {
-        if (nativeReady) return QStringLiteral("native");
-        if (why) *why = KimodoNative::description();
-        return {};
-    }
-    if (nativeReady) return QStringLiteral("native");
+    if (KimodoNative::buildSupported() && KimodoNative::modelsInstalled()) return QStringLiteral("native");
+    if (mode == QLatin1String("native")) return noRuntime(why, KimodoNative::description());
+    if (o.loop) return noRuntime(why, QStringLiteral("loops need the native Kimodo runtime: ") + KimodoNative::description());
     if (pythonRuntimeAvailable()) return QStringLiteral("python");
-    if (why) *why = runtimeDescription();
-    return {};
+    return noRuntime(why, runtimeDescription());
 }
 
 QStringList KimodoPredictor::buildArguments(const Options& o, const QString& outputDir)
@@ -191,6 +194,15 @@ bool KimodoPredictor::validateOptions(const Options& o, QString* error)
         return bad(QStringLiteral("text encoder quantization must be one of: %1").arg(textEncoderQuantModes().join(QStringLiteral(", "))));
     if (!o.runtime.isEmpty() && !runtimeModes().contains(o.runtime))
         return bad(QStringLiteral("runtime must be one of: %1").arg(runtimeModes().join(QStringLiteral(", "))));
+    if (KimodoLoop::Mode mode; !KimodoLoop::modeFromId(o.loopMode, &mode))
+        return bad(QStringLiteral("loop mode must be one of: %1").arg(KimodoLoop::modeIds().join(QStringLiteral(", "))));
+    if (o.loop) {
+        if (o.segments.size() != 1) return bad(QStringLiteral("a loop takes one prompt (no segments)"));
+        if (o.runtime == QLatin1String("python") || !o.constraintsPath.isEmpty() || mockRequested(o))
+            return bad(QStringLiteral("loops need the native Kimodo runtime (no --runtime python, constraints file or mock)"));
+        if (o.segments.front().duration < 0.5 || o.segments.front().duration > 10.0)
+            return bad(QStringLiteral("a loop must be 0.5..10 seconds long"));
+    }
     return true;
 }
 

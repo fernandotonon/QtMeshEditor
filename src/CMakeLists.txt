@@ -266,6 +266,7 @@ AIMotion/AIMotionCLI.cpp
 AIMotion/MotionSceneApply.cpp
 AIMotion/KimodoController.cpp
 AIMotion/KimodoMath.cpp
+AIMotion/KimodoLoop.cpp
 AIMotion/KimodoTextEncoder.cpp
 AIMotion/KimodoNative.cpp
 AIMotion/QtMeshT2M.cpp

@@ -58,6 +58,11 @@ public:
         bool mock = false;
         /// "" or "auto" (native when its models are downloaded, else the Python sidecar) | "native" | "python".
         QString runtime;
+        /// Make every variation a seamless loop (native runtime, one segment): see KimodoLoop.h. The segment's
+        /// duration is the preferred loop length; the cycle found sets the real one.
+        bool loop = false;
+        /// "" / "auto" (cut when the cycle matches, else regenerate with the ends pinned) | "cut" | "regenerate".
+        QString loopMode;
     };
 
     struct Result {
@@ -66,6 +71,7 @@ public:
         QStringList files;          ///< motion_NN.npz, one per variation
         QJsonObject manifest;       ///< the sidecar's result.json / done event
         QString outputDir;
+        QStringList loopSummaries;  ///< per variation when Options::loop: "1.07 s loop (cut, cycle match 2.1 deg)"
     };
 
     /// stage = import|load_model|generate|write; return false to cancel.

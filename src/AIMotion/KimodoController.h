@@ -72,9 +72,10 @@ public:
     /// Generate on the selected rig. `prompt` is one prompt, or one segment per
     /// line ("walk forward @3" — a trailing @SECONDS sets that line's duration,
     /// otherwise `duration` is used). `seed` < 0 = random. Returns false when
-    /// it could not start (the reason is in `status`).
+    /// it could not start (the reason is in `status`). `loop` makes each
+    /// variation a seamless loop of about `duration` seconds (Kimodo native, one prompt; see KimodoLoop.h).
     Q_INVOKABLE bool generate(const QString& prompt, double duration, int variations, int seed,
-                              bool rootMotion, bool footPin);
+                              bool rootMotion, bool footPin, bool loop = false);
     /// Download the QtMesh T2M model (~740 MB, explicit request; main thread, like downloadNativeModels).
     Q_INVOKABLE void downloadT2MModels();
     Q_INVOKABLE void cancel();
@@ -111,7 +112,7 @@ private:
     Ogre::Entity* entityByName(const std::string& name) const;
     void setStatus(const QString& s, bool ok);
     void setBusy(bool b);
-    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin);
+    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false);
     bool generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed, bool rootMotion,
                      bool footPin);
 

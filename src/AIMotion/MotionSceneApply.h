@@ -27,6 +27,9 @@ struct SceneApplyOptions {
     QString baseName = QStringLiteral("generated_kimodo");
     bool rootMotion = true;
     bool footPin = true;
+    /// The motions are seamless loops (KimodoLoop): after foot pinning, which anchors each contact span on its own
+    /// and can rewrite the last frame's legs, the last keys are blended back so the clip still ends on its first pose.
+    bool loop = false;
     bool undoable = true;      ///< push one undo macro (off for headless one-shots)
     int smoothFps = 12;        ///< canonical clips: sparse smoothing bake rate (0 = off)
 };

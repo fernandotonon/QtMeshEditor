@@ -69,7 +69,7 @@ int buildOptions(const CliRequest& req, KimodoPredictor::Options* o)
         }
     } else {
         if (req.prompt.trimmed().isEmpty()) return fail(QStringLiteral("--generate needs a prompt"), 2);
-        o->segments.push_back({req.prompt, req.duration > 0.0 ? req.duration : 5.0});
+        o->segments.push_back({req.prompt, req.duration});   // the caller defaults an ABSENT --duration
     }
     o->numSamples = req.variations;
     o->hasSeed = req.hasSeed;
@@ -81,6 +81,8 @@ int buildOptions(const CliRequest& req, KimodoPredictor::Options* o)
     o->textEncoderUrl = req.textEncoderUrl;
     o->textEncoderQuant = req.textEncoderQuant;
     o->runtime = req.runtime;
+    o->loop = req.loop || !req.loopMode.isEmpty();
+    o->loopMode = req.loopMode;
     if (!o->runtime.isEmpty() && !KimodoPredictor::runtimeModes().contains(o->runtime))
         return fail(QStringLiteral("--runtime must be one of: %1").arg(KimodoPredictor::runtimeModes().join(QStringLiteral(", "))), 2);
     if (QString e; !KimodoPredictor::validateOptions(*o, &e)) return fail(e, 2);
@@ -107,6 +109,7 @@ int generateFiles(const CliRequest& req, QStringList* files, QJsonObject* manife
         return true;
     });
     if (!r.ok) return fail(r.error);
+    for (const QString& l : r.loopSummaries) note(QStringLiteral("(kimodo: %1)").arg(l));
     *files = r.files;
     *manifest = r.manifest;
     return 0;
@@ -165,6 +168,8 @@ QString kimodoOnlyOption(const CliRequest& req)
         {!req.runtime.isEmpty(), "--runtime"},
         {req.download, "--download"},
         {!req.name.isEmpty(), "--name"},
+        {req.loop, "--loop"},
+        {!req.loopMode.isEmpty(), "--loop-mode"},
     };
     for (const auto& [set, flag] : flags)
         if (set) return QString::fromLatin1(flag);
@@ -194,6 +199,7 @@ int runCli(const CliRequest& req)
     so.baseName = req.name;
     so.rootMotion = req.rootMotion;
     so.footPin = req.footPin;
+    so.loop = req.loop || !req.loopMode.isEmpty();
     so.undoable = false;   // one-shot process
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);
@@ -227,6 +233,7 @@ int runT2MCli(const CliRequest& req)
         {!req.textEncoderQuant.isEmpty(), "--text-encoder-quant"},
         {!req.runtime.isEmpty(), "--runtime"},
         {!req.applyMotion.isEmpty(), "--apply-motion"},
+        {req.loop || !req.loopMode.isEmpty(), "--loop"},
     };
     for (const auto& [set, flag] : kimodoOnly)
         if (set) return fail(QStringLiteral("%1 is a Kimodo option (QtMesh T2M generates one motion per prompt)").arg(QLatin1String(flag)), 2);

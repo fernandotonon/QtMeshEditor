@@ -13036,6 +13036,11 @@ Rectangle {
             Row {
                 spacing: 10
                 InspectorCheckBox { id: kimodoRootChk; text: "Root motion"; checked: false }
+                InspectorCheckBox {
+                    id: kimodoLoopChk; text: "Loop"; checked: false; visible: !t2mBackendRow.isT2M
+                    ToolTip.visible: hovered; ToolTip.delay: 500
+                    ToolTip.text: "Make a seamless loop about 'Seconds' long: a cycle is cut from the motion, or the motion is generated again with the same pose pinned at both ends (one prompt)."
+                }
                 InspectorCheckBox { id: kimodoSeedChk; text: "Fixed seed"; checked: false }
                 InspectorIntField { id: kimodoSeed; visible: kimodoSeedChk.checked; from: 0; to: 999999; value: 1
                                      width: 64; accessibleLabel: "Kimodo seed"; anchors.verticalCenter: parent.verticalCenter }
@@ -13050,7 +13055,8 @@ Rectangle {
                         kimodoDuration.commit(); kimodoVariations.commit(); kimodoSeed.commit()
                         KimodoController.generate(kimodoPromptIn.text, kimodoDuration.value, kimodoVariations.value,
                                                   kimodoSeedChk.checked ? kimodoSeed.value : -1,
-                                                  kimodoRootChk.checked, true)   // feet always pinned (foot-contact cleanup)
+                                                  kimodoRootChk.checked, true,   // feet always pinned (foot-contact cleanup)
+                                                  kimodoLoopChk.visible && kimodoLoopChk.checked)
                     }
                 }
                 InspectorButton {

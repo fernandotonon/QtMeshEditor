@@ -31,6 +31,26 @@ sit down @2
 
 Every variation becomes its own clip (`generated_kimodo`, `generated_kimodo_v2`, …), added in one undo step.
 
+## Loops
+
+Tick **Loop** (CLI `--loop`, MCP `loop: true`) to get a clip that repeats seamlessly. It needs the native runtime
+and one prompt; *Seconds* (0.5–10) is the loop length you want, and the cycle found sets the real one (a 2 s walk is
+two strides). How it is made (`src/AIMotion/KimodoLoop.h`):
+
+1. Kimodo generates once. The two frames about one cycle apart whose poses match best are found, comparing a window
+   of 5 frames so the speed matches too, skipping the first 0.5 s (Kimodo starts every clip from rest) and any
+   stretch that barely moves (an attack's final hold would otherwise loop as a frozen pose).
+2. When they match within 3° (most walks, runs and idles), that cycle is cut out and its last frames are cross-faded
+   into the frames before its start. One generation.
+3. Otherwise Kimodo generates again with the cycle's first 5 frames pinned at the start AND at the end (the end
+   moved forward by one stride), so the seam lands on the exact pose. A motion with no cycle at all (over 12°, e.g.
+   an attack) pins its own starting pose at both ends instead, so it returns to where it began.
+
+The last frame of every loop equals the first plus the stride, so an engine looping the clip neither skips nor
+repeats a frame. `--loop-mode cut|regenerate` (MCP `loop_mode`) forces one method; the panel status, the CLI and
+the MCP report (`kimodo.loops`) say which was used, the loop length and how well the cycle matched. Combine with
+root motion off for in-place loops.
+
 ## CLI
 
 ```bash
@@ -42,7 +62,7 @@ qtmesh anim rigged.glb --apply-motion motion_00.npz -o out.glb   # re-apply a sa
 
 Options: `--runtime auto|native|python` (auto = native when its models are downloaded, else the sidecar),
 `--download`, `--variations 1..16`, `--seed N`, `--diffusion-steps 1..1000` (default 100), `--no-root-motion`,
-`--no-postprocess`, `--name CLIP`, `--json`. Kimodo-only options are refused without `--backend kimodo`.
+`--no-postprocess`, `--loop`, `--loop-mode auto|cut|regenerate`, `--name CLIP`, `--json`. Kimodo-only options are refused without `--backend kimodo`.
 `--constraints` (Kimodo constraint files) needs the Python runtime.
 
 ## MCP
@@ -52,7 +72,7 @@ Options: `--runtime auto|native|python` (auto = native when its models are downl
   "variations": 1, "root_motion": false, "download": true, "output_path": "/tmp/jump.glb"}}
 ```
 
-Also `segments`, `seed`, `diffusion_steps`, `postprocess`, `runtime`, `clip_name`, and `motion_files` (re-apply saved
+Also `segments`, `seed`, `diffusion_steps`, `postprocess`, `runtime`, `loop`, `loop_mode`, `clip_name`, and `motion_files` (re-apply saved
 motions). Options are validated before any download; Stop interrupts a download or a generation; a failed export
 takes the new clips back out of the scene.
 
