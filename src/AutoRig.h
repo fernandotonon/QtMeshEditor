@@ -259,6 +259,15 @@ public:
 
     // --- Pure-data core (unit-testable, no Ogre) -------------------------
 
+    // Which way an UPRIGHT character faces along `depthAxis`, read from its
+    // feet: toes stick out in front of the ankles, so the occupied space of
+    // the lowest band of the body sits forward of the band at ankle height.
+    // +1 = faces +depth, -1 = faces -depth, 0 = no clear signal (feet hidden
+    // under a robe, no feet, a near tie) — the caller keeps its convention.
+    // Occupied cells count once, so tessellation density cannot bias it.
+    static int facingFromFeet(const float* vertexPositions, int vertexCount,
+                              int upAxis, int depthAxis);
+
     // The proportional joint graph for a template (positions in [0,1]^3).
     static std::vector<Joint> templateJoints(Template tmpl);
 

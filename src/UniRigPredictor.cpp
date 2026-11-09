@@ -558,11 +558,22 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         const int F = 3 - SIDE - U;   // the remaining (forward) axis
         // Levi-Civita sign of (U, F, SIDE): +1 when e_U x e_F = +e_SIDE.
         const bool cyclic = (F == (U + 1) % 3);
-        const bool conventionPositive = cyclic;   // left = up x (+forward)
+        // Which way the body faces along F: the toes. A leg chain longer than
+        // hip/knee/ankle ends in a toe joint, and foot -> toe points forward.
+        // Without that signal the glTF convention (faces +F) stands.
+        double toeAlongF = 0.0;
+        for (const auto& l : limbs) {
+            if (l.isArm || l.chain.size() < 4) continue;
+            toeAlongF += joints[l.chain.back()].pos[F] - joints[l.chain[2]].pos[F];
+        }
+        const bool facesNegativeF = toeAlongF < 0.0;
+        // left = up x forward
+        const bool conventionPositive = facesNegativeF ? !cyclic : cyclic;
         leftIsPositive = votes > 0 ? true : votes < 0 ? false : conventionPositive;
         if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
-            fprintf(stderr, "[UNIRIG-LABEL] left/right: emission-order votes=%d -> left is %sSIDE%s\n",
-                    votes, leftIsPositive ? "+" : "-", votes == 0 ? " (convention: faces +forward axis)" : "");
+            fprintf(stderr, "[UNIRIG-LABEL] left/right: emission-order votes=%d toe-forward=%.3f -> left is %sSIDE%s\n",
+                    votes, toeAlongF, leftIsPositive ? "+" : "-",
+                    votes == 0 ? " (fallback: facing from the toes, else +forward)" : "");
     }
 
     // #1013 plausibility bookkeeping: how many chains landed on each role/side.
@@ -1242,8 +1253,15 @@ UniRigPredictor::Result UniRigPredictor::predict(
             latentData, latentData + static_cast<size_t>(numLatents) * hidden);
         } // encoder session released
 
+        // The KV-cache decoder runs on the CPU EP: its first step feeds an
+        // EMPTY past (sequence length 0), which the CoreML EP rejects ("has a
+        // dynamic shape ... but the runtime shape has zero elements") — on a
+        // Mac with the GPU preference on, every UniRig call fell back to the
+        // template rig.
         Ort::SessionOptions decSo;
-        OnnxRuntimeSettings::configureSessionOptions(decSo);
+        OnnxRuntimeSettings::SessionConfig decCfg;
+        decCfg.appendGpu = false;
+        OnnxRuntimeSettings::configureSessionOptions(decSo, decCfg);
         Ort::Session decoder = openSession(decSo, decoderModelPath);
         Ort::Session embed   = openSession(decSo, embedModelPath);
 

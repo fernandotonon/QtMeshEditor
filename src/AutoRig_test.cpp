@@ -791,3 +791,74 @@ TEST(AutoRigFacing, BackwardsFacingMeshIsRiggedHeadFirst)
            "mesh rigged front-first plays every clip in reverse "
            "(forward=" << forward << " backward=" << backward << ")";
 }
+
+// Upright characters: which way they face comes from the FEET. TRELLIS.2
+// generations face -Z; the humanoid template faces +Z, and fitting it without
+// turning it named every Left/Right bone mirrored, so Kimodo / T2M clips (which
+// take the side from the bone name) played turned around, walking backwards.
+namespace {
+// A standing figure (torso, legs, arms out) whose feet stick out toward
+// `toeDir` (+1 = +Z, -1 = -Z), or no feet at all (a robe down to the floor).
+std::vector<float> standingFigure(int toeDir, bool feet = true)
+{
+    std::vector<float> v;
+    auto box = [&](float x0, float x1, float y0, float y1, float z0, float z1) {
+        const int s = 6;
+        for (int i = 0; i <= s; ++i)
+            for (int j = 0; j <= s; ++j)
+                for (int k = 0; k <= s; ++k) {
+                    v.push_back(x0 + (x1 - x0) * i / s);
+                    v.push_back(y0 + (y1 - y0) * j / s);
+                    v.push_back(z0 + (z1 - z0) * k / s);
+                }
+    };
+    box(-0.20f, 0.20f, 0.95f, 1.60f, -0.10f, 0.10f);   // torso
+    box(-0.10f, 0.10f, 1.60f, 1.85f, -0.10f, 0.10f);   // head
+    box(-0.80f, -0.20f, 1.45f, 1.55f, -0.05f, 0.05f);  // arms
+    box(0.20f, 0.80f, 1.45f, 1.55f, -0.05f, 0.05f);
+    if (feet) {
+        box(-0.18f, -0.06f, 0.05f, 0.95f, -0.06f, 0.06f);   // legs
+        box(0.06f, 0.18f, 0.05f, 0.95f, -0.06f, 0.06f);
+        // feet: heel just behind the ankle, toes well in front of it
+        const float z0 = toeDir > 0 ? -0.07f : -0.25f, z1 = toeDir > 0 ? 0.25f : 0.07f;
+        box(-0.18f, -0.06f, 0.0f, 0.05f, z0, z1);
+        box(0.06f, 0.18f, 0.0f, 0.05f, z0, z1);
+    } else {
+        box(-0.25f, 0.25f, 0.0f, 0.95f, -0.15f, 0.15f);    // robe to the floor
+    }
+    return v;
+}
+double fittedX(const std::vector<float>& cloud, const char* bone)
+{
+    AutoRig::Options o;
+    o.upAxis = 1;
+    const auto placed = AutoRig::fitTemplate(AutoRig::templateJoints(AutoRig::Template::Humanoid),
+                                             cloud.data(), int(cloud.size() / 3), o, nullptr);
+    for (const auto& j : placed)
+        if (j.name == QLatin1String(bone)) return j.pos[0];
+    ADD_FAILURE() << "no joint " << bone;
+    return 0.0;
+}
+}  // namespace
+
+TEST(AutoRigFacing, FacingFromFeetReadsTheToes)
+{
+    const auto fwd = standingFigure(+1), back = standingFigure(-1);
+    EXPECT_EQ(AutoRig::facingFromFeet(fwd.data(), int(fwd.size() / 3), 1, 2), 1);
+    EXPECT_EQ(AutoRig::facingFromFeet(back.data(), int(back.size() / 3), 1, 2), -1);
+    const auto robe = standingFigure(+1, false);
+    EXPECT_EQ(AutoRig::facingFromFeet(robe.data(), int(robe.size() / 3), 1, 2), 0)
+        << "no feet = no signal: the caller keeps its convention";
+    EXPECT_EQ(AutoRig::facingFromFeet(nullptr, 0, 1, 2), 0);
+}
+
+TEST(AutoRigFacing, UprightTemplateNamesTheCharactersOwnLeft)
+{
+    // left = up x forward: +X when facing +Z, -X when facing -Z
+    EXPECT_GT(fittedX(standingFigure(+1), "LeftHand"), 0.0);
+    EXPECT_LT(fittedX(standingFigure(+1), "RightHand"), 0.0);
+    EXPECT_LT(fittedX(standingFigure(-1), "LeftHand"), 0.0)
+        << "a -Z-facing character (TRELLIS.2) must get its Left bones at -X";
+    EXPECT_GT(fittedX(standingFigure(-1), "RightHand"), 0.0);
+    EXPECT_LT(fittedX(standingFigure(-1), "LeftUpLeg"), 0.0);
+}

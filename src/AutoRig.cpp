@@ -279,6 +279,64 @@ std::vector<AutoRig::Joint> AutoRig::fitVehicle(const float* verts, int vertexCo
     return placed;
 }
 
+namespace {
+
+// Mean depth of the occupied (side, depth) cells of the vertices whose height
+// lies in [lo, hi]; false when the band is empty.
+bool bandDepthMean(const float* verts, int n, int up, int side, int depth,
+                   double lo, double hi, double sideMin, double sideExt,
+                   double depthMin, double depthExt, double* out)
+{
+    constexpr int kCells = 96;
+    std::vector<uint8_t> used(static_cast<size_t>(kCells) * kCells, 0);
+    double sum = 0;
+    long long count = 0;
+    for (int i = 0; i < n; ++i) {
+        const double h = verts[3 * i + up];
+        if (h < lo || h > hi) continue;
+        const int cs = std::clamp(int((verts[3 * i + side] - sideMin) / sideExt * (kCells - 1)), 0, kCells - 1);
+        const int cd = std::clamp(int((verts[3 * i + depth] - depthMin) / depthExt * (kCells - 1)), 0, kCells - 1);
+        uint8_t& u = used[static_cast<size_t>(cs) * kCells + static_cast<size_t>(cd)];
+        if (u) continue;
+        u = 1;
+        sum += depthMin + (cd + 0.5) / kCells * depthExt;
+        ++count;
+    }
+    if (count == 0) return false;
+    *out = sum / static_cast<double>(count);
+    return true;
+}
+
+}  // namespace
+
+int AutoRig::facingFromFeet(const float* verts, int n, int upAxis, int depthAxis)
+{
+    if (!verts || n <= 0 || upAxis == depthAxis) return 0;
+    const int up = std::clamp(upAxis, 0, 2), depth = std::clamp(depthAxis, 0, 2);
+    const int side = 3 - up - depth;
+    double mn[3] = {1e300, 1e300, 1e300}, mx[3] = {-1e300, -1e300, -1e300};
+    for (int i = 0; i < n; ++i)
+        for (int a = 0; a < 3; ++a) {
+            mn[a] = std::min(mn[a], double(verts[3 * i + a]));
+            mx[a] = std::max(mx[a], double(verts[3 * i + a]));
+        }
+    const double H = mx[up] - mn[up];
+    if (!(H > 0)) return 0;
+    const double sideExt = std::max(1e-9, mx[side] - mn[side]);
+    const double depthExt = std::max(1e-9, mx[depth] - mn[depth]);
+    double toes = 0, ankles = 0;
+    // toes: the lowest 3 % of the height; ankles: 7..13 % (above the foot,
+    // below the knee for every humanoid proportion measured)
+    if (!bandDepthMean(verts, n, up, side, depth, mn[up], mn[up] + 0.03 * H,
+                       mn[side], sideExt, mn[depth], depthExt, &toes)
+        || !bandDepthMean(verts, n, up, side, depth, mn[up] + 0.07 * H, mn[up] + 0.13 * H,
+                          mn[side], sideExt, mn[depth], depthExt, &ankles))
+        return 0;
+    const double delta = toes - ankles;
+    if (std::fabs(delta) < 0.01 * H) return 0;
+    return delta > 0 ? 1 : -1;
+}
+
 std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
                                                  const float* verts,
                                                  int vertexCount,
@@ -330,7 +388,19 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
     //     Only applies to body plans whose template has a front/back axis;
     //     fitVehicle does its own front detection.
     bool flipLength = false;
-    if (vertexCount > 0) {
+    // An UPRIGHT template (arms + legs: humanoid, biped) faces +template-z,
+    // i.e. +p1, and its "Left" bones sit at +x. The head-height test below is
+    // meaningless for a standing character (the head is centred in depth),
+    // so the template kept facing +p1 even on characters that face -p1 —
+    // TRELLIS.2 generations face -Z — and every Left/Right name came out
+    // mirrored: name-keyed retargets (Kimodo, QtMesh T2M) then played clips
+    // turned around, walking backwards. Read the facing from the feet.
+    const bool upright = std::any_of(tmpl.begin(), tmpl.end(), [](const Joint& j) {
+        return j.name == QLatin1String("LeftArm");
+    });
+    if (upright) {
+        flipLength = facingFromFeet(verts, vertexCount, up, p1) < 0;
+    } else if (vertexCount > 0) {
         // Work on OCCUPIED SPACE, not vertex counts: a percentile over
         // vertices lets TESSELLATION decide which end reads as tall, so a
         // sparsely-modelled head beside a densely-modelled back could put the

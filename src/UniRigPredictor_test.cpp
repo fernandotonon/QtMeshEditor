@@ -855,3 +855,19 @@ TEST(UniRigLabelingSides, ConflictingOrderFallsBackToFacingPlusZ)
     EXPECT_GT(xOf(j, "LeftArm"), 0.0);   EXPECT_GT(xOf(j, "LeftUpLeg"), 0.0);
     EXPECT_LT(xOf(j, "RightArm"), 0.0);  EXPECT_LT(xOf(j, "RightUpLeg"), 0.0);
 }
+
+TEST(UniRigLabelingSides, ConflictingOrderUsesTheToesBeforeTheConvention)
+{
+    // Same conflicting emission order, but the legs end in toe joints that
+    // point -Z: the body faces -Z, so its left is up x (-Z) = -X.
+    int n = 0; auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = {
+        J(0,0,0,-1), J(0,.3,0,0), J(0,.6,0,1), J(0,.8,0,2), J(0,.95,0,3),
+        J(.2,.6,0,2),  J(.45,.6,0,5),  J(.65,.6,0,6),
+        J(-.2,.6,0,2), J(-.45,.6,0,8), J(-.65,.6,0,9),
+        J(-.1,-.1,0,0), J(-.1,-.5,0,11), J(-.1,-.9,0,12), J(-.1,-.95,-.15,13),
+        J(.1,-.1,0,0),  J(.1,-.5,0,15),  J(.1,-.9,0,16),  J(.1,-.95,-.15,17) };
+    EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    EXPECT_LT(xOf(j, "LeftArm"), 0.0);   EXPECT_LT(xOf(j, "LeftUpLeg"), 0.0);
+    EXPECT_GT(xOf(j, "RightArm"), 0.0);  EXPECT_GT(xOf(j, "RightUpLeg"), 0.0);
+}
