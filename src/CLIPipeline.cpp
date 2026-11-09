@@ -3739,7 +3739,8 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         kimodoReq.rigPath = filePath;
         kimodoReq.outputPath = outputPath;
         kimodoReq.prompt = generatePrompt;
-        kimodoReq.duration = generateDuration > 0.0f ? generateDuration : 5.0;
+        // An explicit --duration goes through as given (0, -1 or "abc" is rejected), only an absent one defaults.
+        kimodoReq.duration = !generateDurationSet ? 5.0 : (generateDurationValid ? double(generateDuration) : -1.0);
         kimodoReq.footPin = generateFootPin;
         kimodoReq.json = jsonOutput;
         return AIMotion::runCli(kimodoReq);

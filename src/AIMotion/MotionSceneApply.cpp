@@ -10,6 +10,7 @@
 #include <QJsonArray>
 
 #include <algorithm>
+#include <map>
 
 #include <OgreAnimation.h>
 #include <OgreEntity.h>
@@ -58,6 +59,55 @@ bool loadMotionFiles(const QStringList& files, std::vector<Motion>* out, QString
     return true;
 }
 
+namespace {
+
+// Per node track of a looped clip: how its last key relates to its first (a loop ends on its first pose plus the
+// stride), captured before foot pinning so that relation can be put back afterwards.
+struct LoopSeam {
+    std::map<unsigned short, std::pair<Ogre::Quaternion, Ogre::Vector3>> lastFromFirst;   ///< rotation, translation
+};
+
+LoopSeam captureLoopSeam(Ogre::Skeleton* skel, const std::string& clip)
+{
+    LoopSeam seam;
+    if (!skel->hasAnimation(clip)) return seam;
+    for (const auto& [handle, track] : skel->getAnimation(clip)->_getNodeTrackList()) {
+        const unsigned short n = track->getNumKeyFrames();
+        if (n < 2) continue;
+        const auto* first = track->getNodeKeyFrame(0);
+        const auto* last = track->getNodeKeyFrame(n - 1);
+        seam.lastFromFirst[handle] = {last->getRotation() * first->getRotation().Inverse(), last->getTranslate() - first->getTranslate()};
+    }
+    return seam;
+}
+
+// Blend the last keys of each track (6 at most, the last fully) so the last key is again its first key plus the
+// captured relation: the wrap of the loop stays seamless and the change is spread over a few frames, not a pop.
+void restoreLoopSeam(Ogre::Skeleton* skel, const std::string& clip, const LoopSeam& seam)
+{
+    if (!skel->hasAnimation(clip)) return;
+    for (const auto& [handle, track] : skel->getAnimation(clip)->_getNodeTrackList()) {
+        const auto it = seam.lastFromFirst.find(handle);
+        const unsigned short n = track->getNumKeyFrames();
+        if (it == seam.lastFromFirst.end() || n < 2) continue;
+        const auto* first = track->getNodeKeyFrame(0);
+        auto* last = track->getNodeKeyFrame(n - 1);
+        const Ogre::Quaternion wantRot = it->second.first * first->getRotation();
+        const Ogre::Quaternion fixRot = wantRot * last->getRotation().Inverse();
+        const Ogre::Vector3 fixPos = first->getTranslate() + it->second.second - last->getTranslate();
+        const int k = std::min<int>(6, n - 1);
+        for (int j = 0; j < k; ++j) {
+            auto* kf = track->getNodeKeyFrame(static_cast<unsigned short>(n - k + j));
+            const float w = float(j + 1) / float(k);
+            kf->setRotation(Ogre::Quaternion::Slerp(w, Ogre::Quaternion::IDENTITY, fixRot, true) * kf->getRotation());
+            kf->setTranslate(kf->getTranslate() + fixPos * w);
+        }
+        track->_keyFrameDataChanged();
+    }
+}
+
+} // namespace
+
 SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Motion>& motions,
                                       const SceneApplyOptions& options)
 {
@@ -80,7 +130,11 @@ SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Mo
             r.error = motions.size() > 1 ? QStringLiteral("variation %1: %2").arg(v + 1).arg(out.error) : out.error;
             return r;
         }
-        if (options.footPin) AnimationMerger::pinFeet(skel, clip);
+        if (options.footPin) {
+            const LoopSeam seam = options.loop ? captureLoopSeam(skel, clip) : LoopSeam{};
+            AnimationMerger::pinFeet(skel, clip);
+            if (options.loop) restoreLoopSeam(skel, clip, seam);
+        }
         r.clips << QString::fromStdString(clip);
         r.outcomes.push_back(std::move(out));
     }

@@ -644,7 +644,7 @@ std::vector<float> gaussianNoise(std::mt19937_64& rng, size_t n)
 // (shifted one stride), then closed so frame `period` equals frame 0 plus the stride.
 Runtime::Decoded regenerateLoop(Runtime& rt, const KimodoMath::DdimSchedule& sched, const std::vector<float>& text,
                                 std::mt19937_64& rng, const Feats& first, int start, int period, std::array<float, 2> stride,
-                                bool post, const std::function<bool()>& onStep)
+                                bool cyclic, bool post, const std::function<bool()>& onStep)
 {
     const Meta& m = rt.meta();
     const int D = m.D;
@@ -676,7 +676,10 @@ Runtime::Decoded regenerateLoop(Runtime& rt, const KimodoMath::DdimSchedule& sch
         motion = postprocess(rt, motion, {Pin{0, NT, &tr.hipIn, &tr.rotIn}, Pin{period, NT, &hipEnd, &tr.rotIn}});
     }
     const KimodoLoop::Motion decoded = motionOf(rt.decode(motion), m.J30);
-    return decodedOf(KimodoLoop::closeLoop(decoded, period, KimodoLoop::strideOf(decoded, 0, period)));
+    // A cyclic loop keeps the stride it actually travelled; a return-to-start loop must come back to x = z = 0
+    // (without post-processing the pinned end can drift, and with root motion the clip would jump on repeat).
+    const std::array<float, 2> close = cyclic ? KimodoLoop::strideOf(decoded, 0, period) : std::array<float, 2>{0.0f, 0.0f};
+    return decodedOf(KimodoLoop::closeLoop(decoded, period, close));
 }
 
 // One looped variation: a first generation, the cycle search, then the cut or a pinned second generation.
@@ -704,9 +707,13 @@ LoopRun generateLoop(Runtime& rt, const KimodoMath::DdimSchedule& sched, const s
     so.targetPeriod = target;
     const KimodoLoop::Cycle c = KimodoLoop::findCycle(m1, so);
     const bool cyclic = c.found && c.costDeg <= KimodoLoop::kNoCycleThresholdDeg;
-    const bool cut = c.found && (mode == KimodoLoop::Mode::Cut || (mode == KimodoLoop::Mode::Auto && c.costDeg <= KimodoLoop::kCutThresholdDeg));
+    if (mode == KimodoLoop::Mode::Cut && !c.found)
+        throw KimodoFailure("no cycle to cut in this motion (loop mode 'cut' never generates twice): use 'auto' or 'regenerate'");
+    const bool cut = mode == KimodoLoop::Mode::Cut || (mode == KimodoLoop::Mode::Auto && KimodoLoop::cleanCut(c));
     LoopRun out;
     out.report = QJsonObject{{QStringLiteral("cycleCostDeg"), c.found ? c.costDeg : -1.0},
+                             {QStringLiteral("cycleRootDeg"), c.found ? c.rootDeg : -1.0},
+                             {QStringLiteral("cycleHeightCm"), c.found ? c.heightCm : -1.0},
                              {QStringLiteral("cycleStartFrame"), c.start}};
     if (cut) {
         skipSecondPass();
@@ -724,7 +731,7 @@ LoopRun generateLoop(Runtime& rt, const KimodoMath::DdimSchedule& sched, const s
         const size_t b = size_t(start + period) * D + size_t(m.smoothRootStart);
         stride = {first.v[b] - first.v[a], first.v[b + 2] - first.v[a + 2]};
     }
-    out.motion = regenerateLoop(rt, sched, text, rng, first, start, period, stride, post, onStep);
+    out.motion = regenerateLoop(rt, sched, text, rng, first, start, period, stride, cyclic, post, onStep);
     out.report.insert(QStringLiteral("method"), cyclic ? QStringLiteral("regenerate") : QStringLiteral("return_to_start"));
     out.report.insert(QStringLiteral("periodFrames"), period);
     return out;

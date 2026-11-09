@@ -277,7 +277,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
             return !m_cancel.load();
         });
     });
-    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin]() {
+    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin, loop]() {
         if (!self) return;
         m_worker->deleteLater();
         m_worker = nullptr;
@@ -293,7 +293,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         m_lastMotionDir = result->outputDir;
         Ogre::Entity* target = entityByName(entityName);
         if (!target) { setStatus(QStringLiteral("The rig was removed while Kimodo ran; the motion is saved in %1.").arg(result->outputDir), false); return; }
-        if (applyFiles(target, result->files, rootMotion, footPin) && !result->loopSummaries.isEmpty())
+        if (applyFiles(target, result->files, rootMotion, footPin, loop) && !result->loopSummaries.isEmpty())
             setStatus(m_status + QStringLiteral(" Loop: ") + result->loopSummaries.join(QStringLiteral("; ")) + QLatin1Char('.'), true);
     });
     m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
@@ -380,7 +380,7 @@ void KimodoController::cancel()
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Kimodo generation cancelled"));
 }
 
-bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin)
+bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop)
 {
     std::vector<Motion> motions;
     QString err;
@@ -388,6 +388,7 @@ bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files
     SceneApplyOptions so;
     so.rootMotion = rootMotion;
     so.footPin = footPin;
+    so.loop = loop;
     const SceneApplyResult r = applyMotionsToEntity(entity, motions, so);
     if (!r.ok) { setStatus(r.error, false); return false; }
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();

@@ -112,7 +112,7 @@ private:
     Ogre::Entity* entityByName(const std::string& name) const;
     void setStatus(const QString& s, bool ok);
     void setBusy(bool b);
-    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin);
+    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false);
     bool generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed, bool rootMotion,
                      bool footPin);
 

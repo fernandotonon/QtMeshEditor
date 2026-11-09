@@ -133,8 +133,10 @@ Cycle findCycle(const Motion& m, const SearchOptions& o)
     for (int a = s0; a < T; ++a)
         for (int b = a + 1; b < T; ++b) dist[size_t(a) * T + size_t(b)] = dist[size_t(b) * T + size_t(a)] = frameCostDeg(m, a, b);
     const auto d = [&dist, T](int a, int b) { return dist[size_t(a) * T + size_t(b)]; };
-    double reference = 0.0;   // how far the motion ever gets from its own start, after the lead-in
-    for (int t = s0; t < T; ++t) reference = std::max(reference, d(s0, t));
+    // How far the motion ever gets from the first candidate frame, the lead-in included (an action that ends
+    // before the search starts must still make the hold after it fail the activity test).
+    double reference = 0.0;
+    for (int t = 0; t < T; ++t) reference = std::max(reference, t >= s0 ? d(s0, t) : frameCostDeg(m, s0, t));
     double bestScore = std::numeric_limits<double>::infinity();
     const int maxP = o.maxPeriod > 0 ? o.maxPeriod : T;
     for (int p = std::max(2, o.minPeriod); p <= maxP; ++p)
@@ -151,7 +153,18 @@ Cycle findCycle(const Motion& m, const SearchOptions& o)
             bestScore = score;
             best = {true, s, p, c};
         }
+    for (int k = 0; best.found && k < w; ++k) {
+        const int a = best.start + k;
+        const int b = best.start + best.period + k;
+        best.rootDeg = std::max(best.rootDeg, angleDeg(&m.local[size_t(a) * size_t(m.J) * 9], &m.local[size_t(b) * size_t(m.J) * 9]));
+        best.heightCm = std::max(best.heightCm, std::abs(double(m.root[size_t(a) * 3 + 1]) - double(m.root[size_t(b) * 3 + 1])) * 100.0);
+    }
     return best;
+}
+
+bool cleanCut(const Cycle& c)
+{
+    return c.found && c.costDeg <= kCutThresholdDeg && c.rootDeg <= kCutRootThresholdDeg && c.heightCm <= kCutHeightThresholdCm;
 }
 
 std::array<float, 2> strideOf(const Motion& m, int from, int to)

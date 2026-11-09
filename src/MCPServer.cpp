@@ -5777,6 +5777,9 @@ QJsonObject MCPServer::toolGenerateMotion(const QJsonObject &args)
             return toolGenerateMotionT2M(args);
         if (backend == QLatin1String("kimodo") || args.contains(QStringLiteral("motion_files")))
             return toolGenerateMotionKimodo(args);
+        // A loop is a Kimodo feature: the template / model clips would come back looking successful but not seamless.
+        if (args.contains(QStringLiteral("loop")) || args.contains(QStringLiteral("loop_mode")))
+            return makeErrorResult("Error: 'loop' / 'loop_mode' need backend 'kimodo'.");
 
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.text_to_motion"),
             QStringLiteral("MCP generate_motion"));
@@ -6133,8 +6136,10 @@ QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor
     } else {
         const QString prompt = args.value(QStringLiteral("prompt")).toString();
         if (prompt.trimmed().isEmpty()) return QStringLiteral("kimodo needs 'prompt' or 'segments'.");
-        const double d = args.value(QStringLiteral("duration")).toDouble(0.0);
-        o->segments.push_back({prompt, d > 0.0 ? d : 5.0});
+        // An absent duration defaults; an explicit one goes through as given so 0 / negative is refused, not
+        // silently turned into 5 s.
+        const double d = args.contains(QStringLiteral("duration")) ? args.value(QStringLiteral("duration")).toDouble(-1.0) : 5.0;
+        o->segments.push_back({prompt, d});
     }
     o->numSamples = args.value(QStringLiteral("variations")).toInt(1);
     if (args.contains(QStringLiteral("seed"))) {
@@ -6318,6 +6323,7 @@ QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* 
     so.baseName = args.value(QStringLiteral("clip_name")).toString();
     so.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
     so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
+    so.loop = args.value(QStringLiteral("loop")).toBool(false) || args.contains(QStringLiteral("loop_mode"));
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return makeErrorResult(QStringLiteral("Error: %1").arg(applied.error));
 

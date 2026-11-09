@@ -69,7 +69,7 @@ int buildOptions(const CliRequest& req, KimodoPredictor::Options* o)
         }
     } else {
         if (req.prompt.trimmed().isEmpty()) return fail(QStringLiteral("--generate needs a prompt"), 2);
-        o->segments.push_back({req.prompt, req.duration > 0.0 ? req.duration : 5.0});
+        o->segments.push_back({req.prompt, req.duration});   // the caller defaults an ABSENT --duration
     }
     o->numSamples = req.variations;
     o->hasSeed = req.hasSeed;
@@ -199,6 +199,7 @@ int runCli(const CliRequest& req)
     so.baseName = req.name;
     so.rootMotion = req.rootMotion;
     so.footPin = req.footPin;
+    so.loop = req.loop || !req.loopMode.isEmpty();
     so.undoable = false;   // one-shot process
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);

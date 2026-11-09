@@ -35,6 +35,10 @@ QString modeId(Mode mode);
 constexpr double kCutThresholdDeg = 3.0;
 /// Above this no cycle is assumed (a one-shot motion): the clip returns to its own start pose instead.
 constexpr double kNoCycleThresholdDeg = 12.0;
+/// The cut also needs the ROOT to match on its own: a mean over 30 joints would let a 90 deg heading change
+/// (or a crouch that does not come back up) through, and the cross-fade would then swing the whole body back.
+constexpr double kCutRootThresholdDeg = 5.0;
+constexpr double kCutHeightThresholdCm = 2.0;
 
 /// A decoded motion: J local rotation matrices per frame (row-major 3x3), the root position, C contact channels.
 struct Motion {
@@ -53,8 +57,9 @@ struct SearchOptions {
     int maxPeriod = 0;       ///< 0 = as long as the motion allows
     int targetPeriod = 0;    ///< preferred length (the requested duration); 0 = no preference
     double lengthWeightDeg = 4.0;   ///< cost added per 100 % of length difference from targetPeriod
-    /// A cycle must move: its largest pose change away from its first frame has to reach this fraction of the
-    /// whole motion's (after the lead-in). Stops a still stretch (the hold after an attack) passing as a loop.
+    /// A cycle must move: its largest pose change away from its first frame has to reach this fraction of how far
+    /// the whole motion (lead-in included) gets from that frame. Stops a still stretch — the hold after an attack,
+    /// even one that finished inside the lead-in — passing as a loop; a clip that never moves is still accepted.
     double minActivity = 0.35;
 };
 
@@ -63,7 +68,11 @@ struct Cycle {
     int start = 0;
     int period = 0;
     double costDeg = std::numeric_limits<double>::infinity();   ///< mean joint-angle mismatch of the windows
+    double rootDeg = 0.0;    ///< largest root-joint (heading + tilt) mismatch inside the windows
+    double heightCm = 0.0;   ///< largest root-height mismatch inside the windows
 };
+/// The cycle may be cut as is (costDeg, rootDeg and heightCm under the cut thresholds).
+bool cleanCut(const Cycle& c);
 
 /// Mean angle (degrees) between the joint rotations of frames [i, i+window) and [j, j+window), plus the root
 /// height difference (1 cm = 1 degree). Rotations are local, the root joint's includes the heading, so a cycle

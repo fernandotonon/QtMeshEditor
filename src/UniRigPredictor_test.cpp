@@ -977,3 +977,30 @@ TEST(UniRigLabeling, ArmChainsWithoutAClavicleKeepArmFirst)
         EXPECT_EQ(j[size_t(f + 2)].name, side + QStringLiteral("Hand"));
     }
 }
+
+// A short upper arm is not a clavicle: with no finger fan, only a first joint right beside the spine is.
+TEST(UniRigLabeling, AShortUpperArmIsNotAClavicle)
+{
+    int n = 0;
+    auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = {J(0, 0, 0, -1), J(0, .3, 0, 0), J(0, .6, 0, 1), J(0, .8, 0, 2), J(0, .95, 0, 3)};
+    int firsts[2] = {0, 0};
+    for (int s = 0; s < 2; ++s) {
+        const double x = s == 0 ? 1.0 : -1.0;
+        firsts[s] = n;
+        j.push_back(J(x * .18, .6, 0, 2));               // shoulder joint, half a chest out
+        j.push_back(J(x * .26, .6, 0, firsts[s]));       // a SHORT upper arm (0.08 vs a 0.3 forearm)
+        j.push_back(J(x * .56, .6, 0, firsts[s] + 1));
+        j.push_back(J(x * .62, .6, 0, firsts[s] + 2));   // one finger
+    }
+    for (int s = 0; s < 2; ++s) {
+        const double x = s == 0 ? .1 : -.1;
+        const int a = n;
+        j.push_back(J(x, -.1, 0, 0));
+        j.push_back(J(x, -.5, 0, a));
+        j.push_back(J(x, -.9, 0, a + 1));
+    }
+    ASSERT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    for (int f : firsts) EXPECT_TRUE(j[size_t(f)].name.endsWith(QLatin1String("Arm")) && !j[size_t(f)].name.contains(QLatin1String("Fore")))
+        << j[size_t(f)].name.toStdString();
+}

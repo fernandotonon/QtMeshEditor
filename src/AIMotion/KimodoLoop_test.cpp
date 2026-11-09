@@ -151,3 +151,45 @@ TEST(KimodoLoop, CloseLoopCopiesTheFirstFrame)
     EXPECT_NEAR(s[0], 0.6f, 1e-5f);
     EXPECT_NEAR(s[1], 0.0f, 1e-6f);
 }
+
+TEST(KimodoLoop, AHeadingChangeIsNotACleanCut)
+{
+    // 30 joints, the root turning 30 deg per cycle while the other 29 repeat exactly: the mean mismatch stays
+    // near 1 deg, so only the separate root check stops the cut from swinging the whole body back at the wrap.
+    Motion m;
+    m.T = 120;
+    m.J = 30;
+    m.C = 4;
+    m.local.resize(size_t(m.T) * 30 * 9);
+    m.root.assign(size_t(m.T) * 3, 0.9f);
+    m.contacts.assign(size_t(m.T) * 4, 0.0f);
+    for (int t = 0; t < m.T; ++t)
+        for (int j = 0; j < 30; ++j)
+            rotY(j == 0 ? t : 20.0 * std::sin(2.0 * kPi * t / 30.0), &m.local[(size_t(t) * 30 + size_t(j)) * 9]);
+    SearchOptions o;
+    o.minStart = 15;
+    o.minPeriod = 25;
+    o.maxPeriod = 35;
+    o.targetPeriod = 30;
+    const Cycle c = findCycle(m, o);
+    ASSERT_TRUE(c.found);
+    EXPECT_LT(c.costDeg, kCutThresholdDeg) << "the mean alone would have cut it";
+    EXPECT_GT(c.rootDeg, kCutRootThresholdDeg);
+    EXPECT_FALSE(cleanCut(c));
+}
+
+TEST(KimodoLoop, AHoldAfterAnActionInTheLeadInIsNotACycle)
+{
+    // The swing ends inside the lead-in (frame 12, search starts at 15): every candidate is still, and the
+    // reference must include the lead-in so the hold is rejected instead of cut as a frozen loop.
+    const Motion m = makeMotion(120, [](int t) { return t < 12 ? 60.0 * std::sin(kPi * t / 12.0) : 0.0; });
+    SearchOptions o;
+    o.minStart = 15;
+    o.minPeriod = 20;
+    o.maxPeriod = 40;
+    o.targetPeriod = 30;
+    EXPECT_FALSE(findCycle(m, o).found);
+    // A clip that never moves at all is still a (trivial) loop.
+    const Motion still = makeMotion(120, [](int) { return 0.0; });
+    EXPECT_TRUE(findCycle(still, o).found);
+}
