@@ -713,7 +713,7 @@ LoopRun generateLoop(const LoopContext& ctx, int target, KimodoLoop::Mode mode)
     const Meta& m = rt.meta();
     const int D = m.D;
     const int NT = m.transitionFrames;
-    const int lead = int(std::lround(0.5 * double(m.fps)));
+    const auto lead = int(std::lround(0.5 * double(m.fps)));
     const int firstLen = lead + int(std::lround(2.0 * target)) + NT;
     std::vector<Feats> generated;
     const SegmentSetup s = prepareSegment(rt, generated, firstLen);

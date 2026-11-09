@@ -242,7 +242,8 @@ bool buildGuiOptions(const GuiRequest& req, KimodoPredictor::Options* o, QString
     QStringList texts;
     QList<double> durations;
     if (!KimodoController::parsePromptSegments(req.prompt, req.duration > 0.0 ? req.duration : 5.0, &texts, &durations, err)) return false;
-    for (int i = 0; i < texts.size(); ++i) o->segments.push_back({texts[i], durations[i]});
+    auto duration = durations.cbegin();
+    for (const QString& text : texts) o->segments.push_back({text, *duration++});
     o->numSamples = qBound(1, req.variations, 16);
     o->hasSeed = req.seed >= 0;
     o->seed = qMax(0, req.seed);
