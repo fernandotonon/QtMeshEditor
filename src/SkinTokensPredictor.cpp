@@ -580,17 +580,26 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "qtmesh_skintokens");
         Ort::SessionOptions so;
         OnnxRuntimeSettings::configureSessionOptions(so);
-        auto openSession = [&](const char* file) -> Ort::Session {
+        // The Qwen3 KV-cache decoder (and its embedding) run on the CPU EP:
+        // the first step's past is EMPTY, which the CoreML EP rejects
+        // (zero-element dynamic shape) — the whole skinner then fell back to
+        // the geodesic bind on a Mac with the GPU preference on.
+        Ort::SessionOptions cpuSo;
+        OnnxRuntimeSettings::SessionConfig cpuCfg;
+        cpuCfg.appendGpu = false;
+        OnnxRuntimeSettings::configureSessionOptions(cpuSo, cpuCfg);
+        auto openSessionWith = [&](const char* file, Ort::SessionOptions& opts) -> Ort::Session {
             const QString p = modelDir() + QLatin1Char('/')
                               + QLatin1String(file);
 #ifdef _WIN32
             const std::wstring wp = p.toStdWString();
-            return Ort::Session(env, wp.c_str(), so);
+            return Ort::Session(env, wp.c_str(), opts);
 #else
             const std::string sp = p.toStdString();
-            return Ort::Session(env, sp.c_str(), so);
+            return Ort::Session(env, sp.c_str(), opts);
 #endif
         };
+        auto openSession = [&](const char* file) { return openSessionWith(file, so); };
         Ort::AllocatorWithDefaultOptions alloc;
         Ort::MemoryInfo mem =
             Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -686,7 +695,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
         dbg("stage 3: embed skeleton");
         // ── (3) embed the skeleton ids (reuse the embed session for decode) ─
         std::vector<float> skelEmbeds;
-        Ort::Session embed = openSession("embed.onnx");
+        Ort::Session embed = openSessionWith("embed.onnx", cpuSo);
         {
             std::vector<std::int64_t> ids = skelIds;
             const int64_t shp[2] = { 1, int64_t(ids.size()) };
@@ -703,7 +712,7 @@ SkinTokensPredictor::Result SkinTokensPredictor::predict(
 
         dbg("stage 4: decoder open");
         // ── (4) decoder prefix + greedy skin decode ─────────────────
-        Ort::Session dec = openSession("decoder.onnx");
+        Ort::Session dec = openSessionWith("decoder.onnx", cpuSo);
         dbg("stage 4a: decoder session created");
 
         const size_t decIn = dec.GetInputCount();

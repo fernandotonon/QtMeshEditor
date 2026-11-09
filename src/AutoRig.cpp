@@ -279,6 +279,90 @@ std::vector<AutoRig::Joint> AutoRig::fitVehicle(const float* verts, int vertexCo
     return placed;
 }
 
+namespace {
+
+bool finiteVertex(const float* verts, int i)
+{
+    return std::isfinite(verts[3 * i]) && std::isfinite(verts[3 * i + 1])
+        && std::isfinite(verts[3 * i + 2]);
+}
+
+// Mean depth of the occupied (side, depth) cells of the vertices whose height
+// lies in [lo, hi], and the largest depth extent of ONE foot: the band is split
+// at the middle of the side axis, so a long stride (feet far apart in depth)
+// is not mistaken for one deep slab. False when the band is empty.
+struct BandStats { double mean = 0, extent = 0; };
+bool bandDepthMean(const float* verts, int n, int up, int side, int depth,
+                   double lo, double hi, double sideMin, double sideExt,
+                   double depthMin, double depthExt, BandStats* out)
+{
+    constexpr int kCells = 96;
+    std::vector<uint8_t> used(static_cast<size_t>(kCells) * kCells, 0);
+    double sum = 0;
+    double lowest[2] = {1e300, 1e300}, highest[2] = {-1e300, -1e300};
+    long long count = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!finiteVertex(verts, i)) continue;
+        const double h = verts[3 * i + up];
+        if (h < lo || h > hi) continue;
+        const int cs = std::clamp(int((verts[3 * i + side] - sideMin) / sideExt * (kCells - 1)), 0, kCells - 1);
+        const int cd = std::clamp(int((verts[3 * i + depth] - depthMin) / depthExt * (kCells - 1)), 0, kCells - 1);
+        uint8_t& u = used[static_cast<size_t>(cs) * kCells + static_cast<size_t>(cd)];
+        if (u) continue;
+        u = 1;
+        const double d = depthMin + (cd + 0.5) / kCells * depthExt;
+        const int half = cs < kCells / 2 ? 0 : 1;
+        sum += d;
+        lowest[half] = std::min(lowest[half], d);
+        highest[half] = std::max(highest[half], d);
+        ++count;
+    }
+    if (count == 0) return false;
+    out->mean = sum / static_cast<double>(count);
+    out->extent = 0;
+    for (int h = 0; h < 2; ++h)
+        if (highest[h] >= lowest[h]) out->extent = std::max(out->extent, highest[h] - lowest[h]);
+    return true;
+}
+
+}  // namespace
+
+int AutoRig::facingFromFeet(const float* verts, int n, int upAxis, int depthAxis)
+{
+    if (!verts || n <= 0 || upAxis < 0 || upAxis > 2 || depthAxis < 0 || depthAxis > 2
+        || upAxis == depthAxis)
+        return 0;
+    const int up = upAxis, depth = depthAxis;
+    const int side = 3 - up - depth;   // the third axis, 0..2
+    double mn[3] = {1e300, 1e300, 1e300}, mx[3] = {-1e300, -1e300, -1e300};
+    for (int i = 0; i < n; ++i) {
+        if (!finiteVertex(verts, i)) continue;   // a NaN would poison the bounds
+        for (int a = 0; a < 3; ++a) {
+            mn[a] = std::min(mn[a], double(verts[3 * i + a]));
+            mx[a] = std::max(mx[a], double(verts[3 * i + a]));
+        }
+    }
+    const double H = mx[up] - mn[up];
+    if (!(H > 0) || !std::isfinite(H)) return 0;
+    const double sideExt = std::max(1e-9, mx[side] - mn[side]);
+    const double depthExt = std::max(1e-9, mx[depth] - mn[depth]);
+    BandStats toes, ankles;
+    // toes: the lowest 3 % of the height; ankles: 7..13 % (above the foot,
+    // below the knee for every humanoid proportion measured)
+    if (!bandDepthMean(verts, n, up, side, depth, mn[up], mn[up] + 0.03 * H,
+                       mn[side], sideExt, mn[depth], depthExt, &toes)
+        || !bandDepthMean(verts, n, up, side, depth, mn[up] + 0.07 * H, mn[up] + 0.13 * H,
+                          mn[side], sideExt, mn[depth], depthExt, &ankles))
+        return 0;
+    // A foot is short (~15 % of the height). A bottom band whose ONE side is
+    // much deeper than that is a base or pedestal, whose shape says nothing
+    // about the facing (each side is measured alone, so a stride is not one).
+    if (toes.extent > 0.35 * H) return 0;
+    const double delta = toes.mean - ankles.mean;
+    if (std::fabs(delta) < 0.01 * H) return 0;
+    return delta > 0 ? 1 : -1;
+}
+
 std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
                                                  const float* verts,
                                                  int vertexCount,
@@ -330,7 +414,19 @@ std::vector<AutoRig::Joint> AutoRig::fitTemplate(const std::vector<Joint>& tmpl,
     //     Only applies to body plans whose template has a front/back axis;
     //     fitVehicle does its own front detection.
     bool flipLength = false;
-    if (vertexCount > 0) {
+    // An UPRIGHT template (arms + legs: humanoid, biped) faces +template-z,
+    // i.e. +p1, and its "Left" bones sit at +x. The head-height test below is
+    // meaningless for a standing character (the head is centred in depth),
+    // so the template kept facing +p1 even on characters that face -p1 —
+    // TRELLIS.2 generations face -Z — and every Left/Right name came out
+    // mirrored: name-keyed retargets (Kimodo, QtMesh T2M) then played clips
+    // turned around, walking backwards. Read the facing from the feet.
+    const bool upright = std::any_of(tmpl.begin(), tmpl.end(), [](const Joint& j) {
+        return j.name == QLatin1String("LeftArm");
+    });
+    if (upright) {
+        flipLength = facingFromFeet(verts, vertexCount, up, p1) < 0;
+    } else if (vertexCount > 0) {
         // Work on OCCUPIED SPACE, not vertex counts: a percentile over
         // vertices lets TESSELLATION decide which end reads as tall, so a
         // sparsely-modelled head beside a densely-modelled back could put the
