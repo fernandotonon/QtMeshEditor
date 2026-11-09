@@ -288,6 +288,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoMath.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoLoop.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/HandShapes.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoTextEncoder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoNative.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/QtMeshT2M.cpp
@@ -297,6 +298,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoController_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoMath_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoLoop_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/HandShapes_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/KimodoNative_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIMotion/QtMeshT2M_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget_test.cpp

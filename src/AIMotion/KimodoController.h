@@ -42,6 +42,9 @@ class KimodoController : public QObject
     Q_PROPERTY(QString nativeDownloadSize READ nativeDownloadSize NOTIFY runtimeChanged)
     /// "kimodo" (default) | "qtmesh_t2m".
     Q_PROPERTY(QString backend READ backend WRITE setBackend NOTIFY backendChanged)
+    /// Kimodo hand shape (HandShapes.h): auto | relaxed | open | fist | grip | point; persisted as ai/kimodoHands.
+    Q_PROPERTY(QString hands READ hands WRITE setHands NOTIFY handsChanged)
+    Q_PROPERTY(QStringList handModes READ handModes CONSTANT)
     Q_PROPERTY(bool t2mSupported READ t2mSupported CONSTANT)
     Q_PROPERTY(bool t2mReady READ t2mReady NOTIFY runtimeChanged)
     Q_PROPERTY(QString t2mDownloadSize READ t2mDownloadSize NOTIFY runtimeChanged)
@@ -64,6 +67,9 @@ public:
     QString nativeDownloadSize() const;
     QString backend() const { return m_backend; }
     void setBackend(const QString& b);
+    QString hands() const { return m_hands; }
+    void setHands(const QString& h);
+    static QStringList handModes();
     bool t2mSupported() const;
     bool t2mReady() const;
     QString t2mDownloadSize() const;
@@ -100,6 +106,7 @@ signals:
     void statusChanged();
     void runtimeChanged();
     void backendChanged();
+    void handsChanged();
     /// Clips were added to `entity` (the panel refreshes its list and selects the first).
     void applied(const QString& entity, const QStringList& clips);
 
@@ -126,6 +133,7 @@ private:
     QStringList m_lastClips;
     QString m_lastMotionDir;
     QString m_backend;
+    QString m_hands = QStringLiteral("auto");
     QThread* m_worker = nullptr;
     std::atomic<bool> m_cancel{false};
 };

@@ -1,4 +1,6 @@
 #include "KimodoController.h"
+
+#include "HandShapes.h"
 #include "KimodoNative.h"
 
 #include "KimodoPredictor.h"
@@ -71,7 +73,20 @@ KimodoController::KimodoController(QObject* parent) : QObject(parent)
     // A saved qtmesh_t2m on a build without ONNX/llama.cpp falls back to Kimodo (the setting itself is kept).
     const bool usable = backends().contains(saved) && (saved != QLatin1String("qtmesh_t2m") || QtMeshT2M::buildSupported());
     m_backend = usable ? saved : QStringLiteral("kimodo");
+    const QString hands = QSettings().value(QStringLiteral("ai/kimodoHands"), QStringLiteral("auto")).toString();
+    if (handModes().contains(hands)) m_hands = hands;
     refreshRuntime();
+}
+
+QStringList KimodoController::handModes() { return HandShapes::modeIds(); }
+
+void KimodoController::setHands(const QString& h)
+{
+    if (!handModes().contains(h) || h == m_hands) return;
+    m_hands = h;
+    QSettings().setValue(QStringLiteral("ai/kimodoHands"), h);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("kimodo hands: %1").arg(h));
+    emit handsChanged();
 }
 
 void KimodoController::setBackend(const QString& b)
@@ -411,15 +426,18 @@ bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files
     so.rootMotion = rootMotion;
     so.footPin = footPin;
     so.loop = loop;
+    so.hands = m_hands;
     const SceneApplyResult r = applyMotionsToEntity(entity, motions, so);
     if (!r.ok) { setStatus(r.error, false); return false; }
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
     m_lastClips = r.clips;
     const ApplyOutcome& first = r.outcomes.front();
-    setStatus(QStringLiteral("Added %1 to %2: %3 bones driven (%4 fingers), %5 rig bones undriven.")
-                  .arg(r.clips.join(QStringLiteral(", ")), QString::fromStdString(entity->getName()))
-                  .arg(first.mappedBones).arg(first.fingerBones).arg(first.unmappedTarget.size()),
-              true);
+    QString msg = QStringLiteral("Added %1 to %2: %3 bones driven (%4 fingers), %5 rig bones undriven.")
+                      .arg(r.clips.join(QStringLiteral(", ")), QString::fromStdString(entity->getName()))
+                      .arg(first.mappedBones).arg(first.fingerBones).arg(first.unmappedTarget.size());
+    if (!r.handShapes.isEmpty() && !r.handShapes.front().isEmpty())
+        msg += QStringLiteral(" Hands: %1.").arg(r.handShapes.front());
+    setStatus(msg, true);
     emit applied(QString::fromStdString(entity->getName()), r.clips);
     return true;
 }

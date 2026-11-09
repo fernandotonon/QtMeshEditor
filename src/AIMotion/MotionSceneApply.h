@@ -30,6 +30,9 @@ struct SceneApplyOptions {
     /// The motions are seamless loops (KimodoLoop): after foot pinning, which anchors each contact span on its own
     /// and can rewrite the last frame's legs, the last keys are blended back so the clip still ends on its first pose.
     bool loop = false;
+    /// Hand shapes (HandShapes.h): "auto" (default: from each prompt segment in the motion's metadata), or
+    /// relaxed / open / fist / grip / point for the whole clip. Relaxed keeps the motion's own hands.
+    QString hands = QStringLiteral("auto");
     bool undoable = true;      ///< push one undo macro (off for headless one-shots)
     int smoothFps = 12;        ///< canonical clips: sparse smoothing bake rate (0 = off)
 };
@@ -38,6 +41,7 @@ struct SceneApplyResult {
     bool ok = false;
     QString error;
     QStringList clips;                 ///< written clip names, one per motion
+    QStringList handShapes;            ///< per clip, the hand shapes written ("fist", "open -> grip"), empty = relaxed
     std::vector<ApplyOutcome> outcomes;
     int undoIndexAfter = -1;           ///< the undo stack index right after this batch's macro (-1 = not undoable)
 };

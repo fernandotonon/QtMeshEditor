@@ -30,6 +30,7 @@
 #include "AlembicImporter.h"
 #include "UsdBridge.h"
 #include "AlembicExporter.h"
+#include "AIMotion/HandShapes.h"
 #include "AIMotion/KimodoNative.h"
 #include "AIMotion/KimodoPredictor.h"
 #include "AIMotion/MotionSceneApply.h"
@@ -6152,6 +6153,9 @@ QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor
     o->runtime = args.value(QStringLiteral("runtime")).toString().toLower();
     o->loopMode = args.value(QStringLiteral("loop_mode")).toString().toLower();
     o->loop = args.value(QStringLiteral("loop")).toBool(false) || !o->loopMode.isEmpty();
+    // Checked here too (it is applied after generation) so a typo never costs a generation.
+    if (!AIMotion::HandShapes::validMode(args.value(QStringLiteral("hands")).toString()))
+        return QStringLiteral("'hands' must be one of: %1").arg(AIMotion::HandShapes::modeIds().join(QStringLiteral(", ")));
     QString err;
     return AIMotion::KimodoPredictor::validateOptions(*o, &err) ? QString() : err;
 }
@@ -6235,7 +6239,7 @@ QJsonObject MCPServer::toolGenerateMotionT2M(const QJsonObject &args)
     using namespace AIMotion;
     Manager* mgr = Manager::getSingletonPtr();
     if (!mgr) return makeErrorResult("Error: Manager not available");
-    for (const char* k : {"segments", "diffusion_steps", "postprocess", "runtime", "motion_files", "loop", "loop_mode"})
+    for (const char* k : {"segments", "diffusion_steps", "postprocess", "runtime", "motion_files", "loop", "loop_mode", "hands"})
         if (args.contains(QLatin1String(k)))
             return makeErrorResult(QStringLiteral("Error: '%1' is a Kimodo option; qtmesh_t2m generates one motion per prompt.").arg(QLatin1String(k)));
     const QString entityName = args.value(QStringLiteral("entity_name")).toString();
@@ -6324,6 +6328,9 @@ QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* 
     so.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
     so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
     so.loop = args.value(QStringLiteral("loop")).toBool(false) || args.contains(QStringLiteral("loop_mode"));
+    if (args.contains(QStringLiteral("hands"))) so.hands = args.value(QStringLiteral("hands")).toString().toLower();
+    if (!HandShapes::validMode(so.hands))
+        return makeErrorResult(QStringLiteral("Error: 'hands' must be one of: %1").arg(HandShapes::modeIds().join(QStringLiteral(", "))));
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return makeErrorResult(QStringLiteral("Error: %1").arg(applied.error));
 
@@ -6347,6 +6354,7 @@ QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* 
     QJsonObject report{{QStringLiteral("backend"), QStringLiteral("kimodo")},
                        {QStringLiteral("entity"), entityName},
                        {QStringLiteral("clips"), clips},
+                       {QStringLiteral("hand_shapes"), QJsonArray::fromStringList(applied.handShapes)},
                        {QStringLiteral("motion_files"), QJsonArray::fromStringList(files)}};
     if (!manifest.isEmpty()) report.insert(QStringLiteral("kimodo"), manifest);
     if (!outPath.isEmpty()) report.insert(QStringLiteral("output_path"), outPath);
@@ -13338,6 +13346,7 @@ QJsonArray MCPServer::buildToolsList()
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo / qtmesh_t2m: keep the root translation (Kimodo: its own, scaled to the rig's height; qtmesh_t2m: estimated from the planted foot). Default true; false = in-place motion."}};
         props["postprocess"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only: Kimodo's own foot-skate cleanup. Default true."}};
         props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "kimodo only (native runtime, one prompt): make each variation a seamless loop about 'duration' seconds long (0.5..10). A cycle is cut from a first generation when one matches; otherwise the motion is generated again with the same pose pinned at both ends (one stride apart). A motion with no cycle (an attack) returns to its own start pose. The report's kimodo.loops says how each loop was made. Default false."}};
+        props["hands"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "relaxed", "open", "fist", "grip", "point"}}, {"description", "kimodo only: finger shape written onto the clip (Kimodo itself drives no fingers). auto (default) = from each prompt segment (punch/fist -> fist, grab/hold/carry -> grip, point -> point, wave/open/clap -> open; 'with the right hand' shapes that hand only), otherwise that shape for the whole clip; relaxed = Kimodo's own hands. Changes blend over 0.2 s."}};
         props["loop_mode"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "cut", "regenerate"}}, {"description", "kimodo loop: auto (default: cut when the cycle matches within 3 degrees, else regenerate), cut (always one generation), regenerate (always pin both ends). Implies loop:true."}};
         props["clip_name"] = QJsonObject{{"type", "string"}, {"description", "kimodo / qtmesh_t2m / motion_files: base clip name (default generated_kimodo or generated_qtmesh_t2m)."}};
         props["runtime"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "native", "python"}},
