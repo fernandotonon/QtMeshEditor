@@ -312,12 +312,16 @@ namespace {
 // when EVERY leg with a verified toe points the same way, 0 otherwise. A toe
 // is verified when the ankle has exactly one child (no competing branch the
 // longest-path walk might have picked instead), and the ankle -> toe step is
-// mostly horizontal and at least 2 % of the body height. Legs pointing in
+// mostly FORWARD (not up/down, not sideways) and at least 2 % of the body
+// height. Degenerate axes give 0. Legs pointing in
 // opposite directions, or no verified toe at all, give 0.
 template <typename LimbList, typename JointList, typename KidList>
 int toeFacingVote(const LimbList& limbs, const JointList& joints, const KidList& kids,
-                  int U, int F, double bodyH)
+                  int U, int F, int SIDE, double bodyH)
 {
+    // degenerate axes (e.g. a skeleton with no measurable extent): no vote
+    if (U < 0 || U > 2 || F < 0 || F > 2 || SIDE < 0 || SIDE > 2 || U == F || U == SIDE || F == SIDE)
+        return 0;
     int sign = 0;
     for (const auto& l : limbs) {
         if (l.isArm || l.chain.size() < 4) continue;
@@ -325,7 +329,11 @@ int toeFacingVote(const LimbList& limbs, const JointList& joints, const KidList&
         if (kids[size_t(ankle)].size() != 1) return 0;
         const double dF = joints[size_t(toe)].pos[F] - joints[size_t(ankle)].pos[F];
         const double dU = joints[size_t(toe)].pos[U] - joints[size_t(ankle)].pos[U];
-        if (std::fabs(dF) < 0.02 * bodyH || std::fabs(dF) < 0.5 * std::fabs(dU)) return 0;
+        const double dS = joints[size_t(toe)].pos[SIDE] - joints[size_t(ankle)].pos[SIDE];
+        // the step must point mostly FORWARD: not up/down, not sideways
+        if (std::fabs(dF) < 0.02 * bodyH || std::fabs(dF) < 0.5 * std::fabs(dU)
+            || std::fabs(dF) < std::fabs(dS))
+            return 0;
         const int s = dF > 0 ? 1 : -1;
         if (sign != 0 && s != sign) return 0;
         sign = s;
@@ -590,7 +598,7 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         // Which way the body faces along F: the toes (foot -> toe points
         // forward). Only VERIFIED toes count, and only when every leg agrees;
         // otherwise the glTF convention (faces +F) stands.
-        const int toeVote = toeFacingVote(limbs, joints, kids, U, F, bodyH);
+        const int toeVote = toeFacingVote(limbs, joints, kids, U, F, SIDE, bodyH);
         const double toeAlongF = toeVote;
         const bool facesNegativeF = toeVote < 0;
         // left = up x forward

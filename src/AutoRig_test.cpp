@@ -4,6 +4,7 @@
 // under Xvfb on CI).
 
 #include <gtest/gtest.h>
+#include <limits>
 #include "UniRigPredictor.h"
 #include "SkinWeights.h"
 #include <stdexcept>
@@ -878,4 +879,28 @@ TEST(AutoRigFacing, PedestalAndBadAxesGiveNoSignal)
     EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), -1, 0), 0);
     EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), 1, 3), 0);
     EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), 2, 2), 0);
+}
+
+TEST(AutoRigFacing, StrideKeepsTheSignalAndNaNIsIgnored)
+{
+    // A long stride: one foot well ahead of the other along depth. Each foot is
+    // short, so it is still read as feet (not a pedestal) and the toes decide.
+    std::vector<float> v;
+    auto box = [&](float x0, float x1, float y0, float y1, float z0, float z1) {
+        for (int i = 0; i <= 6; ++i)
+            for (int jj = 0; jj <= 6; ++jj)
+                for (int k = 0; k <= 6; ++k)
+                    v.insert(v.end(), {x0 + (x1 - x0) * i / 6, y0 + (y1 - y0) * jj / 6,
+                                       z0 + (z1 - z0) * k / 6});
+    };
+    box(-0.20f, 0.20f, 0.95f, 1.85f, -0.10f, 0.10f);              // body
+    box(-0.18f, -0.06f, 0.05f, 0.95f, 0.30f, 0.42f);              // leg, stepped back
+    box(0.06f, 0.18f, 0.05f, 0.95f, -0.42f, -0.30f);              // leg, stepped forward
+    box(-0.18f, -0.06f, 0.0f, 0.05f, 0.18f, 0.43f);               // feet: toes toward -Z
+    box(0.06f, 0.18f, 0.0f, 0.05f, -0.60f, -0.29f);
+    EXPECT_EQ(AutoRig::facingFromFeet(v.data(), int(v.size() / 3), 1, 2), -1);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    v.insert(v.end(), {nan, 0.01f, nan});
+    EXPECT_EQ(AutoRig::facingFromFeet(v.data(), int(v.size() / 3), 1, 2), -1)
+        << "a non-finite vertex is skipped, not fed into the cell maths";
 }
