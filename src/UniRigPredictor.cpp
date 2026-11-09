@@ -306,6 +306,35 @@ QString UniRigPredictor::applyLabeling(std::vector<Joint>& joints, int upAxis, L
     return QStringLiteral("humanoid");
 }
 
+namespace {
+
+// The facing vote of the legs' toe joints along the forward axis F: +1 / -1
+// when EVERY leg with a verified toe points the same way, 0 otherwise. A toe
+// is verified when the ankle has exactly one child (no competing branch the
+// longest-path walk might have picked instead), and the ankle -> toe step is
+// mostly horizontal and at least 2 % of the body height. Legs pointing in
+// opposite directions, or no verified toe at all, give 0.
+template <typename LimbList, typename JointList, typename KidList>
+int toeFacingVote(const LimbList& limbs, const JointList& joints, const KidList& kids,
+                  int U, int F, double bodyH)
+{
+    int sign = 0;
+    for (const auto& l : limbs) {
+        if (l.isArm || l.chain.size() < 4) continue;
+        const int ankle = l.chain[2], toe = l.chain[3];
+        if (kids[size_t(ankle)].size() != 1) return 0;
+        const double dF = joints[size_t(toe)].pos[F] - joints[size_t(ankle)].pos[F];
+        const double dU = joints[size_t(toe)].pos[U] - joints[size_t(ankle)].pos[U];
+        if (std::fabs(dF) < 0.02 * bodyH || std::fabs(dF) < 0.5 * std::fabs(dU)) return 0;
+        const int s = dF > 0 ? 1 : -1;
+        if (sign != 0 && s != sign) return 0;
+        sign = s;
+    }
+    return sign;
+}
+
+}  // namespace
+
 bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int upAxis)
 {
     const int n = static_cast<int>(joints.size());
@@ -558,20 +587,17 @@ bool UniRigPredictor::labelJointsAnatomically(std::vector<Joint>& joints, int up
         const int F = 3 - SIDE - U;   // the remaining (forward) axis
         // Levi-Civita sign of (U, F, SIDE): +1 when e_U x e_F = +e_SIDE.
         const bool cyclic = (F == (U + 1) % 3);
-        // Which way the body faces along F: the toes. A leg chain longer than
-        // hip/knee/ankle ends in a toe joint, and foot -> toe points forward.
-        // Without that signal the glTF convention (faces +F) stands.
-        double toeAlongF = 0.0;
-        for (const auto& l : limbs) {
-            if (l.isArm || l.chain.size() < 4) continue;
-            toeAlongF += joints[l.chain.back()].pos[F] - joints[l.chain[2]].pos[F];
-        }
-        const bool facesNegativeF = toeAlongF < 0.0;
+        // Which way the body faces along F: the toes (foot -> toe points
+        // forward). Only VERIFIED toes count, and only when every leg agrees;
+        // otherwise the glTF convention (faces +F) stands.
+        const int toeVote = toeFacingVote(limbs, joints, kids, U, F, bodyH);
+        const double toeAlongF = toeVote;
+        const bool facesNegativeF = toeVote < 0;
         // left = up x forward
         const bool conventionPositive = facesNegativeF ? !cyclic : cyclic;
         leftIsPositive = votes > 0 ? true : votes < 0 ? false : conventionPositive;
         if (qEnvironmentVariableIsSet("QTMESH_RETARGET_DEBUG"))
-            fprintf(stderr, "[UNIRIG-LABEL] left/right: emission-order votes=%d toe-forward=%.3f -> left is %sSIDE%s\n",
+            fprintf(stderr, "[UNIRIG-LABEL] left/right: emission-order votes=%d toe-vote=%.0f -> left is %sSIDE%s\n",
                     votes, toeAlongF, leftIsPositive ? "+" : "-",
                     votes == 0 ? " (fallback: facing from the toes, else +forward)" : "");
     }

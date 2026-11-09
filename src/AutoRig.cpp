@@ -282,14 +282,16 @@ std::vector<AutoRig::Joint> AutoRig::fitVehicle(const float* verts, int vertexCo
 namespace {
 
 // Mean depth of the occupied (side, depth) cells of the vertices whose height
-// lies in [lo, hi]; false when the band is empty.
+// lies in [lo, hi], and the depth extent those cells span; false when the band
+// is empty.
+struct BandStats { double mean = 0, extent = 0; };
 bool bandDepthMean(const float* verts, int n, int up, int side, int depth,
                    double lo, double hi, double sideMin, double sideExt,
-                   double depthMin, double depthExt, double* out)
+                   double depthMin, double depthExt, BandStats* out)
 {
     constexpr int kCells = 96;
     std::vector<uint8_t> used(static_cast<size_t>(kCells) * kCells, 0);
-    double sum = 0;
+    double sum = 0, lowest = 1e300, highest = -1e300;
     long long count = 0;
     for (int i = 0; i < n; ++i) {
         const double h = verts[3 * i + up];
@@ -299,11 +301,15 @@ bool bandDepthMean(const float* verts, int n, int up, int side, int depth,
         uint8_t& u = used[static_cast<size_t>(cs) * kCells + static_cast<size_t>(cd)];
         if (u) continue;
         u = 1;
-        sum += depthMin + (cd + 0.5) / kCells * depthExt;
+        const double d = depthMin + (cd + 0.5) / kCells * depthExt;
+        sum += d;
+        lowest = std::min(lowest, d);
+        highest = std::max(highest, d);
         ++count;
     }
     if (count == 0) return false;
-    *out = sum / static_cast<double>(count);
+    out->mean = sum / static_cast<double>(count);
+    out->extent = highest - lowest;
     return true;
 }
 
@@ -311,9 +317,11 @@ bool bandDepthMean(const float* verts, int n, int up, int side, int depth,
 
 int AutoRig::facingFromFeet(const float* verts, int n, int upAxis, int depthAxis)
 {
-    if (!verts || n <= 0 || upAxis == depthAxis) return 0;
-    const int up = std::clamp(upAxis, 0, 2), depth = std::clamp(depthAxis, 0, 2);
-    const int side = 3 - up - depth;
+    if (!verts || n <= 0 || upAxis < 0 || upAxis > 2 || depthAxis < 0 || depthAxis > 2
+        || upAxis == depthAxis)
+        return 0;
+    const int up = upAxis, depth = depthAxis;
+    const int side = 3 - up - depth;   // the third axis, 0..2
     double mn[3] = {1e300, 1e300, 1e300}, mx[3] = {-1e300, -1e300, -1e300};
     for (int i = 0; i < n; ++i)
         for (int a = 0; a < 3; ++a) {
@@ -324,7 +332,7 @@ int AutoRig::facingFromFeet(const float* verts, int n, int upAxis, int depthAxis
     if (!(H > 0)) return 0;
     const double sideExt = std::max(1e-9, mx[side] - mn[side]);
     const double depthExt = std::max(1e-9, mx[depth] - mn[depth]);
-    double toes = 0, ankles = 0;
+    BandStats toes, ankles;
     // toes: the lowest 3 % of the height; ankles: 7..13 % (above the foot,
     // below the knee for every humanoid proportion measured)
     if (!bandDepthMean(verts, n, up, side, depth, mn[up], mn[up] + 0.03 * H,
@@ -332,7 +340,10 @@ int AutoRig::facingFromFeet(const float* verts, int n, int upAxis, int depthAxis
         || !bandDepthMean(verts, n, up, side, depth, mn[up] + 0.07 * H, mn[up] + 0.13 * H,
                           mn[side], sideExt, mn[depth], depthExt, &ankles))
         return 0;
-    const double delta = toes - ankles;
+    // A foot is short (~15 % of the height). A bottom band much deeper than
+    // that is a base or pedestal, whose shape says nothing about the facing.
+    if (toes.extent > 0.35 * H) return 0;
+    const double delta = toes.mean - ankles.mean;
     if (std::fabs(delta) < 0.01 * H) return 0;
     return delta > 0 ? 1 : -1;
 }

@@ -862,3 +862,20 @@ TEST(AutoRigFacing, UprightTemplateNamesTheCharactersOwnLeft)
     EXPECT_GT(fittedX(standingFigure(-1), "RightHand"), 0.0);
     EXPECT_LT(fittedX(standingFigure(-1), "LeftUpLeg"), 0.0);
 }
+
+TEST(AutoRigFacing, PedestalAndBadAxesGiveNoSignal)
+{
+    // A figure standing on a deep, sloped base: the bottom band is the base,
+    // whose shape says nothing about which way the figure faces.
+    auto cloud = standingFigure(-1);
+    for (int i = 0; i <= 20; ++i)
+        for (int k = 0; k <= 20; ++k) {
+            const float x = -0.5f + i * 0.05f, z = -0.6f + k * 0.06f;
+            cloud.insert(cloud.end(), {x, -0.10f + 0.02f * (z + 0.6f), z});
+        }
+    EXPECT_EQ(AutoRig::facingFromFeet(cloud.data(), int(cloud.size() / 3), 1, 2), 0);
+    const auto fig = standingFigure(+1);
+    EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), -1, 0), 0);
+    EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), 1, 3), 0);
+    EXPECT_EQ(AutoRig::facingFromFeet(fig.data(), int(fig.size() / 3), 2, 2), 0);
+}
