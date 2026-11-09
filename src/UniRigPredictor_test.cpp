@@ -901,3 +901,79 @@ TEST(UniRigLabelingSides, SidewaysToesAreNotFacingEvidence)
     EXPECT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
     EXPECT_GT(xOf(j, "LeftArm"), 0.0);   EXPECT_GT(xOf(j, "LeftUpLeg"), 0.0);
 }
+
+// UniRig emits the mixamo template, whose arm starts at the CLAVICLE. The arm names must start one joint out:
+// clavicle = Shoulder, then Arm / ForeArm / Hand, with Hand on the joint that fans out into fingers. Before this,
+// the clavicle was named Arm and a name-keyed retarget (Kimodo) swung it as the upper arm, closing the arms.
+TEST(UniRigLabeling, ArmChainsStartingAtTheClavicleNameItShoulder)
+{
+    for (const bool fingers : {true, false}) {
+        int n = 0;
+        auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+        std::vector<UniRigPredictor::Joint> j = {J(0, 0, 0, -1), J(0, .3, 0, 0), J(0, .6, 0, 1), J(0, .8, 0, 2), J(0, .95, 0, 3)};
+        int hands[2] = {0, 0};
+        for (int s = 0; s < 2; ++s) {
+            const double x = s == 0 ? 1.0 : -1.0;   // emission order: the +X chain first, as in the other fixtures
+            const int clav = n;
+            j.push_back(J(x * .04, .62, 0, 2));
+            j.push_back(J(x * .12, .6, 0, clav));
+            j.push_back(J(x * .37, .6, 0, clav + 1));
+            j.push_back(J(x * .6, .6, 0, clav + 2));
+            hands[s] = clav + 3;
+            if (fingers)
+                for (int f = 0; f < 4; ++f) {
+                    const int base = n;
+                    j.push_back(J(x * .64, .57 + .02 * f, 0, hands[s]));   // spread in height: X stays the side axis
+                    j.push_back(J(x * .68, .57 + .02 * f, 0, base));
+                }
+        }
+        for (int s = 0; s < 2; ++s) {
+            const double x = s == 0 ? .1 : -.1;
+            const int a = n;
+            j.push_back(J(x, -.1, 0, 0));
+            j.push_back(J(x, -.5, 0, a));
+            j.push_back(J(x, -.9, 0, a + 1));
+        }
+        ASSERT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1)) << "fingers=" << fingers;
+        for (int s = 0; s < 2; ++s) {
+            const QString side = j[size_t(hands[s])].name.startsWith(QLatin1String("Left")) ? QStringLiteral("Left") : QStringLiteral("Right");
+            EXPECT_EQ(j[size_t(hands[s] - 3)].name, side + QStringLiteral("Shoulder")) << "fingers=" << fingers;
+            EXPECT_EQ(j[size_t(hands[s] - 2)].name, side + QStringLiteral("Arm"));
+            EXPECT_EQ(j[size_t(hands[s] - 1)].name, side + QStringLiteral("ForeArm"));
+            EXPECT_EQ(j[size_t(hands[s])].name, side + QStringLiteral("Hand"));
+        }
+    }
+}
+
+// The other way round: an arm that starts at the shoulder joint itself (no clavicle emitted), half a chest out
+// from the spine, keeps Arm / ForeArm / Hand on its first three joints, also with a one-finger hand.
+TEST(UniRigLabeling, ArmChainsWithoutAClavicleKeepArmFirst)
+{
+    int n = 0;
+    auto J = [&](double x, double y, double z, int p) { return mkJ(x, y, z, p, n++); };
+    std::vector<UniRigPredictor::Joint> j = {J(0, 0, 0, -1), J(0, .3, 0, 0), J(0, .6, 0, 1), J(0, .8, 0, 2), J(0, .95, 0, 3)};
+    int firsts[2] = {0, 0};
+    for (int s = 0; s < 2; ++s) {
+        const double x = s == 0 ? 1.0 : -1.0;
+        firsts[s] = n;
+        j.push_back(J(x * .18, .6, 0, 2));
+        j.push_back(J(x * .42, .6, 0, firsts[s]));
+        j.push_back(J(x * .64, .6, 0, firsts[s] + 1));
+        j.push_back(J(x * .70, .6, 0, firsts[s] + 2));   // one finger
+        j.push_back(J(x * .74, .6, 0, firsts[s] + 3));
+    }
+    for (int s = 0; s < 2; ++s) {
+        const double x = s == 0 ? .1 : -.1;
+        const int a = n;
+        j.push_back(J(x, -.1, 0, 0));
+        j.push_back(J(x, -.5, 0, a));
+        j.push_back(J(x, -.9, 0, a + 1));
+    }
+    ASSERT_TRUE(UniRigPredictor::labelJointsAnatomically(j, 1));
+    for (int f : firsts) {
+        const QString side = j[size_t(f)].name.startsWith(QLatin1String("Left")) ? QStringLiteral("Left") : QStringLiteral("Right");
+        EXPECT_EQ(j[size_t(f)].name, side + QStringLiteral("Arm"));
+        EXPECT_EQ(j[size_t(f + 1)].name, side + QStringLiteral("ForeArm"));
+        EXPECT_EQ(j[size_t(f + 2)].name, side + QStringLiteral("Hand"));
+    }
+}
