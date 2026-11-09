@@ -71,3 +71,24 @@ TEST(KimodoPredictor, SegmentSpecSplitsOnTheLastAt)
     EXPECT_FALSE(parseSegment(QStringLiteral("walk@0"), &s, &e));
     EXPECT_FALSE(parseSegment(QStringLiteral("@3"), &s, &e));
 }
+
+TEST(KimodoPredictor, LoopRequestsAreValidatedUpFront)
+{
+    KimodoPredictor::Options o;
+    o.segments = {{QStringLiteral("walk"), 1.2}};
+    o.loop = true;
+    QString err;
+    EXPECT_TRUE(KimodoPredictor::validateOptions(o, &err)) << err.toStdString();
+    o.loopMode = QStringLiteral("forever");
+    EXPECT_FALSE(KimodoPredictor::validateOptions(o, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("regenerate")));
+    o.loopMode = QStringLiteral("cut");
+    o.segments = {{QStringLiteral("walk"), 1.0}, {QStringLiteral("sit"), 1.0}};
+    EXPECT_FALSE(KimodoPredictor::validateOptions(o, &err)) << "a loop is one prompt";
+    o.segments = {{QStringLiteral("walk"), 20.0}};
+    EXPECT_FALSE(KimodoPredictor::validateOptions(o, &err)) << "loops are 0.5..10 s";
+    o.segments = {{QStringLiteral("walk"), 2.0}};
+    o.runtime = QStringLiteral("python");
+    EXPECT_FALSE(KimodoPredictor::validateOptions(o, &err)) << "the Python sidecar cannot loop";
+    EXPECT_TRUE(err.contains(QStringLiteral("native")));
+}

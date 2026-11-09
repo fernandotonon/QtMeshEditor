@@ -226,12 +226,16 @@ bool KimodoController::parsePromptSegments(const QString& prompt, double default
 }
 
 bool KimodoController::generate(const QString& prompt, double duration, int variations, int seed, bool rootMotion,
-                                bool footPin)
+                                bool footPin, bool loop)
 {
     if (m_busy) return false;
     refreshRuntime();
     Ogre::Entity* entity = targetEntity();
     if (!entity) { setStatus(QStringLiteral("Select a rigged mesh first: generated motion needs a skeleton."), false); return false; }
+    if (loop && m_backend == QLatin1String("qtmesh_t2m")) {
+        setStatus(QStringLiteral("Loop is a Kimodo option: pick the NVIDIA Kimodo model."), false);
+        return false;
+    }
     if (m_backend == QLatin1String("qtmesh_t2m")) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
 
     KimodoPredictor::Options o;
@@ -244,6 +248,8 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
     o.hasSeed = seed >= 0;
     o.seed = qMax(0, seed);
     o.rootMotion = rootMotion;
+    o.loop = loop;
+    if (QString why; !KimodoPredictor::validateOptions(o, &why)) { setStatus(why, false); return false; }
     if (!KimodoPredictor::mockRequested(o) && !m_runtimeAvailable) { setStatus(m_runtimeDescription, false); return false; }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),
@@ -287,7 +293,8 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         m_lastMotionDir = result->outputDir;
         Ogre::Entity* target = entityByName(entityName);
         if (!target) { setStatus(QStringLiteral("The rig was removed while Kimodo ran; the motion is saved in %1.").arg(result->outputDir), false); return; }
-        applyFiles(target, result->files, rootMotion, footPin);
+        if (applyFiles(target, result->files, rootMotion, footPin) && !result->loopSummaries.isEmpty())
+            setStatus(m_status + QStringLiteral(" Loop: ") + result->loopSummaries.join(QStringLiteral("; ")) + QLatin1Char('.'), true);
     });
     m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
     m_worker->start();
