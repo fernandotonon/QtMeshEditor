@@ -85,8 +85,7 @@ QStringList modeIds() { return {QStringLiteral("auto"), QStringLiteral("cut"), Q
 
 bool modeFromId(const QString& id, Mode* mode)
 {
-    const QString s = id.trimmed().toLower();
-    if (s.isEmpty() || s == QLatin1String("auto")) *mode = Mode::Auto;
+    if (const QString s = id.trimmed().toLower(); s.isEmpty() || s == QLatin1String("auto")) *mode = Mode::Auto;
     else if (s == QLatin1String("cut")) *mode = Mode::Cut;
     else if (s == QLatin1String("regenerate")) *mode = Mode::Regenerate;
     else return false;
@@ -121,44 +120,85 @@ double windowCostDeg(const Motion& m, int i, int j, int window)
     return window > 0 ? sum / window : std::numeric_limits<double>::infinity();
 }
 
+namespace {
+
+// Pairwise frame distances from frame s0 on: every candidate reads windows of them.
+struct DistanceTable {
+    int T = 0;
+    std::vector<double> d;
+    double at(int a, int b) const { return d[size_t(a) * size_t(T) + size_t(b)]; }
+};
+
+DistanceTable distanceTable(const Motion& m, int s0)
+{
+    DistanceTable t{m.T, std::vector(size_t(m.T) * size_t(m.T), 0.0)};
+    for (int a = s0; a < m.T; ++a)
+        for (int b = a + 1; b < m.T; ++b) {
+            const double c = frameCostDeg(m, a, b);
+            t.d[size_t(a) * size_t(m.T) + size_t(b)] = c;
+            t.d[size_t(b) * size_t(m.T) + size_t(a)] = c;
+        }
+    return t;
+}
+
+// How far the motion ever gets from frame s0, the lead-in included (an action that ends before the search starts
+// must still make the hold after it fail the activity test).
+double motionReference(const Motion& m, const DistanceTable& t, int s0)
+{
+    double reference = 0.0;
+    for (int f = 0; f < m.T; ++f) reference = std::max(reference, f >= s0 ? t.at(s0, f) : frameCostDeg(m, s0, f));
+    return reference;
+}
+
+// Largest pose change inside a candidate cycle, away from its first frame.
+double cycleActivity(const DistanceTable& t, int s, int p)
+{
+    double activity = 0.0;
+    for (int f = 1; f < p; ++f) activity = std::max(activity, t.at(s, s + f));
+    return activity;
+}
+
+double windowMismatch(const DistanceTable& t, int s, int p, int w)
+{
+    double c = 0.0;
+    for (int k = 0; k < w; ++k) c += t.at(s + k, s + p + k);
+    return c / w;
+}
+
+// The root on its own: the largest root-joint angle and root-height mismatch inside the matched windows.
+void measureRoot(const Motion& m, int w, Cycle* c)
+{
+    for (int k = 0; k < w; ++k) {
+        const int a = c->start + k;
+        const int b = c->start + c->period + k;
+        c->rootDeg = std::max(c->rootDeg, angleDeg(&m.local[size_t(a) * size_t(m.J) * 9], &m.local[size_t(b) * size_t(m.J) * 9]));
+        c->heightCm = std::max(c->heightCm, std::abs(double(m.root[size_t(a) * 3 + 1]) - double(m.root[size_t(b) * 3 + 1])) * 100.0);
+    }
+}
+
+} // namespace
+
 Cycle findCycle(const Motion& m, const SearchOptions& o)
 {
     Cycle best;
-    const int T = m.T;
     const int w = std::max(1, o.window);
     const int s0 = std::max(0, o.minStart);
-    if (T <= s0 + w) return best;
-    // Pairwise frame distances once: every candidate reads windows of them.
-    std::vector<double> dist(size_t(T) * size_t(T), 0.0);
-    for (int a = s0; a < T; ++a)
-        for (int b = a + 1; b < T; ++b) dist[size_t(a) * T + size_t(b)] = dist[size_t(b) * T + size_t(a)] = frameCostDeg(m, a, b);
-    const auto d = [&dist, T](int a, int b) { return dist[size_t(a) * T + size_t(b)]; };
-    // How far the motion ever gets from the first candidate frame, the lead-in included (an action that ends
-    // before the search starts must still make the hold after it fail the activity test).
-    double reference = 0.0;
-    for (int t = 0; t < T; ++t) reference = std::max(reference, t >= s0 ? d(s0, t) : frameCostDeg(m, s0, t));
+    if (m.T <= s0 + w) return best;
+    const DistanceTable table = distanceTable(m, s0);
+    const double minActivity = o.minActivity * motionReference(m, table, s0);
     double bestScore = std::numeric_limits<double>::infinity();
-    const int maxP = o.maxPeriod > 0 ? o.maxPeriod : T;
+    const int maxP = o.maxPeriod > 0 ? o.maxPeriod : m.T;
     for (int p = std::max(2, o.minPeriod); p <= maxP; ++p)
-        for (int s = s0; s + p + w <= T; ++s) {
-            double c = 0.0;
-            for (int k = 0; k < w; ++k) c += d(s + k, s + p + k);
-            c /= w;
+        for (int s = s0; s + p + w <= m.T; ++s) {
+            const double c = windowMismatch(table, s, p, w);
             double score = c;
             if (o.targetPeriod > 0) score += o.lengthWeightDeg * std::abs(double(p - o.targetPeriod)) / double(o.targetPeriod);
-            if (score >= bestScore) continue;
-            double activity = 0.0;
-            for (int t = 1; t < p; ++t) activity = std::max(activity, d(s, s + t));
-            if (activity < o.minActivity * reference) continue;
-            bestScore = score;
-            best = {true, s, p, c};
+            if (score < bestScore && cycleActivity(table, s, p) >= minActivity) {
+                bestScore = score;
+                best = {true, s, p, c};
+            }
         }
-    for (int k = 0; best.found && k < w; ++k) {
-        const int a = best.start + k;
-        const int b = best.start + best.period + k;
-        best.rootDeg = std::max(best.rootDeg, angleDeg(&m.local[size_t(a) * size_t(m.J) * 9], &m.local[size_t(b) * size_t(m.J) * 9]));
-        best.heightCm = std::max(best.heightCm, std::abs(double(m.root[size_t(a) * 3 + 1]) - double(m.root[size_t(b) * 3 + 1])) * 100.0);
-    }
+    if (best.found) measureRoot(m, w, &best);
     return best;
 }
 

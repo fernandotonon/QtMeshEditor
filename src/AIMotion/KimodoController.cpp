@@ -225,6 +225,34 @@ bool KimodoController::parsePromptSegments(const QString& prompt, double default
     return true;
 }
 
+namespace {
+
+struct GuiRequest {
+    QString prompt;
+    double duration = 5.0;
+    int variations = 1;
+    int seed = -1;
+    bool rootMotion = false;
+    bool loop = false;
+};
+
+// Panel input -> validated Kimodo options (one segment per prompt line, "@SECONDS" per line).
+bool buildGuiOptions(const GuiRequest& req, KimodoPredictor::Options* o, QString* err)
+{
+    QStringList texts;
+    QList<double> durations;
+    if (!KimodoController::parsePromptSegments(req.prompt, req.duration > 0.0 ? req.duration : 5.0, &texts, &durations, err)) return false;
+    for (int i = 0; i < texts.size(); ++i) o->segments.push_back({texts[i], durations[i]});
+    o->numSamples = qBound(1, req.variations, 16);
+    o->hasSeed = req.seed >= 0;
+    o->seed = qMax(0, req.seed);
+    o->rootMotion = req.rootMotion;
+    o->loop = req.loop;
+    return KimodoPredictor::validateOptions(*o, err);
+}
+
+} // namespace
+
 bool KimodoController::generate(const QString& prompt, double duration, int variations, int seed, bool rootMotion,
                                 bool footPin, bool loop)
 {
@@ -232,24 +260,17 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
     refreshRuntime();
     Ogre::Entity* entity = targetEntity();
     if (!entity) { setStatus(QStringLiteral("Select a rigged mesh first: generated motion needs a skeleton."), false); return false; }
-    if (loop && m_backend == QLatin1String("qtmesh_t2m")) {
+    if (m_backend == QLatin1String("qtmesh_t2m")) {
+        if (!loop) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
         setStatus(QStringLiteral("Loop is a Kimodo option: pick the NVIDIA Kimodo model."), false);
         return false;
     }
-    if (m_backend == QLatin1String("qtmesh_t2m")) return generateT2M(entity, prompt, duration, variations, seed, rootMotion, footPin);
 
     KimodoPredictor::Options o;
-    QStringList texts;
-    QList<double> durations;
-    QString err;
-    if (!parsePromptSegments(prompt, duration > 0.0 ? duration : 5.0, &texts, &durations, &err)) { setStatus(err, false); return false; }
-    for (int i = 0; i < texts.size(); ++i) o.segments.push_back({texts[i], durations[i]});
-    o.numSamples = qBound(1, variations, 16);
-    o.hasSeed = seed >= 0;
-    o.seed = qMax(0, seed);
-    o.rootMotion = rootMotion;
-    o.loop = loop;
-    if (QString why; !KimodoPredictor::validateOptions(o, &why)) { setStatus(why, false); return false; }
+    if (QString err; !buildGuiOptions({prompt, duration, variations, seed, rootMotion, loop}, &o, &err)) {
+        setStatus(err, false);
+        return false;
+    }
     if (!KimodoPredictor::mockRequested(o) && !m_runtimeAvailable) { setStatus(m_runtimeDescription, false); return false; }
 
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.kimodo"),

@@ -128,34 +128,31 @@ QString KimodoPredictor::runtimeDescription()
     return pythonRuntimeDescription();
 }
 
+namespace {
+
+// No runtime: the reason goes to `why`, the result is empty.
+QString noRuntime(QString* why, const QString& reason)
+{
+    if (why) *why = reason;
+    return {};
+}
+
+} // namespace
+
 QString KimodoPredictor::resolveRuntime(const Options& o, QString* why)
 {
     const QString mode = o.runtime.isEmpty() ? QStringLiteral("auto") : o.runtime;
-    const bool nativeReady = KimodoNative::buildSupported() && KimodoNative::modelsInstalled();
     // The mock and constraints files live in the Python sidecar only.
-    const bool needsPython = mockRequested(o) || !o.constraintsPath.isEmpty();
-    if (mode == QLatin1String("python") || needsPython) {
-        if (mode == QLatin1String("native")) {
-            if (why) *why = QStringLiteral("constraints files and the mock need the Python runtime");
-            return {};
-        }
+    if (mode == QLatin1String("python") || mockRequested(o) || !o.constraintsPath.isEmpty()) {
+        if (mode == QLatin1String("native")) return noRuntime(why, QStringLiteral("constraints files and the mock need the Python runtime"));
         if (pythonRuntimeAvailable() || mockRequested(o)) return QStringLiteral("python");
-        if (why) *why = pythonRuntimeDescription();
-        return {};
+        return noRuntime(why, pythonRuntimeDescription());
     }
-    if (mode == QLatin1String("native")) {
-        if (nativeReady) return QStringLiteral("native");
-        if (why) *why = KimodoNative::description();
-        return {};
-    }
-    if (nativeReady) return QStringLiteral("native");
-    if (o.loop) {
-        if (why) *why = QStringLiteral("loops need the native Kimodo runtime: ") + KimodoNative::description();
-        return {};
-    }
+    if (KimodoNative::buildSupported() && KimodoNative::modelsInstalled()) return QStringLiteral("native");
+    if (mode == QLatin1String("native")) return noRuntime(why, KimodoNative::description());
+    if (o.loop) return noRuntime(why, QStringLiteral("loops need the native Kimodo runtime: ") + KimodoNative::description());
     if (pythonRuntimeAvailable()) return QStringLiteral("python");
-    if (why) *why = runtimeDescription();
-    return {};
+    return noRuntime(why, runtimeDescription());
 }
 
 QStringList KimodoPredictor::buildArguments(const Options& o, const QString& outputDir)
