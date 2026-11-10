@@ -238,3 +238,16 @@ TEST(HandShapes, EachSegmentPicksItsOwnHand)
     EXPECT_EQ(keys[1].hands.left, Shape::Grip);
     EXPECT_EQ(keys[1].hands.right, Shape::Relaxed);
 }
+
+TEST(HandShapes, AFistThumbCrossesThePalmTowardTheLittleFinger)
+{
+    // The thumb must swing ACROSS the palm (toward the pinky side, -Z here) rather than fold straight into the palm
+    // like a finger: the into-the-palm bend made the thumb stick out sideways (overbent) on real rigs.
+    Motion m = syntheticHand();
+    const auto rest = positions(m, 0);
+    apply(&m, {Key{0.0, {Shape::Fist, Shape::Fist}}});
+    const auto fist = positions(m, 5);
+    const int tip = m.indexOf("RightHandThumbEnd");
+    EXPECT_LT(fist[size_t(tip)].z, rest[size_t(tip)].z - 0.02f) << "the thumb tip moves toward the little finger";
+    EXPECT_LT(fist[size_t(tip)].y, rest[size_t(tip)].y + 0.005f) << "and stays on the palm side";
+}

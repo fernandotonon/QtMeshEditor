@@ -21,14 +21,19 @@ struct Curl {
 Curl curlOf(Shape s)
 {
     switch (s) {
-    case Shape::Fist: return {{85.0f, 100.0f, 65.0f}, {25.0f, 35.0f, 45.0f}};
-    case Shape::Grip: return {{50.0f, 60.0f, 35.0f}, {20.0f, 25.0f, 25.0f}};
-    case Shape::Point: return {{85.0f, 100.0f, 65.0f}, {25.0f, 35.0f, 45.0f}};   // index overridden below
+    // Thumb angles go with kThumbMix: chosen on close-up renders of a fist on a generated character (the old
+    // into-the-palm thumb stuck straight out sideways; these tuck it over the index and middle fingers).
+    case Shape::Fist: return {{85.0f, 100.0f, 65.0f}, {20.0f, 42.0f, 42.0f}};
+    case Shape::Grip: return {{50.0f, 60.0f, 35.0f}, {10.0f, 22.0f, 22.0f}};
+    case Shape::Point: return {{85.0f, 100.0f, 65.0f}, {20.0f, 42.0f, 42.0f}};   // index overridden below
     case Shape::Open: return {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}};
     case Shape::Relaxed: break;
     }
     return {};
 }
+
+// Thumb flexion axis per joint (base, middle, tip): 0 = across the palm (about the palm normal), 1 = into the palm.
+constexpr std::array<float, 3> kThumbMix = {0.65f, 0.2f, 0.2f};
 
 constexpr std::array<const char*, 4> kLongFingers = {"Index", "Middle", "Ring", "Pinky"};
 
@@ -36,6 +41,7 @@ constexpr std::array<const char*, 4> kLongFingers = {"Index", "Middle", "Ring", 
 struct Joint {
     int index = -1;
     Ogre::Vector3 axis = Ogre::Vector3::UNIT_X;   ///< bend axis in the (rest-aligned) parent frame
+    Ogre::Vector3 across = Ogre::Vector3::UNIT_Y;   ///< thumb: the axis that swings it across the palm toward the little finger
     int segment = 0;                              ///< 0..2 along the finger
     bool thumb = false;
     bool index_ = false;                          ///< the index finger (Point keeps it straight)
@@ -65,6 +71,7 @@ Hand handOf(const Motion& m, const std::string& side)
     Ogre::Vector3 palm = along.crossProduct(across).normalisedCopy();
     // The palm side is where the thumb sits: flip the normal so the thumb base is on its positive side.
     if (palm.dotProduct(rest(m, hand + "Thumb2") - rest(m, hand)) < 0.0f) palm = -palm;
+    const Ogre::Vector3 toPinky = rest(m, hand + "Pinky2") - rest(m, hand + "Index2");
 
     const auto addChain = [&](const std::string& base, int first, bool thumb, bool indexFinger) {
         for (int seg = 0; seg < 3; ++seg) {
@@ -76,6 +83,9 @@ Hand handOf(const Motion& m, const std::string& side)
             Joint jt;
             jt.index = j;
             jt.axis = bone.crossProduct(palm).normalisedCopy();   // rotating the bone about it moves it toward the palm
+            // The swing across the palm is about the palm normal, in the sense that moves the bone toward the
+            // little finger: decided from the geometry, because a left hand mirrors the right one.
+            jt.across = palm.crossProduct(bone).dotProduct(toPinky) >= 0.0f ? palm : -palm;
             jt.segment = seg;
             jt.thumb = thumb;
             jt.index_ = indexFinger;
@@ -98,7 +108,13 @@ Ogre::Quaternion target(const Joint& j, Shape s, const Ogre::Quaternion& relaxed
     const Curl c = curlOf(s);
     float deg = j.thumb ? c.thumb[size_t(j.segment)] : c.finger[size_t(j.segment)];
     if (s == Shape::Point && j.index_) deg = 0.0f;
-    return Ogre::Quaternion(Ogre::Degree(deg), j.axis);
+    if (!j.thumb) return Ogre::Quaternion(Ogre::Degree(deg), j.axis);
+    // The thumb does not fold into the palm like a finger: its joints flex ACROSS the palm, toward the little
+    // finger (a rotation about the palm normal: SOMA's rest thumb lies parallel to the fingers), the base joint
+    // also bringing it in front of the palm (opposition). Mix per joint: 0 = across, 1 = into the palm.
+    const float mix = kThumbMix[size_t(j.segment)];
+    const Ogre::Vector3 axis = (j.across * (1.0f - mix) + j.axis * mix).normalisedCopy();
+    return Ogre::Quaternion(Ogre::Degree(deg), axis);
 }
 
 // The shape in force at time t and, while blending, the one before it with the blend weight of the new one.
