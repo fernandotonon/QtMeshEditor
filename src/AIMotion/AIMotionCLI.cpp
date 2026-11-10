@@ -212,10 +212,15 @@ int runCli(const CliRequest& req)
     applyArmSpace(entity, applied.clips, req.armSpaceDeg);
 
     QJsonArray clips;
-    for (const ApplyOutcome& out : applied.outcomes) {
-        note(QStringLiteral("(%1: %2 bones mapped, %3 fingers; %4 rig bones undriven)")
-                 .arg(QString::fromStdString(out.clip)).arg(out.mappedBones).arg(out.fingerBones).arg(out.unmappedTarget.size()));
-        clips.append(outcomeJson(out));
+    for (size_t i = 0; i < applied.outcomes.size(); ++i) {
+        const ApplyOutcome& out = applied.outcomes[i];
+        const QString hands = i < size_t(applied.handShapes.size()) ? applied.handShapes.at(qsizetype(i)) : QString();
+        note(QStringLiteral("(%1: %2 bones mapped, %3 fingers; %4 rig bones undriven%5)")
+                 .arg(QString::fromStdString(out.clip)).arg(out.mappedBones).arg(out.fingerBones).arg(out.unmappedTarget.size())
+                 .arg(hands.isEmpty() ? QString() : QStringLiteral("; hands: ") + hands));
+        QJsonObject o = outcomeJson(out);
+        o.insert(QStringLiteral("hands"), hands);
+        clips.append(o);
     }
 
     const QString output = req.outputPath.isEmpty() ? req.rigPath : req.outputPath;

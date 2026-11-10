@@ -8,6 +8,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+
 using namespace AIMotion;
 using namespace AIMotion::HandShapes;
 
@@ -160,4 +162,79 @@ TEST(HandShapes, NothingToDoIsReported)
     body.localRot.assign(3, {Ogre::Quaternion::IDENTITY});
     EXPECT_EQ(apply(&body, {Key{0.0, {Shape::Fist, Shape::Fist}}}, 0.2, &why), 0);
     EXPECT_TRUE(why.contains(QStringLiteral("finger")));
+}
+
+namespace {
+
+// Hips -> Chest -> {Left,Right}Arm -> {Left,Right}Hand; each arm swings by its own amplitude (degrees) or is held
+// raised by `liftDeg`.
+Motion armsBody(double leftSwing, double rightSwing, double leftLift = 0.0, int frames = 60)
+{
+    Motion m;
+    m.fps = 30.0f;
+    m.names = {"Hips", "Chest", "LeftArm", "LeftHand", "RightArm", "RightHand"};
+    m.parents = {-1, 0, 1, 2, 1, 4};
+    m.restJoints = {{0, 1, 0}, {0, 1.4f, 0}, {-0.2f, 1.4f, 0}, {-0.2f, 0.9f, 0}, {0.2f, 1.4f, 0}, {0.2f, 0.9f, 0}};
+    for (int f = 0; f < frames; ++f) {
+        std::vector<Ogre::Quaternion> r(6, Ogre::Quaternion::IDENTITY);
+        const double s = std::sin(f * 0.3);
+        r[2] = Ogre::Quaternion(Ogre::Degree(float(leftSwing * s)), Ogre::Vector3::UNIT_X)
+               * Ogre::Quaternion(Ogre::Degree(float(leftLift)), Ogre::Vector3::UNIT_Z);
+        r[4] = Ogre::Quaternion(Ogre::Degree(float(rightSwing * s)), Ogre::Vector3::UNIT_X);
+        m.localRot.push_back(r);
+    }
+    m.rootPos.assign(size_t(frames), Ogre::Vector3::ZERO);
+    return m;
+}
+
+} // namespace
+
+TEST(HandShapes, TheMovingHandTakesTheShape)
+{
+    std::vector<Key> keys{Key{0.0, shapeFromPrompt("a person waves hello")}};
+    ASSERT_EQ(keys[0].hands.left, Shape::Open);
+    ASSERT_FALSE(keys[0].hands.explicitHands);
+    EXPECT_EQ(pickActiveHands(armsBody(2.0, 40.0), &keys), 1);
+    EXPECT_EQ(keys[0].hands.right, Shape::Open);
+    EXPECT_EQ(keys[0].hands.left, Shape::Relaxed) << "the still left hand stays relaxed";
+}
+
+TEST(HandShapes, BothHandsWhenBothMoveOrThePromptSaysSo)
+{
+    std::vector<Key> boxer{Key{0.0, shapeFromPrompt("a boxer punches")}};
+    EXPECT_EQ(pickActiveHands(armsBody(35.0, 40.0), &boxer), 0);
+    EXPECT_EQ(boxer[0].hands.left, Shape::Fist);
+    EXPECT_EQ(boxer[0].hands.right, Shape::Fist);
+    // "fists" (plural) names both hands: kept even though only one arm moves.
+    std::vector<Key> said{Key{0.0, shapeFromPrompt("clench both fists")}};
+    ASSERT_TRUE(said[0].hands.explicitHands);
+    EXPECT_EQ(pickActiveHands(armsBody(0.0, 40.0), &said), 0);
+    EXPECT_EQ(said[0].hands.left, Shape::Fist);
+}
+
+TEST(HandShapes, ARaisedHandTakesTheShapeWhenNeitherMoves)
+{
+    // Pointing: the left arm is held up to the side (90 deg), neither swings.
+    std::vector<Key> keys{Key{0.0, shapeFromPrompt("a person points at something")}};
+    EXPECT_EQ(pickActiveHands(armsBody(0.0, 0.0, -90.0), &keys), 1);
+    EXPECT_EQ(keys[0].hands.left, Shape::Point);
+    EXPECT_EQ(keys[0].hands.right, Shape::Relaxed);
+}
+
+TEST(HandShapes, EachSegmentPicksItsOwnHand)
+{
+    // Two keys over one take: the right arm moves only in the first second, the left only in the second.
+    Motion m = armsBody(0.0, 0.0, 0.0, 60);
+    for (int f = 0; f < 60; ++f) {
+        const double s = std::sin(f * 0.3) * 40.0;
+        auto& r = m.localRot[size_t(f)];
+        if (f < 30) r[4] = Ogre::Quaternion(Ogre::Degree(float(s)), Ogre::Vector3::UNIT_X);
+        else r[2] = Ogre::Quaternion(Ogre::Degree(float(s)), Ogre::Vector3::UNIT_X);
+    }
+    std::vector<Key> keys{Key{0.0, shapeFromPrompt("wave")}, Key{1.0, shapeFromPrompt("grab a cup")}};
+    EXPECT_EQ(pickActiveHands(m, &keys), 2);
+    EXPECT_EQ(keys[0].hands.right, Shape::Open);
+    EXPECT_EQ(keys[0].hands.left, Shape::Relaxed);
+    EXPECT_EQ(keys[1].hands.left, Shape::Grip);
+    EXPECT_EQ(keys[1].hands.right, Shape::Relaxed);
 }

@@ -29,6 +29,8 @@ QString shapeId(Shape s);
 struct HandPair {
     Shape left = Shape::Relaxed;
     Shape right = Shape::Relaxed;
+    /// The prompt says which hands ("with the left hand", "both hands", "fists"): pickActiveHands keeps it.
+    bool explicitHands = false;
 };
 
 /// The shape a prompt implies, from its words: fist/punch/clench -> Fist, grab/hold/carry/pick -> Grip,
@@ -49,6 +51,13 @@ bool validMode(const QString& mode);   ///< empty = auto
 /// The keys for a motion whose metadata (result.json: "segments" [{text, duration}]) names its prompts: one key per
 /// segment at its start time. `mode` = "auto" or a shape id (one key at 0). Unknown mode -> empty.
 std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode);
+
+/// Which hand does the action, from the motion itself: for every key whose prompt did not name the hands, measure
+/// each wrist over the key's segment, relative to the chest (so walking does not count). When one wrist travels at
+/// least `minRatio` times as far as the other, or is held clearly higher (> 15 cm on average: pointing, raising a
+/// cup), only that hand keeps the shape and the other stays relaxed. Otherwise both keep it (a boxer, a box carried
+/// in both hands). Returns how many keys were narrowed to one hand.
+int pickActiveHands(const Motion& m, std::vector<Key>* keys, double minRatio = 1.6);
 
 /// Writes the keyed shapes into `m`'s finger joints (SOMA-77 names). Each change blends over `blendSeconds`.
 /// Returns the number of finger joints written per hand (0 = no SOMA fingers / nothing to do; `why` says why).

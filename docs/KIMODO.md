@@ -58,8 +58,12 @@ thumb/middle end markers move under 2 degrees through "clench fists, then open t
 CLI `--hands`, MCP `hands`) writes a finger shape onto the clip (`src/AIMotion/HandShapes.h`):
 
 - **auto** (default): from each prompt segment. punch/fist/box/clench gives fist; grab/hold/carry/pick/lift/climb gives
-  grip; point gives point; wave/open/spread/clap gives open. "with the right hand" shapes that hand only. A prompt
-  with none of these words keeps the relaxed hands.
+  grip; point gives point; wave/open/spread/clap gives open. A prompt with none of these words keeps the relaxed
+  hands.
+- **Which hand:** the prompt decides when it says so ("with the right hand", "both hands", "fists"). Otherwise the
+  motion does. Over each segment, the wrist that travels at least 1.6x as far relative to the chest, or is held more
+  than 15 cm higher on average, takes the shape and the other hand stays relaxed. When both hands move alike (a
+  boxer, a box carried in both hands), both take it. This also applies to a fixed shape picked in Hands.
 - **relaxed** (Kimodo's own hands), **open**, **fist**, **grip**, **point**: that shape for the whole clip.
 
 Shape changes between segments blend over 0.2 s. The shape is written on Kimodo's own skeleton before the retarget,

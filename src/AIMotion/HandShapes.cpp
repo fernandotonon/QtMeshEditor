@@ -179,6 +179,8 @@ HandPair shapeFromPrompt(const QString& prompt)
     const bool right = has("\\bright (hand|arm)\\b");
     if (left && !right) out.right = Shape::Relaxed;
     if (right && !left) out.left = Shape::Relaxed;
+    // Naming a side, or both hands ("both", "hands", "fists", "arms" in the plural), is explicit: keep it as said.
+    out.explicitHands = left || right || has("\\b(both|hands|fists|arms|palms)\\b");
     return out;
 }
 
@@ -210,6 +212,88 @@ std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode)
         t += seg.value(QStringLiteral("duration")).toDouble(0.0);
     }
     return keys;
+}
+
+namespace {
+
+// Wrist positions relative to the chest, per frame (forward kinematics of the SOMA motion; root translation
+// cancels out). Empty when a joint is missing.
+struct WristTrack {
+    std::vector<Ogre::Vector3> left, right;
+};
+
+WristTrack wristTrack(const Motion& m)
+{
+    WristTrack w;
+    const int lh = m.indexOf("LeftHand");
+    const int rh = m.indexOf("RightHand");
+    const int chest = m.indexOf("Chest");
+    if (lh < 0 || rh < 0 || chest < 0) return w;
+    const size_t J = m.names.size();
+    std::vector<Ogre::Quaternion> g(J);
+    std::vector<Ogre::Vector3> p(J);
+    for (int f = 0; f < m.frameCount(); ++f) {
+        for (size_t j = 0; j < J; ++j) {
+            const int par = m.parents[j];
+            const Ogre::Quaternion& l = m.localRot[size_t(f)][j];
+            if (par < 0) {
+                g[j] = l;
+                p[j] = m.restJoints[j];
+                continue;
+            }
+            g[j] = g[size_t(par)] * l;
+            p[j] = p[size_t(par)] + g[size_t(par)] * (m.restJoints[j] - m.restJoints[size_t(par)]);
+        }
+        w.left.push_back(p[size_t(lh)] - p[size_t(chest)]);
+        w.right.push_back(p[size_t(rh)] - p[size_t(chest)]);
+    }
+    return w;
+}
+
+struct WristStats {
+    double path = 0.0;     ///< metres travelled relative to the chest
+    double height = 0.0;   ///< mean height relative to the chest
+};
+
+WristStats statsOf(const std::vector<Ogre::Vector3>& t, int from, int to)
+{
+    WristStats s;
+    if (to <= from) return s;
+    for (int f = from; f < to; ++f) {
+        s.height += t[size_t(f)].y;
+        if (f > from) s.path += t[size_t(f)].distance(t[size_t(f - 1)]);
+    }
+    s.height /= double(to - from);
+    return s;
+}
+
+} // namespace
+
+int pickActiveHands(const Motion& m, std::vector<Key>* keys, double minRatio)
+{
+    if (!keys || keys->empty()) return 0;
+    const WristTrack w = wristTrack(m);
+    if (w.left.empty()) return 0;
+    int narrowed = 0;
+    const int T = m.frameCount();
+    for (size_t k = 0; k < keys->size(); ++k) {
+        HandPair& h = (*keys)[k].hands;
+        if (h.explicitHands || h.left != h.right || h.left == Shape::Relaxed) continue;
+        const int from = std::clamp(int(std::lround((*keys)[k].time * m.fps)), 0, T);
+        const int to = k + 1 < keys->size() ? std::clamp(int(std::lround((*keys)[k + 1].time * m.fps)), from, T) : T;
+        const WristStats l = statsOf(w.left, from, to);
+        const WristStats r = statsOf(w.right, from, to);
+        bool leftOnly = false;
+        bool rightOnly = false;
+        if (l.path >= minRatio * r.path && l.path > 0.05) leftOnly = true;
+        else if (r.path >= minRatio * l.path && r.path > 0.05) rightOnly = true;
+        else if (l.height > r.height + 0.15) leftOnly = true;
+        else if (r.height > l.height + 0.15) rightOnly = true;
+        if (leftOnly) h.right = Shape::Relaxed;
+        if (rightOnly) h.left = Shape::Relaxed;
+        narrowed += (leftOnly || rightOnly) ? 1 : 0;
+    }
+    return narrowed;
 }
 
 int apply(Motion* m, const std::vector<Key>& keys, double blendSeconds, QString* why)

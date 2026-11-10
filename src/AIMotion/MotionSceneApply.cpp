@@ -131,7 +131,8 @@ int pushUndoBatch(const Ogre::Entity* entity, const QStringList& clips)
 // empty when the hands stay relaxed.
 QString shapeHands(Motion* m, const QString& mode)
 {
-    const std::vector<HandShapes::Key> keys = HandShapes::keysFor(m->meta, mode);
+    std::vector<HandShapes::Key> keys = HandShapes::keysFor(m->meta, mode);
+    HandShapes::pickActiveHands(*m, &keys);   // the hand the motion actually uses, unless the prompt names them
     if (HandShapes::apply(m, keys) == 0) return {};
     QStringList seq;
     for (const HandShapes::Key& k : keys) {
