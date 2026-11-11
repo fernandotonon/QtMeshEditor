@@ -87,9 +87,7 @@ jobs:
             curl -fsSL -o qtmesheditor_amd64.deb \
               "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.4.0/qtmesheditor_amd64.deb"
           fi
-          # --network host: the build's apt-get uses the runner's own resolver. Through Docker's embedded DNS it
-          # failed to resolve archive.ubuntu.com on three runs in a row (Nov 2026), and every other job waits on this one.
-          docker build --network host --platform linux/amd64 -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
+          docker build --platform linux/amd64 -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
 
       - name: Scan media/ via Docker (ci-scan image)
         run: |
