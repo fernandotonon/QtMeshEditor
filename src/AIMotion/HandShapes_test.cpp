@@ -101,9 +101,10 @@ TEST(HandShapes, KeysFollowTheSegmentsOrTheChosenShape)
     EXPECT_DOUBLE_EQ(keys[2].time, 3.5);
     EXPECT_EQ(keys[1].hands.left, Shape::Fist);
     EXPECT_EQ(keys[2].hands.right, Shape::Open);
+    // A fixed shape: one key per segment (so each prompt's hand words still apply), the same shape in all.
     const auto fixed = keysFor(meta, QStringLiteral("grip"));
-    ASSERT_EQ(fixed.size(), 1u);
-    EXPECT_EQ(fixed[0].hands.right, Shape::Grip);
+    ASSERT_EQ(fixed.size(), 3u);
+    for (const Key& k : fixed) EXPECT_EQ(k.hands.right, Shape::Grip);
     EXPECT_TRUE(keysFor(meta, QStringLiteral("claw")).empty());
     EXPECT_TRUE(validMode(QString()));
     EXPECT_TRUE(validMode(QStringLiteral("Fist")));
@@ -293,4 +294,44 @@ TEST(HandShapes, MissingSegmentDurationsAreReported)
     last.append(QJsonObject{{"text", "punch"}, {"duration", 1.0}});
     last.append(QJsonObject{{"text", "wave"}});
     EXPECT_EQ(keysFor(QJsonObject{{"segments", last}}, QStringLiteral("auto")).size(), 2u);
+}
+
+TEST(HandShapes, ABodyTurnIsNotOneHandMoving)
+{
+    // Both hands still relative to the chest, the body turning: the left hand sits far from the turn axis, the right
+    // close to it, so in WORLD space the left travels ~3x as far. Measured in the chest's frame neither moves.
+    Motion m;
+    m.fps = 30.0f;
+    m.names = {"Hips", "Chest", "LeftHand", "RightHand"};
+    m.parents = {-1, 0, 1, 1};
+    m.restJoints = {{0, 1, 0}, {0, 1.4f, 0}, {-0.7f, 1.4f, 0}, {0.25f, 1.4f, 0}};
+    for (int f = 0; f < 60; ++f) {
+        std::vector<Ogre::Quaternion> r(4, Ogre::Quaternion::IDENTITY);
+        r[0] = Ogre::Quaternion(Ogre::Degree(float(40.0 * std::sin(f * 0.2))), Ogre::Vector3::UNIT_Y);
+        m.localRot.push_back(r);
+    }
+    m.rootPos.assign(60, Ogre::Vector3::ZERO);
+    std::vector<Key> keys{Key{0.0, shapeFromPrompt("a boxer punches")}};
+    EXPECT_EQ(pickActiveHands(m, &keys), 0) << "a turn must not relax one hand";
+    EXPECT_EQ(keys[0].hands.left, Shape::Fist);
+    EXPECT_EQ(keys[0].hands.right, Shape::Fist);
+}
+
+TEST(HandShapes, AFixedShapeFollowsThePromptsHands)
+{
+    QJsonArray segs;
+    segs.append(QJsonObject{{"text", "wave with the right hand"}, {"duration", 2.0}});
+    segs.append(QJsonObject{{"text", "clench both fists"}, {"duration", 2.0}});
+    segs.append(QJsonObject{{"text", "walk forward"}, {"duration", 2.0}});
+    const auto keys = keysFor(QJsonObject{{"segments", segs}}, QStringLiteral("fist"));
+    ASSERT_EQ(keys.size(), 3u);
+    EXPECT_EQ(keys[0].hands.right, Shape::Fist);
+    EXPECT_EQ(keys[0].hands.left, Shape::Relaxed) << "the prompt names the right hand";
+    EXPECT_TRUE(keys[0].hands.explicitHands);
+    EXPECT_TRUE(keys[1].hands.explicitHands) << "both fists: the motion must not narrow it to one hand";
+    EXPECT_EQ(keys[1].hands.left, Shape::Fist);
+    EXPECT_FALSE(keys[2].hands.explicitHands) << "no hand words: the motion decides";
+    EXPECT_EQ(keys[2].hands.left, Shape::Fist);
+    // No segments in the metadata: one key for the whole clip.
+    EXPECT_EQ(keysFor(QJsonObject{}, QStringLiteral("grip")).size(), 1u);
 }

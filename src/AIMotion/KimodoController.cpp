@@ -73,8 +73,9 @@ KimodoController::KimodoController(QObject* parent) : QObject(parent)
     // A saved qtmesh_t2m on a build without ONNX/llama.cpp falls back to Kimodo (the setting itself is kept).
     const bool usable = backends().contains(saved) && (saved != QLatin1String("qtmesh_t2m") || QtMeshT2M::buildSupported());
     m_backend = usable ? saved : QStringLiteral("kimodo");
-    const QString hands = QSettings().value(QStringLiteral("ai/kimodoHands"), QStringLiteral("auto")).toString();
-    if (handModes().contains(hands)) m_hands = hands;
+    if (const QString hands = QSettings().value(QStringLiteral("ai/kimodoHands"), QStringLiteral("auto")).toString();
+        handModes().contains(hands))
+        m_hands = hands;
     m_handsEnabled = QSettings().value(QStringLiteral("ai/kimodoHandsEnabled"), true).toBool();
     refreshRuntime();
 }
