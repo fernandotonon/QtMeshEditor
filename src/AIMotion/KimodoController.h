@@ -42,6 +42,11 @@ class KimodoController : public QObject
     Q_PROPERTY(QString nativeDownloadSize READ nativeDownloadSize NOTIFY runtimeChanged)
     /// "kimodo" (default) | "qtmesh_t2m".
     Q_PROPERTY(QString backend READ backend WRITE setBackend NOTIFY backendChanged)
+    /// Kimodo hand shape (HandShapes.h): auto | relaxed | open | fist | grip | point; persisted as ai/kimodoHands.
+    Q_PROPERTY(QString hands READ hands WRITE setHands NOTIFY handsChanged)
+    Q_PROPERTY(QStringList handModes READ handModes CONSTANT)
+    /// Write hand shapes at all (default on, persisted as ai/kimodoHandsEnabled). Off = Kimodo's own relaxed hands.
+    Q_PROPERTY(bool handsEnabled READ handsEnabled WRITE setHandsEnabled NOTIFY handsChanged)
     Q_PROPERTY(bool t2mSupported READ t2mSupported CONSTANT)
     Q_PROPERTY(bool t2mReady READ t2mReady NOTIFY runtimeChanged)
     Q_PROPERTY(QString t2mDownloadSize READ t2mDownloadSize NOTIFY runtimeChanged)
@@ -64,6 +69,13 @@ public:
     QString nativeDownloadSize() const;
     QString backend() const { return m_backend; }
     void setBackend(const QString& b);
+    QString hands() const { return m_hands; }
+    void setHands(const QString& h);
+    bool handsEnabled() const { return m_handsEnabled; }
+    void setHandsEnabled(bool on);
+    /// What generation applies: the picked shape, or "relaxed" when the checkbox is off.
+    QString effectiveHands() const { return m_handsEnabled ? m_hands : QStringLiteral("relaxed"); }
+    static QStringList handModes();
     bool t2mSupported() const;
     bool t2mReady() const;
     QString t2mDownloadSize() const;
@@ -100,6 +112,7 @@ signals:
     void statusChanged();
     void runtimeChanged();
     void backendChanged();
+    void handsChanged();
     /// Clips were added to `entity` (the panel refreshes its list and selects the first).
     void applied(const QString& entity, const QStringList& clips);
 
@@ -112,7 +125,9 @@ private:
     Ogre::Entity* entityByName(const std::string& name) const;
     void setStatus(const QString& s, bool ok);
     void setBusy(bool b);
-    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false);
+    /// `hands` empty = the current picker value (saved-motion application); generation passes the one it started with.
+    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false,
+                    const QString& hands = QString());
     bool generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed, bool rootMotion,
                      bool footPin);
 
@@ -126,6 +141,8 @@ private:
     QStringList m_lastClips;
     QString m_lastMotionDir;
     QString m_backend;
+    QString m_hands = QStringLiteral("auto");
+    bool m_handsEnabled = true;
     QThread* m_worker = nullptr;
     std::atomic<bool> m_cancel{false};
 };

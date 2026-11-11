@@ -13047,6 +13047,29 @@ Rectangle {
             }
             Row {
                 spacing: 6
+                visible: !t2mBackendRow.isT2M
+                InspectorCheckBox {
+                    id: kimodoHandsChk
+                    text: "Hands"
+                    checked: KimodoController.handsEnabled
+                    onToggled: KimodoController.handsEnabled = checked
+                    anchors.verticalCenter: parent.verticalCenter
+                    ToolTip.visible: hovered; ToolTip.delay: 500
+                    ToolTip.text: "Shape the fingers (fist, grip, point, open). Untick for Kimodo's own relaxed hands."
+                }
+                ThemedComboBox {
+                    id: kimodoHandsBox
+                    enabled: KimodoController.handsEnabled
+                    width: 110
+                    model: KimodoController.handModes
+                    currentIndex: Math.max(0, KimodoController.handModes.indexOf(KimodoController.hands))
+                    onActivated: KimodoController.hands = KimodoController.handModes[currentIndex]
+                    ToolTip.visible: hovered; ToolTip.delay: 500
+                    ToolTip.text: "Finger shape (Kimodo itself drives no fingers). auto = from the prompt: punch/fist → fist, grab/hold/carry → grip, point → point, wave/open/clap → open; 'with the right hand' shapes that hand only. relaxed = Kimodo's own hands."
+                }
+            }
+            Row {
+                spacing: 6
                 InspectorButton {
                     width: 128
                     text: KimodoController.busy ? "Generating…" : (t2mBackendRow.isT2M ? "Generate (QtMesh T2M)" : "Generate (Kimodo)")

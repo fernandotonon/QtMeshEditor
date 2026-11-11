@@ -3525,7 +3525,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // flag as the value" (`--seed --no-root-motion` used to seed 0 and leave root motion on).
         if (arg == "--backend" || arg == "--apply-motion" || arg == "--segment" || arg == "--variations"
             || arg == "--seed" || arg == "--diffusion-steps" || arg == "--constraints" || arg == "--text-encoder-url"
-            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime" || arg == "--loop-mode") {
+            || arg == "--text-encoder-quant" || arg == "--name" || arg == "--runtime" || arg == "--loop-mode" || arg == "--hands") {
             const QString v = i + 1 < argc ? QString::fromLocal8Bit(argv[i + 1]) : QString();
             if (v.isEmpty() || (v.startsWith(QLatin1Char('-')) && arg != "--segment")) {
                 err() << "Error: " << arg << " needs a value." << Qt::endl;
@@ -3544,6 +3544,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             else if (arg == "--text-encoder-quant") kimodoReq.textEncoderQuant = v.toLower();
             else if (arg == "--runtime") kimodoReq.runtime = v.toLower();
             else if (arg == "--loop-mode") kimodoReq.loopMode = v.toLower();
+            else if (arg == "--hands") kimodoReq.hands = v.toLower();
             else kimodoReq.name = v;
             if (!ok) {
                 err() << "Error: " << arg << " needs an integer, got '" << v << "'." << Qt::endl;
@@ -4148,6 +4149,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <rig> --generate \"<prompt>\" --backend kimodo [--segment \"TEXT@SEC\"]... [--variations N] [--seed N]" << Qt::endl;
         err() << "                          [--diffusion-steps N] [--no-root-motion] [--no-postprocess] [--runtime auto|native|python]" << Qt::endl;
         err() << "                          [--loop [--loop-mode auto|cut|regenerate]]  (seamless loop; --duration = preferred length)" << Qt::endl;
+        err() << "                          [--hands auto|relaxed|open|fist|grip|point]  (finger shape; auto = from the prompt)" << Qt::endl;
         err() << "                          [--download] [--name CLIP] [--json] -o <output>   (NVIDIA Kimodo; --download fetches ~9 GB once)" << Qt::endl;
         err() << "       qtmesh anim <rig> --apply-motion motion_00.npz [...] -o <output>   (re-apply a saved Kimodo motion)" << Qt::endl;
         return 2;

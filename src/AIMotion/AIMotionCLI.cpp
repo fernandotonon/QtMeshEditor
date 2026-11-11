@@ -1,5 +1,7 @@
 #include "AIMotionCLI.h"
 
+#include "HandShapes.h"
+
 #include "KimodoNative.h"
 #include "MotionInterchange.h"
 #include "MotionSceneApply.h"
@@ -170,6 +172,7 @@ QString kimodoOnlyOption(const CliRequest& req)
         {!req.name.isEmpty(), "--name"},
         {req.loop, "--loop"},
         {!req.loopMode.isEmpty(), "--loop-mode"},
+        {!req.hands.isEmpty(), "--hands"},
     };
     for (const auto& [set, flag] : flags)
         if (set) return QString::fromLatin1(flag);
@@ -180,6 +183,8 @@ int runCli(const CliRequest& req)
 {
     if (!QFileInfo::exists(req.rigPath)) return fail(QStringLiteral("File not found: %1").arg(req.rigPath));
     if (req.variations < 1 || req.variations > 16) return fail(QStringLiteral("--variations must be 1..16"), 2);
+    if (!HandShapes::validMode(req.hands))
+        return fail(QStringLiteral("--hands must be one of: %1").arg(HandShapes::modeIds().join(QStringLiteral(", "))), 2);
     // A non-finite angle would write NaN rotations, and the default output overwrites the input rig.
     if (!std::isfinite(req.armSpaceDeg)) return fail(QStringLiteral("--arm-space must be a finite number of degrees"), 2);
 
@@ -200,16 +205,22 @@ int runCli(const CliRequest& req)
     so.rootMotion = req.rootMotion;
     so.footPin = req.footPin;
     so.loop = req.loop || !req.loopMode.isEmpty();
+    if (!req.hands.isEmpty()) so.hands = req.hands;
     so.undoable = false;   // one-shot process
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);
     if (!applied.ok) return fail(applied.error);
     applyArmSpace(entity, applied.clips, req.armSpaceDeg);
 
     QJsonArray clips;
-    for (const ApplyOutcome& out : applied.outcomes) {
-        note(QStringLiteral("(%1: %2 bones mapped, %3 fingers; %4 rig bones undriven)")
-                 .arg(QString::fromStdString(out.clip)).arg(out.mappedBones).arg(out.fingerBones).arg(out.unmappedTarget.size()));
-        clips.append(outcomeJson(out));
+    for (size_t i = 0; i < applied.outcomes.size(); ++i) {
+        const ApplyOutcome& out = applied.outcomes[i];
+        const QString hands = i < size_t(applied.handShapes.size()) ? applied.handShapes.at(qsizetype(i)) : QString();
+        note(QStringLiteral("(%1: %2 bones mapped, %3 fingers; %4 rig bones undriven%5)")
+                 .arg(QString::fromStdString(out.clip)).arg(out.mappedBones).arg(out.fingerBones).arg(out.unmappedTarget.size())
+                 .arg(hands.isEmpty() ? QString() : QStringLiteral("; hands: ") + hands));
+        QJsonObject o = outcomeJson(out);
+        o.insert(QStringLiteral("hands"), hands);
+        clips.append(o);
     }
 
     const QString output = req.outputPath.isEmpty() ? req.rigPath : req.outputPath;
@@ -234,6 +245,7 @@ int runT2MCli(const CliRequest& req)
         {!req.runtime.isEmpty(), "--runtime"},
         {!req.applyMotion.isEmpty(), "--apply-motion"},
         {req.loop || !req.loopMode.isEmpty(), "--loop"},
+        {!req.hands.isEmpty(), "--hands"},
     };
     for (const auto& [set, flag] : kimodoOnly)
         if (set) return fail(QStringLiteral("%1 is a Kimodo option (QtMesh T2M generates one motion per prompt)").arg(QLatin1String(flag)), 2);

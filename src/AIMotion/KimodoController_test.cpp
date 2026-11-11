@@ -71,3 +71,18 @@ TEST(KimodoController, ApplyRefusesAMissingEntityOrNoMotion)
     EXPECT_FALSE(none.ok);
     EXPECT_FALSE(none.error.isEmpty());
 }
+
+TEST(KimodoController, HandsCheckboxOffMeansKimodosOwnHands)
+{
+    AIMotion::KimodoController& c = *AIMotion::KimodoController::instance();
+    const bool wasOn = c.handsEnabled();
+    const QString was = c.hands();
+    c.setHands(QStringLiteral("fist"));
+    c.setHandsEnabled(true);
+    EXPECT_EQ(c.effectiveHands(), QStringLiteral("fist"));
+    c.setHandsEnabled(false);
+    EXPECT_EQ(c.effectiveHands(), QStringLiteral("relaxed")) << "unticked: Kimodo's own relaxed hands";
+    EXPECT_EQ(c.hands(), QStringLiteral("fist")) << "the picked shape is kept for when it is ticked again";
+    c.setHandsEnabled(wasOn);   // the settings persist: leave them as found
+    c.setHands(was);
+}

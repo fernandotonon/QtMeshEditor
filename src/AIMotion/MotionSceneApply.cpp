@@ -1,5 +1,7 @@
 #include "MotionSceneApply.h"
 
+#include "HandShapes.h"
+
 #include "../AnimationMerger.h"
 #include "../AnimationRetargeter.h"
 #include "../MotionInbetween.h"
@@ -125,6 +127,31 @@ int pushUndoBatch(const Ogre::Entity* entity, const QStringList& clips)
     return um->stack()->index();
 }
 
+// Writes the hand shapes `mode` asks for into a SOMA motion; returns what was written ("fist", "open -> grip"),
+// empty when the hands stay relaxed.
+QString shapeHands(Motion* m, const QString& mode)
+{
+    QString why;
+    std::vector<HandShapes::Key> keys = HandShapes::keysFor(m->meta, mode, &why);
+    if (keys.empty()) return why.isEmpty() ? QString() : QStringLiteral("not applied: %1").arg(why);
+    HandShapes::pickActiveHands(*m, &keys);   // the hand the motion actually uses, unless the prompt names them
+    if (HandShapes::apply(m, keys, 0.2, &why) == 0) {
+        // Auto with nothing to shape is the normal case; a shape the user ASKED for that could not be written is
+        // reported, so it does not read as an intentional relaxed hand.
+        const QString md = mode.trimmed().toLower();
+        const bool asked = !md.isEmpty() && md != QLatin1String("auto") && md != QLatin1String("relaxed");
+        return asked ? QStringLiteral("%1 not applied: %2").arg(md, why) : QString();
+    }
+    QStringList seq;
+    for (const HandShapes::Key& k : keys) {
+        QString s = HandShapes::shapeId(k.hands.left);
+        if (k.hands.right != k.hands.left)
+            s = QStringLiteral("%1 L / %2 R").arg(s, HandShapes::shapeId(k.hands.right));
+        if (seq.isEmpty() || seq.last() != s) seq << s;
+    }
+    return seq.join(QStringLiteral(" -> "));
+}
+
 } // namespace
 
 SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Motion>& motions,
@@ -141,7 +168,9 @@ SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Mo
         const std::string clip = Retarget::uniqueAnimationName(skel, variantClipName(base, int(v)).toStdString());
         ApplyOptions ao;
         ao.rootMotion = options.rootMotion;
-        ApplyOutcome out = applyMotionToSkeleton(skel, motions[v], clip, ao);
+        Motion shaped = motions[v];
+        const QString hands = shapeHands(&shaped, options.hands);
+        ApplyOutcome out = applyMotionToSkeleton(skel, shaped, clip, ao);
         if (!out.ok) {
             for (const QString& c : r.clips) skel->removeAnimation(c.toStdString());
             r.clips.clear();
@@ -151,6 +180,7 @@ SceneApplyResult applyMotionsToEntity(Ogre::Entity* entity, const std::vector<Mo
         }
         if (options.footPin) pinFeetKeepingLoop(skel, clip, options.loop);
         r.clips << QString::fromStdString(clip);
+        r.handShapes << hands;
         r.outcomes.push_back(std::move(out));
     }
     entity->refreshAvailableAnimationState();

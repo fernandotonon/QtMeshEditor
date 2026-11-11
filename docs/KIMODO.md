@@ -51,6 +51,27 @@ repeats a frame. `--loop-mode cut|regenerate` (MCP `loop_mode`) forces one metho
 the MCP report (`kimodo.loops`) say which was used, the loop length and how well the cycle matched. Combine with
 root motion off for in-place loops.
 
+## Hands
+
+![Kimodo hands off (left) vs auto hand shapes (right): fists while walking, an open right hand for the wave, a pointing left hand](img/kimodo-hands.gif)
+
+Kimodo's model drives no finger joints: every finger holds a relaxed pose for the whole clip (measured: the
+thumb/middle end markers move under 2 degrees through "clench fists, then open the hands"). **Hands** (panel picker,
+CLI `--hands`, MCP `hands`) writes a finger shape onto the clip (`src/AIMotion/HandShapes.h`):
+
+- **auto** (default): from each prompt segment. punch/fist/box/clench gives fist; grab/hold/carry/pick/lift/climb gives
+  grip; point gives point; wave/open/spread/clap gives open. A prompt with none of these words keeps the relaxed
+  hands.
+- **Which hand:** the prompt decides when it says so ("with the right hand", "both hands", "fists"). Otherwise the
+  motion does. Over each segment, the wrist that travels at least 1.6x as far relative to the chest, or is held more
+  than 15 cm higher on average, takes the shape and the other hand stays relaxed. When both hands move alike (a
+  boxer, a box carried in both hands), both take it. This also applies to a fixed shape picked in Hands.
+- **relaxed** (Kimodo's own hands), **open**, **fist**, **grip**, **point**: that shape for the whole clip.
+
+Shape changes between segments blend over 0.2 s. The shape is written on Kimodo's own skeleton before the retarget,
+so it reaches any rig the retarget maps fingers on, including UniRig rigs whose fingers are found by position.
+`--apply-motion` reads the prompts from the motion's `result.json`.
+
 ## CLI
 
 ```bash
@@ -62,7 +83,7 @@ qtmesh anim rigged.glb --apply-motion motion_00.npz -o out.glb   # re-apply a sa
 
 Options: `--runtime auto|native|python` (auto = native when its models are downloaded, else the sidecar),
 `--download`, `--variations 1..16`, `--seed N`, `--diffusion-steps 1..1000` (default 100), `--no-root-motion`,
-`--no-postprocess`, `--loop`, `--loop-mode auto|cut|regenerate`, `--name CLIP`, `--json`. Kimodo-only options are refused without `--backend kimodo`.
+`--no-postprocess`, `--loop`, `--loop-mode auto|cut|regenerate`, `--hands auto|relaxed|open|fist|grip|point`, `--name CLIP`, `--json`. Kimodo-only options are refused without `--backend kimodo`.
 `--constraints` (Kimodo constraint files) needs the Python runtime.
 
 ## MCP
@@ -72,7 +93,7 @@ Options: `--runtime auto|native|python` (auto = native when its models are downl
   "variations": 1, "root_motion": false, "download": true, "output_path": "/tmp/jump.glb"}}
 ```
 
-Also `segments`, `seed`, `diffusion_steps`, `postprocess`, `runtime`, `loop`, `loop_mode`, `clip_name`, and `motion_files` (re-apply saved
+Also `segments`, `seed`, `diffusion_steps`, `postprocess`, `runtime`, `loop`, `loop_mode`, `hands`, `clip_name`, and `motion_files` (re-apply saved
 motions). Options are validated before any download; Stop interrupts a download or a generation; a failed export
 takes the new clips back out of the scene.
 

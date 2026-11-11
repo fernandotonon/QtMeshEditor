@@ -1,4 +1,6 @@
 #include "KimodoController.h"
+
+#include "HandShapes.h"
 #include "KimodoNative.h"
 
 #include "KimodoPredictor.h"
@@ -71,7 +73,31 @@ KimodoController::KimodoController(QObject* parent) : QObject(parent)
     // A saved qtmesh_t2m on a build without ONNX/llama.cpp falls back to Kimodo (the setting itself is kept).
     const bool usable = backends().contains(saved) && (saved != QLatin1String("qtmesh_t2m") || QtMeshT2M::buildSupported());
     m_backend = usable ? saved : QStringLiteral("kimodo");
+    if (const QString hands = QSettings().value(QStringLiteral("ai/kimodoHands"), QStringLiteral("auto")).toString();
+        handModes().contains(hands))
+        m_hands = hands;
+    m_handsEnabled = QSettings().value(QStringLiteral("ai/kimodoHandsEnabled"), true).toBool();
     refreshRuntime();
+}
+
+QStringList KimodoController::handModes() { return HandShapes::modeIds(); }
+
+void KimodoController::setHandsEnabled(bool on)
+{
+    if (on == m_handsEnabled) return;
+    m_handsEnabled = on;
+    QSettings().setValue(QStringLiteral("ai/kimodoHandsEnabled"), on);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("kimodo hands: %1").arg(on ? "on" : "off"));
+    emit handsChanged();
+}
+
+void KimodoController::setHands(const QString& h)
+{
+    if (!handModes().contains(h) || h == m_hands) return;
+    m_hands = h;
+    QSettings().setValue(QStringLiteral("ai/kimodoHands"), h);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("kimodo hands: %1").arg(h));
+    emit handsChanged();
 }
 
 void KimodoController::setBackend(const QString& b)
@@ -299,7 +325,8 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
             return !m_cancel.load();
         });
     });
-    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin, loop]() {
+    const QString hands = effectiveHands();   // captured now: a change while the model runs must not reach this clip
+    connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin, loop, hands]() {
         if (!self) return;
         m_worker->deleteLater();
         m_worker = nullptr;
@@ -315,7 +342,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
         m_lastMotionDir = result->outputDir;
         Ogre::Entity* target = entityByName(entityName);
         if (!target) { setStatus(QStringLiteral("The rig was removed while Kimodo ran; the motion is saved in %1.").arg(result->outputDir), false); return; }
-        if (applyFiles(target, result->files, rootMotion, footPin, loop) && !result->loopSummaries.isEmpty())
+        if (applyFiles(target, result->files, rootMotion, footPin, loop, hands) && !result->loopSummaries.isEmpty())
             setStatus(m_status + QStringLiteral(" Loop: ") + result->loopSummaries.join(QStringLiteral("; ")) + QLatin1Char('.'), true);
     });
     m_worker->setParent(this);   // owned by the controller until finished() hands it to deleteLater
@@ -402,7 +429,8 @@ void KimodoController::cancel()
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("Kimodo generation cancelled"));
 }
 
-bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop)
+bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop,
+                                  const QString& hands)
 {
     std::vector<Motion> motions;
     QString err;
@@ -411,15 +439,18 @@ bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files
     so.rootMotion = rootMotion;
     so.footPin = footPin;
     so.loop = loop;
+    so.hands = hands.isEmpty() ? effectiveHands() : hands;   // generation passes the choice made when it started
     const SceneApplyResult r = applyMotionsToEntity(entity, motions, so);
     if (!r.ok) { setStatus(r.error, false); return false; }
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
     m_lastClips = r.clips;
     const ApplyOutcome& first = r.outcomes.front();
-    setStatus(QStringLiteral("Added %1 to %2: %3 bones driven (%4 fingers), %5 rig bones undriven.")
-                  .arg(r.clips.join(QStringLiteral(", ")), QString::fromStdString(entity->getName()))
-                  .arg(first.mappedBones).arg(first.fingerBones).arg(first.unmappedTarget.size()),
-              true);
+    QString msg = QStringLiteral("Added %1 to %2: %3 bones driven (%4 fingers), %5 rig bones undriven.")
+                      .arg(r.clips.join(QStringLiteral(", ")), QString::fromStdString(entity->getName()))
+                      .arg(first.mappedBones).arg(first.fingerBones).arg(first.unmappedTarget.size());
+    if (!r.handShapes.isEmpty() && !r.handShapes.front().isEmpty())
+        msg += QStringLiteral(" Hands: %1.").arg(r.handShapes.front());
+    setStatus(msg, true);
     emit applied(QString::fromStdString(entity->getName()), r.clips);
     return true;
 }
