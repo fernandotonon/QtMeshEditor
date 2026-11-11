@@ -53,6 +53,8 @@ root motion off for in-place loops.
 
 ## Hands
 
+![Kimodo hands off (left) vs auto hand shapes (right): fists while walking, an open right hand for the wave, a pointing left hand](img/kimodo-hands.gif)
+
 Kimodo's model drives no finger joints: every finger holds a relaxed pose for the whole clip (measured: the
 thumb/middle end markers move under 2 degrees through "clench fists, then open the hands"). **Hands** (panel picker,
 CLI `--hands`, MCP `hands`) writes a finger shape onto the clip (`src/AIMotion/HandShapes.h`):
