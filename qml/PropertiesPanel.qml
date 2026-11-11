@@ -13048,10 +13048,18 @@ Rectangle {
             Row {
                 spacing: 6
                 visible: !t2mBackendRow.isT2M
-                Text { text: "Hands"; color: PropertiesPanelController.textColor; font.pixelSize: 10
-                       anchors.verticalCenter: parent.verticalCenter }
+                InspectorCheckBox {
+                    id: kimodoHandsChk
+                    text: "Hands"
+                    checked: KimodoController.handsEnabled
+                    onToggled: KimodoController.handsEnabled = checked
+                    anchors.verticalCenter: parent.verticalCenter
+                    ToolTip.visible: hovered; ToolTip.delay: 500
+                    ToolTip.text: "Shape the fingers (fist, grip, point, open). Untick for Kimodo's own relaxed hands."
+                }
                 ThemedComboBox {
                     id: kimodoHandsBox
+                    enabled: KimodoController.handsEnabled
                     width: 110
                     model: KimodoController.handModes
                     currentIndex: Math.max(0, KimodoController.handModes.indexOf(KimodoController.hands))

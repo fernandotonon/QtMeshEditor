@@ -45,6 +45,8 @@ class KimodoController : public QObject
     /// Kimodo hand shape (HandShapes.h): auto | relaxed | open | fist | grip | point; persisted as ai/kimodoHands.
     Q_PROPERTY(QString hands READ hands WRITE setHands NOTIFY handsChanged)
     Q_PROPERTY(QStringList handModes READ handModes CONSTANT)
+    /// Write hand shapes at all (default on, persisted as ai/kimodoHandsEnabled). Off = Kimodo's own relaxed hands.
+    Q_PROPERTY(bool handsEnabled READ handsEnabled WRITE setHandsEnabled NOTIFY handsChanged)
     Q_PROPERTY(bool t2mSupported READ t2mSupported CONSTANT)
     Q_PROPERTY(bool t2mReady READ t2mReady NOTIFY runtimeChanged)
     Q_PROPERTY(QString t2mDownloadSize READ t2mDownloadSize NOTIFY runtimeChanged)
@@ -69,6 +71,10 @@ public:
     void setBackend(const QString& b);
     QString hands() const { return m_hands; }
     void setHands(const QString& h);
+    bool handsEnabled() const { return m_handsEnabled; }
+    void setHandsEnabled(bool on);
+    /// What generation applies: the picked shape, or "relaxed" when the checkbox is off.
+    QString effectiveHands() const { return m_handsEnabled ? m_hands : QStringLiteral("relaxed"); }
     static QStringList handModes();
     bool t2mSupported() const;
     bool t2mReady() const;
@@ -136,6 +142,7 @@ private:
     QString m_lastMotionDir;
     QString m_backend;
     QString m_hands = QStringLiteral("auto");
+    bool m_handsEnabled = true;
     QThread* m_worker = nullptr;
     std::atomic<bool> m_cancel{false};
 };

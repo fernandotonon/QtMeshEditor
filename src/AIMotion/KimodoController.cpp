@@ -75,10 +75,20 @@ KimodoController::KimodoController(QObject* parent) : QObject(parent)
     m_backend = usable ? saved : QStringLiteral("kimodo");
     const QString hands = QSettings().value(QStringLiteral("ai/kimodoHands"), QStringLiteral("auto")).toString();
     if (handModes().contains(hands)) m_hands = hands;
+    m_handsEnabled = QSettings().value(QStringLiteral("ai/kimodoHandsEnabled"), true).toBool();
     refreshRuntime();
 }
 
 QStringList KimodoController::handModes() { return HandShapes::modeIds(); }
+
+void KimodoController::setHandsEnabled(bool on)
+{
+    if (on == m_handsEnabled) return;
+    m_handsEnabled = on;
+    QSettings().setValue(QStringLiteral("ai/kimodoHandsEnabled"), on);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("kimodo hands: %1").arg(on ? "on" : "off"));
+    emit handsChanged();
+}
 
 void KimodoController::setHands(const QString& h)
 {
@@ -314,7 +324,7 @@ bool KimodoController::generate(const QString& prompt, double duration, int vari
             return !m_cancel.load();
         });
     });
-    const QString hands = m_hands;   // captured now: a change while the model runs must not reach this clip
+    const QString hands = effectiveHands();   // captured now: a change while the model runs must not reach this clip
     connect(m_worker, &QThread::finished, this, [this, self, result, entityName, rootMotion, footPin, loop, hands]() {
         if (!self) return;
         m_worker->deleteLater();
@@ -428,7 +438,7 @@ bool KimodoController::applyFiles(Ogre::Entity* entity, const QStringList& files
     so.rootMotion = rootMotion;
     so.footPin = footPin;
     so.loop = loop;
-    so.hands = hands.isEmpty() ? m_hands : hands;   // generation passes the shape picked when it started
+    so.hands = hands.isEmpty() ? effectiveHands() : hands;   // generation passes the choice made when it started
     const SceneApplyResult r = applyMotionsToEntity(entity, motions, so);
     if (!r.ok) { setStatus(r.error, false); return false; }
     if (auto* acc = AnimationControlController::instance()) acc->updateAnimationTree();
