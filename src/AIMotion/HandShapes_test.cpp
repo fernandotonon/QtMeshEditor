@@ -335,3 +335,19 @@ TEST(HandShapes, AFixedShapeFollowsThePromptsHands)
     // No segments in the metadata: one key for the whole clip.
     EXPECT_EQ(keysFor(QJsonObject{}, QStringLiteral("grip")).size(), 1u);
 }
+
+TEST(HandShapes, ANamedFistIsOneHand)
+{
+    // "the right fist" names a hand like "the right hand" does, in auto and in a fixed shape.
+    const HandPair autoPair = shapeFromPrompt("clench the right fist");
+    EXPECT_EQ(autoPair.right, Shape::Fist);
+    EXPECT_EQ(autoPair.left, Shape::Relaxed);
+    EXPECT_TRUE(autoPair.explicitHands);
+    QJsonArray segs;
+    segs.append(QJsonObject{{"text", "clench the right fist"}, {"duration", 2.0}});
+    const auto keys = keysFor(QJsonObject{{"segments", segs}}, QStringLiteral("fist"));
+    ASSERT_EQ(keys.size(), 1u);
+    EXPECT_EQ(keys[0].hands.right, Shape::Fist);
+    EXPECT_EQ(keys[0].hands.left, Shape::Relaxed);
+    EXPECT_TRUE(keys[0].hands.explicitHands);
+}

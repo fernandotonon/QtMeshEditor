@@ -160,6 +160,23 @@ bool anyShape(const std::vector<Key>& keys)
 
 } // namespace
 
+namespace {
+
+// Which side a prompt names: "left/right hand", "arm", "fist", "palm", "fingers" (shared by auto and fixed shapes).
+struct NamedSides {
+    bool left = false;
+    bool right = false;
+};
+
+NamedSides namedSides(const QString& lowerPrompt)
+{
+    static const QRegularExpression leftRe(QStringLiteral("\\bleft (hand|arm|fist|palm|fingers?)\\b"));
+    static const QRegularExpression rightRe(QStringLiteral("\\bright (hand|arm|fist|palm|fingers?)\\b"));
+    return {lowerPrompt.contains(leftRe), lowerPrompt.contains(rightRe)};
+}
+
+} // namespace
+
 QStringList shapeIds()
 {
     return {QStringLiteral("relaxed"), QStringLiteral("open"), QStringLiteral("fist"), QStringLiteral("grip"), QStringLiteral("point")};
@@ -192,8 +209,7 @@ HandPair shapeFromPrompt(const QString& prompt)
     else if (has("\\b(grab\\w*|hold\\w*|carr(y|ies|ying)|pick\\w*|grip\\w*|lift\\w*|drink\\w*|climb\\w*|pull\\w* (a|the|on) \\w+)\\b")) s = Shape::Grip;
     else if (has("\\b(wav(e|es|ing)|open\\w* (the |both |their |his |her )?hands?|spread\\w* (the |both |their |his |her )?(hands?|fingers)|high[- ]?five|clap\\w*|jazz hands)\\b")) s = Shape::Open;
     HandPair out{s, s};
-    const bool left = has("\\bleft (hand|arm)\\b");
-    const bool right = has("\\bright (hand|arm)\\b");
+    const auto [left, right] = namedSides(p);
     if (left && !right) out.right = Shape::Relaxed;
     if (right && !left) out.left = Shape::Relaxed;
     // Naming a side, or both hands ("both", "hands", "fists", "arms" in the plural), is explicit: keep it as said.
@@ -221,9 +237,7 @@ HandPair fixedShapeFor(Shape s, const QString& prompt)
 {
     const HandPair said = shapeFromPrompt(prompt);
     HandPair out{s, s, said.explicitHands};
-    const QString p = prompt.toLower();
-    const bool left = p.contains(QRegularExpression(QStringLiteral("\\bleft (hand|arm)\\b")));
-    const bool right = p.contains(QRegularExpression(QStringLiteral("\\bright (hand|arm)\\b")));
+    const auto [left, right] = namedSides(prompt.toLower());
     if (left && !right) out.right = Shape::Relaxed;
     if (right && !left) out.left = Shape::Relaxed;
     return out;
