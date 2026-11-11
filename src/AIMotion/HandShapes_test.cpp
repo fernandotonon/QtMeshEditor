@@ -16,11 +16,17 @@ using namespace AIMotion::HandShapes;
 namespace {
 
 // A right hand at the origin, fingers along +X, palm facing -Y (the thumb base sits on the palm side), at rest.
-Motion syntheticHand(int frames = 40)
+// `mirrored` = a LEFT hand: the right hand reflected across the z = 0 plane (thumb and pinky swap sides).
+Motion syntheticHand(int frames = 40, bool mirrored = false)
 {
     Motion m;
     m.fps = 30.0f;
-    const auto add = [&m](const std::string& name, int parent, Ogre::Vector3 p) {
+    const std::string side = mirrored ? "Left" : "Right";
+    const auto add = [&m, mirrored, &side](std::string name, int parent, Ogre::Vector3 p) {
+        if (mirrored) {
+            p.z = -p.z;
+            name.replace(0, 5, side);   // "Right..." -> "Left..."
+        }
         m.names.push_back(name);
         m.parents.push_back(parent);
         m.restJoints.push_back(p);
@@ -143,10 +149,8 @@ TEST(HandShapes, ChangesBlendAndRelaxedKeepsTheMotion)
     EXPECT_TRUE(m.localRot[10][size_t(j)].equals(own, Ogre::Radian(1e-4f))) << "relaxed before the change";
     const Ogre::Quaternion full = m.localRot[50][size_t(j)];
     const Ogre::Quaternion mid = m.localRot[33][size_t(j)];   // 1.1 s: half way through the 0.2 s blend
-    const float toFull = mid.Dot(full);
-    const float toOwn = mid.Dot(own);
-    EXPECT_LT(toFull, 0.9999f) << "not yet the full fist";
-    EXPECT_LT(toOwn, 0.9999f) << "no longer the relaxed pose";
+    const Ogre::Quaternion expected = Ogre::Quaternion::Slerp(0.5f, own, full, true);
+    EXPECT_TRUE(mid.equals(expected, Ogre::Radian(1e-3f))) << "exactly half way between the relaxed pose and the fist";
 }
 
 TEST(HandShapes, NothingToDoIsReported)
@@ -250,4 +254,43 @@ TEST(HandShapes, AFistThumbCrossesThePalmTowardTheLittleFinger)
     const int tip = m.indexOf("RightHandThumbEnd");
     EXPECT_LT(fist[size_t(tip)].z, rest[size_t(tip)].z - 0.02f) << "the thumb tip moves toward the little finger";
     EXPECT_LT(fist[size_t(tip)].y, rest[size_t(tip)].y + 0.005f) << "and stays on the palm side";
+}
+
+TEST(HandShapes, ALeftHandCurlsTheSameWayAsTheRight)
+{
+    // The left hand mirrors the right: the fingers still fold to the palm side and the thumb still swings toward
+    // the little finger (now on +Z). A fixed-sign axis would curl one of the two hands the wrong way.
+    Motion m = syntheticHand(40, true);
+    const auto rest = positions(m, 0);
+    ASSERT_GT(apply(&m, {Key{0.0, {Shape::Fist, Shape::Fist}}}), 0);
+    const auto fist = positions(m, 5);
+    const int knuckle = m.indexOf("LeftHandMiddle3");
+    const int thumb = m.indexOf("LeftHandThumbEnd");
+    ASSERT_GE(knuckle, 0);
+    EXPECT_LT(fist[size_t(knuckle)].y, rest[size_t(knuckle)].y - 0.02f) << "fingers fold to the palm side";
+    EXPECT_GT(fist[size_t(thumb)].z, rest[size_t(thumb)].z + 0.02f) << "the thumb moves toward the little finger";
+}
+
+TEST(HandShapes, AmbiguousWholeBodyVerbsKeepRelaxedHands)
+{
+    EXPECT_EQ(shapeFromPrompt("a person stretches").left, Shape::Relaxed);
+    EXPECT_EQ(shapeFromPrompt("a person pulls away").left, Shape::Relaxed);
+    EXPECT_EQ(shapeFromPrompt("a person pulls the rope").left, Shape::Grip);
+    EXPECT_EQ(shapeFromPrompt("someone opens the hands").right, Shape::Open);
+    EXPECT_EQ(shapeFromPrompt("a person opens the door").right, Shape::Relaxed);
+}
+
+TEST(HandShapes, MissingSegmentDurationsAreReported)
+{
+    QJsonArray segs;
+    segs.append(QJsonObject{{"text", "punch"}});   // no duration: the next segment's start is unknown
+    segs.append(QJsonObject{{"text", "wave"}, {"duration", 1.0}});
+    QString why;
+    EXPECT_TRUE(keysFor(QJsonObject{{"segments", segs}}, QStringLiteral("auto"), &why).empty());
+    EXPECT_TRUE(why.contains(QStringLiteral("duration")));
+    // The LAST segment's duration is never needed.
+    QJsonArray last;
+    last.append(QJsonObject{{"text", "punch"}, {"duration", 1.0}});
+    last.append(QJsonObject{{"text", "wave"}});
+    EXPECT_EQ(keysFor(QJsonObject{{"segments", last}}, QStringLiteral("auto")).size(), 2u);
 }

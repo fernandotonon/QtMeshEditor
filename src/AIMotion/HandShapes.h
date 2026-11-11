@@ -49,8 +49,9 @@ QStringList modeIds();
 bool validMode(const QString& mode);   ///< empty = auto
 
 /// The keys for a motion whose metadata (result.json: "segments" [{text, duration}]) names its prompts: one key per
-/// segment at its start time. `mode` = "auto" or a shape id (one key at 0). Unknown mode -> empty.
-std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode);
+/// segment at its start time. `mode` = "auto" or a shape id (one key at 0). Unknown mode -> empty. In auto mode a
+/// segment with a missing or non-positive duration (other than the last) makes the timing unknown: empty, `why` set.
+std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode, QString* why = nullptr);
 
 /// Which hand does the action, from the motion itself: for every key whose prompt did not name the hands, measure
 /// each wrist over the key's segment, relative to the chest (so walking does not count). When one wrist travels at

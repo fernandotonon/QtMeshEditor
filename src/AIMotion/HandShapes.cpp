@@ -188,8 +188,9 @@ HandPair shapeFromPrompt(const QString& prompt)
     Shape s = Shape::Relaxed;
     if (has("\\b(fists?|punch\\w*|box\\w*|clench\\w*|jab\\w*|uppercut\\w*)\\b")) s = Shape::Fist;
     else if (has("\\bpoint\\w*\\b")) s = Shape::Point;
-    else if (has("\\b(grab\\w*|hold\\w*|carr(y|ies|ying)|pick\\w*|grip\\w*|lift\\w*|drink\\w*|climb\\w*|pull\\w*)\\b")) s = Shape::Grip;
-    else if (has("\\b(wav(e|es|ing)|open\\w*|spread\\w*|high[- ]?five|clap\\w*|jazz hands|stretch\\w*)\\b")) s = Shape::Open;
+    // Only words that are about the hands: "stretches" and "pulls away" are whole-body motions and keep relaxed hands.
+    else if (has("\\b(grab\\w*|hold\\w*|carr(y|ies|ying)|pick\\w*|grip\\w*|lift\\w*|drink\\w*|climb\\w*|pull\\w* (a|the|on) \\w+)\\b")) s = Shape::Grip;
+    else if (has("\\b(wav(e|es|ing)|open\\w* (the |both |their |his |her )?hands?|spread\\w* (the |both |their |his |her )?(hands?|fingers)|high[- ]?five|clap\\w*|jazz hands)\\b")) s = Shape::Open;
     HandPair out{s, s};
     const bool left = has("\\bleft (hand|arm)\\b");
     const bool right = has("\\bright (hand|arm)\\b");
@@ -212,7 +213,7 @@ bool validMode(const QString& mode)
     return mode.trimmed().isEmpty() || modeIds().contains(mode.trimmed().toLower());
 }
 
-std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode)
+std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode, QString* why)
 {
     const QString md = mode.trimmed().toLower();
     if (!md.isEmpty() && md != QLatin1String("auto")) {
@@ -222,10 +223,17 @@ std::vector<Key> keysFor(const QJsonObject& meta, const QString& mode)
     }
     std::vector<Key> keys;
     double t = 0.0;
-    for (const QJsonValue& v : meta.value(QStringLiteral("segments")).toArray()) {
-        const QJsonObject seg = v.toObject();
+    const QJsonArray segs = meta.value(QStringLiteral("segments")).toArray();
+    for (qsizetype i = 0; i < segs.size(); ++i) {
+        const QJsonObject seg = segs.at(i).toObject();
         keys.push_back({t, shapeFromPrompt(seg.value(QStringLiteral("text")).toString())});
-        t += seg.value(QStringLiteral("duration")).toDouble(0.0);
+        const double d = seg.value(QStringLiteral("duration")).toDouble(0.0);
+        // Two keys at the same time would drop the earlier shape and blend from one that was never shown.
+        if (i + 1 < segs.size() && !(d > 0.0)) {
+            if (why) *why = QStringLiteral("segment %1 of the motion has no valid duration, so the hand timing is unknown").arg(i + 1);
+            return {};
+        }
+        t += d;
     }
     return keys;
 }

@@ -6154,6 +6154,8 @@ QString kimodoOptionsFromArgs(const QJsonObject& args, AIMotion::KimodoPredictor
     o->loopMode = args.value(QStringLiteral("loop_mode")).toString().toLower();
     o->loop = args.value(QStringLiteral("loop")).toBool(false) || !o->loopMode.isEmpty();
     // Checked here too (it is applied after generation) so a typo never costs a generation.
+    if (args.contains(QStringLiteral("hands")) && !args.value(QStringLiteral("hands")).isString())
+        return QStringLiteral("'hands' must be a string: %1").arg(AIMotion::HandShapes::modeIds().join(QStringLiteral(", ")));
     if (!AIMotion::HandShapes::validMode(args.value(QStringLiteral("hands")).toString()))
         return QStringLiteral("'hands' must be one of: %1").arg(AIMotion::HandShapes::modeIds().join(QStringLiteral(", ")));
     QString err;
@@ -6328,7 +6330,11 @@ QJsonObject MCPServer::applyKimodoMotion(const QJsonObject& args, Ogre::Entity* 
     so.rootMotion = args.value(QStringLiteral("root_motion")).toBool(true);
     so.footPin = args.value(QStringLiteral("foot_pin")).toBool(true);
     so.loop = args.value(QStringLiteral("loop")).toBool(false) || args.contains(QStringLiteral("loop_mode"));
-    if (args.contains(QStringLiteral("hands"))) so.hands = args.value(QStringLiteral("hands")).toString().toLower();
+    if (args.contains(QStringLiteral("hands"))) {
+        if (!args.value(QStringLiteral("hands")).isString())
+            return makeErrorResult(QStringLiteral("Error: 'hands' must be a string: %1").arg(HandShapes::modeIds().join(QStringLiteral(", "))));
+        so.hands = args.value(QStringLiteral("hands")).toString().toLower();
+    }
     if (!HandShapes::validMode(so.hands))
         return makeErrorResult(QStringLiteral("Error: 'hands' must be one of: %1").arg(HandShapes::modeIds().join(QStringLiteral(", "))));
     const SceneApplyResult applied = applyMotionsToEntity(entity, motions, so);

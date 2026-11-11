@@ -131,9 +131,17 @@ int pushUndoBatch(const Ogre::Entity* entity, const QStringList& clips)
 // empty when the hands stay relaxed.
 QString shapeHands(Motion* m, const QString& mode)
 {
-    std::vector<HandShapes::Key> keys = HandShapes::keysFor(m->meta, mode);
+    QString why;
+    std::vector<HandShapes::Key> keys = HandShapes::keysFor(m->meta, mode, &why);
+    if (keys.empty()) return why.isEmpty() ? QString() : QStringLiteral("not applied: %1").arg(why);
     HandShapes::pickActiveHands(*m, &keys);   // the hand the motion actually uses, unless the prompt names them
-    if (HandShapes::apply(m, keys) == 0) return {};
+    if (HandShapes::apply(m, keys, 0.2, &why) == 0) {
+        // Auto with nothing to shape is the normal case; a shape the user ASKED for that could not be written is
+        // reported, so it does not read as an intentional relaxed hand.
+        const QString md = mode.trimmed().toLower();
+        const bool asked = !md.isEmpty() && md != QLatin1String("auto") && md != QLatin1String("relaxed");
+        return asked ? QStringLiteral("%1 not applied: %2").arg(md, why) : QString();
+    }
     QStringList seq;
     for (const HandShapes::Key& k : keys) {
         QString s = HandShapes::shapeId(k.hands.left);

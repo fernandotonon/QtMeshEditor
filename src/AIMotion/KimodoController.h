@@ -119,7 +119,9 @@ private:
     Ogre::Entity* entityByName(const std::string& name) const;
     void setStatus(const QString& s, bool ok);
     void setBusy(bool b);
-    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false);
+    /// `hands` empty = the current picker value (saved-motion application); generation passes the one it started with.
+    bool applyFiles(Ogre::Entity* entity, const QStringList& files, bool rootMotion, bool footPin, bool loop = false,
+                    const QString& hands = QString());
     bool generateT2M(Ogre::Entity* entity, const QString& prompt, double duration, int variations, int seed, bool rootMotion,
                      bool footPin);
 
