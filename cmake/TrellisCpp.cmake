@@ -72,7 +72,14 @@ if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
          -DGGML_AVX2=OFF
          -DGGML_FMA=OFF
          -DGGML_F16C=OFF
-         -DGGML_BMI2=OFF)
+         -DGGML_BMI2=OFF
+         # The GGML_* switches only cover ggml's own CPU code. The GitHub
+         # ubuntu-26.04 image produced FMA opcodes in the CLI anyway (GCC 15,
+         # same sources and flags; not reproducible in a plain 26.04
+         # container), so forbid the post-AVX extensions for EVERY translation
+         # unit: an explicit -mno-* wins over any default or inherited flag.
+         "-DCMAKE_C_FLAGS=-mno-fma -mno-avx2 -mno-f16c -mno-bmi2"
+         "-DCMAKE_CXX_FLAGS=-mno-fma -mno-avx2 -mno-f16c -mno-bmi2")
 endif()
 # Windows (MinGW): self-contained trellis-cli.exe. -static folds the MinGW
 # runtimes (libgcc/libstdc++/winpthread) into the exe so the package's
@@ -109,16 +116,15 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 ExternalProject_Add(qtmesh_trelliscpp
-    # fernandotonon/trellis.cpp @ qtmesh-pixal3d = upstream pwilkin/main plus the
-    # three macOS commits QtMeshEditor depends on (Metal backend, direct CONV_3D
-    # in the SS decoder, and --dump-post, which is how we take over the asset
-    # pipeline after inference), and --ss-control (the shape guide: start the
-    # sparse-structure flow from a guide mesh's SS-VAE latent,
-    # src/ImageTo3D/ShapeGuide.h). Upstream shipped Pixal3D support in v0.8.0.
+    # fernandotonon/trellis.cpp @ main = upstream pwilkin/trellis.cpp main
+    # (Metal, --dump-post, Pixal3D) plus the shape guide (--ss-control: start
+    # the sparse-structure flow from a guide mesh's SS-VAE latent,
+    # src/ImageTo3D/ShapeGuide.h), proposed upstream as pwilkin/trellis.cpp#64.
+    # Once that merges, pin upstream directly.
     # NB upstream writes Pixal3D GLB/PLY upright since 4546869; --dump-post
     # returns before that rotation, so MeshGenBuilder keeps its own upright turn.
     GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
-    GIT_TAG        fe0bef6320e6d92b041ed47db2ef9166b56511bf
+    GIT_TAG        1e291a555929d4d096953b1af17bb25fb1f0c57f
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
