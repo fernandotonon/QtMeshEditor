@@ -115,6 +115,26 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
          -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()
 
+set(_trellis_git_tag 53db2ce3f2c41f753335ab91654c7cb9dcaa1631)
+# With UPDATE_DISCONNECTED, CMake < 3.27 does not re-clone when only GIT_TAG
+# changes, so an existing build tree would keep building the old checkout.
+# Record the pin and drop the clone state when it moves.
+set(_trellis_pin_file "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp.pin")
+if(EXISTS "${_trellis_pin_file}")
+    file(READ "${_trellis_pin_file}" _trellis_old_pin)
+    string(STRIP "${_trellis_old_pin}" _trellis_old_pin)
+else()
+    set(_trellis_old_pin "")
+endif()
+if(NOT _trellis_old_pin STREQUAL _trellis_git_tag)
+    if(EXISTS "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+        message(STATUS "trellis.cpp pin changed -> re-cloning ${_trellis_git_tag}")
+    endif()
+    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
+                        "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+    file(WRITE "${_trellis_pin_file}" "${_trellis_git_tag}\n")
+endif()
+
 ExternalProject_Add(qtmesh_trelliscpp
     # fernandotonon/trellis.cpp @ main = upstream pwilkin/trellis.cpp main
     # (Metal, --dump-post, Pixal3D) plus the shape guide (--ss-control: start
@@ -124,7 +144,7 @@ ExternalProject_Add(qtmesh_trelliscpp
     # NB upstream writes Pixal3D GLB/PLY upright since 4546869; --dump-post
     # returns before that rotation, so MeshGenBuilder keeps its own upright turn.
     GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
-    GIT_TAG        53db2ce3f2c41f753335ab91654c7cb9dcaa1631
+    GIT_TAG        ${_trellis_git_tag}
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
