@@ -2748,10 +2748,11 @@ Rectangle {
             }
 
             // ---- Shape guide (TRELLIS.2 / Pixal3D) ------------------------------
-            // A rough blockout (a preset, the selected mesh, or a mesh file)
-            // steers where the generation puts its volume, and can be the mesh
-            // the textures are baked onto (keeps your low-poly topology). See
-            // src/ImageTo3D/ShapeGuide.h.
+            // A rough blockout (the selected mesh, or a mesh file) steers where
+            // the generation puts its volume, and can be the mesh the textures
+            // are baked onto (keeps your low-poly topology). Ready-made
+            // blockouts (houses, vehicles, ...) are in Add Primitive >
+            // Blockouts. See src/ImageTo3D/ShapeGuide.h.
             Row {
                 spacing: 6
                 visible: mgBackendCombo.t2Selected
@@ -2765,23 +2766,20 @@ Rectangle {
                     id: mgGuide
                     width: 190
                     enabled: !MeshGenController.busy
-                    readonly property var presets: MeshGenController.guidePresets()
-                    // [none] + presets + selected mesh + file
-                    model: ["None"].concat(presets.map(function(p) {
-                               return p.category + ": " + p.label }))
-                           .concat(["Selected mesh in scene", "Mesh file…"])
+                    model: ["None", "Selected mesh in scene", "Mesh file…"]
                     currentIndex: 0
                     property string filePath: ""
-                    readonly property bool isPreset: currentIndex > 0
-                                                     && currentIndex <= presets.length
-                    readonly property bool isSelected: currentIndex === presets.length + 1
-                    readonly property bool isFile: currentIndex === presets.length + 2
+                    readonly property bool isSelected: currentIndex === 1
+                    readonly property bool isFile: currentIndex === 2
                     readonly property bool active: currentIndex > 0
-                    readonly property string spec: isPreset ? presets[currentIndex - 1].id
-                                                 : isSelected ? "selected"
+                    readonly property string spec: isSelected ? "selected"
                                                  : isFile ? filePath : ""
+                    // Re-read on every selection change (selectedMeshName() is
+                    // a plain call, not a property).
+                    readonly property string selectedName:
+                        (PropertiesPanelController.selectionName, MeshGenController.selectedMeshName())
                     onActivated: function(index) {
-                        if (index === presets.length + 2) {
+                        if (index === 2) {
                             var f = MeshGenController.pickGuideFile()
                             if (f.length > 0) filePath = f
                             else if (filePath.length === 0) currentIndex = 0
@@ -2790,29 +2788,18 @@ Rectangle {
                 }
             }
             Text {
-                visible: mgBackendCombo.t2Selected && mgGuide.active
-                text: "  " + (mgGuide.isPreset ? mgGuide.presets[mgGuide.currentIndex - 1].hint + ". "
-                            : mgGuide.isSelected ? ("Uses: " + (MeshGenController.selectedMeshName() || "(select a mesh)") + ". ")
-                            : mgGuide.isFile ? (mgGuide.filePath || "(no file)") + ". " : "")
-                      + "The image should show the same kind of object, front-on."
+                visible: mgBackendCombo.t2Selected
+                text: "  " + (mgGuide.isSelected
+                              ? ("Uses: " + (mgGuide.selectedName || "(select a mesh)")
+                                 + ", as shown (scale and rotation count). ")
+                              : mgGuide.isFile ? (mgGuide.filePath || "(no file)") + ". "
+                              : "Ready-made blockouts: Add Primitive > Blockouts. ")
+                      + (mgGuide.active ? "The image should show the same kind of object, front-on." : "")
                 color: PropertiesPanelController.textColor
+                opacity: mgGuide.active ? 1.0 : 0.7
                 font.pixelSize: 10
                 wrapMode: Text.WordWrap
                 width: parent.width - 16
-            }
-            // NB not wrapped in a Row: InspectorButton sizes itself from its
-            // parent's width, and a Row sizes itself from its children — that
-            // pair is a polish() loop that blanks the whole section.
-            InspectorButton {
-                visible: mgBackendCombo.t2Selected && mgGuide.isPreset
-                text: "Add guide to scene (to edit it)"
-                clickEnabled: !MeshGenController.busy
-                onClicked: {
-                    var n = MeshGenController.insertGuidePreset(
-                                mgGuide.presets[mgGuide.currentIndex - 1].id)
-                    if (n.length > 0)
-                        mgGuide.currentIndex = mgGuide.presets.length + 1
-                }
             }
             Row {
                 spacing: 6

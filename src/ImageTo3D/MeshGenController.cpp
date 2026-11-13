@@ -1190,7 +1190,7 @@ QString MeshGenController::insertGuidePreset(const QString& id)
     if (!ShapeGuide::isPreset(id))
         return {};
     Ogre::SceneNode* node =
-        ShapeGuideScene::insert(ShapeGuide::preset(id), QStringLiteral("guide_") + id);
+        ShapeGuideScene::insert(ShapeGuide::preset(id), QStringLiteral("blockout_") + id);
     if (!node)
         return {};
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),

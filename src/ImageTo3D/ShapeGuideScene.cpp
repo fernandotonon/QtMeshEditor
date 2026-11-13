@@ -8,6 +8,8 @@
 #include <QFileInfo>
 #include <QSet>
 
+#include <utility>
+
 #include <OgreEntity.h>
 #include <OgreSceneNode.h>
 
@@ -21,6 +23,26 @@ bool fromEntity(Ogre::Entity* entity, ShapeGuide::Mesh& out, QString* error)
         if (error)
             *error = QStringLiteral("the guide mesh has no readable triangles");
         return false;
+    }
+    // Use the guide as it is SHOWN: a blockout stretched or turned with the
+    // gizmo must steer the generation that way. Translation does not matter
+    // (the guide is centred in the grid).
+    if (Ogre::SceneNode* n = entity->getParentSceneNode()) {
+        const Ogre::Quaternion q = n->_getDerivedOrientation();
+        const Ogre::Vector3 s = n->_getDerivedScale();
+        if (q != Ogre::Quaternion::IDENTITY || s != Ogre::Vector3::UNIT_SCALE) {
+            for (size_t v = 0; v + 2 < out.positions.size(); v += 3) {
+                const Ogre::Vector3 p = q * (s * Ogre::Vector3(out.positions[v], out.positions[v + 1],
+                                                               out.positions[v + 2]));
+                out.positions[v] = p.x;
+                out.positions[v + 1] = p.y;
+                out.positions[v + 2] = p.z;
+            }
+            // A mirroring scale turns the surface inside out: keep it outward.
+            if (s.x * s.y * s.z < 0.0f)
+                for (size_t t = 0; t + 2 < out.indices.size(); t += 3)
+                    std::swap(out.indices[t + 1], out.indices[t + 2]);
+        }
     }
     return true;
 }
