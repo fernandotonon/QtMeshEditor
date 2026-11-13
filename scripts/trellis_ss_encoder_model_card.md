@@ -34,6 +34,25 @@ the "Shape guide" row of the GUI, or the MCP `guide` argument.
 > [`fernandotonon/QtMeshEditor-models`](https://huggingface.co/fernandotonon/QtMeshEditor-models)
 > repo under `trellis2/`. This repo is the standalone model card + mirror.
 
+## Examples
+
+The guide steers the generation's volume; the guide strength goes from
+"image only" (0) to "follow the guide" (0.9).
+
+**A spring primitive guiding a coiled snake.** Same FLUX.2 [klein] image and
+seed at every strength; the large one is strength 0.9 with the texture baked
+onto the spring itself (it keeps the low-poly topology).
+
+![Snake guided by a spring primitive](images/snake_spring_guide.png)
+
+**A body as the guide.** The armour comes from the image; the build and pose
+come from the guide (a MetaHuman body, and a heavier body made with
+QtMeshEditor's MHR character generator). Around 0.6 the outfit stays complete
+(cape included) while the build changes; at 0.8 the guide's pose takes over
+and loose cloth is dropped.
+
+![Knight guided by two different bodies](images/knight_body_guides.png)
+
 ## Files
 
 | file | role |
