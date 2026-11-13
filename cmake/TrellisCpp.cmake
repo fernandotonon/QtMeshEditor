@@ -124,7 +124,7 @@ ExternalProject_Add(qtmesh_trelliscpp
     # NB upstream writes Pixal3D GLB/PLY upright since 4546869; --dump-post
     # returns before that rotation, so MeshGenBuilder keeps its own upright turn.
     GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
-    GIT_TAG        1e291a555929d4d096953b1af17bb25fb1f0c57f
+    GIT_TAG        53db2ce3f2c41f753335ab91654c7cb9dcaa1631
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
