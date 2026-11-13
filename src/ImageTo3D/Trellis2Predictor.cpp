@@ -690,15 +690,16 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     bool guideControlUsed = false;
     if (guideWanted && opts.guideStrength > 0.0f) {
         const QString latentPath = QDir(tmp.path()).filePath(QStringLiteral("guide.ss"));
-        QString encoder = opts.guideEncoderPath;
-        if (encoder.isEmpty() && QFileInfo::exists(ShapeGuide::encoderModelPath()))
-            encoder = ShapeGuide::encoderModelPath();
+        // Only the path ShapeGuide::ensureEncoderBlocking handed over: it
+        // applies the digest policy, and an empty path means the cached file
+        // is missing or failed verification, so it must not be picked up here.
+        const QString encoder = opts.guideEncoderPath;
         ShapeGuide::Mesh gm;
         gm.positions = opts.guidePositions;
         gm.indices = opts.guideIndices;
         QString gerr;
         if (encoder.isEmpty()) {
-            gerr = QStringLiteral("the shape-guide encoder is not installed");
+            gerr = QStringLiteral("the shape-guide encoder is not installed or failed verification");
         } else if (ShapeGuide::writeControlLatent(gm, encoder, latentPath, &gerr)) {
             const float s = std::clamp(opts.guideStrength, 0.0f, 1.0f);
             args << QStringLiteral("--ss-control") << latentPath
