@@ -3647,8 +3647,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.guideStrength = static_cast<float>(args.value("guide_strength").toDouble(
                 opts.bakeOntoGuide ? ShapeGuide::kBakeOnGuideMinStrength : 0.33));
             opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));
-            if (opts.guideStrength > 0.0f)
-                opts.guideEncoderPath = ShapeGuide::ensureEncoderBlocking(&gerr);
+            if (opts.guideStrength > 0.0f) {
+                // Stop must reach the (first-use, ~240 MB) encoder download.
+                m_toolCancelRequested = false;
+                opts.guideEncoderPath = ShapeGuide::ensureEncoderBlocking(
+                    &gerr, [this]() { return m_toolCancelRequested; });
+                if (m_toolCancelRequested)
+                    return makeErrorResult(QStringLiteral("cancelled"));
+            }
             SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
                 QStringLiteral("mcp strength=%1 bake=%2").arg(opts.guideStrength)
                     .arg(opts.bakeOntoGuide));
