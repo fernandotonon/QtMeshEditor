@@ -2863,8 +2863,8 @@ Rectangle {
                     }
                     ToolTip.visible: hovered
                     ToolTip.text: "Morphs the generated shape from what the image alone "
-                                + "would give (0) towards the guide (0.9). ~0.3: the image "
-                                + "leads, the guide sets size and placement. Past the tick "
+                                + "would give (0) towards the guide (0.9). Below ~0.5 the "
+                                + "guide only nudges the result. Past the tick "
                                 + "(" + mgBakeOnGuide.minStrength.toFixed(1) + "): the shape "
                                 + "follows the guide closely and can be baked onto the guide. "
                                 + "Same seed + image = comparable steps."
