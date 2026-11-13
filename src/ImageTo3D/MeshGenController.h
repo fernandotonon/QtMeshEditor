@@ -115,6 +115,22 @@ public:
     Q_INVOKABLE QVariantList gameReadyPresets() const;
     Q_INVOKABLE int gameReadyDefaultIndex() const;
 
+    // ── Shape guide (TRELLIS.2 / Pixal3D, ShapeGuide.h) ─────────────────────
+    // Preset blockouts: [{id, label, category, hint}]. generateSelected()
+    // takes options {"guide": <preset id | "selected" | mesh file>,
+    // "guide_strength": 0..1 (0.33), "bake_onto_guide": bool,
+    // "guide_reach": 0..1 (0.08)}.
+    Q_INVOKABLE QVariantList guidePresets() const;
+    // Puts a preset into the scene as an ordinary editable mesh and selects
+    // it, so it can be reshaped (Edit Mode) and then used as "selected".
+    // Returns the new node's name ("" on failure).
+    Q_INVOKABLE QString insertGuidePreset(const QString& id);
+    // Name of the selected mesh entity ("" when none) — the "Selected mesh"
+    // guide source.
+    Q_INVOKABLE QString selectedMeshName() const;
+    // File dialog for a guide mesh (.obj/.glb/.fbx/...). "" when cancelled.
+    Q_INVOKABLE QString pickGuideFile();
+
     // ── Prompt-to-3D: generate the source image from a TEXT PROMPT instead
     // of importing one (FLUX.2-klein-4B via stable-diffusion.cpp; falls back
     // to whatever SD checkpoint the user has). generateSourceImage is async —

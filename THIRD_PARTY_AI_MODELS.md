@@ -211,6 +211,25 @@ For a one-page overview of every model and what it does in the app, see
   the runtime resolves; every surface reports a clean "runtime not installed"
   message otherwise (no crash).
 
+## TRELLIS sparse-structure encoder — shape guide (TRELLIS.2 / Pixal3D)
+
+- **Model:** the sparse-structure VAE ENCODER `ss_enc_conv3d_16l8_fp16` from
+  `microsoft/TRELLIS-image-large` (TRELLIS-1) — **MIT** (code and weights).
+  TRELLIS.2 reuses TRELLIS-1's sparse-structure VAE; trellis.cpp ships only
+  its decoder, so QtMeshEditor runs the encoder itself.
+- **Method:** SpaceControl (training-free blockout control, **MIT**): the guide
+  mesh's 64³ surface voxels are encoded and the sparse-structure flow starts
+  from that latent (trellis-cli `--ss-control`, our patch
+  `cmake/patches/trellis-ss-control.patch`).
+- **Export:** `scripts/export-trellis-ss-encoder-onnx.py` (offline, not shipped;
+  fp32, opset 17, parity vs torch ≤ 2e-5 asserted). Hosted as
+  `trellis2/ss_encoder.onnx` (~237 MB, SHA-256 pinned in
+  `src/ImageTo3D/ShapeGuide.cpp`), downloads on first use of a guide.
+  Overrides `QTMESH_SHAPE_GUIDE_MODEL_BASE_URL` / `ai/shapeGuideModelBaseUrl`,
+  guard `QTMESH_SHAPE_GUIDE_NO_DOWNLOAD`. Upload: `scripts/upload-shape-guide-encoder.sh`.
+- The preset blockouts (house, car, bus, ...) are generated in code by
+  `ShapeGuide::preset` — no third-party assets.
+
 ## NVIDIA Kimodo — text-to-motion diffusion (native runtime + Python sidecar)
 
 - **Model:** NVIDIA **Kimodo**, `nvidia/Kimodo-SOMA-RP-v1.2` (~1.1 GB

@@ -2747,6 +2747,172 @@ Rectangle {
                 }
             }
 
+            // ---- Shape guide (TRELLIS.2 / Pixal3D) ------------------------------
+            // A rough blockout (a preset, the selected mesh, or a mesh file)
+            // steers where the generation puts its volume, and can be the mesh
+            // the textures are baked onto (keeps your low-poly topology). See
+            // src/ImageTo3D/ShapeGuide.h.
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Shape guide"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorComboBox {
+                    id: mgGuide
+                    width: 190
+                    enabled: !MeshGenController.busy
+                    readonly property var presets: MeshGenController.guidePresets()
+                    // [none] + presets + selected mesh + file
+                    model: ["None"].concat(presets.map(function(p) {
+                               return p.category + ": " + p.label }))
+                           .concat(["Selected mesh in scene", "Mesh file…"])
+                    currentIndex: 0
+                    property string filePath: ""
+                    readonly property bool isPreset: currentIndex > 0
+                                                     && currentIndex <= presets.length
+                    readonly property bool isSelected: currentIndex === presets.length + 1
+                    readonly property bool isFile: currentIndex === presets.length + 2
+                    readonly property bool active: currentIndex > 0
+                    readonly property string spec: isPreset ? presets[currentIndex - 1].id
+                                                 : isSelected ? "selected"
+                                                 : isFile ? filePath : ""
+                    onActivated: function(index) {
+                        if (index === presets.length + 2) {
+                            var f = MeshGenController.pickGuideFile()
+                            if (f.length > 0) filePath = f
+                            else if (filePath.length === 0) currentIndex = 0
+                        }
+                    }
+                }
+            }
+            Text {
+                visible: mgBackendCombo.t2Selected && mgGuide.active
+                text: "  " + (mgGuide.isPreset ? mgGuide.presets[mgGuide.currentIndex - 1].hint + ". "
+                            : mgGuide.isSelected ? ("Uses: " + (MeshGenController.selectedMeshName() || "(select a mesh)") + ". ")
+                            : mgGuide.isFile ? (mgGuide.filePath || "(no file)") + ". " : "")
+                      + "The image should show the same kind of object, front-on."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+            // NB not wrapped in a Row: InspectorButton sizes itself from its
+            // parent's width, and a Row sizes itself from its children — that
+            // pair is a polish() loop that blanks the whole section.
+            InspectorButton {
+                visible: mgBackendCombo.t2Selected && mgGuide.isPreset
+                text: "Add guide to scene (to edit it)"
+                clickEnabled: !MeshGenController.busy
+                onClicked: {
+                    var n = MeshGenController.insertGuidePreset(
+                                mgGuide.presets[mgGuide.currentIndex - 1].id)
+                    if (n.length > 0)
+                        mgGuide.currentIndex = mgGuide.presets.length + 1
+                }
+            }
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected && mgGuide.active
+                Text {
+                    text: "Guide strength " + mgGuideStrength.value.toFixed(2)
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    width: 120
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                Slider {
+                    id: mgGuideStrength
+                    width: 120
+                    from: 0.0; to: 0.9; stepSize: 0.05
+                    value: 0.35
+                    enabled: !MeshGenController.busy
+                    // Groove split at the bake-onto-guide threshold: left of the
+                    // tick the shape follows the image, right of it the shape
+                    // hugs the guide (and baking onto the guide is offered). The
+                    // zone is lit in the highlight colour while that bake is on,
+                    // since there the strength only changes the texture.
+                    background: Item {
+                        x: mgGuideStrength.leftPadding
+                        y: mgGuideStrength.topPadding
+                           + mgGuideStrength.availableHeight / 2 - height / 2
+                        width: mgGuideStrength.availableWidth
+                        height: 14
+                        readonly property real tickX: width
+                            * (mgBakeOnGuide.minStrength - mgGuideStrength.from)
+                            / (mgGuideStrength.to - mgGuideStrength.from)
+                        Rectangle {    // groove
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width; height: 4; radius: 2
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.25
+                        }
+                        Rectangle {    // "follows the guide" zone
+                            anchors.verticalCenter: parent.verticalCenter
+                            // Wider than the groove so it stays visible
+                            // around the value fill drawn on top of it.
+                            x: parent.tickX; width: parent.width - parent.tickX
+                            height: 8; radius: 4
+                            color: mgBakeOnGuide.effective
+                                   ? PropertiesPanelController.highlightColor
+                                   : "#c8962e"
+                            opacity: mgBakeOnGuide.effective ? 0.75 : 0.5
+                        }
+                        Rectangle {    // value fill
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: mgGuideStrength.visualPosition * parent.width
+                            height: 4; radius: 2
+                            color: PropertiesPanelController.highlightColor
+                            opacity: 0.6
+                        }
+                        Rectangle {    // threshold tick
+                            x: parent.tickX - 1; width: 2; height: parent.height
+                            color: PropertiesPanelController.textColor
+                            opacity: 0.8
+                        }
+                    }
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Morphs the generated shape from what the image alone "
+                                + "would give (0) towards the guide (0.9). ~0.3: the image "
+                                + "leads, the guide sets size and placement. Past the tick "
+                                + "(" + mgBakeOnGuide.minStrength.toFixed(1) + "): the shape "
+                                + "follows the guide closely and can be baked onto the guide. "
+                                + "Same seed + image = comparable steps."
+                }
+            }
+            // Baking onto the guide OUTPUTS THE GUIDE MESH, so the strength
+            // no longer changes the result's shape: below ~0.6 the generation
+            // follows the image and its texture lands stretched on a shape it
+            // does not match. Only offered where the generation hugs the guide.
+            InspectorCheck {
+                id: mgBakeOnGuide
+                readonly property real minStrength: 0.6
+                readonly property bool usable: mgGuideStrength.value >= minStrength - 1e-6
+                readonly property bool effective: checked && usable
+                visible: mgBackendCombo.t2Selected && mgGuide.active
+                text: "Bake onto the guide (keep its low-poly mesh)"
+                checked: false
+                enabled: !MeshGenController.busy && mgBake.checked && usable
+            }
+            Text {
+                visible: mgBackendCombo.t2Selected && mgGuide.active
+                text: mgBakeOnGuide.usable
+                      ? (mgBakeOnGuide.checked
+                         ? "The result is the guide mesh itself: the strength only changes the texture."
+                         : "The result is the generated shape, morphed towards the guide by the strength.")
+                      : "Bake onto the guide needs strength " + mgBakeOnGuide.minStrength.toFixed(1)
+                        + "+: below that the shape follows the image and its texture would stretch "
+                        + "over the guide."
+                color: PropertiesPanelController.textColor
+                opacity: 0.7
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
+
             // Model quality/size tier. TripoSR: fp32 (best/largest) vs int8
             // (smallest), 1:1 with the MeshGenController quality int. TripoSG:
             // fp32 ONLY — the quantized 1.5B DiT degrades geometry to blobs
@@ -2997,6 +3163,11 @@ Rectangle {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
                         genOptions["texture_supersample"] = mgT2Super.superValue
+                        if (mgGuide.active && mgGuide.spec.length > 0) {
+                            genOptions["guide"] = mgGuide.spec
+                            genOptions["guide_strength"] = mgGuideStrength.value
+                            genOptions["bake_onto_guide"] = mgBakeOnGuide.effective
+                        }
                     }
                     genOptions["matting"] = mgBestMatte.checked ? "best" : "fast"
                     MeshGenController.generateSelected(

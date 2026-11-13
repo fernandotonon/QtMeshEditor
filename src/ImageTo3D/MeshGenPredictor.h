@@ -220,12 +220,22 @@ public:
         // Empty = don't keep. The kept path lands in Result::sourceInterchangePath.
         QString trellis2SourceKeepDir;
         QString trellis2SourceKeepBaseName;
+        // Shape guide (TRELLIS.2 / Pixal3D) — see Trellis2Predictor::Options and
+        // ShapeGuide.h. Editor-frame mesh; empty = none.
+        std::vector<float>    guidePositions;
+        std::vector<uint32_t> guideIndices;
+        float   guideStrength = 0.33f;
+        bool    bakeOntoGuide = false;
+        float   guideRayReach = 0.08f;
+        bool    guideKeepPlacement = true;
+        QString guideEncoderPath;
     };
 
     struct Result {
         bool ok = false;
         QString error;                 // populated when !ok
         QString warning;               // non-fatal (e.g. bake fell back to vertex colours)
+        QString guideNote;             // what the shape guide did (empty = no guide)
         int  uvCharts = 0;             // UV islands of the baked atlas (0 = no bake)
         bool partUvIslands = false;    // islands came from PartUnwrap (else plain xatlas)
         std::vector<float>    positions; // Nx3, world space

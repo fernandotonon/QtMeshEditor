@@ -72,6 +72,8 @@
 #include "AppStorage.h"
 #include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/ShapeGuide.h"
+#include "ImageTo3D/ShapeGuideScene.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/TripoSplatPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -3313,6 +3315,18 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     if (args.contains("uv_layout")
         && !MeshGenPredictor::parseUvLayout(args["uv_layout"].toString(), &partUvIslands))
         return makeErrorResult("'uv_layout' must be 'parts' or 'xatlas'.");
+    // Shape guide arguments, validated before any slow work.
+    const QString guideSpec = args.value("guide").toString().trimmed();
+    for (const char* key : {"guide_strength", "guide_reach"}) {
+        if (args.contains(QLatin1String(key))) {
+            const QJsonValue v = args.value(QLatin1String(key));
+            if (!v.isDouble() || v.toDouble() < 0.0 || v.toDouble() > 1.0)
+                return makeErrorResult(QStringLiteral("'%1' must be a number in [0, 1].")
+                                           .arg(QLatin1String(key)));
+        }
+    }
+    if (guideSpec.isEmpty() && args.value("bake_onto_guide").toBool())
+        return makeErrorResult("'bake_onto_guide' needs 'guide'.");
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
     if (!genPrompt.isEmpty()) {
@@ -3609,6 +3623,24 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.trellis2SourceKeepDir = QFileInfo(outPath).absolutePath();
             opts.trellis2SourceKeepBaseName = QFileInfo(outPath).completeBaseName();
         }
+        if (!guideSpec.isEmpty()) {
+            ShapeGuide::Mesh guide;
+            QString gerr;
+            if (!ShapeGuideScene::resolve(guideSpec, guide, &gerr))
+                return makeErrorResult(QStringLiteral("guide: %1").arg(gerr));
+            opts.guidePositions = std::move(guide.positions);
+            opts.guideIndices = std::move(guide.indices);
+            opts.guideStrength = static_cast<float>(args.value("guide_strength").toDouble(0.33));
+            opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));
+            opts.bakeOntoGuide = args.value("bake_onto_guide").toBool();
+            if (opts.guideStrength > 0.0f)
+                opts.guideEncoderPath = ShapeGuide::ensureEncoderBlocking(&gerr);
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
+                QStringLiteral("mcp strength=%1 bake=%2").arg(opts.guideStrength)
+                    .arg(opts.bakeOntoGuide));
+        }
+    } else if (!guideSpec.isEmpty()) {
+        return makeErrorResult("'guide' needs backend 'trellis2' or 'pixal3d'.");
     } else if (useSplat) {
         // First use downloads ~6 GB: Stop must reach the transfer, not wait
         // for it (the downloader's nested loop delivers the click).
@@ -3804,6 +3836,7 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         warn += densityWarning;
     }
     if (!warn.isEmpty()) result["warning"] = warn;
+    if (!res.guideNote.isEmpty()) result["guide"] = res.guideNote;
     return result;
 }
 
@@ -13573,6 +13606,25 @@ QJsonArray MCPServer::buildToolsList()
         props["refine"] = QJsonObject{{"type", "boolean"}, {"description", "After smoothing, Newton-project each vertex back onto the network's true iso-surface via extra decoder queries (default true; recovers grid-quantized detail)."}};
         props["bake_texture"] = QJsonObject{{"type", "boolean"}, {"description", "TripoSR only: bake a real diffuse texture (xatlas unwrap + per-texel decoder color) instead of per-vertex colors (default true; falls back to vertex colors if the bake fails). Ignored by triposg (its colour comes from the GUI AI-texture pass; the CLI/MCP triposg mesh is geometry-only)."}};
         props["texture_size"] = QJsonObject{{"type", "integer"}, {"description", "Baked-texture resolution, any value 64..8192 (default 1024; GUI default for TRELLIS.2 is 2048). xatlas treats it as a hint, so the atlas can land slightly larger. Overrides game_preset's texture cap when both are given (past a Roblox limit it is honoured and flagged). TRELLIS.2's texture VOLUME is a separate knob: tex_res 512|1024."}};
+        {
+            QStringList guideIds;
+            for (const ShapeGuide::PresetInfo& p : ShapeGuide::presets())
+                guideIds << p.id;
+            props["guide"] = QJsonObject{{"type", "string"}, {"description", QStringLiteral(
+                "trellis2/pixal3d only. Shape guide: a rough blockout that steers where the "
+                "generation puts its volume. A preset id (%1), a mesh file path, or the name "
+                "of a mesh in the scene. The image should show the same kind of object.")
+                .arg(guideIds.join(", "))}};
+            props["guide_strength"] = QJsonObject{{"type", "number"}, {"description",
+                "0..1 (default 0.33): share of the sparse-structure steps the guide replaces. "
+                "~0.3 = the image leads and the guide fixes size/placement; 0.5+ follows the "
+                "guide closely but fights an image that disagrees; 0 = guide only used for the bake."}};
+            props["bake_onto_guide"] = QJsonObject{{"type", "boolean"}, {"description",
+                "Bake the generation's textures (and detail normal map) onto the guide mesh itself, "
+                "keeping its low-poly topology, size and placement."}};
+            props["guide_reach"] = QJsonObject{{"type", "number"}, {"description",
+                "0..1 (default 0.08): projection reach of that bake as a fraction of the guide's size."}};
+        }
         props["uv_layout"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"parts", "xatlas"}}, {"description", "UV layout of the baked texture. 'parts' (default): islands follow the model's parts and materials (regions by colour, cut to discs, area-preserving flattening) so the texture reads as face / hands / clothes and is easy to paint on. 'xatlas': plain xatlas charts (hundreds of small near-planar scraps, ~10% tighter packing). 'parts' falls back to xatlas on its own when it cannot handle a mesh (a warning says so)."}};
         props["upscale_texture"] = QJsonObject{{"type", "boolean"}, {"description", "Run Real-ESRGAN 2x on the baked diffuse before saving (default false; best-effort — keeps the un-upscaled texture if the upscale model is unavailable)."}};
         props["remove_degenerates"] = QJsonObject{{"type", "boolean"}, {"description", "Drop zero-area, repeated-index and duplicate triangles from the result. Default true."}};

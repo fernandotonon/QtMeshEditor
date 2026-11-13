@@ -159,6 +159,13 @@ MeshGenPredictor::Result predictTrellis2(
     t2.mock             = opts.trellis2Mock;
     t2.sourceKeepDir    = opts.trellis2SourceKeepDir;
     t2.sourceKeepBaseName = opts.trellis2SourceKeepBaseName;
+    t2.guidePositions     = opts.guidePositions;
+    t2.guideIndices       = opts.guideIndices;
+    t2.guideStrength      = opts.guideStrength;
+    t2.bakeOntoGuide      = opts.bakeOntoGuide;
+    t2.guideRayReach      = opts.guideRayReach;
+    t2.guideKeepPlacement = opts.guideKeepPlacement;
+    t2.guideEncoderPath   = opts.guideEncoderPath;
     MeshGenPredictor::Result r = Trellis2Predictor::predict(image, t2, progress);
     // TRELLIS.2 decodes in a Z-up frame — in the viewer's Y-up world the
     // model arrives face-down. Bake a -90° X rotation into the geometry:

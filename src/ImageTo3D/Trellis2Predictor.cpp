@@ -3,6 +3,7 @@
 #include "BackgroundRemover.h"
 #include "Trellis2Bake.h"
 #include "Trellis2Interchange.h"
+#include "ShapeGuide.h"
 
 #include <QCoreApplication>
 #include <QThread>
@@ -447,6 +448,8 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         return false;
     }();
     QString warning;
+    QString guideNote;
+    const bool guideWanted = opts.guideIndices.size() >= 3 && opts.guidePositions.size() >= 9;
     bool matteReady = inputHasMatte;
     if (!inputHasMatte && opts.removeBackground && !mockRun) {
         if (!report(Stage::Encode, 0, 1))
@@ -681,6 +684,34 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (opts.noNaf)
             args << QStringLiteral("--no-naf");
     }
+    // Shape guide: start the sparse-structure flow from the guide's latent
+    // (cmake/patches/trellis-ss-control.patch). A guide that cannot be encoded
+    // is reported and the generation continues unguided.
+    bool guideControlUsed = false;
+    if (guideWanted && opts.guideStrength > 0.0f) {
+        const QString latentPath = QDir(tmp.path()).filePath(QStringLiteral("guide.ss"));
+        QString encoder = opts.guideEncoderPath;
+        if (encoder.isEmpty() && QFileInfo::exists(ShapeGuide::encoderModelPath()))
+            encoder = ShapeGuide::encoderModelPath();
+        ShapeGuide::Mesh gm;
+        gm.positions = opts.guidePositions;
+        gm.indices = opts.guideIndices;
+        QString gerr;
+        if (encoder.isEmpty()) {
+            gerr = QStringLiteral("the shape-guide encoder is not installed");
+        } else if (ShapeGuide::writeControlLatent(gm, encoder, latentPath, &gerr)) {
+            const float s = std::clamp(opts.guideStrength, 0.0f, 1.0f);
+            args << QStringLiteral("--ss-control") << latentPath
+                 << QStringLiteral("--ss-control-strength") << QString::number(s);
+            guideControlUsed = true;
+            guideNote += QStringLiteral("generation guided (strength %1)").arg(s, 0, 'f', 2);
+        }
+        if (!guideControlUsed) {
+            if (!warning.isEmpty())
+                warning += QStringLiteral(" ");
+            warning += QStringLiteral("shape guide not applied to the generation (%1).").arg(gerr);
+        }
+    }
     QProcess proc;
     proc.setProgram(cli);
     proc.setArguments(args);
@@ -763,8 +794,14 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     drainStderr();
     if (cancelled)
         return failResult(QStringLiteral("cancelled"));
-    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0)
+    if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        if (guideControlUsed && errBuf.contains("unknown option: --ss-control"))
+            return failResult(QStringLiteral(
+                "trellis2: this trellis-cli has no shape-guide support (--ss-control). "
+                "Rebuild QtMeshEditor's bundled runtime (cmake/patches/trellis-ss-control.patch), "
+                "or set the guide strength to 0 to only bake onto the guide."));
         return failFromTrellisCliProcess(proc, errBuf);
+    }
     Trellis2Interchange::ReadResult rr =
         Trellis2Interchange::readTrellisCppDump(outDump);
     if (!rr.ok)
@@ -784,6 +821,13 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     const QString python = pythonPath();
     const QString script = generateScriptPath();
 
+    if (guideWanted && opts.guideStrength > 0.0f) {
+        if (!warning.isEmpty())
+            warning += QStringLiteral(" ");
+        warning += QStringLiteral(
+            "the Python TRELLIS.2 runtime cannot follow a shape guide; it only "
+            "steers the bundled trellis.cpp runtime.");
+    }
     QStringList args{script,
                      QStringLiteral("--input"), inputPng,
                      QStringLiteral("--output"), outQtm3d,
@@ -971,10 +1015,72 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         gr.remeshResolution = envRes > 0 ? std::clamp(envRes, 64, 2048) : srcRes;
     }
     gr.exportWeldedSource = opts.bakeTexture;   // the bake needs a consistently wound source
-    const Trellis2Bake::GameReadyResult processed =
+    Trellis2Bake::GameReadyResult processed =
         Trellis2Bake::makeGameReady(src.positions, src.indices, gr);
     if (!processed.ok)
         return failResult(QStringLiteral("trellis2: %1").arg(processed.error));
+    // Shape guide as the bake target: the generation's textures (and its
+    // detail as a normal map) land on the user's own low-poly mesh. The guide
+    // goes to the grid frame the guide latent used, then a uniform-scale +
+    // translation ICP fits it onto the generated surface (the guide drove the
+    // generation, but the body still lands a few voxels off, and below 0.67
+    // strength the image decides the proportions).
+    float guideFitScale = 1.0f;
+    float guideFitYaw = 0.0f;
+    float guideFitOffset[3] = {0.0f, 0.0f, 0.0f};
+    ShapeGuide::GridPlacement guidePlacement;
+    const bool bakeOnGuide = guideWanted && opts.bakeOntoGuide;
+    if (bakeOnGuide) {
+        ShapeGuide::Mesh gm;
+        gm.positions = opts.guidePositions;
+        gm.indices = opts.guideIndices;
+        guidePlacement = ShapeGuide::placementFor(gm);
+        ShapeGuide::Mesh target = ShapeGuide::toGrid(gm, guidePlacement);
+        const bool welded = !processed.weldedPositions.empty();
+        const Trellis2Bake::TargetFit fit = Trellis2Bake::fitTargetToSource(
+            target.positions, target.indices,
+            welded ? processed.weldedPositions : src.positions,
+            welded ? processed.weldedIndices : src.indices);
+        if (fit.ok) {
+            guideFitScale = fit.scale;
+            guideFitYaw = fit.yaw;
+            for (int k = 0; k < 3; ++k) guideFitOffset[k] = fit.offset[k];
+            const float c = std::cos(fit.yaw), sn = std::sin(fit.yaw);
+            for (size_t v = 0; v + 2 < target.positions.size(); v += 3) {
+                float* p = &target.positions[v];
+                const float x = c * p[0] - sn * p[1], y = sn * p[0] + c * p[1];
+                p[0] = fit.scale * x + fit.offset[0];
+                p[1] = fit.scale * y + fit.offset[1];
+                p[2] = fit.scale * p[2] + fit.offset[2];
+            }
+        }
+        fprintf(stderr,
+                "[trellis2] shape guide as bake target: %zu tris, fit yaw %.1f deg, scale %.3f "
+                "offset (%.3f %.3f %.3f), mean gap %.4f -> %.4f\n",
+                target.indices.size() / 3, guideFitYaw * 57.29578f, guideFitScale, guideFitOffset[0],
+                guideFitOffset[1], guideFitOffset[2], fit.meanDistanceBefore,
+                fit.meanDistanceAfter);
+        processed.positions = std::move(target.positions);
+        processed.indices = std::move(target.indices);
+        processed.outputTriangles = static_cast<int>(processed.indices.size() / 3);
+        if (!guideNote.isEmpty())
+            guideNote += QStringLiteral("; ");
+        guideNote += QStringLiteral("baked onto the guide (%1 triangles, fit scale %2, turned %3°)")
+                         .arg(processed.outputTriangles)
+                         .arg(guideFitScale, 0, 'f', 3)
+                         .arg(guideFitYaw * 57.29578f, 0, 'f', 0);
+        // The output IS the guide mesh: below ~0.6 the generation follows the
+        // image, so its texture is stretched over a shape it does not match.
+        if (opts.guideStrength < 0.6f) {
+            if (!warning.isEmpty())
+                warning += QStringLiteral(" ");
+            warning += QStringLiteral(
+                "baked onto the guide at strength %1: the generation follows the image below "
+                "~0.6, so the texture may stretch over the guide (raise the strength, or drop "
+                "--bake-onto-guide to keep the generated shape).")
+                           .arg(opts.guideStrength, 0, 'f', 2);
+        }
+    }
     fprintf(stderr,
             "[trellis2] game-ready: %d -> %d tris (welded %d, dropped %d comps, "
             "simplify err %.4f%s)\n",
@@ -1016,6 +1122,10 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         bo.supersample = opts.supersample;
         bo.bakeNormalMap = opts.bakeNormalMap;
         bo.partIslands = opts.partUvIslands;
+        if (bakeOnGuide)
+            bo.rayProjectFraction = std::clamp(opts.guideRayReach, 0.0f, 1.0f);
+        if (const QByteArray rp = qgetenv("QTMESH_TRELLIS2_RAY_PROJECT"); !rp.isEmpty())
+            bo.rayProjectFraction = std::clamp(rp.toFloat(), 0.0f, 1.0f);
         // The dense source carries the dual-grid's voxel terracing (the remesh
         // reproduces it faithfully): unsmoothed it bakes into the detail map as
         // contour-line banding on every flat panel, forehead and neck. Each pass
@@ -1095,6 +1205,30 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
 
     if (r.vertexCount <= 0 || r.triangleCount <= 0)
         return failResult(QStringLiteral("trellis2: generation produced an empty mesh."));
+
+    // Hand the baked guide back in its own coordinates. Positions are still in
+    // the grid frame here (the callers rotate grid -> editor), so undo the fit
+    // and the placement in grid terms: p' = R(editor) = (p - off)/fit/scale + R(centre).
+    if (bakeOnGuide && opts.guideKeepPlacement && guidePlacement.scale > 0.0f) {
+        float rc[3];
+        ShapeGuide::editorToGridDir(guidePlacement.centre, rc);
+        const float k = 1.0f / (guideFitScale * guidePlacement.scale);
+        const float c = std::cos(guideFitYaw), sn = std::sin(guideFitYaw);
+        // Undo the fitted turn too (Rz(-yaw)), on normals as well.
+        auto unturn = [c, sn](float* p) {
+            const float x = c * p[0] + sn * p[1], y = -sn * p[0] + c * p[1];
+            p[0] = x; p[1] = y;
+        };
+        for (size_t v = 0; v + 2 < r.positions.size(); v += 3) {
+            float* p = &r.positions[v];
+            for (int a = 0; a < 3; ++a) p[a] = (p[a] - guideFitOffset[a]) * k;
+            unturn(p);
+            for (int a = 0; a < 3; ++a) p[a] += rc[a];
+        }
+        for (size_t v = 0; v + 2 < r.normals.size(); v += 3)
+            unturn(&r.normals[v]);
+    }
+    r.guideNote = guideNote;
 
     report(Stage::Decode, 1, 1);
     r.ok = true;

@@ -7,6 +7,9 @@
 #include <QImage>
 #include <QString>
 
+#include <cstdint>
+#include <vector>
+
 // Microsoft TRELLIS.2 image-to-3D backend — the project's highest-quality
 // generation tier and the DEFAULT backend whenever its runtime is installed.
 //
@@ -94,6 +97,26 @@ public:
         QString sourceKeepBaseName; // file stem for the kept interchange
         // Test hook — run the sidecar's --mock synthetic generation (no GPU).
         bool mock = false;
+        // ---- shape guide (ShapeGuide.h) ------------------------------------------
+        // A rough mesh in the EDITOR frame (+Y up, front +Z). Empty = no guide.
+        std::vector<float>    guidePositions;
+        std::vector<uint32_t> guideIndices;
+        // Fraction of the sparse-structure flow steps the guide replaces
+        // (trellis-cli --ss-control-strength). 0 = the guide does not steer the
+        // generation (it can still be the bake target). trellis.cpp only.
+        float guideStrength = 0.33f;
+        // Bake the generation's textures onto the guide itself instead of the
+        // simplified generated mesh: the result keeps the guide's topology.
+        bool  bakeOntoGuide = false;
+        // Projection reach for that bake, as a fraction of the guide's bbox
+        // diagonal (Trellis2Bake::BakeOptions::rayProjectFraction).
+        float guideRayReach = 0.08f;
+        // Give the baked guide back in the guide's own coordinates (size and
+        // placement), instead of the generation's normalised frame.
+        bool  guideKeepPlacement = true;
+        // Encoder graph (ShapeGuide::ensureEncoderBlocking, resolved on the
+        // MAIN thread by the caller). Empty = use the file if it is installed.
+        QString guideEncoderPath;
     };
 
     // Compiled in unconditionally (no ONNX needed). What actually gates the
