@@ -26,6 +26,8 @@
 #   u2net      → QtMeshEditor-u2net-onnx       (Apache, U²-Net / rembg)
 #   birefnet   → QtMeshEditor-birefnet-onnx    (MIT,    BiRefNet high-quality matting)
 #   lama       → QtMeshEditor-lama-onnx        (Apache, LaMa texture inpainting)
+#   ssencoder  → QtMeshEditor-trellis-ss-encoder-onnx (MIT, Microsoft TRELLIS SS-VAE encoder; shape guide —
+#                                               upload with upload-shape-guide-encoder.sh, which also writes the card)
 #   smolvlm    → QtMeshEditor-smolvlm-gguf     (Apache, HuggingFaceTB SmolVLM Q8_0)
 #   motion     → QtMeshEditor-t2m              (CC0,    in-house; template clip library)
 #   segveg     → QtMeshEditor-mesh-segmentation-vegetation (CC-BY-4.0, in-house #818 B2)
@@ -70,6 +72,7 @@ declare -A REPOS=(
   [depthanything]=QtMeshEditor-depthanything-onnx
   [birefnet]=QtMeshEditor-birefnet-onnx
   [lama]=QtMeshEditor-lama-onnx
+  [ssencoder]=QtMeshEditor-trellis-ss-encoder-onnx
   [sam3dbody]=QtMeshEditor-sam3dbody-onnx
 )
 declare -A FILES=(
@@ -95,6 +98,7 @@ declare -A FILES=(
   [depthanything]="depth/da2_small.onnx"
   [birefnet]="rembg/birefnet.onnx"
   [lama]="pbr/lama.onnx"
+  [ssencoder]="trellis2/ss_encoder.onnx trellis2/LICENSE-TRELLIS.txt"
   [sam3dbody]="sam3dbody/sam3d_backbone.onnx sam3dbody/sam3d_backbone.onnx.data sam3dbody/sam3d_decoder.onnx sam3dbody/mhr_body.onnx sam3dbody/mhr_faces.i32 sam3dbody/mhr_uv.bin sam3dbody/LICENSE-SAM.txt sam3dbody/LICENSE-MHR.txt"
 )
 

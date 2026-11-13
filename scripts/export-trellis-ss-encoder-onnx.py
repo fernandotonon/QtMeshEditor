@@ -6,7 +6,7 @@ sparse-structure flow from the SS-VAE latent of the user's guide mesh
 (SpaceControl, MIT). TRELLIS.2 reuses TRELLIS-1's sparse-structure VAE
 (`ss_enc_conv3d_16l8_fp16`, microsoft/TRELLIS-image-large, MIT), and
 trellis.cpp ships only its DECODER, so QtMeshEditor runs the encoder itself
-through ONNX Runtime (src/ImageTo3D/BlockoutControl.cpp).
+through ONNX Runtime (src/ImageTo3D/ShapeGuide.cpp).
 
 Contract of the exported graph (verified below, the export refuses to write a
 graph that does not match torch):

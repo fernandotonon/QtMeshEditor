@@ -14,6 +14,7 @@ For a one-page overview of every model and what it does in the app, see
 > [`QtMeshEditor-triposr-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposr-onnx),
 > [`QtMeshEditor-triposg-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposg-onnx),
 > [`QtMeshEditor-triposplat-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-triposplat-onnx),
+> [`QtMeshEditor-trellis-ss-encoder-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-trellis-ss-encoder-onnx),
 > [`QtMeshEditor-pbrify-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-pbrify-onnx),
 > [`QtMeshEditor-realesrgan-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-realesrgan-onnx),
 > [`QtMeshEditor-u2net-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-u2net-onnx),
@@ -226,7 +227,10 @@ For a one-page overview of every model and what it does in the app, see
   `trellis2/ss_encoder.onnx` (~237 MB, SHA-256 pinned in
   `src/ImageTo3D/ShapeGuide.cpp`), downloads on first use of a guide.
   Overrides `QTMESH_SHAPE_GUIDE_MODEL_BASE_URL` / `ai/shapeGuideModelBaseUrl`,
-  guard `QTMESH_SHAPE_GUIDE_NO_DOWNLOAD`. Upload: `scripts/upload-shape-guide-encoder.sh`.
+  guard `QTMESH_SHAPE_GUIDE_NO_DOWNLOAD`. Upload: `scripts/upload-shape-guide-encoder.sh`
+  (aggregate repo `trellis2/` + the MIT licence text, and the dedicated mirror
+  [`QtMeshEditor-trellis-ss-encoder-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-trellis-ss-encoder-onnx)
+  with its model card); mirror refresh: `scripts/sync-hf-model-repos.sh ssencoder`.
 - The preset blockouts (house, car, bus, ...) are generated in code by
   `ShapeGuide::preset` — no third-party assets.
 
