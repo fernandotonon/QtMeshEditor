@@ -63,7 +63,8 @@ a lower `t0`.
 `scripts/export-trellis-ss-encoder-onnx.py` in the QtMeshEditor repo (offline
 developer tool): loads the TRELLIS checkpoint, exports with
 `torch.onnx.export`, and refuses to write a graph whose output differs from
-torch by more than 2e-5 on a test blockout.
+torch by more than 1e-3 (measured: 1.8e-5 on a test blockout, 8.6e-6 on
+random occupancy).
 
 ## Licence
 

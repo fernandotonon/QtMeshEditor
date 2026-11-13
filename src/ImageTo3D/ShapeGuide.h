@@ -5,6 +5,7 @@
 #include <QStringList>
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 // Shape guide (blockout control) for the TRELLIS.2 / Pixal3D backends.
@@ -37,6 +38,13 @@ struct Mesh {
 };
 
 // ---- presets ---------------------------------------------------------------
+// Strength from which the generation hugs the guide closely enough to bake
+// onto the guide mesh itself (the output IS the guide, so below this the
+// image's shape would be stretched over it). The GUI offers the bake from
+// here, the CLI/MCP default to it when baking onto the guide without an
+// explicit strength, and the predictor warns below it.
+inline constexpr float kBakeOnGuideMinStrength = 0.6f;
+
 struct PresetInfo {
     QString id;        // stable id: "house", "car", ...
     QString label;     // UI label
@@ -83,7 +91,9 @@ QString encoderModelPath();       // <ai_models>/trellis2/ss_encoder.onnx
 // Downloads the encoder on first use (QTMESH_SHAPE_GUIDE_MODEL_BASE_URL /
 // QSettings ai/shapeGuideModelBaseUrl; QTMESH_SHAPE_GUIDE_NO_DOWNLOAD blocks).
 // Must be called on the main thread (ModelDownloader lives there).
-QString ensureEncoderBlocking(QString* error = nullptr);
+// `cancelled` is polled during a download; returning true stops it.
+QString ensureEncoderBlocking(QString* error = nullptr,
+                              const std::function<bool()>& cancelled = {});
 // occupancy (64^3, layout above) -> latent in the layout trellis-cli's SS
 // sampler uses: float [4096][8], channel fastest, s = x*256 + y*16 + z.
 bool encode(const std::vector<uint8_t>& occupancy64, const QString& modelFile,

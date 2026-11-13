@@ -31,6 +31,9 @@ class MeshGenController : public QObject
 
     Q_PROPERTY(bool available READ available CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // Strength from which baking onto the shape guide is offered
+    // (ShapeGuide::kBakeOnGuideMinStrength; the slider marks it).
+    Q_PROPERTY(double bakeOnGuideMinStrength READ bakeOnGuideMinStrength CONSTANT)
     // The currently-selected source image (empty until the user picks one). The
     // panel's "Generate" button binds its enabled state to this being non-empty.
     Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
@@ -56,6 +59,7 @@ public:
 
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
+    double bakeOnGuideMinStrength() const;
     QString selectedImagePath() const { return m_selectedImage; }
     QString selectedImageUrl() const;
     QString previewSource() const { return m_previewSource; }

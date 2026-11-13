@@ -2876,9 +2876,11 @@ Rectangle {
             // does not match. Only offered where the generation hugs the guide.
             InspectorCheck {
                 id: mgBakeOnGuide
-                readonly property real minStrength: 0.6
+                readonly property real minStrength: MeshGenController.bakeOnGuideMinStrength
                 readonly property bool usable: mgGuideStrength.value >= minStrength - 1e-6
-                readonly property bool effective: checked && usable
+                // Needs the texture bake: without it the guide mesh would come
+                // back untextured.
+                readonly property bool effective: checked && usable && mgBake.checked
                 visible: mgBackendCombo.t2Selected && mgGuide.active
                 text: "Bake onto the guide (keep its low-poly mesh)"
                 checked: false
@@ -3299,6 +3301,7 @@ Rectangle {
                     mgRoot.mgActiveIdx = mgRoot.mgSteps.length   // all ✓
                     mgStatus.text = "Done: " + result.vertexCount + " verts, "
                         + result.triangleCount + " tris"
+                        + (result.guideNote ? " — shape guide: " + result.guideNote : "")
                     // Non-fatal degradations (e.g. the part UV layout fell back
                     // to xatlas) stay in their own line: later AI-texture status
                     // updates replace mgStatus, not this.

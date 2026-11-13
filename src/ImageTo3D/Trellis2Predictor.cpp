@@ -1029,7 +1029,24 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     float guideFitYaw = 0.0f;
     float guideFitOffset[3] = {0.0f, 0.0f, 0.0f};
     ShapeGuide::GridPlacement guidePlacement;
-    const bool bakeOnGuide = guideWanted && opts.bakeOntoGuide;
+    // Whether the output IS the guide mesh. Requested, but dropped (keeping
+    // the generated mesh, with a warning) when the guide cannot be fitted or
+    // would break a hard triangle ceiling.
+    bool bakeOnGuide = guideWanted && opts.bakeOntoGuide;
+    auto addWarning = [&warning](const QString& w) {
+        if (!warning.isEmpty())
+            warning += QStringLiteral(" ");
+        warning += w;
+    };
+    if (bakeOnGuide && opts.strictTriangleBudget && opts.targetTriangles > 0
+        && static_cast<int>(opts.guideIndices.size() / 3) > opts.targetTriangles) {
+        addWarning(QStringLiteral(
+            "the shape guide has %1 triangles, over the %2-triangle ceiling of this preset: "
+            "kept the generated mesh instead of baking onto the guide.")
+                       .arg(opts.guideIndices.size() / 3)
+                       .arg(opts.targetTriangles));
+        bakeOnGuide = false;
+    }
     if (bakeOnGuide) {
         ShapeGuide::Mesh gm;
         gm.positions = opts.guidePositions;
@@ -1041,7 +1058,14 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             target.positions, target.indices,
             welded ? processed.weldedPositions : src.positions,
             welded ? processed.weldedIndices : src.indices);
-        if (fit.ok) {
+        if (!fit.ok) {
+            // A degenerate guide (no area) has nothing to bake onto: never
+            // hand it back as a successful result.
+            addWarning(QStringLiteral(
+                "the shape guide could not be fitted to the generation (no usable surface): "
+                "kept the generated mesh instead of baking onto the guide."));
+            bakeOnGuide = false;
+        } else {
             guideFitScale = fit.scale;
             guideFitYaw = fit.yaw;
             for (int k = 0; k < 3; ++k) guideFitOffset[k] = fit.offset[k];
@@ -1053,32 +1077,30 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 p[1] = fit.scale * y + fit.offset[1];
                 p[2] = fit.scale * p[2] + fit.offset[2];
             }
-        }
-        fprintf(stderr,
-                "[trellis2] shape guide as bake target: %zu tris, fit yaw %.1f deg, scale %.3f "
-                "offset (%.3f %.3f %.3f), mean gap %.4f -> %.4f\n",
-                target.indices.size() / 3, guideFitYaw * 57.29578f, guideFitScale, guideFitOffset[0],
-                guideFitOffset[1], guideFitOffset[2], fit.meanDistanceBefore,
-                fit.meanDistanceAfter);
-        processed.positions = std::move(target.positions);
-        processed.indices = std::move(target.indices);
-        processed.outputTriangles = static_cast<int>(processed.indices.size() / 3);
-        if (!guideNote.isEmpty())
-            guideNote += QStringLiteral("; ");
-        guideNote += QStringLiteral("baked onto the guide (%1 triangles, fit scale %2, turned %3°)")
-                         .arg(processed.outputTriangles)
-                         .arg(guideFitScale, 0, 'f', 3)
-                         .arg(guideFitYaw * 57.29578f, 0, 'f', 0);
-        // The output IS the guide mesh: below ~0.6 the generation follows the
-        // image, so its texture is stretched over a shape it does not match.
-        if (opts.guideStrength < 0.6f) {
-            if (!warning.isEmpty())
-                warning += QStringLiteral(" ");
-            warning += QStringLiteral(
-                "baked onto the guide at strength %1: the generation follows the image below "
-                "~0.6, so the texture may stretch over the guide (raise the strength, or drop "
-                "--bake-onto-guide to keep the generated shape).")
-                           .arg(opts.guideStrength, 0, 'f', 2);
+            fprintf(stderr,
+                    "[trellis2] shape guide as bake target: %zu tris, fit yaw %.1f deg, scale %.3f "
+                    "offset (%.3f %.3f %.3f), mean gap %.4f -> %.4f\n",
+                    target.indices.size() / 3, guideFitYaw * 57.29578f, guideFitScale,
+                    guideFitOffset[0], guideFitOffset[1], guideFitOffset[2],
+                    fit.meanDistanceBefore, fit.meanDistanceAfter);
+            processed.positions = std::move(target.positions);
+            processed.indices = std::move(target.indices);
+            processed.outputTriangles = static_cast<int>(processed.indices.size() / 3);
+            if (!guideNote.isEmpty())
+                guideNote += QStringLiteral("; ");
+            guideNote += QStringLiteral("baked onto the guide (%1 triangles, fit scale %2, turned %3°)")
+                             .arg(processed.outputTriangles)
+                             .arg(guideFitScale, 0, 'f', 3)
+                             .arg(guideFitYaw * 57.29578f, 0, 'f', 0);
+            // The output IS the guide mesh: at a low strength the generation
+            // follows the image, so its texture can stretch over the guide.
+            if (opts.guideStrength < ShapeGuide::kBakeOnGuideMinStrength)
+                addWarning(QStringLiteral(
+                    "baked onto the guide at strength %1: below ~%2 the generation follows the "
+                    "image, so the texture may stretch over the guide (raise the strength, or "
+                    "drop --bake-onto-guide to keep the generated shape).")
+                               .arg(opts.guideStrength, 0, 'f', 2)
+                               .arg(ShapeGuide::kBakeOnGuideMinStrength, 0, 'f', 2));
         }
     }
     fprintf(stderr,
@@ -1113,6 +1135,11 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     r.bakeTrellisUprightX = srcFamily.isEmpty()
                                 ? opts.pixal3d
                                 : srcFamily == QLatin1String("pixal3d");
+    // A baked guide is put into the TRELLIS grid frame by ShapeGuide::toGrid,
+    // whatever the model family, so Pixal3D's extra upright turn must not
+    // apply to it.
+    if (bakeOnGuide)
+        r.bakeTrellisUprightX = false;
 
     // ---- 5. native multi-channel PBR bake (Phase 7) ----------------------------
     bool baked = false;
@@ -1210,6 +1237,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // the grid frame here (the callers rotate grid -> editor), so undo the fit
     // and the placement in grid terms: p' = R(editor) = (p - off)/fit/scale + R(centre).
     if (bakeOnGuide && opts.guideKeepPlacement && guidePlacement.scale > 0.0f) {
+        r.nodeScale = 1.0f;   // already in the guide's own units
         float rc[3];
         ShapeGuide::editorToGridDir(guidePlacement.centre, rc);
         const float k = 1.0f / (guideFitScale * guidePlacement.scale);

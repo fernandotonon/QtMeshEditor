@@ -3327,6 +3327,20 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
     }
     if (guideSpec.isEmpty() && args.value("bake_onto_guide").toBool())
         return makeErrorResult("'bake_onto_guide' needs 'guide'.");
+    // Resolve the guide BEFORE a prompt image is generated (minutes of work),
+    // so a bad guide or an incompatible backend fails at once.
+    ShapeGuide::Mesh earlyGuide;
+    if (!guideSpec.isEmpty()) {
+        const QString b = args.value("backend").toString().toLower();
+        const bool trellisRuntime = b.isEmpty()
+            ? MeshGenPredictor::isTrellisRuntime(MeshGenPredictor::defaultBackend())
+            : (b == QLatin1String("trellis2") || b == QLatin1String("pixal3d"));
+        if (!trellisRuntime)
+            return makeErrorResult("'guide' needs backend 'trellis2' or 'pixal3d'.");
+        QString gerr;
+        if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr))
+            return makeErrorResult(QStringLiteral("guide: %1").arg(gerr));
+    }
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
     if (!genPrompt.isEmpty()) {
@@ -3624,15 +3638,15 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.trellis2SourceKeepBaseName = QFileInfo(outPath).completeBaseName();
         }
         if (!guideSpec.isEmpty()) {
-            ShapeGuide::Mesh guide;
             QString gerr;
-            if (!ShapeGuideScene::resolve(guideSpec, guide, &gerr))
-                return makeErrorResult(QStringLiteral("guide: %1").arg(gerr));
-            opts.guidePositions = std::move(guide.positions);
-            opts.guideIndices = std::move(guide.indices);
-            opts.guideStrength = static_cast<float>(args.value("guide_strength").toDouble(0.33));
-            opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));
+            opts.guidePositions = std::move(earlyGuide.positions);
+            opts.guideIndices = std::move(earlyGuide.indices);
             opts.bakeOntoGuide = args.value("bake_onto_guide").toBool();
+            // Baking onto the guide outputs the guide mesh: without an explicit
+            // strength use the one from which the generation hugs it.
+            opts.guideStrength = static_cast<float>(args.value("guide_strength").toDouble(
+                opts.bakeOntoGuide ? ShapeGuide::kBakeOnGuideMinStrength : 0.33));
+            opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));
             if (opts.guideStrength > 0.0f)
                 opts.guideEncoderPath = ShapeGuide::ensureEncoderBlocking(&gerr);
             SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),

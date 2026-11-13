@@ -457,7 +457,7 @@ QString encoderModelPath()
 
 bool encoderAvailable() { return false; }
 
-QString ensureEncoderBlocking(QString* error)
+QString ensureEncoderBlocking(QString* error, const std::function<bool()>&)
 {
     if (error)
         *error = QStringLiteral("the shape guide needs an ONNX build (rebuild with -DENABLE_ONNX)");
@@ -475,7 +475,7 @@ bool encode(const std::vector<uint8_t>&, const QString&, std::vector<float>&, QS
 
 bool encoderAvailable() { return true; }
 
-QString ensureEncoderBlocking(QString* error)
+QString ensureEncoderBlocking(QString* error, const std::function<bool()>& cancelled)
 {
     QString base;
     bool defaultHosting = false;
@@ -492,9 +492,18 @@ QString ensureEncoderBlocking(QString* error)
     const QString dst = encoderModelPath();
     if (QFileInfo::exists(dst) && !defaultHosting)
         return dst;   // a mirror may serve another export: trust the file
-    if (!QFileInfo::exists(dst) && !qEnvironmentVariableIsEmpty("QTMESH_SHAPE_GUIDE_NO_DOWNLOAD")) {
+    if (!qEnvironmentVariableIsEmpty("QTMESH_SHAPE_GUIDE_NO_DOWNLOAD")) {
+        // Never start a transfer, also not to replace a corrupt cached copy:
+        // a present file is used only if it matches the pinned digest.
+        if (QFileInfo::exists(dst)
+            && ModelDownloader::sha256HexOfFile(dst).compare(
+                   QString::fromLatin1(kModelSha256), Qt::CaseInsensitive) == 0)
+            return dst;
         if (error)
-            *error = QStringLiteral("downloads disabled by QTMESH_SHAPE_GUIDE_NO_DOWNLOAD");
+            *error = QFileInfo::exists(dst)
+                ? QStringLiteral("the cached encoder does not match its pinned digest, and "
+                                 "downloads are disabled by QTMESH_SHAPE_GUIDE_NO_DOWNLOAD")
+                : QStringLiteral("downloads disabled by QTMESH_SHAPE_GUIDE_NO_DOWNLOAD");
         return {};
     }
     if (!base.endsWith('/'))
@@ -511,6 +520,7 @@ QString ensureEncoderBlocking(QString* error)
     req.timeoutMs = 900000;
     if (defaultHosting)
         req.expectedSha256 = QString::fromLatin1(kModelSha256);
+    req.cancelled = cancelled;
     const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
     if (!fo.ok) {
         if (error) *error = fo.error;

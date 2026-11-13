@@ -9,8 +9,11 @@
 #include <QSet>
 
 #include <utility>
+#include <vector>
 
 #include <OgreEntity.h>
+#include <OgreCamera.h>
+#include <OgreSceneManager.h>
 #include <OgreSceneNode.h>
 
 namespace ShapeGuideScene {
@@ -77,7 +80,16 @@ bool fromFile(const QString& path, ShapeGuide::Mesh& out, QString* error)
     QSet<Ogre::Entity*> before;
     for (Ogre::Entity* e : mgr->getEntities())
         before.insert(e);
+    // The importer frames the cameras on what it loaded (it moves their
+    // parent nodes); this import is temporary, so put the view back after.
+    std::vector<std::pair<Ogre::SceneNode*, Ogre::Vector3>> cameraNodes;
+    if (Ogre::SceneManager* sm = mgr->getSceneMgr())
+        for (const auto& [name, cam] : sm->getCameras())
+            if (Ogre::SceneNode* cn = cam ? cam->getParentSceneNode() : nullptr)
+                cameraNodes.emplace_back(cn, cn->getPosition());
     MeshImporterExporter::importer({QFileInfo(path).absoluteFilePath()});
+    for (const auto& [cn, pos] : cameraNodes)
+        cn->setPosition(pos);
     QList<Ogre::Entity*> added;
     for (Ogre::Entity* e : mgr->getEntities())
         if (e && !before.contains(e))
@@ -150,6 +162,7 @@ Ogre::SceneNode* insert(const ShapeGuide::Mesh& mesh, const QString& baseName)
     r.triangleCount = static_cast<int>(r.indices.size() / 3);
     r.bakeTripoSROrientation = false;
     r.bakeTrellisUprightX = false;
+    r.nodeScale = 1.0f;   // a blockout is authored in metres
     return MeshGenBuilder::buildSceneNode(r, baseName);
 }
 

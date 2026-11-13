@@ -223,7 +223,8 @@ For a one-page overview of every model and what it does in the app, see
   from that latent (trellis-cli `--ss-control`, added in our trellis.cpp fork,
   pinned by `cmake/TrellisCpp.cmake`).
 - **Export:** `scripts/export-trellis-ss-encoder-onnx.py` (offline, not shipped;
-  fp32, opset 17, parity vs torch ≤ 2e-5 asserted). Hosted as
+  fp32, opset 17; refuses a graph off torch by more than 1e-3,
+  measured max error 1.8e-5). Hosted as
   `trellis2/ss_encoder.onnx` (~237 MB, SHA-256 pinned in
   `src/ImageTo3D/ShapeGuide.cpp`), downloads on first use of a guide.
   Overrides `QTMESH_SHAPE_GUIDE_MODEL_BASE_URL` / `ai/shapeGuideModelBaseUrl`,

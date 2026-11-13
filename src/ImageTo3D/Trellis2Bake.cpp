@@ -356,7 +356,19 @@ public:
                                       std::abs(cy - m_lo[1]), std::abs(m_hi[1] - cy),
                                       std::abs(cz - m_lo[2]), std::abs(m_hi[2] - cz)})
                             + 1;
-        for (int r = 0; r <= maxRing; ++r) {
+        // A query far outside the occupied box (a guide sample during an ICP
+        // yaw trial) would otherwise sweep every empty ring on the way in:
+        // start at the first ring that can reach the box (Chebyshev distance
+        // in cells), and clamp each shell face to the box.
+        const int rStart = std::max({0, m_lo[0] - cx, cx - m_hi[0], m_lo[1] - cy,
+                                     cy - m_hi[1], m_lo[2] - cz, cz - m_hi[2]});
+        const int c[3] = {cx, cy, cz};
+        auto clampRange = [this, &c](int axis, int from, int to, int& a, int& b) {
+            a = std::max(from, m_lo[axis] - c[axis]);
+            b = std::min(to, m_hi[axis] - c[axis]);
+            return a <= b;
+        };
+        for (int r = rStart; r <= maxRing; ++r) {
             // Once we have a hit, stop when the ring's nearest possible
             // distance already exceeds the best.
             if (bestTri >= 0) {
@@ -364,27 +376,41 @@ public:
                 if (ringMin > 0.0f && ringMin * ringMin > bestD2)
                     break;
             }
-            // True O(r^2) shell iteration — the 6 faces of the ring cube.
-            // (An earlier full-cube scan with a shell test was O(r^3) per
-            // ring and cratered on texels far from the source surface.)
+            // True O(r^2) shell iteration — the 6 faces of the ring cube,
+            // each clamped to the occupied box.
             if (r == 0) {
                 visitCell(cx, cy, cz);
                 continue;
             }
-            for (int dx = -r; dx <= r; ++dx) {
-                for (int dy = -r; dy <= r; ++dy) {
-                    visitCell(cx + dx, cy + dy, cz - r);
-                    visitCell(cx + dx, cy + dy, cz + r);
-                }
-                for (int dz = -r + 1; dz <= r - 1; ++dz) {
-                    visitCell(cx + dx, cy - r, cz + dz);
-                    visitCell(cx + dx, cy + r, cz + dz);
+            int x0, x1, y0, y1, z0, z1;
+            // z faces: full x/y extent
+            if (clampRange(0, -r, r, x0, x1) && clampRange(1, -r, r, y0, y1)) {
+                for (const int dz : {-r, r}) {
+                    if (cz + dz < m_lo[2] || cz + dz > m_hi[2])
+                        continue;
+                    for (int dx = x0; dx <= x1; ++dx)
+                        for (int dy = y0; dy <= y1; ++dy)
+                            visitCell(cx + dx, cy + dy, cz + dz);
                 }
             }
-            for (int dy = -r + 1; dy <= r - 1; ++dy) {
-                for (int dz = -r + 1; dz <= r - 1; ++dz) {
-                    visitCell(cx - r, cy + dy, cz + dz);
-                    visitCell(cx + r, cy + dy, cz + dz);
+            // y faces: full x extent, z without the z-face rows
+            if (clampRange(0, -r, r, x0, x1) && clampRange(2, -r + 1, r - 1, z0, z1)) {
+                for (const int dy : {-r, r}) {
+                    if (cy + dy < m_lo[1] || cy + dy > m_hi[1])
+                        continue;
+                    for (int dx = x0; dx <= x1; ++dx)
+                        for (int dz = z0; dz <= z1; ++dz)
+                            visitCell(cx + dx, cy + dy, cz + dz);
+                }
+            }
+            // x faces: y and z without the rows already covered
+            if (clampRange(1, -r + 1, r - 1, y0, y1) && clampRange(2, -r + 1, r - 1, z0, z1)) {
+                for (const int dx : {-r, r}) {
+                    if (cx + dx < m_lo[0] || cx + dx > m_hi[0])
+                        continue;
+                    for (int dy = y0; dy <= y1; ++dy)
+                        for (int dz = z0; dz <= z1; ++dz)
+                            visitCell(cx + dx, cy + dy, cz + dz);
                 }
             }
         }

@@ -44,21 +44,16 @@
 #include <QUrl>
 
 namespace {
-// The selected mesh entity: an entity selection wins, else the first entity
-// hanging on a selected node.
+// The selected mesh entity, resolved like the rest of the editor resolves a
+// selection (an entity, the parent of a selected submesh, or a mesh on a
+// selected node or one of its descendants).
 Ogre::Entity* selectedMeshEntity()
 {
     auto* sel = SelectionSet::getSingletonPtr();
     if (!sel)
         return nullptr;
-    if (sel->hasEntities())
-        return sel->getEntitiesSelectionList().first();
-    if (sel->hasNodes())
-        for (Ogre::SceneNode* n : sel->getNodesSelectionList())
-            for (unsigned i = 0; n && i < n->numAttachedObjects(); ++i)
-                if (auto* e = dynamic_cast<Ogre::Entity*>(n->getAttachedObject(i)))
-                    return e;
-    return nullptr;
+    const QList<Ogre::Entity*> ents = sel->getResolvedEntities();
+    return ents.isEmpty() ? nullptr : ents.first();
 }
 } // namespace
 
@@ -866,7 +861,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         }
         if (guideStrength > 0.0f) {
             emit statusMessage(tr("Checking shape-guide encoder…"));
-            guideEncoder = ShapeGuide::ensureEncoderBlocking(&gerr);
+            guideEncoder = ShapeGuide::ensureEncoderBlocking(
+                &gerr, [this]() { return m_cancel.load(); });
+            if (m_cancel.load()) {
+                setBusy(false);
+                emit statusMessage(tr("Cancelled."));
+                return;
+            }
             if (guideEncoder.isEmpty())
                 emit statusMessage(tr("Shape-guide encoder unavailable (%1) — the guide "
                                       "will only be used for the bake.").arg(gerr));
@@ -1200,6 +1201,11 @@ QString MeshGenController::insertGuidePreset(const QString& id)
         sel->append(node);
     }
     return QString::fromStdString(node->getName());
+}
+
+double MeshGenController::bakeOnGuideMinStrength() const
+{
+    return ShapeGuide::kBakeOnGuideMinStrength;
 }
 
 QString MeshGenController::selectedMeshName() const

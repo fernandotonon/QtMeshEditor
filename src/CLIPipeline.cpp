@@ -13619,6 +13619,32 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         err() << "Error: --bake-onto-guide / --guide-strength need --guide." << Qt::endl;
         return 2;
     }
+    // Baking onto the guide outputs the guide mesh, so without an explicit
+    // strength use the one from which the generation hugs it.
+    if (bakeOntoGuide && !guideStrengthSet)
+        guideStrength = ShapeGuide::kBakeOnGuideMinStrength;
+    // Reject a guide that cannot be used BEFORE a prompt image is generated or
+    // a backend is prepared (minutes of work). Presets, .obj files and missing
+    // paths resolve without a scene; other mesh files are imported later.
+    ShapeGuide::Mesh earlyGuide;
+    bool guideResolvedEarly = false;
+    if (!guideSpec.isEmpty()) {
+        const MeshGenPredictor::Backend effective =
+            backendSet ? backend : MeshGenPredictor::defaultBackend();
+        if (!MeshGenPredictor::isTrellisRuntime(effective)) {
+            err() << "Error: --guide needs the trellis2 or pixal3d backend." << Qt::endl;
+            return 2;
+        }
+        const QFileInfo gfi(guideSpec);
+        if (!gfi.exists() || gfi.suffix().compare(QLatin1String("obj"), Qt::CaseInsensitive) == 0) {
+            QString gerr;
+            if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr)) {
+                err() << "Error: " << gerr << Qt::endl;
+                return 2;
+            }
+            guideResolvedEarly = true;
+        }
+    }
 
     // --list-game-presets is a standalone op (no image needed): one line per
     // preset — id, budget, and the platform limits it enforces.
@@ -13933,9 +13959,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             err() << "Error: --guide needs the trellis2 or pixal3d backend." << Qt::endl;
             return 2;
         }
-        ShapeGuide::Mesh guide;
+        ShapeGuide::Mesh guide = std::move(earlyGuide);
         QString gerr;
-        if (!ShapeGuideScene::resolve(guideSpec, guide, &gerr)) {
+        if (!guideResolvedEarly && !ShapeGuideScene::resolve(guideSpec, guide, &gerr)) {
             err() << "Error: " << gerr << Qt::endl;
             return 2;
         }
