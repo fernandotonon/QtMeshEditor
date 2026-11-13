@@ -72,7 +72,14 @@ if(NOT APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
          -DGGML_AVX2=OFF
          -DGGML_FMA=OFF
          -DGGML_F16C=OFF
-         -DGGML_BMI2=OFF)
+         -DGGML_BMI2=OFF
+         # The GGML_* switches only cover ggml's own CPU code. The GitHub
+         # ubuntu-26.04 image produced FMA opcodes in the CLI anyway (GCC 15,
+         # same sources and flags; not reproducible in a plain 26.04
+         # container), so forbid the post-AVX extensions for EVERY translation
+         # unit: an explicit -mno-* wins over any default or inherited flag.
+         "-DCMAKE_C_FLAGS=-mno-fma -mno-avx2 -mno-f16c -mno-bmi2"
+         "-DCMAKE_CXX_FLAGS=-mno-fma -mno-avx2 -mno-f16c -mno-bmi2")
 endif()
 # Windows (MinGW): self-contained trellis-cli.exe. -static folds the MinGW
 # runtimes (libgcc/libstdc++/winpthread) into the exe so the package's
@@ -108,14 +115,36 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
          -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()
 
+set(_trellis_git_tag 53db2ce3f2c41f753335ab91654c7cb9dcaa1631)
+# With UPDATE_DISCONNECTED, CMake < 3.27 does not re-clone when only GIT_TAG
+# changes, so an existing build tree would keep building the old checkout.
+# Record the pin and drop the clone state when it moves.
+set(_trellis_pin_file "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp.pin")
+if(EXISTS "${_trellis_pin_file}")
+    file(READ "${_trellis_pin_file}" _trellis_old_pin)
+    string(STRIP "${_trellis_old_pin}" _trellis_old_pin)
+else()
+    set(_trellis_old_pin "")
+endif()
+if(NOT _trellis_old_pin STREQUAL _trellis_git_tag)
+    if(EXISTS "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+        message(STATUS "trellis.cpp pin changed -> re-cloning ${_trellis_git_tag}")
+    endif()
+    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
+                        "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src")
+    file(WRITE "${_trellis_pin_file}" "${_trellis_git_tag}\n")
+endif()
+
 ExternalProject_Add(qtmesh_trelliscpp
-    # fernandotonon/trellis.cpp @ qtmesh-pixal3d = upstream pwilkin/main plus the
-    # three macOS commits QtMeshEditor depends on (Metal backend, direct CONV_3D
-    # in the SS decoder, and --dump-post, which is how we take over the asset
-    # pipeline after inference). Upstream shipped Pixal3D support in v0.8.0, so
-    # the fork carries no generation logic of its own — only the platform work.
+    # fernandotonon/trellis.cpp @ main = upstream pwilkin/trellis.cpp main
+    # (Metal, --dump-post, Pixal3D) plus the shape guide (--ss-control: start
+    # the sparse-structure flow from a guide mesh's SS-VAE latent,
+    # src/ImageTo3D/ShapeGuide.h), proposed upstream as pwilkin/trellis.cpp#64.
+    # Once that merges, pin upstream directly.
+    # NB upstream writes Pixal3D GLB/PLY upright since 4546869; --dump-post
+    # returns before that rotation, so MeshGenBuilder keeps its own upright turn.
     GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
-    GIT_TAG        f46ea9a8c5cb6b7cf0d58ea6594db7d918d4e384
+    GIT_TAG        ${_trellis_git_tag}
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"

@@ -7,6 +7,11 @@
 #include "TripoSGPredictor.h"
 #include "TripoSplatPredictor.h"
 #include "Trellis2Predictor.h"
+#include "ShapeGuide.h"
+#include "ShapeGuideScene.h"
+#include "SelectionSet.h"
+#include <OgreEntity.h>
+#include <memory>
 #include "MeshGenBuilder.h"
 #include "BackgroundRemover.h"
 #include "MeshImporterExporter.h"
@@ -37,6 +42,20 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QUrl>
+
+namespace {
+// The selected mesh entity, resolved like the rest of the editor resolves a
+// selection (an entity, the parent of a selected submesh, or a mesh on a
+// selected node or one of its descendants).
+Ogre::Entity* selectedMeshEntity()
+{
+    auto* sel = SelectionSet::getSingletonPtr();
+    if (!sel)
+        return nullptr;
+    const QList<Ogre::Entity*> ents = sel->getResolvedEntities();
+    return ents.isEmpty() ? nullptr : ents.first();
+}
+} // namespace
 
 #include <thread>
 #include "AppStorage.h"
@@ -813,6 +832,52 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         m_upscaleModelPath = AIAssistManager::instance()->ensureUpscaleModel(2);
     }
 
+    // Shape guide: resolved HERE (main thread — scene access, and the encoder
+    // download needs the downloader's event loop); the worker only reads it.
+    auto guide = std::make_shared<ShapeGuide::Mesh>();
+    const QString guideSpec = options.value(QLatin1String("guide")).toString().trimmed();
+    const float guideStrength = options.contains(QLatin1String("guide_strength"))
+        ? std::clamp(options.value(QLatin1String("guide_strength")).toFloat(), 0.0f, 1.0f)
+        : 0.33f;
+    const bool bakeOntoGuide = options.value(QLatin1String("bake_onto_guide")).toBool();
+    const float guideReach = options.contains(QLatin1String("guide_reach"))
+        ? std::clamp(options.value(QLatin1String("guide_reach")).toFloat(), 0.0f, 1.0f)
+        : 0.08f;
+    QString guideEncoder;
+    if (useT2 && !guideSpec.isEmpty() && guideSpec != QLatin1String("none")) {
+        QString gerr;
+        bool okGuide = false;
+        if (guideSpec == QLatin1String("selected")) {
+            Ogre::Entity* e = selectedMeshEntity();
+            okGuide = e ? ShapeGuideScene::fromEntity(e, *guide, &gerr)
+                        : (gerr = tr("select a mesh to use as the shape guide"), false);
+        } else {
+            okGuide = ShapeGuideScene::resolve(guideSpec, *guide, &gerr);
+        }
+        if (!okGuide) {
+            setBusy(false);
+            emit error(tr("Shape guide: %1").arg(gerr));
+            return;
+        }
+        if (guideStrength > 0.0f) {
+            emit statusMessage(tr("Checking shape-guide encoder…"));
+            guideEncoder = ShapeGuide::ensureEncoderBlocking(
+                &gerr, [this]() { return m_cancel.load(); });
+            if (m_cancel.load()) {
+                setBusy(false);
+                emit statusMessage(tr("Cancelled."));
+                return;
+            }
+            if (guideEncoder.isEmpty())
+                emit statusMessage(tr("Shape-guide encoder unavailable (%1) — the guide "
+                                      "will only be used for the bake.").arg(gerr));
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
+            QStringLiteral("gui guide=%1 strength=%2 bake=%3 tris=%4")
+                .arg(guideSpec.startsWith('/') ? QStringLiteral("file") : guideSpec)
+                .arg(guideStrength).arg(bakeOntoGuide).arg(guide->indices.size() / 3));
+    }
+
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.image_to_3d"),
         QStringLiteral("MeshGenController generate %1 res=%2 rembg=%3 smooth=%4 "
                        "refine=%5 bake=%6 upscale=%7 pbr=%8")
@@ -840,6 +905,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      backend, t2Seed, t2Preset, t2TargetTris,
                                      t2TargetTrisStrict, t2MaxTexture,
                                      t2Supersample, wantClean, wantPartUv,
+                                     guide, guideStrength, bakeOntoGuide,
+                                     guideReach, guideEncoder,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -936,6 +1003,14 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                 QDir(AppStorage::persistentRoot())
                     .filePath(QStringLiteral("generated_sources"));
             opts.trellis2SourceKeepBaseName = imageStem;
+            if (!guide->empty()) {
+                opts.guidePositions = guide->positions;
+                opts.guideIndices = guide->indices;
+                opts.guideStrength = guideStrength;
+                opts.bakeOntoGuide = bakeOntoGuide;
+                opts.guideRayReach = guideReach;
+                opts.guideEncoderPath = guideEncoder;
+            }
         }
 
         QMetaObject::invokeMethod(this, "statusMessage", Qt::QueuedConnection,
@@ -1055,6 +1130,7 @@ void MeshGenController::buildOnMainThread()
             out["entityName"] = QString::fromStdString(obj->getName());
     }
     if (!r.warning.isEmpty()) out["warning"] = r.warning;
+    if (!r.guideNote.isEmpty()) out["guideNote"] = r.guideNote;
     if (!r.splatPlyPath.isEmpty()) out["splatPath"] = r.splatPlyPath;
     if (r.uvCharts > 0) {
         out["uvCharts"] = r.uvCharts;
@@ -1097,4 +1173,50 @@ int MeshGenController::gameReadyDefaultIndex() const
 {
     const int i = GameReady::indexOf(GameReady::defaultId());
     return i < 0 ? 0 : i;
+}
+
+QVariantList MeshGenController::guidePresets() const
+{
+    QVariantList out;
+    for (const ShapeGuide::PresetInfo& p : ShapeGuide::presets())
+        out.append(QVariantMap{{QStringLiteral("id"), p.id},
+                               {QStringLiteral("label"), p.label},
+                               {QStringLiteral("category"), p.category},
+                               {QStringLiteral("hint"), p.hint}});
+    return out;
+}
+
+QString MeshGenController::insertGuidePreset(const QString& id)
+{
+    if (!ShapeGuide::isPreset(id))
+        return {};
+    Ogre::SceneNode* node =
+        ShapeGuideScene::insert(ShapeGuide::preset(id), QStringLiteral("blockout_") + id);
+    if (!node)
+        return {};
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("insert shape guide %1").arg(id));
+    if (auto* sel = SelectionSet::getSingleton()) {
+        sel->clear();
+        sel->append(node);
+    }
+    return QString::fromStdString(node->getName());
+}
+
+double MeshGenController::bakeOnGuideMinStrength() const
+{
+    return ShapeGuide::kBakeOnGuideMinStrength;
+}
+
+QString MeshGenController::selectedMeshName() const
+{
+    Ogre::Entity* e = selectedMeshEntity();
+    return e ? QString::fromStdString(e->getName()) : QString();
+}
+
+QString MeshGenController::pickGuideFile()
+{
+    return QFileDialog::getOpenFileName(
+        nullptr, tr("Choose a shape-guide mesh"), QString(),
+        tr("Meshes (*.obj *.glb *.gltf *.fbx *.dae *.mesh *.ply *.stl);;All files (*)"));
 }

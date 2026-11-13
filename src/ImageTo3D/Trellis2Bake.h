@@ -251,6 +251,12 @@ struct BakeOptions {
     // Part-based UV islands (PartUnwrap): regions by base colour + metallic,
     // cut to discs and flattened, instead of xatlas's near-planar scraps.
     bool partIslands = true;
+    // > 0: cage-style projection. Each texel first casts a ray along the
+    // target's interpolated normal (both directions, up to this fraction of
+    // the target's bbox diagonal) and samples the nearest same-facing source
+    // hit; closest point is the fallback. For a hand-made low-poly target that
+    // sits centimetres off the generated surface, closest point smears.
+    float rayProjectFraction = 0.0f;
 };
 
 struct BakeResult {
@@ -309,6 +315,34 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
                                   const std::vector<float>& sourcePositions,
                                   const std::vector<uint32_t>& sourceIndices,
                                   const BakeOptions& opts);
+
+// Places a hand-made target (a shape-guide blockout) onto the generated
+// surface before a bake: trimmed ICP restricted to a UNIFORM scale +
+// translation, plus (searchYaw) a turn about the up axis (grid +Z): the image
+// decides which way the generation faces, and a three-quarter view comes back
+// turned. The yaw is searched in 15° steps (kept at 0 unless a turn fits
+// clearly better — a box fits several angles about equally). Points are sampled over the
+// target's AREA, not its vertices, because a 72-triangle blockout has too few
+// vertices to say where its faces are. The worst `trimFraction` of the
+// correspondences are ignored each round (a floor slab, a prop the guide does
+// not have). Returns false for empty input; on success the fitted placement
+// is   target' = scale * Rz(yaw) * target + offset   with the scale clamped
+// to [minScale, maxScale].
+struct TargetFit {
+    bool ok = false;
+    float yaw = 0.0f;      // radians about grid +Z, applied first
+    float scale = 1.0f;
+    float offset[3] = {0.0f, 0.0f, 0.0f};
+    float meanDistanceBefore = 0.0f;   // in source units, over the kept points
+    float meanDistanceAfter = 0.0f;
+};
+TargetFit fitTargetToSource(const std::vector<float>& targetPositions,
+                            const std::vector<uint32_t>& targetIndices,
+                            const std::vector<float>& sourcePositions,
+                            const std::vector<uint32_t>& sourceIndices,
+                            int iterations = 40, float trimFraction = 0.15f,
+                            float minScale = 0.6f, float maxScale = 1.6f,
+                            bool searchYaw = true);
 
 } // namespace Trellis2Bake
 

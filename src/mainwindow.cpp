@@ -159,6 +159,7 @@
 #include "CharacterGen/CharacterController.h"
 #include "MotionGraphManager.h"
 #include "ImageTo3D/MeshGenController.h"
+#include "ImageTo3D/ShapeGuide.h"
 #include "Mocap/MocapController.h"
 #include "MorphAnimationManager.h"
 #include "VertexAnimationManager.h"
@@ -1909,6 +1910,26 @@ void MainWindow::initToolBar()
     addPrimitiveMenu->addAction(pAddIcoSphere);
     addPrimitiveMenu->addAction(pAddRoundedBox);
     addPrimitiveMenu->addAction(pAddSpring);
+
+    // Blockouts: rough shapes built from boxes (houses, vehicles, props, a
+    // humanoid). Plain editable meshes; select one and use it as the shape
+    // guide of an image-to-3D generation (AI: Image -> 3D, TRELLIS.2).
+    addPrimitiveMenu->addSeparator();
+    QMenu* blockoutMenu = addPrimitiveMenu->addMenu(QIcon(":/icones/cube.png"), tr("Blockouts"));
+    blockoutMenu->setToolTipsVisible(true);
+    QMap<QString, QMenu*> blockoutCategories;
+    for (const ShapeGuide::PresetInfo& p : ShapeGuide::presets()) {
+        QMenu*& cat = blockoutCategories[p.category];
+        if (!cat)
+            cat = blockoutMenu->addMenu(p.category);
+        QAction* a = cat->addAction(p.label);
+        a->setToolTip(p.hint);
+        const QString id = p.id;
+        connect(a, &QAction::triggered, this, [id] {
+            if (MeshGenController* mg = MeshGenController::instance())
+                mg->insertGuidePreset(id);
+        });
+    }
 
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     QAction* addPrimitiveAction = ui->objectsToolbar->addWidget(addPrimitiveButton);

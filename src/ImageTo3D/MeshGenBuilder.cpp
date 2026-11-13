@@ -497,7 +497,8 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
     // model quite small in the editor scene; scale x2 so it arrives at a
     // workable size (matches TripoSR + TripoSG). Applied on the node, so it's
     // baked into any export via the node transform.
-    node->setScale(2.0f, 2.0f, 2.0f);
+    const float sc = result.nodeScale > 0.0f ? result.nodeScale : 1.0f;
+    node->setScale(sc, sc, sc);
     return node;
 }
 

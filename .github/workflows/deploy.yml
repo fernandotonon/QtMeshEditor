@@ -1339,7 +1339,8 @@ jobs:
     # Hard cap on the whole job. The full sweep takes ~12 min normally
     # (build + xvfb + ~25 suites + coverage + sonar). Cap at 90 so a
     # cold ccache build on a large PR still finishes under the limit.
-    timeout-minutes: 90
+    # ubuntu-26.04 runners: a cold build + the suite alone take ~75 min.
+    timeout-minutes: 120
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
@@ -1923,10 +1924,12 @@ jobs:
         path: |
           test-results-*.xml
           
-    - name: Set up Python 3.8 for gcovr
-      uses: actions/setup-python@v4
+    - name: Set up Python for gcovr
+      # 3.8 is not available on the ubuntu-26.04 runner image (ubuntu-latest
+      # moved there); gcovr 7.2 runs on any 3.8+.
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.8
+        python-version: '3.12'
         
     - name: install gcovr
       run: |

@@ -356,7 +356,19 @@ public:
                                       std::abs(cy - m_lo[1]), std::abs(m_hi[1] - cy),
                                       std::abs(cz - m_lo[2]), std::abs(m_hi[2] - cz)})
                             + 1;
-        for (int r = 0; r <= maxRing; ++r) {
+        // A query far outside the occupied box (a guide sample during an ICP
+        // yaw trial) would otherwise sweep every empty ring on the way in:
+        // start at the first ring that can reach the box (Chebyshev distance
+        // in cells), and clamp each shell face to the box.
+        const int rStart = std::max({0, m_lo[0] - cx, cx - m_hi[0], m_lo[1] - cy,
+                                     cy - m_hi[1], m_lo[2] - cz, cz - m_hi[2]});
+        const int c[3] = {cx, cy, cz};
+        auto clampRange = [this, &c](int axis, int from, int to, int& a, int& b) {
+            a = std::max(from, m_lo[axis] - c[axis]);
+            b = std::min(to, m_hi[axis] - c[axis]);
+            return a <= b;
+        };
+        for (int r = rStart; r <= maxRing; ++r) {
             // Once we have a hit, stop when the ring's nearest possible
             // distance already exceeds the best.
             if (bestTri >= 0) {
@@ -364,27 +376,41 @@ public:
                 if (ringMin > 0.0f && ringMin * ringMin > bestD2)
                     break;
             }
-            // True O(r^2) shell iteration — the 6 faces of the ring cube.
-            // (An earlier full-cube scan with a shell test was O(r^3) per
-            // ring and cratered on texels far from the source surface.)
+            // True O(r^2) shell iteration — the 6 faces of the ring cube,
+            // each clamped to the occupied box.
             if (r == 0) {
                 visitCell(cx, cy, cz);
                 continue;
             }
-            for (int dx = -r; dx <= r; ++dx) {
-                for (int dy = -r; dy <= r; ++dy) {
-                    visitCell(cx + dx, cy + dy, cz - r);
-                    visitCell(cx + dx, cy + dy, cz + r);
-                }
-                for (int dz = -r + 1; dz <= r - 1; ++dz) {
-                    visitCell(cx + dx, cy - r, cz + dz);
-                    visitCell(cx + dx, cy + r, cz + dz);
+            int x0, x1, y0, y1, z0, z1;
+            // z faces: full x/y extent
+            if (clampRange(0, -r, r, x0, x1) && clampRange(1, -r, r, y0, y1)) {
+                for (const int dz : {-r, r}) {
+                    if (cz + dz < m_lo[2] || cz + dz > m_hi[2])
+                        continue;
+                    for (int dx = x0; dx <= x1; ++dx)
+                        for (int dy = y0; dy <= y1; ++dy)
+                            visitCell(cx + dx, cy + dy, cz + dz);
                 }
             }
-            for (int dy = -r + 1; dy <= r - 1; ++dy) {
-                for (int dz = -r + 1; dz <= r - 1; ++dz) {
-                    visitCell(cx - r, cy + dy, cz + dz);
-                    visitCell(cx + r, cy + dy, cz + dz);
+            // y faces: full x extent, z without the z-face rows
+            if (clampRange(0, -r, r, x0, x1) && clampRange(2, -r + 1, r - 1, z0, z1)) {
+                for (const int dy : {-r, r}) {
+                    if (cy + dy < m_lo[1] || cy + dy > m_hi[1])
+                        continue;
+                    for (int dx = x0; dx <= x1; ++dx)
+                        for (int dz = z0; dz <= z1; ++dz)
+                            visitCell(cx + dx, cy + dy, cz + dz);
+                }
+            }
+            // x faces: y and z without the rows already covered
+            if (clampRange(1, -r + 1, r - 1, y0, y1) && clampRange(2, -r + 1, r - 1, z0, z1)) {
+                for (const int dx : {-r, r}) {
+                    if (cx + dx < m_lo[0] || cx + dx > m_hi[0])
+                        continue;
+                    for (int dy = y0; dy <= y1; ++dy)
+                        for (int dz = z0; dz <= z1; ++dz)
+                            visitCell(cx + dx, cy + dy, cz + dz);
                 }
             }
         }
@@ -407,6 +433,93 @@ public:
                     std::memcpy(outBary, bc, sizeof(bc));
                 }
             }
+        }
+        return bestTri;
+    }
+
+    // Cage-style projection: intersect the line p + t*dir, |t| <= maxT, with
+    // the surface and return the hit with the smallest |t| whose face normal
+    // agrees with dir (dot > 0). Grid cells are walked with a 3D DDA from
+    // p - maxT*dir to p + maxT*dir. Returns the triangle or -1.
+    int rayNearest(const float p[3], const float dir[3], float maxT,
+                   float outPoint[3], float outBary[3]) const
+    {
+        if (m_triCount == 0)
+            return -1;
+        float o[3], d[3];
+        for (int k = 0; k < 3; ++k) {
+            o[k] = p[k] - dir[k] * maxT;
+            d[k] = dir[k] * 2.0f * maxT;   // segment param u in [0,1]
+        }
+        int c[3], step[3];
+        float tMax[3], tDelta[3];
+        for (int k = 0; k < 3; ++k) {
+            c[k] = cellIndex(o[k], k);
+            if (d[k] > 0) {
+                step[k] = 1;
+                tMax[k] = ((m_min[k] + (c[k] + 1) * m_cell) - o[k]) / d[k];
+                tDelta[k] = m_cell / d[k];
+            } else if (d[k] < 0) {
+                step[k] = -1;
+                tMax[k] = ((m_min[k] + c[k] * m_cell) - o[k]) / d[k];
+                tDelta[k] = -m_cell / d[k];
+            } else {
+                step[k] = 0;
+                tMax[k] = std::numeric_limits<float>::max();
+                tDelta[k] = std::numeric_limits<float>::max();
+            }
+        }
+        float bestAbs = std::numeric_limits<float>::max();
+        int bestTri = -1;
+        float u = 0.0f;
+        for (int guard = 0; guard < 4096 && u <= 1.0f; ++guard) {
+            const auto it = m_cells.find(packKey(c[0], c[1], c[2]));
+            if (it != m_cells.end()) {
+                for (int t : it->second) {
+                    const uint32_t* idx = &(*m_indices)[t * 3];
+                    const float* a = &(*m_positions)[idx[0] * 3];
+                    const float* b = &(*m_positions)[idx[1] * 3];
+                    const float* cc = &(*m_positions)[idx[2] * 3];
+                    float e1[3], e2[3], fn[3];
+                    sub3(b, a, e1);
+                    sub3(cc, a, e2);
+                    cross3(e1, e2, fn);
+                    if (dot3(fn, dir) <= 0.0f)
+                        continue;   // back side
+                    float pv[3];
+                    cross3(dir, e2, pv);
+                    const float det = dot3(e1, pv);
+                    if (std::fabs(det) < 1e-20f)
+                        continue;
+                    const float invDet = 1.0f / det;
+                    float tv[3];
+                    sub3(p, a, tv);
+                    const float bu = dot3(tv, pv) * invDet;
+                    if (bu < 0.0f || bu > 1.0f)
+                        continue;
+                    float qv[3];
+                    cross3(tv, e1, qv);
+                    const float bv = dot3(dir, qv) * invDet;
+                    if (bv < 0.0f || bu + bv > 1.0f)
+                        continue;
+                    const float tt = dot3(e2, qv) * invDet;
+                    if (std::fabs(tt) > maxT || std::fabs(tt) >= bestAbs)
+                        continue;
+                    bestAbs = std::fabs(tt);
+                    bestTri = t;
+                    for (int k = 0; k < 3; ++k)
+                        outPoint[k] = p[k] + dir[k] * tt;
+                    outBary[0] = 1.0f - bu - bv;
+                    outBary[1] = bu;
+                    outBary[2] = bv;
+                }
+            }
+            int ax = 0;
+            if (tMax[1] < tMax[ax]) ax = 1;
+            if (tMax[2] < tMax[ax]) ax = 2;
+            u = tMax[ax];
+            c[ax] += step[ax];
+            tMax[ax] += tDelta[ax];
         }
         return bestTri;
     }
@@ -2320,6 +2433,18 @@ BakeResult bake(const std::vector<float>& targetPositions,
     // islands here as well as the texel loop below.
     TriangleGrid grid;
     grid.build(sourcePositions, sourceIndices);
+    float rayMaxT = 0.0f;
+    if (opts.rayProjectFraction > 0.0f && targetPositions.size() >= 3) {
+        float mn[3] = {targetPositions[0], targetPositions[1], targetPositions[2]};
+        float mx[3] = {mn[0], mn[1], mn[2]};
+        for (size_t v = 0; v < targetPositions.size() / 3; ++v)
+            for (int k = 0; k < 3; ++k) {
+                mn[k] = std::min(mn[k], targetPositions[v * 3 + k]);
+                mx[k] = std::max(mx[k], targetPositions[v * 3 + k]);
+            }
+        const float dg[3] = {mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]};
+        rayMaxT = opts.rayProjectFraction * len3(dg);
+    }
     PartUnwrap::AtlasOptions ao;
     ao.textureSize = texSize;
     ao.padding = std::max(1, opts.dilatePx);
@@ -2569,7 +2694,10 @@ BakeResult bake(const std::vector<float>& targetPositions,
                         normalize3(Nt);
 
                         float S[3], sb[3];
-                        int sTri = grid.closest(P, S, sb, Nt);
+                        int sTri = rayMaxT > 0.0f
+                            ? grid.rayNearest(P, Nt, rayMaxT, S, sb) : -1;
+                        if (sTri < 0)
+                            sTri = grid.closest(P, S, sb, Nt);
                         if (sTri < 0)
                             sTri = grid.closest(P, S, sb);
                         float attr[6];
@@ -3056,6 +3184,166 @@ NormalBakeResult bakeDetailNormal(const std::vector<float>& targetPositions,
     r.normalMap = std::move(normal);
     r.ok = true;
     return r;
+}
+
+TargetFit fitTargetToSource(const std::vector<float>& targetPositions,
+                            const std::vector<uint32_t>& targetIndices,
+                            const std::vector<float>& sourcePositions,
+                            const std::vector<uint32_t>& sourceIndices,
+                            int iterations, float trimFraction,
+                            float minScale, float maxScale, bool searchYaw)
+{
+    TargetFit fit;
+    const size_t tTris = targetIndices.size() / 3;
+    if (tTris == 0 || sourceIndices.size() < 3)
+        return fit;
+
+    // Area-weighted surface samples of the target (deterministic).
+    std::vector<double> cdf(tTris);
+    double total = 0.0;
+    for (size_t t = 0; t < tTris; ++t) {
+        const float* a = &targetPositions[targetIndices[t * 3 + 0] * 3];
+        const float* b = &targetPositions[targetIndices[t * 3 + 1] * 3];
+        const float* c = &targetPositions[targetIndices[t * 3 + 2] * 3];
+        const float e1[3] = {b[0] - a[0], b[1] - a[1], b[2] - a[2]};
+        const float e2[3] = {c[0] - a[0], c[1] - a[1], c[2] - a[2]};
+        const float cr[3] = {e1[1] * e2[2] - e1[2] * e2[1],
+                             e1[2] * e2[0] - e1[0] * e2[2],
+                             e1[0] * e2[1] - e1[1] * e2[0]};
+        total += 0.5 * len3(cr);
+        cdf[t] = total;
+    }
+    if (total <= 0.0)
+        return fit;
+    constexpr int kSamples = 8000;
+    std::vector<float> pts;
+    pts.reserve(kSamples * 3);
+    uint32_t rng = 0x9E3779B9u;
+    auto rnd = [&rng]() {
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        return static_cast<float>(rng & 0xFFFFFF) / static_cast<float>(0x1000000);
+    };
+    for (int i = 0; i < kSamples; ++i) {
+        const double u = (i + rnd()) / kSamples * total;
+        const size_t t = std::min<size_t>(
+            tTris - 1, static_cast<size_t>(
+                std::lower_bound(cdf.begin(), cdf.end(), u) - cdf.begin()));
+        float r1 = rnd(), r2 = rnd();
+        if (r1 + r2 > 1.0f) { r1 = 1.0f - r1; r2 = 1.0f - r2; }
+        const float* a = &targetPositions[targetIndices[t * 3 + 0] * 3];
+        const float* b = &targetPositions[targetIndices[t * 3 + 1] * 3];
+        const float* c = &targetPositions[targetIndices[t * 3 + 2] * 3];
+        for (int k = 0; k < 3; ++k)
+            pts.push_back(a[k] + r1 * (b[k] - a[k]) + r2 * (c[k] - a[k]));
+    }
+
+    TriangleGrid grid;
+    grid.build(sourcePositions, sourceIndices);
+
+    // One trimmed ICP run (uniform scale + translation) over `P`, starting
+    // from s/off; returns the final mean distance of the kept pairs.
+    auto icp = [&](const std::vector<float>& P, int iters, double& s, double off[3],
+                   float* before) -> double {
+        const int n = static_cast<int>(P.size() / 3);
+        std::vector<float> q(P.size());
+        std::vector<float> d(n);
+        std::vector<int> order(n);
+        double mean = 0.0;
+        for (int it = 0; it <= iters; ++it) {
+            for (int i = 0; i < n; ++i) {
+                float p[3], bary[3];
+                for (int k = 0; k < 3; ++k)
+                    p[k] = static_cast<float>(s * P[i * 3 + k] + off[k]);
+                if (grid.closest(p, &q[static_cast<size_t>(i) * 3], bary) < 0) {
+                    d[i] = std::numeric_limits<float>::max();
+                    continue;
+                }
+                const float dd[3] = {q[i * 3] - p[0], q[i * 3 + 1] - p[1], q[i * 3 + 2] - p[2]};
+                d[i] = len3(dd);
+            }
+            for (int i = 0; i < n; ++i) order[i] = i;
+            const int keep = std::max(std::min(n, 16), static_cast<int>(n * (1.0f - trimFraction)));
+            std::nth_element(order.begin(), order.begin() + (keep - 1), order.end(),
+                             [&d](int x, int y) { return d[x] < d[y]; });
+            mean = 0.0;
+            for (int j = 0; j < keep; ++j) mean += d[order[j]];
+            mean /= keep;
+            if (it == 0 && before) *before = static_cast<float>(mean);
+            if (it == iters)
+                break;
+            // Closed-form uniform scale + translation on the kept pairs:
+            // q ≈ s·p + t.
+            double pm[3] = {0, 0, 0}, qm[3] = {0, 0, 0};
+            for (int j = 0; j < keep; ++j)
+                for (int k = 0; k < 3; ++k) {
+                    pm[k] += P[order[j] * 3 + k];
+                    qm[k] += q[order[j] * 3 + k];
+                }
+            for (int k = 0; k < 3; ++k) { pm[k] /= keep; qm[k] /= keep; }
+            double num = 0.0, den = 0.0;
+            for (int j = 0; j < keep; ++j)
+                for (int k = 0; k < 3; ++k) {
+                    const double pp = P[order[j] * 3 + k] - pm[k];
+                    num += pp * (q[order[j] * 3 + k] - qm[k]);
+                    den += pp * pp;
+                }
+            if (den <= 0.0)
+                break;
+            s = std::clamp(num / den, static_cast<double>(minScale),
+                           static_cast<double>(maxScale));
+            for (int k = 0; k < 3; ++k) off[k] = qm[k] - s * pm[k];
+        }
+        return mean;
+    };
+    // Rotate the samples about the up axis (grid +Z) through the origin.
+    auto rotated = [](const std::vector<float>& P, double yaw, int stride) {
+        const double c = std::cos(yaw), sn = std::sin(yaw);
+        std::vector<float> R;
+        R.reserve(P.size() / stride + 3);
+        for (size_t i = 0; i + 2 < P.size(); i += 3 * static_cast<size_t>(stride)) {
+            R.push_back(static_cast<float>(c * P[i] - sn * P[i + 1]));
+            R.push_back(static_cast<float>(sn * P[i] + c * P[i + 1]));
+            R.push_back(P[i + 2]);
+        }
+        return R;
+    };
+
+    double bestYaw = 0.0;
+    if (searchYaw) {
+        // The image decides which way the generation faces (a three-quarter
+        // view of a van comes back turned ~35°), so try every 15° and refine
+        // around the best. Coarse runs use a quarter of the samples.
+        constexpr double kPiD = 3.14159265358979323846;
+        auto trial = [&](double yaw) {
+            double ts = 1.0, toff[3] = {0, 0, 0};
+            return icp(rotated(pts, yaw, 4), 10, ts, toff, nullptr);
+        };
+        const double base = trial(0.0);
+        double best = base;
+        for (int k = 1; k < 24; ++k) {
+            const double yaw = k * kPiD / 12.0;
+            const double m = trial(yaw);
+            if (m < best) { best = m; bestYaw = yaw; }
+        }
+        for (double dy : {-5.0, -2.5, 2.5, 5.0}) {
+            const double yaw = bestYaw + dy * kPiD / 180.0;
+            const double m = trial(yaw);
+            if (m < best) { best = m; bestYaw = yaw; }
+        }
+        // A near-symmetric guide (a box) fits several angles about equally:
+        // keep the authored orientation unless a turn is clearly better.
+        if (best > 0.9 * base)
+            bestYaw = 0.0;
+    }
+    double s = 1.0;
+    double off[3] = {0.0, 0.0, 0.0};
+    fit.meanDistanceAfter = static_cast<float>(
+        icp(rotated(pts, bestYaw, 1), iterations, s, off, &fit.meanDistanceBefore));
+    fit.ok = true;
+    fit.yaw = static_cast<float>(bestYaw);
+    fit.scale = static_cast<float>(s);
+    for (int k = 0; k < 3; ++k) fit.offset[k] = static_cast<float>(off[k]);
+    return fit;
 }
 
 } // namespace Trellis2Bake

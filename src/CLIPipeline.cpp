@@ -82,6 +82,8 @@
 #include "FaceRig/FaceRigLandmarks.h"
 #include "ImageTo3D/GameReadyPresets.h"
 #include "ImageTo3D/MeshGenPredictor.h"
+#include "ImageTo3D/ShapeGuide.h"
+#include "ImageTo3D/ShapeGuideScene.h"
 #include "ImageTo3D/TripoSGPredictor.h"
 #include "ImageTo3D/TripoSplatPredictor.h"
 #include "ImageTo3D/Trellis2Predictor.h"
@@ -13293,6 +13295,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     bool backendSet = false;    // explicit --backend beats the auto default
     QString genPrompt;          // --prompt: generate the source image from text
     QString imageModel;         // --image-model: SD model override for --prompt
+    // Shape guide (TRELLIS.2 / Pixal3D, src/ImageTo3D/ShapeGuide.h).
+    QString guideSpec;          // --guide preset|mesh file|scene mesh
+    float guideStrength = 0.33f;
+    bool guideStrengthSet = false;
+    bool bakeOntoGuide = false;
+    float guideReach = 0.08f;
+    bool listGuides = false;
+    QString exportGuide;        // --export-guide <preset> -o file.obj
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -13409,6 +13419,27 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             continue;
         }
         if (arg == "--no-source") { keepSource = false; continue; }
+        if (arg == "--list-guides") { listGuides = true; continue; }
+        if (arg == "--bake-onto-guide") { bakeOntoGuide = true; continue; }
+        if (arg == "--guide" || arg == "--export-guide") {
+            if (i + 1 >= argc) {
+                err() << "Error: " << arg << " requires a value (see --list-guides)." << Qt::endl;
+                return 2;
+            }
+            (arg == "--guide" ? guideSpec : exportGuide) = QString::fromLocal8Bit(argv[++i]);
+            continue;
+        }
+        if (arg == "--guide-strength" || arg == "--guide-reach") {
+            bool ok = false;
+            const float v = i + 1 < argc ? QString::fromLocal8Bit(argv[++i]).toFloat(&ok) : 0.0f;
+            if (!ok || v < 0.0f || v > 1.0f) {
+                err() << "Error: " << arg << " must be a number in [0, 1]." << Qt::endl;
+                return 2;
+            }
+            if (arg == "--guide-strength") { guideStrength = v; guideStrengthSet = true; }
+            else guideReach = v;
+            continue;
+        }
         if (arg == "--pixal-fov") {
             if (i + 1 >= argc) {
                 err() << "Error: --pixal-fov requires degrees." << Qt::endl; return 2; }
@@ -13555,6 +13586,66 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         if (!arg.startsWith("-") && inputPath.isEmpty()) { inputPath = arg; continue; }
     }
 
+    // Shape-guide standalone ops: list the presets / write one as an OBJ the
+    // user can edit (in QtMeshEditor or any DCC) and pass back via --guide.
+    if (listGuides) {
+        QString listing;
+        for (const ShapeGuide::PresetInfo& p : ShapeGuide::presets())
+            listing += p.id.leftJustified(12) + p.category.leftJustified(12)
+                       + p.hint + QLatin1Char('\n');
+        listing += QStringLiteral(
+            "\nuse: --guide <id | mesh file | .obj> [--guide-strength 0.33] "
+            "[--bake-onto-guide] [--guide-reach 0.08]\n"
+            "     --export-guide <id> -o guide.obj   writes a preset to edit\n");
+        cliWrite(listing);
+        return 0;
+    }
+    if (!exportGuide.isEmpty()) {
+        if (!ShapeGuide::isPreset(exportGuide) || outputPath.isEmpty()) {
+            err() << "Error: --export-guide needs a preset id (see --list-guides) and -o <file.obj>."
+                  << Qt::endl;
+            return 2;
+        }
+        QString werr;
+        if (!ShapeGuide::writeObj(outputPath, ShapeGuide::preset(exportGuide),
+                                  exportGuide, &werr)) {
+            err() << "Error: " << werr << Qt::endl;
+            return 1;
+        }
+        cliWrite(QStringLiteral("Wrote shape guide '%1': %2\n").arg(exportGuide, outputPath));
+        return 0;
+    }
+    if (guideSpec.isEmpty() && (bakeOntoGuide || guideStrengthSet)) {
+        err() << "Error: --bake-onto-guide / --guide-strength need --guide." << Qt::endl;
+        return 2;
+    }
+    // Baking onto the guide outputs the guide mesh, so without an explicit
+    // strength use the one from which the generation hugs it.
+    if (bakeOntoGuide && !guideStrengthSet)
+        guideStrength = ShapeGuide::kBakeOnGuideMinStrength;
+    // Reject a guide that cannot be used BEFORE a prompt image is generated or
+    // a backend is prepared (minutes of work). Presets, .obj files and missing
+    // paths resolve without a scene; other mesh files are imported later.
+    ShapeGuide::Mesh earlyGuide;
+    bool guideResolvedEarly = false;
+    if (!guideSpec.isEmpty()) {
+        const MeshGenPredictor::Backend effective =
+            backendSet ? backend : MeshGenPredictor::defaultBackend();
+        if (!MeshGenPredictor::isTrellisRuntime(effective)) {
+            err() << "Error: --guide needs the trellis2 or pixal3d backend." << Qt::endl;
+            return 2;
+        }
+        const QFileInfo gfi(guideSpec);
+        if (!gfi.exists() || gfi.suffix().compare(QLatin1String("obj"), Qt::CaseInsensitive) == 0) {
+            QString gerr;
+            if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr)) {
+                err() << "Error: " << gerr << Qt::endl;
+                return 2;
+            }
+            guideResolvedEarly = true;
+        }
+    }
+
     // --list-game-presets is a standalone op (no image needed): one line per
     // preset — id, budget, and the platform limits it enforces.
     if (listGamePresets) {
@@ -13626,10 +13717,12 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
+                 " [--guide ID|mesh] [--guide-strength 0.33] [--bake-onto-guide] [--guide-reach 0.08]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
         err() << "       qtmesh generate3d --list-game-presets" << Qt::endl;
+        err() << "       qtmesh generate3d --list-guides | --export-guide house -o house.obj" << Qt::endl;
         err() << "  Default backend: trellis2 when its runtime is installed "
                  "(ai/trellis2/install.py), else triposr. --seed/--preset "
                  "apply to trellis2; --target-tris (game-ready simplify + "
@@ -13861,6 +13954,32 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                 : QFileInfo(outputPath).absolutePath() + "/"
                       + QFileInfo(outputPath).completeBaseName() + "_splats.ply";
     }
+    if (!guideSpec.isEmpty()) {
+        if (!useTrellis2) {
+            err() << "Error: --guide needs the trellis2 or pixal3d backend." << Qt::endl;
+            return 2;
+        }
+        ShapeGuide::Mesh guide = std::move(earlyGuide);
+        QString gerr;
+        if (!guideResolvedEarly && !ShapeGuideScene::resolve(guideSpec, guide, &gerr)) {
+            err() << "Error: " << gerr << Qt::endl;
+            return 2;
+        }
+        opts.guidePositions = std::move(guide.positions);
+        opts.guideIndices = std::move(guide.indices);
+        opts.guideStrength = guideStrength;
+        opts.bakeOntoGuide = bakeOntoGuide;
+        opts.guideRayReach = guideReach;
+        if (guideStrength > 0.0f) {
+            opts.guideEncoderPath = ShapeGuide::ensureEncoderBlocking(&gerr);
+            if (opts.guideEncoderPath.isEmpty())
+                err() << "Warning: shape-guide encoder unavailable (" << gerr
+                      << ") — the guide will not steer the generation." << Qt::endl;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
+            QStringLiteral("cli strength=%1 bake=%2 tris=%3")
+                .arg(guideStrength).arg(bakeOntoGuide).arg(opts.guideIndices.size() / 3));
+    }
     if (useTrellis2) {
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the
                                         // predictor skips it when the input
@@ -13885,6 +14004,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
     if (!res.warning.isEmpty())
         err() << "Warning: " << res.warning << Qt::endl;
+    if (!res.guideNote.isEmpty())
+        err() << "Shape guide: " << res.guideNote << Qt::endl;
 
     // Optional Real-ESRGAN 2x on the baked diffuse (reuses the #405 upscaler +
     // its on-demand model download) — sharpens the decoder's soft colours.

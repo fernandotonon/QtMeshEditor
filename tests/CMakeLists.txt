@@ -337,6 +337,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/SplatToMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Interchange.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Bake.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ShapeGuide.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/ShapeGuideScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/Trellis2Predictor.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilder.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenController.cpp

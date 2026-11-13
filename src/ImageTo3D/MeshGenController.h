@@ -31,6 +31,9 @@ class MeshGenController : public QObject
 
     Q_PROPERTY(bool available READ available CONSTANT)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+    // Strength from which baking onto the shape guide is offered
+    // (ShapeGuide::kBakeOnGuideMinStrength; the slider marks it).
+    Q_PROPERTY(double bakeOnGuideMinStrength READ bakeOnGuideMinStrength CONSTANT)
     // The currently-selected source image (empty until the user picks one). The
     // panel's "Generate" button binds its enabled state to this being non-empty.
     Q_PROPERTY(QString selectedImagePath READ selectedImagePath NOTIFY selectedImageChanged)
@@ -56,6 +59,7 @@ public:
 
     bool available() const;         // ENABLE_ONNX build
     bool busy() const { return m_busy; }
+    double bakeOnGuideMinStrength() const;
     QString selectedImagePath() const { return m_selectedImage; }
     QString selectedImageUrl() const;
     QString previewSource() const { return m_previewSource; }
@@ -114,6 +118,22 @@ public:
     // and applies the budget + the platform texture cap itself.
     Q_INVOKABLE QVariantList gameReadyPresets() const;
     Q_INVOKABLE int gameReadyDefaultIndex() const;
+
+    // ── Shape guide (TRELLIS.2 / Pixal3D, ShapeGuide.h) ─────────────────────
+    // Preset blockouts: [{id, label, category, hint}]. generateSelected()
+    // takes options {"guide": <preset id | "selected" | mesh file>,
+    // "guide_strength": 0..1 (0.33), "bake_onto_guide": bool,
+    // "guide_reach": 0..1 (0.08)}.
+    Q_INVOKABLE QVariantList guidePresets() const;
+    // Puts a preset into the scene as an ordinary editable mesh and selects
+    // it, so it can be reshaped (Edit Mode) and then used as "selected".
+    // Returns the new node's name ("" on failure).
+    Q_INVOKABLE QString insertGuidePreset(const QString& id);
+    // Name of the selected mesh entity ("" when none) — the "Selected mesh"
+    // guide source.
+    Q_INVOKABLE QString selectedMeshName() const;
+    // File dialog for a guide mesh (.obj/.glb/.fbx/...). "" when cancelled.
+    Q_INVOKABLE QString pickGuideFile();
 
     // ── Prompt-to-3D: generate the source image from a TEXT PROMPT instead
     // of importing one (FLUX.2-klein-4B via stable-diffusion.cpp; falls back

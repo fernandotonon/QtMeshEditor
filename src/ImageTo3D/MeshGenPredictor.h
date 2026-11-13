@@ -220,12 +220,22 @@ public:
         // Empty = don't keep. The kept path lands in Result::sourceInterchangePath.
         QString trellis2SourceKeepDir;
         QString trellis2SourceKeepBaseName;
+        // Shape guide (TRELLIS.2 / Pixal3D) — see Trellis2Predictor::Options and
+        // ShapeGuide.h. Editor-frame mesh; empty = none.
+        std::vector<float>    guidePositions;
+        std::vector<uint32_t> guideIndices;
+        float   guideStrength = 0.33f;
+        bool    bakeOntoGuide = false;
+        float   guideRayReach = 0.08f;
+        bool    guideKeepPlacement = true;
+        QString guideEncoderPath;
     };
 
     struct Result {
         bool ok = false;
         QString error;                 // populated when !ok
         QString warning;               // non-fatal (e.g. bake fell back to vertex colours)
+        QString guideNote;             // what the shape guide did (empty = no guide)
         int  uvCharts = 0;             // UV islands of the baked atlas (0 = no bake)
         bool partUvIslands = false;    // islands came from PartUnwrap (else plain xatlas)
         std::vector<float>    positions; // Nx3, world space
@@ -259,6 +269,11 @@ public:
         //   -90°X: (x, y, z) -> (x, z, -y)   (a proper rotation, det +1, so
         //   triangle winding and normals are unaffected).
         bool bakeTrellisUprightX = false;
+        // Scale MeshGenBuilder puts on the scene node. Generations come out in
+        // a unit-ish box and get x2 to arrive at a workable size; a result
+        // already in its own units (a baked shape guide handed back at the
+        // guide's size, a blockout put into the scene) must keep 1.
+        float nodeScale = 2.0f;
 
         // ---- TRELLIS.2 extras (empty/null for the other backends) -------------
         // Real baked PBR maps from the sparse attribute volume (Trellis2Bake).
