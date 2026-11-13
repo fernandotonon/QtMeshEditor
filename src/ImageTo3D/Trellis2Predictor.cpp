@@ -685,7 +685,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
             args << QStringLiteral("--no-naf");
     }
     // Shape guide: start the sparse-structure flow from the guide's latent
-    // (cmake/patches/trellis-ss-control.patch). A guide that cannot be encoded
+    // (the --ss-control flag of the trellis.cpp fork pinned in cmake/TrellisCpp.cmake). A guide that cannot be encoded
     // is reported and the generation continues unguided.
     bool guideControlUsed = false;
     if (guideWanted && opts.guideStrength > 0.0f) {
@@ -798,7 +798,7 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         if (guideControlUsed && errBuf.contains("unknown option: --ss-control"))
             return failResult(QStringLiteral(
                 "trellis2: this trellis-cli has no shape-guide support (--ss-control). "
-                "Rebuild QtMeshEditor's bundled runtime (cmake/patches/trellis-ss-control.patch), "
+                "Rebuild QtMeshEditor's bundled runtime (cmake/TrellisCpp.cmake pins a trellis.cpp with --ss-control), "
                 "or set the guide strength to 0 to only bake onto the guide."));
         return failFromTrellisCliProcess(proc, errBuf);
     }

@@ -220,8 +220,8 @@ For a one-page overview of every model and what it does in the app, see
   its decoder, so QtMeshEditor runs the encoder itself.
 - **Method:** SpaceControl (training-free blockout control, **MIT**): the guide
   mesh's 64³ surface voxels are encoded and the sparse-structure flow starts
-  from that latent (trellis-cli `--ss-control`, our patch
-  `cmake/patches/trellis-ss-control.patch`).
+  from that latent (trellis-cli `--ss-control`, added in our trellis.cpp fork,
+  pinned by `cmake/TrellisCpp.cmake`).
 - **Export:** `scripts/export-trellis-ss-encoder-onnx.py` (offline, not shipped;
   fp32, opset 17, parity vs torch ≤ 2e-5 asserted). Hosted as
   `trellis2/ss_encoder.onnx` (~237 MB, SHA-256 pinned in

@@ -18,7 +18,7 @@
 // the 64^3 sparse-structure grid, encoded with TRELLIS's sparse-structure VAE
 // encoder (TRELLIS-1 `ss_enc_conv3d_16l8_fp16`, MIT, which TRELLIS.2 reuses),
 // and the sparse-structure flow starts from that latent instead of pure noise
-// (trellis-cli `--ss-control`, patch cmake/patches/trellis-ss-control.patch),
+// (trellis-cli `--ss-control`, in our trellis.cpp fork; cmake/TrellisCpp.cmake),
 // skipping the first `strength` fraction of its steps.
 //
 // Measured on this project (res 512, 12 SS steps): <= 0.33 the IMAGE leads

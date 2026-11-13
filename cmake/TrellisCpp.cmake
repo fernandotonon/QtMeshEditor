@@ -112,10 +112,13 @@ ExternalProject_Add(qtmesh_trelliscpp
     # fernandotonon/trellis.cpp @ qtmesh-pixal3d = upstream pwilkin/main plus the
     # three macOS commits QtMeshEditor depends on (Metal backend, direct CONV_3D
     # in the SS decoder, and --dump-post, which is how we take over the asset
-    # pipeline after inference). Upstream shipped Pixal3D support in v0.8.0, so
-    # the fork carries no generation logic of its own — only the platform work.
+    # pipeline after inference), and --ss-control (the shape guide: start the
+    # sparse-structure flow from a guide mesh's SS-VAE latent,
+    # src/ImageTo3D/ShapeGuide.h). Upstream shipped Pixal3D support in v0.8.0.
+    # NB upstream writes Pixal3D GLB/PLY upright since 4546869; --dump-post
+    # returns before that rotation, so MeshGenBuilder keeps its own upright turn.
     GIT_REPOSITORY https://github.com/fernandotonon/trellis.cpp.git
-    GIT_TAG        f46ea9a8c5cb6b7cf0d58ea6594db7d918d4e384
+    GIT_TAG        fe0bef6320e6d92b041ed47db2ef9166b56511bf
     GIT_SHALLOW    OFF
     PREFIX         "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp"
     SOURCE_DIR     "${CMAKE_BINARY_DIR}/_deps/qtmesh_trelliscpp-src"
@@ -123,14 +126,8 @@ ExternalProject_Add(qtmesh_trelliscpp
     LIST_SEPARATOR |
     # MinGW header compat (see cmake/PatchTrellisMinGW.cmake) — idempotent,
     # runs on every platform, errors loudly if the pin moves past the pattern.
-    # + the shape guide (SpaceControl): `--ss-control <latent> --ss-control-strength s`
-    # starts the sparse-structure flow from a guide mesh's SS-VAE latent
-    # (src/ImageTo3D/ShapeGuide.h). Applied with git, skipped when already in.
     PATCH_COMMAND  ${CMAKE_COMMAND} -DSRC=<SOURCE_DIR>
                    -P ${CMAKE_CURRENT_LIST_DIR}/PatchTrellisMinGW.cmake
-          COMMAND  ${CMAKE_COMMAND}
-                   "-DPATCHES=${CMAKE_CURRENT_LIST_DIR}/patches/trellis-ss-control.patch"
-                   -P ${CMAKE_CURRENT_LIST_DIR}/ApplyPatchesOnce.cmake
     CMAKE_ARGS     ${_trellis_cmake_args}
     BUILD_COMMAND  ${CMAKE_COMMAND} --build <BINARY_DIR> --target trellis-cli
                    --config Release -j4
