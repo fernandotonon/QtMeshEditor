@@ -65,6 +65,17 @@ TEST(ShapeGuide, VehiclesFaceForwardAlongZ)
     }
 }
 
+TEST(ShapeGuide, PresetsFaceMinusZLikeTheGenerations)
+{
+    // The house's front step and the shop's awning stick out of the front
+    // of a body that is symmetric in Z: that front must be the -Z side.
+    for (const char* id : {"house", "shop"}) {
+        float mn[3], mx[3];
+        bounds(ShapeGuide::preset(QString::fromLatin1(id)), mn, mx);
+        EXPECT_GT(-mn[2], mx[2] + 0.4f) << id << " front must be at -Z";
+    }
+}
+
 TEST(ShapeGuide, GridFrameIsZUpAndFillsTheExtent)
 {
     // A 2 x 4 x 1 box standing at x = 10: its height (editor Y) must become

@@ -306,7 +306,19 @@ bool isPreset(const QString& id)
 
 Mesh preset(const QString& id)
 {
-    return isPreset(id) ? buildPreset(id) : Mesh{};
+    if (!isPreset(id))
+        return Mesh{};
+    // The builders author the front (doors, windscreens, cabs) towards +Z;
+    // the editor and every generation face -Z, the side the default view
+    // looks from. Turn 180 degrees about Y so a preset faces like the result
+    // it guides (a backwards guide puts the image's front on the guide's
+    // back, and the generation fights it). A proper rotation: winding stays.
+    Mesh m = buildPreset(id);
+    for (size_t v = 0; v + 2 < m.positions.size(); v += 3) {
+        m.positions[v] = -m.positions[v];
+        m.positions[v + 2] = -m.positions[v + 2];
+    }
+    return m;
 }
 
 bool readObj(const QString& path, Mesh& out, QString* error)
