@@ -1923,10 +1923,12 @@ jobs:
         path: |
           test-results-*.xml
           
-    - name: Set up Python 3.8 for gcovr
-      uses: actions/setup-python@v4
+    - name: Set up Python for gcovr
+      # 3.8 is not available on the ubuntu-26.04 runner image (ubuntu-latest
+      # moved there); gcovr 7.2 runs on any 3.8+.
+      uses: actions/setup-python@v5
       with:
-        python-version: 3.8
+        python-version: '3.12'
         
     - name: install gcovr
       run: |
