@@ -1,6 +1,9 @@
 #include "EcosystemWidgets.h"
 
+#include <QAbstractButton>
 #include <QApplication>
+#include <QEvent>
+#include <QKeyEvent>
 #include <QFrame>
 #include <QGuiApplication>
 #include <QLabel>
@@ -64,6 +67,32 @@ QPixmap roundedThumbnail(const QString& path, const QSize& size, qreal dpr)
     out.setDevicePixelRatio(dpr);
     return out;
 }
+
+/// QToolButton only activates on Space. Inside a QDialog, Return/Enter on a
+/// focused card would otherwise reach the dialog's default button ("New
+/// Scene") and close it instead of opening the game.
+class ActivateOnEnter : public QObject
+{
+public:
+    using QObject::QObject;
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (event->type() == QEvent::KeyPress || event->type() == QEvent::ShortcutOverride) {
+            const int key = static_cast<QKeyEvent*>(event)->key();
+            if (key == Qt::Key_Return || key == Qt::Key_Enter) {
+                if (event->type() == QEvent::KeyPress) {
+                    if (auto* button = qobject_cast<QAbstractButton*>(watched))
+                        button->click();
+                }
+                event->accept();
+                return true;
+            }
+        }
+        return QObject::eventFilter(watched, event);
+    }
+};
 
 } // namespace
 
@@ -144,6 +173,7 @@ QToolButton* gameCard(const QtMeshEcosystem::Game& game, const QString& surface,
     card->setAutoRaise(false);
     card->setFocusPolicy(Qt::StrongFocus);
     card->setCursor(Qt::PointingHandCursor);
+    card->installEventFilter(new ActivateOnEnter(card));
     card->setText(game.title + QLatin1Char('\n') + game.platform);
     card->setToolTip(QStringLiteral("%1 (%2)\n%3").arg(game.title, game.platform, game.blurb));
     card->setAccessibleName(QStringLiteral("%1, %2 game").arg(game.title, game.platform));

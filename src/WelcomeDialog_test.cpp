@@ -11,6 +11,7 @@
 #include <QSignalSpy>
 #include <QLabel>
 #include <QToolButton>
+#include <QKeyEvent>
 #include <QVariantMap>
 
 namespace {
@@ -182,6 +183,32 @@ TEST_F(WelcomeDialogTests, ShowcaseHasFourGameCardsAndAnExploreLink)
     }
     EXPECT_EQ(cards, 4);
     EXPECT_NE(findButtonByText(dialog, QStringLiteral("Explore QtMesh Games →")), nullptr);
+}
+
+TEST_F(WelcomeDialogTests, EnterOnAFocusedGameCardOpensTheGameNotTheDefaultButton)
+{
+    WelcomeDialog dialog;
+    QToolButton* card = nullptr;
+    for (auto* button : dialog.findChildren<QToolButton*>()) {
+        if (button->objectName() == QStringLiteral("ecosystemGameCard")) {
+            card = button;
+            break;
+        }
+    }
+    ASSERT_NE(card, nullptr);
+    // Swap the browser launch for a counter so the test opens nothing.
+    QObject::disconnect(card, &QToolButton::clicked, nullptr, nullptr);
+    int activations = 0;
+    QObject::connect(card, &QToolButton::clicked, [&activations]() { ++activations; });
+
+    for (const int key : {int(Qt::Key_Return), int(Qt::Key_Enter)}) {
+        QKeyEvent press(QEvent::KeyPress, key, Qt::NoModifier);
+        QCoreApplication::sendEvent(card, &press);
+    }
+
+    EXPECT_EQ(activations, 2);
+    EXPECT_EQ(dialog.result(), QDialog::Rejected);  // the dialog stayed open
+    EXPECT_EQ(dialog.userAction(), WelcomeDialog::Dismissed);
 }
 
 TEST_F(WelcomeDialogTests, NoRecentFilesShowsAPlaceholderInsteadOfAnEmptyList)
