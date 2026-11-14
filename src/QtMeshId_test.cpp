@@ -184,3 +184,13 @@ TEST_F(QtMeshIdTest, OverlayControllerExposesStateAndNameOnly)
     EXPECT_EQ(controller->accountName(), "Ada Lovelace");
     EXPECT_EQ(controller->accountInitials(), "AL");
 }
+
+TEST_F(QtMeshIdTest, AnOpenScreenLearnsWhenTheSessionExpires)
+{
+    // Nobody calls refresh(): the expiry alone must flip the state.
+    storeSession(nowMs() + 300, QStringLiteral("Ada"));
+    ASSERT_EQ(QtMeshId::instance()->state(), QtMeshId::State::SignedIn);
+    QSignalSpy spy(QtMeshId::instance(), &QtMeshId::sessionChanged);
+    ASSERT_TRUE(spy.wait(5000));
+    EXPECT_EQ(QtMeshId::instance()->state(), QtMeshId::State::Expired);
+}

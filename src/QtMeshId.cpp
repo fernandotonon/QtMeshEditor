@@ -28,7 +28,25 @@ QtMeshId* QtMeshId::instance()
 QtMeshId::QtMeshId(QObject* parent)
     : QObject(parent)
 {
+    m_expiryTimer = new QTimer(this);
+    m_expiryTimer->setSingleShot(true);
+    connect(m_expiryTimer, &QTimer::timeout, this, &QtMeshId::refresh);
     m_lastSnapshot = stateId(state()) + QLatin1Char('|') + displayName();
+    scheduleExpiryCheck();
+}
+
+void QtMeshId::scheduleExpiryCheck()
+{
+    m_expiryTimer->stop();
+    const CloudSession session = CloudCredentialStore::loadSession();
+    if (!session.hasToken() || session.expiresAt <= 0)
+        return;
+    const qint64 remaining = session.expiresAt - QDateTime::currentMSecsSinceEpoch();
+    if (remaining <= 0)
+        return;  // already expired: state() reports it
+    // QTimer takes an int: a far-off expiry re-arms itself from refresh().
+    constexpr qint64 kMaxInterval = 24LL * 60 * 60 * 1000;  // one day
+    m_expiryTimer->start(int(qMin(remaining + 1000, kMaxInterval)));
 }
 
 bool QtMeshId::isExpired(qint64 expiresAtMs, qint64 nowMs)
@@ -91,6 +109,7 @@ bool QtMeshId::openManageAccount(const QString& surface)
 
 void QtMeshId::refresh()
 {
+    scheduleExpiryCheck();
     const QString snapshot = stateId(state()) + QLatin1Char('|') + displayName();
     if (snapshot == m_lastSnapshot)
         return;
@@ -152,6 +171,12 @@ bool QtMeshId::signIn(QWidget* parent)
 
     QTimer pollTimer(&prompt);
     bool signedIn = false;
+    // pollDeviceToken() waits in a nested event loop, so Cancel (or Esc) can
+    // close the prompt, and the poll timer can fire again, while a request is
+    // still out. A late token must not be saved after the user cancelled.
+    bool cancelled = false;
+    bool pollInFlight = false;
+    connect(&prompt, &QDialog::rejected, &prompt, [&cancelled]() { cancelled = true; });
     int intervalMs = qMax(1, code.intervalSeconds) * 1000;
     const int maxAttempts = qMax(1, code.expiresInSeconds / qMax(1, code.intervalSeconds) + 2);
     int attempts = 0;
@@ -191,9 +216,15 @@ bool QtMeshId::signIn(QWidget* parent)
             failSignIn(tr("The sign-in request expired. Start sign in again."));
             return;
         }
+        if (pollInFlight || cancelled)
+            return;
         ++attempts;
 
+        pollInFlight = true;
         const auto token = QtMeshCloudClient::pollDeviceToken(code.deviceCode);
+        pollInFlight = false;
+        if (cancelled || !prompt.isVisible())
+            return;
         if (token.ok) {
             pollTimer.stop();
             if (applyToken(token)) {

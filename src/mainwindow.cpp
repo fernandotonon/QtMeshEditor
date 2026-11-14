@@ -4123,6 +4123,14 @@ void MainWindow::setupCloudAccountStatusControl()
         if (m_cloudSession && !CloudCredentialStore::hasSession()) {
             m_cloudSession->deleteLater();
             m_cloudSession = nullptr;
+            // A listing still in flight on that session will never report back
+            // (its callback drops results once the session is gone): reset the
+            // state its handler would have reset, or uploads stay blocked.
+            if (m_cloudUploadListingInFlight) {
+                m_cloudUploadListingInFlight = false;
+                m_cloudUploadProgress->hideProgress();
+                statusBar()->clearMessage();
+            }
         }
         updateCloudAuthActions();
     });

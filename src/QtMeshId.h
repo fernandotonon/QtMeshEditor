@@ -5,6 +5,8 @@
 #include <QString>
 #include <QUrl>
 
+class QTimer;
+
 class QWidget;
 
 /**
@@ -73,8 +75,12 @@ signals:
 private:
     explicit QtMeshId(QObject* parent = nullptr);
     void setConnecting(bool connecting);
+    /// Arms m_expiryTimer for the stored session's expiry, so a screen left
+    /// open switches to "expired" without anyone calling refresh().
+    void scheduleExpiryCheck();
 
     bool m_connecting = false;
+    QTimer* m_expiryTimer = nullptr;
     QString m_lastSnapshot;
 };
 
