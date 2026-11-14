@@ -53,6 +53,7 @@
 #include "GamificationManager.h"
 #include "GamificationToast.h"
 #include "CloudCredentialStore.h"
+#include "QtMeshId.h"
 #include "CloudDeepLink.h"
 #include "AppLaunchHandler.h"
 #include "CloudProjectsController.h"
@@ -4116,6 +4117,23 @@ void MainWindow::setupCloudAccountStatusControl()
 
     QAction* cloudAction = ui->objectsToolbar->addWidget(m_cloudAccountControl);
     cloudAction->setObjectName(QStringLiteral("modeAnyCloudAccountAction"));
+    // Sign-in/out may happen on any surface (account button, Welcome screens,
+    // Cloud dialogs); keep every account view and the Cloud session in step.
+    connect(QtMeshId::instance(), &QtMeshId::sessionChanged, this, [this]() {
+        if (m_cloudSession && !CloudCredentialStore::hasSession()) {
+            m_cloudSession->deleteLater();
+            m_cloudSession = nullptr;
+            // A listing still in flight on that session will never report back
+            // (its callback drops results once the session is gone): reset the
+            // state its handler would have reset, or uploads stay blocked.
+            if (m_cloudUploadListingInFlight) {
+                m_cloudUploadListingInFlight = false;
+                m_cloudUploadProgress->hideProgress();
+                statusBar()->clearMessage();
+            }
+        }
+        updateCloudAuthActions();
+    });
     updateCloudAuthActions();
     updateCloudUploadActionState();
 
@@ -4226,6 +4244,8 @@ void MainWindow::setupCloudAccountStatusControl()
 
 void MainWindow::updateCloudAuthActions()
 {
+    // Picks up changes made outside QtMeshId (legacy migration, API-key login).
+    QtMeshId::instance()->refresh();
     GamificationManager::instance()->handleSessionChanged();
     if (m_cloudAccountControl)
         m_cloudAccountControl->refresh();
@@ -4275,188 +4295,18 @@ void MainWindow::showSendFeedbackDialog(const FeedbackPrefill& prefill)
 
 void MainWindow::signInToQtMeshCloud()
 {
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
-                                  QStringLiteral("QtMesh Cloud sign-in started"));
-
-    const auto code = QtMeshCloudClient::requestDeviceCode();
-    if (!code.ok) {
-        QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
-                             tr("Could not start sign in.\n\n%1").arg(code.errorString));
+    // The device-code flow lives in QtMeshId so the Welcome screens share it.
+    if (!QtMeshId::instance()->signIn(this))
         return;
-    }
-
-    QDialog prompt(this);
-    prompt.setWindowTitle(tr("Sign in to QtMesh Cloud"));
-    prompt.setWindowModality(Qt::WindowModal);
-    auto* layout = new QVBoxLayout(&prompt);
-    auto* label = new QLabel(
-        tr("Enter this code on the QtMesh Cloud website, or click Open Browser.\n\n"
-           "Code: %1")
-            .arg(code.userCode),
-        &prompt);
-    label->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    layout->addWidget(label);
-
-    auto* statusLabel = new QLabel(tr("Waiting for approval…"), &prompt);
-    statusLabel->setWordWrap(true);
-    layout->addWidget(statusLabel);
-
-    auto* buttons = new QHBoxLayout();
-    auto* copyButton = new QPushButton(tr("Copy Code"), &prompt);
-    auto* openButton = new QPushButton(tr("Open Browser"), &prompt);
-    auto* cancelButton = new QPushButton(tr("Cancel"), &prompt);
-    buttons->addWidget(copyButton);
-    buttons->addStretch();
-    buttons->addWidget(cancelButton);
-    buttons->addWidget(openButton);
-    layout->addLayout(buttons);
-
-    QTimer pollTimer(&prompt);
-    bool signedIn = false;
-    int intervalMs = qMax(1, code.intervalSeconds) * 1000;
-    const int maxAttempts = qMax(1, code.expiresInSeconds / qMax(1, code.intervalSeconds) + 2);
-    int attempts = 0;
-
-    const auto applyToken = [&](const QtMeshCloudClient::DeviceTokenResult& token) -> bool {
-        CloudSession session;
-        session.token = token.token;
-        session.expiresAt = token.expiresAt;
-        session.email = token.user.value(QStringLiteral("email")).toString();
-        if (!CloudCredentialStore::saveSession(session)) {
-            QMessageBox::warning(this, tr("QtMesh Cloud Sign In"),
-                                 tr("Signed in, but the session could not be saved securely."));
-            return false;
-        }
-
-        QSettings settings;
-        settings.setValue(AppSettingsKeys::cloudUserName(),
-                          token.user.value(QStringLiteral("name")).toString());
-        settings.setValue(AppSettingsKeys::cloudUserSlug(),
-                          token.user.value(QStringLiteral("slug")).toString());
-        // NB: do NOT remove the cloudToken / cloudTokenExpiresAt / cloudUserEmail
-        // keys here. CloudCredentialStore now persists the session in exactly
-        // those QSettings keys (it no longer uses the OS keychain), so removing
-        // them would erase the session we just saved and log the user out on the
-        // next launch.
-        settings.sync();
-        updateCloudAuthActions();
-        return true;
-    };
-
-    const auto failSignIn = [&](const QString& message) {
-        pollTimer.stop();
-        if (!prompt.isVisible())
-            return;
-        QMessageBox::warning(this, tr("QtMesh Cloud Sign In"), message);
-        prompt.reject();
-    };
-
-    const auto pollOnce = [&]() {
-        if (attempts >= maxAttempts) {
-            failSignIn(tr("The sign-in request expired. Start sign in again."));
-            return;
-        }
-        ++attempts;
-
-        const auto token = QtMeshCloudClient::pollDeviceToken(code.deviceCode);
-        if (token.ok) {
-            pollTimer.stop();
-            if (applyToken(token)) {
-                signedIn = true;
-                prompt.accept();
-            } else {
-                prompt.reject();
-            }
-            return;
-        }
-
-        if (token.errorCode == QStringLiteral("authorization_pending")) {
-            statusLabel->setText(tr("Waiting for approval…"));
-            return;
-        }
-        if (token.errorCode == QStringLiteral("slow_down")) {
-            intervalMs = qMax(intervalMs + 2000, qMax(1, token.intervalSeconds) * 1000);
-            pollTimer.setInterval(intervalMs);
-            statusLabel->setText(tr("Waiting for approval…"));
-            return;
-        }
-        if (token.errorCode == QStringLiteral("access_denied")) {
-            failSignIn(tr("Sign in was denied in the browser."));
-            return;
-        }
-        if (token.errorCode == QStringLiteral("expired_token")) {
-            failSignIn(tr("The sign-in code expired. Start sign in again."));
-            return;
-        }
-        failSignIn(tr("Sign in failed.\n\n%1").arg(token.errorString));
-    };
-
-    connect(copyButton, &QPushButton::clicked, this, [userCode = code.userCode]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud sign-in: Copy Code"));
-        if (QApplication::clipboard())
-            QApplication::clipboard()->setText(userCode);
-    });
-    connect(cancelButton, &QPushButton::clicked, &prompt, [&pollTimer, &prompt]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud sign-in: Cancel"));
-        pollTimer.stop();
-        prompt.reject();
-    });
-    connect(openButton, &QPushButton::clicked, &prompt, [this, statusLabel, verificationUri = code.verificationUriComplete]() {
-        SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                      QStringLiteral("Cloud sign-in: Open Browser"));
-        if (!QDesktopServices::openUrl(QUrl(verificationUri))) {
-            SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                          QStringLiteral("Cloud sign-in: Open Browser failed"));
-            QMessageBox::warning(this, tr("QtMesh Cloud"),
-                                 tr("Could not open QtMesh Cloud in your browser."));
-            return;
-        }
-        statusLabel->setText(tr("Complete sign-in in your browser…"));
-    });
-    connect(&pollTimer, &QTimer::timeout, pollOnce);
-
-    openButton->setDefault(true);
-    prompt.resize(420, prompt.sizeHint().height());
-
-    pollTimer.start(intervalMs);
-    QTimer::singleShot(0, &prompt, pollOnce);
-    prompt.exec();
-    pollTimer.stop();
-
-    if (signedIn) {
-        QMessageBox::information(this, tr("QtMesh Cloud Sign In"),
-                                 tr("Signed in to QtMesh Cloud as %1.")
-                                     .arg(storedCloudDisplayName()));
-        SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
-                                      QStringLiteral("QtMesh Cloud sign-in completed"));
-    }
+    QMessageBox::information(this, tr("QtMesh ID"),
+                             tr("Signed in with QtMesh ID as %1.")
+                                 .arg(QtMeshId::instance()->displayName()));
 }
 
 void MainWindow::signOutOfQtMeshCloud()
 {
-    const QString token = CloudCredentialStore::loadSession().token;
-    if (!token.isEmpty())
-        QtMeshCloudClient::logout(token, /*timeoutMs=*/10000);
-
-    CloudCredentialStore::clearSession();
-
-    QSettings settings;
-    settings.remove(AppSettingsKeys::cloudToken());
-    settings.remove(AppSettingsKeys::cloudTokenExpiresAt());
-    settings.remove(AppSettingsKeys::cloudUserName());
-    settings.remove(AppSettingsKeys::cloudUserEmail());
-    settings.remove(AppSettingsKeys::cloudUserSlug());
-    settings.sync();
-    if (m_cloudSession) {
-        m_cloudSession->deleteLater();
-        m_cloudSession = nullptr;
-    }
-    updateCloudAuthActions();
-    SentryReporter::addBreadcrumb(QStringLiteral("cloud.auth"),
-                                  QStringLiteral("QtMesh Cloud signed out"));
-    QMessageBox::information(this, tr("QtMesh Cloud"), tr("Signed out of QtMesh Cloud."));
+    QtMeshId::instance()->signOut();
+    QMessageBox::information(this, tr("QtMesh ID"), tr("Signed out of QtMesh ID."));
 }
 
 QtMeshCloudSession* MainWindow::cloudSessionForToken(const QString& token)
@@ -6438,7 +6288,9 @@ void MainWindow::on_actionMerge_Animations_triggered()
 
 void MainWindow::on_actionAbout_triggered()
 {
-    About *m = new About(this);
+    SentryReporter::addBreadcrumb("ui.action", "Help: About");
+    auto *m = new About(this);
+    m->setAttribute(Qt::WA_DeleteOnClose);
     m->show();
 }
 

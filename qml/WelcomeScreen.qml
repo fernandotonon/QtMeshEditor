@@ -62,10 +62,133 @@ Rectangle {
                 }
 
                 Text {
-                    text: "3D Mesh Editor & Converter"
+                    text: WelcomeScreenController.tagline
+                    color: PropertiesPanelController.highlightColor
+                    font.pixelSize: 13
+                    font.bold: true
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Text {
+                    text: "Open-source 3D creation and asset pipeline"
                     color: Qt.darker(PropertiesPanelController.textColor, 1.4)
                     font.pixelSize: 12
                     Layout.alignment: Qt.AlignHCenter
+                }
+            }
+
+            // ---- QtMesh ID (optional account; one compact row) ----
+            Rectangle {
+                id: accountBar
+                objectName: "qtmeshIdBar"
+                readonly property string state_: WelcomeScreenController.accountState
+                Layout.fillWidth: true
+                implicitHeight: accountRow.implicitHeight + 16
+                radius: 8
+                color: "transparent"
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                RowLayout {
+                    id: accountRow
+                    anchors { fill: parent; leftMargin: 10; rightMargin: 10; topMargin: 8; bottomMargin: 8 }
+                    spacing: 10
+
+                    // Avatar (initials) when signed in, else a neutral ID badge.
+                    Rectangle {
+                        width: 28; height: 28; radius: 14
+                        color: accountBar.state_ === "signedIn"
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: accountBar.state_ === "signedIn" ? 0 : 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: accountBar.state_ === "signedIn"
+                                ? (WelcomeScreenController.accountInitials || "?") : "ID"
+                            color: accountBar.state_ === "signedIn"
+                                ? "#ffffff" : PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+                        Text {
+                            text: "QtMesh ID"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                            font.pixelSize: 11
+                            text: {
+                                switch (accountBar.state_) {
+                                case "signedIn":
+                                    return "✓ Connected as " + WelcomeScreenController.accountName
+                                case "connecting":
+                                    return "Connecting… finish signing in in your browser."
+                                case "expired":
+                                    return "Your session expired. Sign in again to reconnect QtMesh Cloud."
+                                default:
+                                    return "Your account for the QtMesh ecosystem: QtMesh Cloud projects "
+                                         + "and progress sync. Optional — the editor works without it."
+                                }
+                            }
+                        }
+                    }
+
+                    // Actions: compact text links, secondary to New Scene / Open File.
+                    Repeater {
+                        model: {
+                            switch (accountBar.state_) {
+                            case "signedIn":
+                                return [{ label: "Manage Account", act: "manage" },
+                                        { label: "Sign out", act: "signout" }]
+                            case "connecting":
+                                return []
+                            case "expired":
+                                return [{ label: "Sign in with QtMesh ID", act: "signin" }]
+                            default:
+                                return [{ label: "Sign in with QtMesh ID", act: "signin" },
+                                        { label: "Create a free account", act: "create" }]
+                            }
+                        }
+                        delegate: Text {
+                            required property var modelData
+                            text: modelData.label
+                            color: PropertiesPanelController.highlightColor
+                            font.pixelSize: 12
+                            font.bold: modelData.act === "signin"
+                            font.underline: linkMA.containsMouse || activeFocus
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: modelData.label
+                            function trigger() {
+                                switch (modelData.act) {
+                                case "signin": WelcomeScreenController.signInWithQtMeshId(); break
+                                case "create": WelcomeScreenController.createQtMeshIdAccount(); break
+                                case "manage": WelcomeScreenController.manageQtMeshIdAccount(); break
+                                case "signout": WelcomeScreenController.signOutOfQtMeshId(); break
+                                }
+                            }
+                            Keys.onReturnPressed: trigger()
+                            Keys.onEnterPressed: trigger()
+                            Keys.onSpacePressed: trigger()
+                            MouseArea {
+                                id: linkMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: parent.trigger()
+                            }
+                        }
+                    }
                 }
             }
 
@@ -391,6 +514,117 @@ Rectangle {
                         Layout.fillWidth: true
                     }
                 }
+            }
+
+            // ---- Made with QtMeshEditor (same catalog as WelcomeDialog) ----
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: PropertiesPanelController.borderColor
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: "Made with QtMeshEditor"
+                    color: Qt.darker(PropertiesPanelController.textColor, 1.3)
+                    font.pixelSize: 11
+                    font.bold: true
+                    font.capitalization: Font.AllUppercase
+                    Layout.fillWidth: true
+                }
+                Text {
+                    id: exploreLink
+                    text: "Explore QtMesh Games \u2192"
+                    color: PropertiesPanelController.highlightColor
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.underline: exploreMA.containsMouse || activeFocus
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Link
+                    Accessible.name: text
+                    Keys.onReturnPressed: WelcomeScreenController.openEcosystemLink("games")
+                    Keys.onSpacePressed: WelcomeScreenController.openEcosystemLink("games")
+                    MouseArea {
+                        id: exploreMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: WelcomeScreenController.openEcosystemLink("games")
+                    }
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 4
+                columnSpacing: 8
+
+                Repeater {
+                    // Four cards keep the section compact; About shows them all.
+                    model: WelcomeScreenController.showcaseGames.filter(
+                               g => ["scrapfall", "ironfang", "mall-chase", "data-core-clash"].indexOf(g.id) >= 0)
+
+                    Rectangle {
+                        id: gameCard
+                        Layout.fillWidth: true
+                        implicitHeight: cardCol.implicitHeight + 12
+                        radius: 6
+                        color: PropertiesPanelController.headerColor
+                        border.color: (gameMA.containsMouse || activeFocus)
+                                      ? PropertiesPanelController.highlightColor
+                                      : PropertiesPanelController.borderColor
+                        border.width: activeFocus ? 2 : 1
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Link
+                        Accessible.name: modelData.title + ", " + modelData.platform + " game"
+                        Keys.onReturnPressed: WelcomeScreenController.openEcosystemLink(modelData.id)
+                        Keys.onSpacePressed: WelcomeScreenController.openEcosystemLink(modelData.id)
+
+                        ColumnLayout {
+                            id: cardCol
+                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
+                            spacing: 4
+                            Image {
+                                source: modelData.thumbnail
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: width * 9 / 16
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                                smooth: true
+                                mipmap: true
+                            }
+                            Text {
+                                text: modelData.title
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 11
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: modelData.platform
+                                color: Qt.darker(PropertiesPanelController.textColor, 1.5)
+                                font.pixelSize: 10
+                            }
+                        }
+                        MouseArea {
+                            id: gameMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: WelcomeScreenController.openEcosystemLink(modelData.id)
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "Platforms: " + WelcomeScreenController.platformsSummary
+                color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
 
             // ---- Separator ----
