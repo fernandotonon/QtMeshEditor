@@ -8,9 +8,9 @@
 	<string>APPL</string>
 
 	<key>CFBundleName</key>
-	<string>QtMeshEditor</string>
+	<string>QtMesh Editor</string>
 	<key>CFBundleDisplayName</key>
-	<string>QtMeshEditor</string>
+	<string>QtMesh Editor</string>
 	<key>CFBundleSignature</key>
 	<string>QtMeshEditor</string>
 	<key>CFBundleIdentifier</key>
@@ -44,7 +44,7 @@
 	<true/>
 
 	<key>NSCameraUsageDescription</key>
-	<string>QtMeshEditor uses the camera for live performance capture.</string>
+	<string>QtMesh Editor uses the camera for live performance capture.</string>
 
 	<key>CFBundleDocumentTypes</key>
 	<array>

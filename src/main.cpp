@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QMessageBox>
 #include "WelcomeDialog.h"
+#include "GamificationManager.h"
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
@@ -463,6 +464,12 @@ int main(int argc, char *argv[])
     bool welcomeNewScene = false;
     if (launchPaths.isEmpty() && WelcomeDialog::shouldShow()) {
         WelcomeDialog welcome;
+        // The "try this next" card (E-P5). The manager is a process singleton
+        // MainWindow creates anyway; creating it here only reads local state.
+        auto* gamify = GamificationManager::instance();
+        welcome.setDiscoverySuggestion(gamify->suggestion(), [gamify](const QString& key) {
+            gamify->dismissSuggestion(key);
+        });
         welcome.exec();
         if (welcome.userAction() == WelcomeDialog::OpenFile ||
             welcome.userAction() == WelcomeDialog::OpenRecent) {
@@ -509,14 +516,14 @@ int main(int argc, char *argv[])
 
         result = a.exec();
     } catch (const std::exception& e) {
-        QMessageBox::critical(nullptr, "QtMeshEditor - Startup Error",
-            QString("QtMeshEditor failed to start:\n\n%1\n\n"
+        QMessageBox::critical(nullptr, "QtMesh Editor - Startup Error",
+            QString("QtMesh Editor failed to start:\n\n%1\n\n"
                     "Please ensure your GPU drivers are up to date and OpenGL is available.")
                 .arg(QString::fromStdString(e.what())));
         result = 1;
     } catch (...) {
-        QMessageBox::critical(nullptr, "QtMeshEditor - Startup Error",
-            "QtMeshEditor failed to start due to an unexpected error.\n\n"
+        QMessageBox::critical(nullptr, "QtMesh Editor - Startup Error",
+            "QtMesh Editor failed to start due to an unexpected error.\n\n"
             "Please ensure your GPU drivers are up to date and OpenGL is available.");
         result = 1;
     }

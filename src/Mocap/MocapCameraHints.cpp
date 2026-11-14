@@ -46,7 +46,7 @@ QString permissionDeniedMessage()
     return QCoreApplication::translate(
         "MocapCameraHints",
         "Camera access was not granted. If no prompt appeared, enable it for "
-        "QtMeshEditor in System Settings → Privacy & Security → Camera, then "
+        "QtMesh Editor in System Settings → Privacy & Security → Camera, then "
         "click Preview again.");
 #elif defined(Q_OS_LINUX)
     if (runningAsSnap()) {
@@ -58,13 +58,13 @@ QString permissionDeniedMessage()
     }
     return QCoreApplication::translate(
         "MocapCameraHints",
-        "Camera access was not granted. Allow camera access for QtMeshEditor "
+        "Camera access was not granted. Allow camera access for QtMesh Editor "
         "in your system privacy settings (or via xdg-desktop-portal), then "
         "click Preview again.");
 #else
     return QCoreApplication::translate(
         "MocapCameraHints",
-        "Camera access was not granted. Allow camera access for QtMeshEditor, "
+        "Camera access was not granted. Allow camera access for QtMesh Editor, "
         "then click Preview again.");
 #endif
 }

@@ -414,6 +414,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppStorage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeDialog.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshEcosystem.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EcosystemWidgets.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshId.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshIdPanel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.cpp
@@ -583,6 +587,11 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIModelCatalog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeDialog.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshEcosystem.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EcosystemWidgets.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshId.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshIdPanel.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppBranding.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h

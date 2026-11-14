@@ -49,7 +49,7 @@ TEST_F(LLMSettingsWidgetTest, TabNames)
     EXPECT_EQ(tabWidget->tabText(0), "LLM Models");
     EXPECT_EQ(tabWidget->tabText(1), "Settings");
     EXPECT_EQ(tabWidget->tabText(2), "LLM Download");
-    EXPECT_EQ(tabWidget->tabText(3), "QtMeshEditor Models");
+    EXPECT_EQ(tabWidget->tabText(3), "QtMesh Editor Models");
 #ifdef ENABLE_STABLE_DIFFUSION
     EXPECT_EQ(tabWidget->tabText(4), "Image Models");   // FLUX.2 lives here too, not just SD
     EXPECT_EQ(tabWidget->tabText(5), "Image Settings");

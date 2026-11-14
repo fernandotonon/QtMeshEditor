@@ -337,6 +337,10 @@ AIModelCatalog.cpp
 AppStorage.cpp
 WelcomeScreenController.cpp
 WelcomeDialog.cpp
+QtMeshEcosystem.cpp
+EcosystemWidgets.cpp
+QtMeshId.cpp
+QtMeshIdPanel.cpp
 ScanConfig.cpp
 ScanEngine.cpp
 PlatformProfile.cpp
@@ -556,6 +560,11 @@ AIToolRouter.h
 AIModelCatalog.h
 WelcomeScreenController.h
 WelcomeDialog.h
+QtMeshEcosystem.h
+EcosystemWidgets.h
+QtMeshId.h
+QtMeshIdPanel.h
+AppBranding.h
 ScanConfig.h
 ScanEngine.h
 PlatformProfile.h

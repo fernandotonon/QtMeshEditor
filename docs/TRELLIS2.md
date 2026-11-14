@@ -1,6 +1,6 @@
 # TRELLIS.2 image-to-3D backend
 
-TRELLIS.2 (Microsoft, MIT code + MIT weights) is QtMeshEditor's highest-quality
+TRELLIS.2 (Microsoft, MIT code + MIT weights) is QtMesh Editor's highest-quality
 image-to-3D backend, and the **default** one whenever its runtime is installed. It sits
 next to the local ONNX backends:
 
@@ -12,7 +12,7 @@ next to the local ONNX backends:
 
 ## Architecture — who does what
 
-**TRELLIS.2 generates; QtMeshEditor makes the asset.**
+**TRELLIS.2 generates; QtMesh Editor makes the asset.**
 
 ```text
 input image ── U²-Net alpha matte (QtMeshEditor, Apache-2.0) ──► RGBA
@@ -37,15 +37,15 @@ re-baked later without re-running inference.
 The upstream reference implementation uses **nvdiffrast** (UV rasterization/texture bake,
 preview rendering) and **nvdiffrec** (environment-light PBR previews). Both are under the
 NVIDIA Source Code License — *research or evaluation use only* — which is incompatible
-with QtMeshEditor's commercial redistribution, so this integration **excludes them
+with QtMesh Editor's commercial redistribution, so this integration **excludes them
 entirely**: never installed, never imported, never invoked; the sidecar warns if they are
 unexpectedly present, `scripts/check-trellis2-restricted-deps.sh` + `Trellis2GuardTest`
-gate CI, and everything they did is replaced by QtMeshEditor's own code
+gate CI, and everything they did is replaced by QtMesh Editor's own code
 (`src/ImageTo3D/Trellis2Bake.{h,cpp}` — xatlas, meshoptimizer, a conventional barycentric
 UV-space rasterizer, Ericson closest-point queries and trilinear sparse-volume sampling;
 previews come from the existing Ogre/RTSS + HDR/IBL renderer). Two more license traps are
 bypassed: the upstream default background remover `briaai/RMBG-2.0` is **CC BY-NC** and is
-never downloaded (QtMeshEditor's own U²-Net produces the alpha matte), and `pip install
+never downloaded (QtMesh Editor's own U²-Net produces the alpha matte), and `pip install
 cumesh` would fetch an unrelated unlicensed PyPI package (CuMesh is built from the pinned
 MIT checkout instead).
 
@@ -65,11 +65,11 @@ when both are present:
 | **trellis.cpp** (preferred, **bundled**) | C++/GGML ([pwilkin/trellis.cpp](https://github.com/pwilkin/trellis.cpp)) — CUDA / Vulkan / **Metal** / CPU, no Python, GGUF weights. Built with `ENABLE_TRELLIS_CPP` as a **self-contained** `trellis-cli` (`BUILD_SHARED_LIBS=OFF` so ggml is linked in — shipping only the CLI without `libggml*.so` caused exit 127 on Linux .deb/snap). Linux builds enable **Vulkan** (`GGML_VULKAN=ON`; runtime `libvulkan1`) and ship an **AVX-without-FMA** CPU baseline so pre-Haswell hosts do not SIGILL; GPU is used automatically when a Vulkan device is present. | Linux + **macOS** release builds (Windows MinGW still OFF pending verification) | Discovery order: env `QTMESH_TRELLIS2_CLI` → QSettings `ai/trellis2Cli` → bundled next to the editor binary → `trellis-cli` on `PATH`. Models: `QTMESH_TRELLIS2_CLI_MODELS` / `ai/trellis2CliModels` / `<AppData>/ai_models/trellis2` (GGUFs from AI Model Settings / [`ilintar/trellis2-gguf`](https://huggingface.co/ilintar/trellis2-gguf)) |
 | Python sidecar | upstream-exact PyTorch/CUDA (`ai/trellis2/`) | Linux + NVIDIA | as below |
 
-QtMeshEditor invokes `trellis-cli --dump-post` (upstream PR
+QtMesh Editor invokes `trellis-cli --dump-post` (upstream PR
 [#45](https://github.com/pwilkin/trellis.cpp/pull/45); pin must be at/after that merge —
 3.37.6 shipped an older pin and every install failed with `unknown option: --dump-post`):
 trellis.cpp emits the RAW decoded mesh + sparse PBR volume and exits before its own
-remesh/UV/bake — QtMeshEditor keeps the game-ready + native-bake pipeline either way.
+remesh/UV/bake — QtMesh Editor keeps the game-ready + native-bake pipeline either way.
 Presets map to `--res` (fast=512, balanced=1024, high=1536); with only the 512 GGUFs
 installed the backend drops to the 512 pipeline with a warning. `--mock` runs always
 route to the Python sidecar.
@@ -81,10 +81,10 @@ python3 ai/trellis2/install.py            # → ~/.local/share/QtMeshEditor/trel
 huggingface-cli login                     # DINOv3 is gated — accept Meta's terms on HF first
 ```
 
-QtMeshEditor auto-detects the default location; override with `QTMESH_TRELLIS2_ENV` (or
+QtMesh Editor auto-detects the default location; override with `QTMESH_TRELLIS2_ENV` (or
 QSettings `ai/trellis2Env`), and the interpreter with `QTMESH_TRELLIS2_PYTHON`
 (`ai/trellis2Python`). The ~19 GB TRELLIS.2-4B weights download on the first generation.
-Everything is isolated in that directory — nothing touches QtMeshEditor's own dependencies.
+Everything is isolated in that directory — nothing touches QtMesh Editor's own dependencies.
 
 Health checks:
 

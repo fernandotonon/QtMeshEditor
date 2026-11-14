@@ -213,7 +213,7 @@ Rectangle {
                         }
 
                         Text {
-                            text: "Telemetry helps improve QtMeshEditor by sending anonymous usage data."
+                            text: "Telemetry helps improve QtMesh Editor by sending anonymous usage data."
                             font.pixelSize: 11; font.italic: true; color: dimTextColor; wrapMode: Text.WordWrap; width: parent.width
                         }
 

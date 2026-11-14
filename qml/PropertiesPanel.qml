@@ -3272,6 +3272,28 @@ Rectangle {
                 persistentSelection: true
             }
 
+            // Copy the status + warning to the clipboard. Selecting text in the
+            // Inspector's QQuickWidget is unreliable and Cmd/Ctrl+C can be
+            // taken by the main window's Copy shortcut, so give errors a button.
+            TextEdit { id: mgClipboard; visible: false }
+            InspectorButton {
+                id: mgCopyBtn
+                text: "Copy message"
+                visible: !MeshGenController.busy
+                    && (mgStatus.text.length > 0 || mgWarning.text.length > 0)
+                onClicked: {
+                    var parts = []
+                    if (mgStatus.text.length > 0) parts.push(mgStatus.text)
+                    if (mgWarning.text.length > 0) parts.push(mgWarning.text)
+                    mgClipboard.text = parts.join("\n")
+                    mgClipboard.selectAll()
+                    mgClipboard.copy()
+                    text = "Copied"
+                    mgCopyReset.restart()
+                }
+                Timer { id: mgCopyReset; interval: 1500; onTriggered: mgCopyBtn.text = "Copy message" }
+            }
+
             // Cancel (only while busy)
             InspectorButton {
                 text: "Cancel"

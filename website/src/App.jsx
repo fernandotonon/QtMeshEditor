@@ -392,7 +392,7 @@ function App() {
         <main className={styles.main}>
           <header className={`${styles.hero} reveal`}>
             <div className={styles.heroCopy}>
-              <p className={styles.kicker}>QtMeshEditor | CI/CD for 3D Assets</p>
+              <p className={styles.kicker}>QtMesh Editor | CI/CD for 3D Assets</p>
               <h1 className={styles.heroTitle}>{hero.title}</h1>
               <p className={styles.heroSubtitle}>{hero.subtitle}</p>
 
@@ -712,7 +712,7 @@ function App() {
           <Section
             id="install"
             eyebrow="Install"
-            title="Install QtMeshEditor and start scanning"
+            title="Install QtMesh Editor and start scanning"
             subtitle="Choose your platform path: winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries."
           >
             <div className={styles.installPortalEntryActions}>
@@ -753,21 +753,21 @@ function App() {
               <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
                 <img
                   src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor?style=for-the-badge&label=GitHub%20stars"
-                  alt="QtMeshEditor GitHub stars"
+                  alt="QtMesh Editor GitHub stars"
                   loading="lazy"
                 />
               </a>
               <a href={links.releases} target="_blank" rel="noreferrer">
                 <img
                   src="https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?style=for-the-badge&label=Latest%20release"
-                  alt="QtMeshEditor latest release"
+                  alt="QtMesh Editor latest release"
                   loading="lazy"
                 />
               </a>
               <a href={links.license} target="_blank" rel="noreferrer">
                 <img
                   src="https://img.shields.io/github/license/fernandotonon/QtMeshEditor?style=for-the-badge&label=License"
-                  alt="QtMeshEditor license badge"
+                  alt="QtMesh Editor license badge"
                   loading="lazy"
                 />
               </a>
@@ -787,7 +787,7 @@ function App() {
 
         <footer className={styles.footer}>
           <div className={styles.footerInner}>
-            <p>QtMeshEditor</p>
+            <p>QtMesh Editor</p>
             <div className={styles.footerLinks}>
               {footerLinks.map((item) => (
                 <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
