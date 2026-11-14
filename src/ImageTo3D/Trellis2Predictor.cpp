@@ -797,10 +797,16 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         return failResult(QStringLiteral("cancelled"));
     if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
         if (guideControlUsed && errBuf.contains("unknown option: --ss-control"))
+            // Name the binary that ran: the usual cause is a stale override
+            // (QTMESH_TRELLIS2_CLI / QSettings ai/trellis2Cli) pointing at an
+            // older install, which wins over the bundled runtime.
             return failResult(QStringLiteral(
-                "trellis2: this trellis-cli has no shape-guide support (--ss-control). "
-                "Rebuild QtMeshEditor's bundled runtime (cmake/TrellisCpp.cmake pins a trellis.cpp with --ss-control), "
-                "or set the guide strength to 0 to only bake onto the guide."));
+                "trellis2: the trellis-cli at %1 has no shape-guide support (--ss-control). "
+                "If that path is an older install set by %2 or the QSettings key %3, clear it to use the bundled runtime; "
+                "otherwise rebuild the bundled runtime (cmake/TrellisCpp.cmake pins a trellis.cpp with --ss-control), "
+                "or set the guide strength to 0 to only bake onto the guide.")
+                    .arg(QDir::toNativeSeparators(cli), QLatin1String(kEnvCliVar),
+                         QLatin1String(kCliSettingsKey)));
         return failFromTrellisCliProcess(proc, errBuf);
     }
     Trellis2Interchange::ReadResult rr =
