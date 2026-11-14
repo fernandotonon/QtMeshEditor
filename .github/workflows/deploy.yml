@@ -98,13 +98,17 @@ jobs:
           # scan would test a binary that cannot start. Fall back to the newest
           # earlier release that loads.
           binary_loads() {
-            local out
-            # Same library path and rule as the docker-publish verification:
-            # the bundled Qt/Ogre/Assimp libraries live in /usr/lib/qtmesheditor,
+            local out rc=0
+            # The library path the .deb launcher (/usr/bin/qtmesheditor) exports,
             # so with it set ANY "not found" (a missing library or a too-new
-            # GLIBC/GLIBCXX symbol version) means the binary cannot start.
+            # GLIBC/GLIBCXX symbol version) means the binary cannot start. A
+            # failing docker run / ldd counts as "does not load" too.
             out="$(docker run --rm --entrypoint bash ghcr.io/fernandotonon/qtmesh:ci-scan -c \
-                     'LD_LIBRARY_PATH=/usr/lib/qtmesheditor ldd /usr/share/qtmesheditor/qtmesheditor 2>&1' || true)"
+                     'LD_LIBRARY_PATH=/usr/lib/qtmesheditor:/usr/share/qtmesheditor ldd /usr/share/qtmesheditor/qtmesheditor 2>&1')" || rc=$?
+            if [ "$rc" -ne 0 ]; then
+              echo "::warning::Package load check failed (exit $rc): $out"
+              return 1
+            fi
             ! grep -q "not found" <<<"$out"
           }
           build_image
