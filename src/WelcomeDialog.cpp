@@ -1,20 +1,42 @@
 #include "WelcomeDialog.h"
+#include "EcosystemWidgets.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "QtMeshEcosystem.h"
 #include "SentryReporter.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QPushButton>
-#include <QCheckBox>
-#include <QListWidget>
-#include <QFileInfo>
-#include <QSettings>
-#include <QFileDialog>
 #include <QApplication>
-#include <QStyle>
+#include <QCheckBox>
+#include <QFileInfo>
 #include <QFont>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QLabel>
+#include <QListWidget>
+#include <QPushButton>
+#include <QSettings>
+#include <QToolButton>
+#include <QVBoxLayout>
+
+namespace {
+const QString kSurface = QStringLiteral("welcome");
+
+// The four games on the Welcome card: three web games and one Roblox
+// experience, so both playable platforms are represented.
+const QStringList kWelcomeGames = {
+    QStringLiteral("scrapfall"), QStringLiteral("ironfang"),
+    QStringLiteral("mall-chase"), QStringLiteral("data-core-clash"),
+};
+
+QLabel* tipRow(const QString& title, const QString& body, QWidget* parent)
+{
+    auto* label = new QLabel(QStringLiteral("<b>%1</b><br>%2").arg(title, body), parent);
+    label->setTextFormat(Qt::RichText);
+    label->setWordWrap(true);
+    return label;
+}
+} // namespace
 
 bool WelcomeDialog::shouldShow()
 {
@@ -32,48 +54,127 @@ QFileDialog::Options WelcomeDialog::openFileDialogOptions()
 WelcomeDialog::WelcomeDialog(QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle("QtMeshEditor");
-    setFixedSize(480, 420);
+    setWindowTitle(QStringLiteral("Welcome to QtMeshEditor"));
+    setWindowIcon(QIcon(QStringLiteral(":/icones/icone.ico")));
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+    // Width only: an explicit minimum HEIGHT would override the layout's own
+    // minimum and squeeze the word-wrapped tips and the game cards.
+    setMinimumWidth(720);
+    resize(860, 700);
 
     auto* mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(12);
-    mainLayout->setContentsMargins(24, 20, 24, 16);
+    mainLayout->setSpacing(16);
+    mainLayout->setContentsMargins(28, 24, 28, 18);
 
-    // Title
-    auto* titleLabel = new QLabel("QtMeshEditor");
-    QFont titleFont = titleLabel->font();
-    titleFont.setPointSize(20);
-    titleFont.setBold(true);
-    titleLabel->setFont(titleFont);
-    titleLabel->setAlignment(Qt::AlignCenter);
-    mainLayout->addWidget(titleLabel);
+    // ---- Header: logo, name, identity line --------------------------------
+    {
+        auto* header = new QHBoxLayout();
+        header->setSpacing(14);
 
-    auto* subtitleLabel = new QLabel("Automate your 3D asset pipeline");
-    subtitleLabel->setAlignment(Qt::AlignCenter);
-    subtitleLabel->setStyleSheet("color: gray;");
-    mainLayout->addWidget(subtitleLabel);
+        auto* logo = new QLabel(this);
+        logo->setPixmap(QIcon(QStringLiteral(":/icones/icone.ico")).pixmap(48, 48));
+        logo->setFixedSize(48, 48);
+        header->addWidget(logo, 0, Qt::AlignTop);
 
-    mainLayout->addSpacing(4);
+        auto* titles = new QVBoxLayout();
+        titles->setSpacing(2);
+        auto* title = new QLabel(QStringLiteral("QtMeshEditor"), this);
+        QFont tf = title->font();
+        tf.setPointSizeF(tf.pointSizeF() * 1.7);
+        tf.setBold(true);
+        title->setFont(tf);
+        titles->addWidget(title);
 
-    // Action buttons
+        auto* tagline = new QLabel(QtMeshEcosystem::tagline(), this);
+        QFont gf = tagline->font();
+        gf.setBold(true);
+        tagline->setFont(gf);
+        QPalette tp = tagline->palette();
+        tp.setColor(QPalette::WindowText, EcosystemWidgets::accentColor(tp));
+        tagline->setPalette(tp);
+        titles->addWidget(tagline);
+        titles->addWidget(EcosystemWidgets::mutedLabel(
+            QStringLiteral("Open-source 3D creation and asset pipeline"), this));
+        header->addLayout(titles, 1);
+
+        auto* version = EcosystemWidgets::mutedLabel(
+            QStringLiteral("Version %1").arg(QStringLiteral(QTMESHEDITOR_VERSION)), this);
+        version->setWordWrap(false);
+        header->addWidget(version, 0, Qt::AlignTop | Qt::AlignRight);
+        mainLayout->addLayout(header);
+    }
+
+    mainLayout->addWidget(EcosystemWidgets::separator(this));
+
+    // ---- Body: start actions + recent files | tips + discovery ------------
+    auto* body = new QHBoxLayout();
+    body->setSpacing(28);
+    body->addWidget(buildStartColumn(), 3);
+    body->addWidget(buildTipsColumn(), 2);
+    mainLayout->addLayout(body, 1);
+
+    mainLayout->addWidget(EcosystemWidgets::separator(this));
+
+    // ---- Made with QtMeshEditor -------------------------------------------
+    mainLayout->addWidget(buildShowcase());
+
+    mainLayout->addWidget(EcosystemWidgets::separator(this));
+
+    // ---- Footer: don't show again + Get Started ---------------------------
+    auto* bottomLayout = new QHBoxLayout();
+    auto* dontShowCheck = new QCheckBox(QStringLiteral("Don't show again"), this);
+    bottomLayout->addWidget(dontShowCheck);
+
+    // Persist "Don't show again" on ANY exit path (New Scene, Open File, Recent, Get Started)
+    connect(this, &QDialog::accepted, this, [dontShowCheck]() {
+        if (dontShowCheck->isChecked()) {
+            QSettings settings;
+            settings.setValue("WelcomeScreen/dontShowAgain", true);
+        }
+    });
+
+    bottomLayout->addStretch();
+
+    auto* getStartedBtn = new QPushButton(QStringLiteral("Get Started"), this);
+    getStartedBtn->setMinimumHeight(32);
+    getStartedBtn->setStyleSheet(EcosystemWidgets::secondaryButtonStyle(palette()));
+    connect(getStartedBtn, &QPushButton::clicked, this, [this]() {
+        m_action = Dismissed;
+        SentryReporter::addBreadcrumb("ui.action", "Welcome: Dismissed");
+        accept();
+    });
+    bottomLayout->addWidget(getStartedBtn);
+    mainLayout->addLayout(bottomLayout);
+}
+
+QWidget* WelcomeDialog::buildStartColumn()
+{
+    auto* column = new QWidget(this);
+    auto* layout = new QVBoxLayout(column);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    layout->addWidget(EcosystemWidgets::sectionHeader(QStringLiteral("Start"), column));
+
     auto* btnLayout = new QHBoxLayout();
     btnLayout->setSpacing(10);
 
-    auto* newSceneBtn = new QPushButton("New Scene");
-    newSceneBtn->setMinimumHeight(36);
-    newSceneBtn->setStyleSheet(
-        "QPushButton { background-color: #3080d0; color: white; border-radius: 4px; padding: 0 16px; font-weight: bold; }"
-        "QPushButton:hover { background-color: #4090e0; }");
+    auto* newSceneBtn = new QPushButton(QStringLiteral("New Scene"), column);
+    newSceneBtn->setMinimumHeight(40);
+    newSceneBtn->setDefault(true);
+    newSceneBtn->setStyleSheet(EcosystemWidgets::primaryButtonStyle(palette()));
+    newSceneBtn->setToolTip(QStringLiteral("Start with an empty scene"));
     connect(newSceneBtn, &QPushButton::clicked, this, [this]() {
         m_action = NewScene;
         SentryReporter::addBreadcrumb("ui.action", "Welcome: New Scene");
         accept();
     });
-    btnLayout->addWidget(newSceneBtn);
+    btnLayout->addWidget(newSceneBtn, 1);
 
-    auto* openFileBtn = new QPushButton("Open File...");
-    openFileBtn->setMinimumHeight(36);
+    auto* openFileBtn = new QPushButton(QStringLiteral("Open File..."), column);
+    openFileBtn->setMinimumHeight(40);
+    openFileBtn->setStyleSheet(EcosystemWidgets::secondaryButtonStyle(palette()));
+    openFileBtn->setToolTip(QStringLiteral("Open a mesh, scene or animation file"));
     connect(openFileBtn, &QPushButton::clicked, this, [this]() {
         const QString filter = MeshImporterExporter::importFileDialogFilterFromExtensionList(
             Manager::defaultImportExtensions());
@@ -87,78 +188,176 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
             accept();
         }
     });
-    btnLayout->addWidget(openFileBtn);
+    btnLayout->addWidget(openFileBtn, 1);
+    layout->addLayout(btnLayout);
 
-    mainLayout->addLayout(btnLayout);
+    layout->addSpacing(6);
+    layout->addWidget(EcosystemWidgets::sectionHeader(QStringLiteral("Recent Files"), column));
 
-    // Recent files
     QSettings settings;
-    QStringList recentFiles = settings.value("RecentFiles/files").toStringList();
-
-    if (!recentFiles.isEmpty()) {
-        auto* recentLabel = new QLabel("Recent Files");
-        QFont recentFont = recentLabel->font();
-        recentFont.setBold(true);
-        recentLabel->setFont(recentFont);
-        mainLayout->addWidget(recentLabel);
-
-        auto* recentList = new QListWidget();
-        recentList->setMaximumHeight(120);
-        for (const QString& path : recentFiles) {
-            QFileInfo fi(path);
-            if (fi.exists()) {
-                auto* item = new QListWidgetItem(fi.fileName());
-                item->setToolTip(path);
-                item->setData(Qt::UserRole, path);
-                recentList->addItem(item);
-            }
-        }
-        auto openRecent = [this](QListWidgetItem* item) {
-            m_action = OpenRecent;
-            m_selectedFile = item->data(Qt::UserRole).toString();
-            SentryReporter::addBreadcrumb("ui.action", "Welcome: Open Recent");
-            accept();
-        };
-        connect(recentList, &QListWidget::itemDoubleClicked, this, openRecent);
-        connect(recentList, &QListWidget::itemActivated, this, openRecent);
-        mainLayout->addWidget(recentList);
+    const QStringList recentFiles = settings.value("RecentFiles/files").toStringList();
+    QStringList existing;
+    for (const QString& path : recentFiles) {
+        if (QFileInfo::exists(path))
+            existing.append(path);
     }
 
-    // Tips
-    auto* tipsLabel = new QLabel(
-        "<b>Tips:</b> Press <b>Ctrl+/</b> for keyboard shortcuts, "
-        "<b>Ctrl+,</b> for preferences. "
-        "Use the <b>AI Chat</b> panel to control the editor with natural language.");
-    tipsLabel->setWordWrap(true);
-    tipsLabel->setStyleSheet("color: gray; font-size: 11px;");
-    mainLayout->addWidget(tipsLabel);
+    if (existing.isEmpty()) {
+        layout->addWidget(EcosystemWidgets::mutedLabel(
+            QStringLiteral("No recent files yet. Files you open will appear here."), column));
+        layout->addStretch();
+        return column;
+    }
 
-    mainLayout->addStretch();
-
-    // Bottom row: don't show again + Get Started
-    auto* bottomLayout = new QHBoxLayout();
-
-    auto* dontShowCheck = new QCheckBox("Don't show again");
-    bottomLayout->addWidget(dontShowCheck);
-
-    // Persist "Don't show again" on ANY exit path (New Scene, Open File, Recent, Get Started)
-    connect(this, &QDialog::accepted, this, [dontShowCheck]() {
-        if (dontShowCheck->isChecked()) {
-            QSettings settings;
-            settings.setValue("WelcomeScreen/dontShowAgain", true);
-        }
-    });
-
-    bottomLayout->addStretch();
-
-    auto* getStartedBtn = new QPushButton("Get Started");
-    getStartedBtn->setMinimumHeight(32);
-    connect(getStartedBtn, &QPushButton::clicked, this, [this]() {
-        m_action = Dismissed;
-        SentryReporter::addBreadcrumb("ui.action", "Welcome: Dismissed");
+    auto* recentList = new QListWidget(column);
+    recentList->setFrameShape(QFrame::NoFrame);
+    recentList->setUniformItemSizes(true);
+    recentList->setAccessibleName(QStringLiteral("Recent files"));
+    recentList->setStyleSheet(QStringLiteral(
+        "QListWidget { background: transparent; }"
+        "QListWidget::item { padding: 5px 6px; border-radius: 4px; }"
+        "QListWidget::item:hover { background: palette(alternate-base); }"
+        "QListWidget::item:selected { background: palette(highlight);"
+        "  color: palette(highlighted-text); }"));
+    for (const QString& path : existing) {
+        QFileInfo fi(path);
+        auto* item = new QListWidgetItem(
+            QStringLiteral("%1   —   %2").arg(fi.fileName(), fi.absolutePath()));
+        item->setToolTip(path);
+        item->setData(Qt::UserRole, path);
+        recentList->addItem(item);
+    }
+    auto openRecent = [this](QListWidgetItem* item) {
+        m_action = OpenRecent;
+        m_selectedFile = item->data(Qt::UserRole).toString();
+        SentryReporter::addBreadcrumb("ui.action", "Welcome: Open Recent");
         accept();
-    });
-    bottomLayout->addWidget(getStartedBtn);
+    };
+    connect(recentList, &QListWidget::itemDoubleClicked, this, openRecent);
+    connect(recentList, &QListWidget::itemActivated, this, openRecent);
+    layout->addWidget(recentList, 1);
+    return column;
+}
 
-    mainLayout->addLayout(bottomLayout);
+QWidget* WelcomeDialog::buildTipsColumn()
+{
+    auto* column = new QWidget(this);
+    auto* layout = new QVBoxLayout(column);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    layout->addWidget(EcosystemWidgets::sectionHeader(QStringLiteral("Quick Tips"), column));
+    layout->addWidget(tipRow(QStringLiteral("AI Chat"),
+        QStringLiteral("Describe changes in natural language from the AI Chat panel."), column));
+    layout->addWidget(tipRow(QStringLiteral("Shortcuts"),
+        QStringLiteral("Q select, W move, E rotate, R scale, F frame. "
+                       "Ctrl+/ lists them all; Ctrl+, opens Preferences."), column));
+    layout->addWidget(tipRow(QStringLiteral("CLI pipeline"),
+        QStringLiteral("Use <code>qtmesh</code> to convert, validate, build LODs "
+                       "and process animations in batch."), column));
+
+    // Filled by setDiscoverySuggestion(); empty until then.
+    m_suggestionHost = new QVBoxLayout();
+    m_suggestionHost->setContentsMargins(0, 4, 0, 0);
+    layout->addLayout(m_suggestionHost);
+    layout->addStretch();
+    return column;
+}
+
+QWidget* WelcomeDialog::buildShowcase()
+{
+    auto* section = new QWidget(this);
+    auto* layout = new QVBoxLayout(section);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    auto* headerRow = new QHBoxLayout();
+    headerRow->addWidget(EcosystemWidgets::sectionHeader(
+        QStringLiteral("Made with QtMeshEditor"), section));
+    headerRow->addStretch();
+    headerRow->addWidget(EcosystemWidgets::linkButton(
+        QStringLiteral("Explore QtMesh Games →"), QtMeshEcosystem::Link::Games,
+        kSurface, section));
+    layout->addLayout(headerRow);
+
+    auto* cards = new QHBoxLayout();
+    cards->setSpacing(10);
+    for (const QString& id : kWelcomeGames) {
+        for (const auto& game : QtMeshEcosystem::showcaseGames()) {
+            if (game.id == id) {
+                cards->addWidget(EcosystemWidgets::gameCard(game, kSurface, QSize(160, 90),
+                                                            section), 1);
+                break;
+            }
+        }
+    }
+    layout->addLayout(cards);
+
+    QStringList platformBits;
+    for (const auto& platform : QtMeshEcosystem::platforms()) {
+        platformBits.append(platform.url.isEmpty()
+            ? QStringLiteral("%1 (%2)").arg(platform.name, platform.status.toLower())
+            : platform.name);
+    }
+    layout->addWidget(EcosystemWidgets::mutedLabel(
+        QStringLiteral("Games built with QtMeshEditor assets and workflows. Platforms: ")
+            + platformBits.join(QStringLiteral(" · ")) + QLatin1Char('.'),
+        section));
+    return section;
+}
+
+void WelcomeDialog::setDiscoverySuggestion(const QVariantMap& suggestion,
+                                           std::function<void(const QString&)> onDismiss)
+{
+    if (!m_suggestionHost)
+        return;
+    while (QLayoutItem* item = m_suggestionHost->takeAt(0)) {
+        delete item->widget();
+        delete item;
+    }
+    const QString key = suggestion.value(QStringLiteral("featureKey")).toString();
+    if (key.isEmpty())
+        return;
+
+    // A single bordered, word-wrapped QLabel (like the tips) with the dismiss
+    // button beside it: wrapped labels nested inside a QFrame lose their
+    // height-for-width in this layout and were clipped to one line.
+    auto* card = new QWidget(this);
+    auto* row = new QHBoxLayout(card);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(4);
+
+    const bool personalized = suggestion.value(QStringLiteral("personalized")).toBool();
+    auto* text = new QLabel(QStringLiteral("<b>%1%2</b><br><span style=\"color:%3\">%4</span>")
+        .arg(personalized ? QStringLiteral("New to you: ") : QStringLiteral("Try this: "),
+             suggestion.value(QStringLiteral("title")).toString().toHtmlEscaped(),
+             EcosystemWidgets::mutedColor(palette()).name(),
+             suggestion.value(QStringLiteral("blurb")).toString().toHtmlEscaped()), card);
+    text->setObjectName(QStringLiteral("welcomeSuggestion"));
+    text->setTextFormat(Qt::RichText);
+    text->setWordWrap(true);
+    text->setStyleSheet(QStringLiteral(
+        "QLabel#welcomeSuggestion { border: 1px solid %1; border-radius: 6px;"
+        "  background: palette(alternate-base); }")
+        .arg(EcosystemWidgets::accentColor(palette()).name()));
+    // setMargin, not stylesheet padding: QLabel's height-for-width ignores
+    // stylesheet padding and clips the last wrapped line.
+    text->setMargin(8);
+    // The tips column is ~260-320 px wide; reserve the height the text needs
+    // at the narrow end so the blurb is never cut off.
+    text->setMinimumHeight(text->heightForWidth(260));
+    row->addWidget(text, 1);
+
+    auto* hide = new QToolButton(card);
+    hide->setText(QStringLiteral("\u2715"));
+    hide->setAutoRaise(true);
+    hide->setToolTip(QStringLiteral("Don't suggest this again"));
+    hide->setAccessibleName(QStringLiteral("Dismiss suggestion"));
+    connect(hide, &QToolButton::clicked, card, [card, key, onDismiss]() {
+        if (onDismiss)
+            onDismiss(key);
+        card->hide();
+    });
+    row->addWidget(hide, 0, Qt::AlignTop);
+    m_suggestionHost->addWidget(card);
 }

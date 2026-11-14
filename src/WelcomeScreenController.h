@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QStringList>
+#include <QVariantList>
 #include <QQmlEngine>
 
 class MainWindow;
@@ -22,6 +23,10 @@ class WelcomeScreenController : public QObject
     Q_PROPERTY(QStringList recentFiles READ recentFiles NOTIFY recentFilesChanged)
     Q_PROPERTY(QStringList recentFileNames READ recentFileNames NOTIFY recentFilesChanged)
     Q_PROPERTY(bool visible READ isVisible WRITE setVisible NOTIFY visibleChanged)
+    // Ecosystem showcase (shared with WelcomeDialog via QtMeshEcosystem; offline).
+    Q_PROPERTY(QVariantList showcaseGames READ showcaseGames CONSTANT)
+    Q_PROPERTY(QString tagline READ tagline CONSTANT)
+    Q_PROPERTY(QString platformsSummary READ platformsSummary CONSTANT)
 
 public:
     static WelcomeScreenController* instance();
@@ -43,6 +48,13 @@ public:
     Q_INVOKABLE void openFileDialog();
     Q_INVOKABLE void newScene();
     Q_INVOKABLE void dismiss(bool dontShowAgain);
+
+    QVariantList showcaseGames() const;
+    QString tagline() const;
+    QString platformsSummary() const;
+    /// Opens a showcase game (by id) or an ecosystem link ("games", "website",
+    /// "github", "sponsor", ...). Returns false for an unknown id.
+    Q_INVOKABLE bool openEcosystemLink(const QString& id);
 
 signals:
     void recentFilesChanged();

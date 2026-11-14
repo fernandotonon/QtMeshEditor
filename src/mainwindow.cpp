@@ -6438,7 +6438,9 @@ void MainWindow::on_actionMerge_Animations_triggered()
 
 void MainWindow::on_actionAbout_triggered()
 {
-    About *m = new About(this);
+    SentryReporter::addBreadcrumb("ui.action", "Help: About");
+    auto *m = new About(this);
+    m->setAttribute(Qt::WA_DeleteOnClose);
     m->show();
 }
 

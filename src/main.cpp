@@ -2,6 +2,7 @@
 #include <QCoreApplication>
 #include <QMessageBox>
 #include "WelcomeDialog.h"
+#include "GamificationManager.h"
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
@@ -463,6 +464,12 @@ int main(int argc, char *argv[])
     bool welcomeNewScene = false;
     if (launchPaths.isEmpty() && WelcomeDialog::shouldShow()) {
         WelcomeDialog welcome;
+        // The "try this next" card (E-P5). The manager is a process singleton
+        // MainWindow creates anyway; creating it here only reads local state.
+        auto* gamify = GamificationManager::instance();
+        welcome.setDiscoverySuggestion(gamify->suggestion(), [gamify](const QString& key) {
+            gamify->dismissSuggestion(key);
+        });
         welcome.exec();
         if (welcome.userAction() == WelcomeDialog::OpenFile ||
             welcome.userAction() == WelcomeDialog::OpenRecent) {

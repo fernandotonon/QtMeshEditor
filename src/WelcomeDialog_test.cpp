@@ -9,6 +9,9 @@
 #include <QPushButton>
 #include <QTemporaryFile>
 #include <QSignalSpy>
+#include <QLabel>
+#include <QToolButton>
+#include <QVariantMap>
 
 namespace {
 QPushButton* findButtonByText(WelcomeDialog& dialog, const QString& text)
@@ -165,4 +168,60 @@ TEST_F(WelcomeDialogTests, ActivatingRecentFileSetsOpenRecentActionAndSelectedPa
     EXPECT_EQ(dialog.userAction(), WelcomeDialog::OpenRecent);
     EXPECT_EQ(dialog.selectedFile(), existingPath);
     EXPECT_EQ(dialog.result(), QDialog::Accepted);
+}
+
+TEST_F(WelcomeDialogTests, ShowcaseHasFourGameCardsAndAnExploreLink)
+{
+    WelcomeDialog dialog;
+    int cards = 0;
+    for (auto* button : dialog.findChildren<QToolButton*>()) {
+        if (button->objectName() == QStringLiteral("ecosystemGameCard")) {
+            ++cards;
+            EXPECT_EQ(button->focusPolicy(), Qt::StrongFocus);
+        }
+    }
+    EXPECT_EQ(cards, 4);
+    EXPECT_NE(findButtonByText(dialog, QStringLiteral("Explore QtMesh Games →")), nullptr);
+}
+
+TEST_F(WelcomeDialogTests, NoRecentFilesShowsAPlaceholderInsteadOfAnEmptyList)
+{
+    QSettings settings;
+    const QVariant saved = settings.value("RecentFiles/files");
+    settings.setValue("RecentFiles/files", QStringList() << "/path/that/does/not/exist.mesh");
+
+    WelcomeDialog dialog;
+    EXPECT_EQ(dialog.findChild<QListWidget*>(), nullptr);
+    bool sawPlaceholder = false;
+    for (auto* label : dialog.findChildren<QLabel*>())
+        sawPlaceholder |= label->text().startsWith(QStringLiteral("No recent files yet"));
+    EXPECT_TRUE(sawPlaceholder);
+
+    if (saved.isValid()) settings.setValue("RecentFiles/files", saved);
+    else settings.remove("RecentFiles/files");
+}
+
+TEST_F(WelcomeDialogTests, DiscoverySuggestionShowsAndDismissReportsTheKey)
+{
+    WelcomeDialog dialog;
+    QString dismissedKey;
+    dialog.setDiscoverySuggestion(
+        QVariantMap{{"featureKey", "uv_unwrap"}, {"title", "Auto UV unwrap"},
+                    {"blurb", "One click."}, {"personalized", false}},
+        [&dismissedKey](const QString& key) { dismissedKey = key; });
+
+    QToolButton* hide = nullptr;
+    for (auto* button : dialog.findChildren<QToolButton*>())
+        if (button->accessibleName() == QStringLiteral("Dismiss suggestion")) hide = button;
+    ASSERT_NE(hide, nullptr);
+    hide->click();
+    EXPECT_EQ(dismissedKey, QStringLiteral("uv_unwrap"));
+}
+
+TEST_F(WelcomeDialogTests, EmptySuggestionAddsNoCard)
+{
+    WelcomeDialog dialog;
+    dialog.setDiscoverySuggestion(QVariantMap());
+    for (auto* button : dialog.findChildren<QToolButton*>())
+        EXPECT_NE(button->accessibleName(), QStringLiteral("Dismiss suggestion"));
 }

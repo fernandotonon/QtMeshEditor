@@ -62,7 +62,15 @@ Rectangle {
                 }
 
                 Text {
-                    text: "3D Mesh Editor & Converter"
+                    text: WelcomeScreenController.tagline
+                    color: PropertiesPanelController.highlightColor
+                    font.pixelSize: 13
+                    font.bold: true
+                    Layout.alignment: Qt.AlignHCenter
+                }
+
+                Text {
+                    text: "Open-source 3D creation and asset pipeline"
                     color: Qt.darker(PropertiesPanelController.textColor, 1.4)
                     font.pixelSize: 12
                     Layout.alignment: Qt.AlignHCenter
@@ -391,6 +399,117 @@ Rectangle {
                         Layout.fillWidth: true
                     }
                 }
+            }
+
+            // ---- Made with QtMeshEditor (same catalog as WelcomeDialog) ----
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: PropertiesPanelController.borderColor
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Text {
+                    text: "Made with QtMeshEditor"
+                    color: Qt.darker(PropertiesPanelController.textColor, 1.3)
+                    font.pixelSize: 11
+                    font.bold: true
+                    font.capitalization: Font.AllUppercase
+                    Layout.fillWidth: true
+                }
+                Text {
+                    id: exploreLink
+                    text: "Explore QtMesh Games \u2192"
+                    color: PropertiesPanelController.highlightColor
+                    font.pixelSize: 12
+                    font.bold: true
+                    font.underline: exploreMA.containsMouse || activeFocus
+                    activeFocusOnTab: true
+                    Accessible.role: Accessible.Link
+                    Accessible.name: text
+                    Keys.onReturnPressed: WelcomeScreenController.openEcosystemLink("games")
+                    Keys.onSpacePressed: WelcomeScreenController.openEcosystemLink("games")
+                    MouseArea {
+                        id: exploreMA
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: WelcomeScreenController.openEcosystemLink("games")
+                    }
+                }
+            }
+
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 4
+                columnSpacing: 8
+
+                Repeater {
+                    // Four cards keep the section compact; About shows them all.
+                    model: WelcomeScreenController.showcaseGames.filter(
+                               g => ["scrapfall", "ironfang", "mall-chase", "data-core-clash"].indexOf(g.id) >= 0)
+
+                    Rectangle {
+                        id: gameCard
+                        Layout.fillWidth: true
+                        implicitHeight: cardCol.implicitHeight + 12
+                        radius: 6
+                        color: PropertiesPanelController.headerColor
+                        border.color: (gameMA.containsMouse || activeFocus)
+                                      ? PropertiesPanelController.highlightColor
+                                      : PropertiesPanelController.borderColor
+                        border.width: activeFocus ? 2 : 1
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Link
+                        Accessible.name: modelData.title + ", " + modelData.platform + " game"
+                        Keys.onReturnPressed: WelcomeScreenController.openEcosystemLink(modelData.id)
+                        Keys.onSpacePressed: WelcomeScreenController.openEcosystemLink(modelData.id)
+
+                        ColumnLayout {
+                            id: cardCol
+                            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
+                            spacing: 4
+                            Image {
+                                source: modelData.thumbnail
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: width * 9 / 16
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                                smooth: true
+                                mipmap: true
+                            }
+                            Text {
+                                text: modelData.title
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 11
+                                font.bold: true
+                                elide: Text.ElideRight
+                                Layout.fillWidth: true
+                            }
+                            Text {
+                                text: modelData.platform
+                                color: Qt.darker(PropertiesPanelController.textColor, 1.5)
+                                font.pixelSize: 10
+                            }
+                        }
+                        MouseArea {
+                            id: gameMA
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: WelcomeScreenController.openEcosystemLink(modelData.id)
+                        }
+                    }
+                }
+            }
+
+            Text {
+                text: "Platforms: " + WelcomeScreenController.platformsSummary
+                color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                Layout.fillWidth: true
             }
 
             // ---- Separator ----
