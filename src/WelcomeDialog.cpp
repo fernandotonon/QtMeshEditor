@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "QtMeshEcosystem.h"
+#include "QtMeshIdPanel.h"
 #include "SentryReporter.h"
 
 #include <QApplication>
@@ -97,10 +98,12 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
             QStringLiteral("Open-source 3D creation and asset pipeline"), this));
         header->addLayout(titles, 1);
 
-        auto* version = EcosystemWidgets::mutedLabel(
-            QStringLiteral("Version %1").arg(QStringLiteral(QTMESHEDITOR_VERSION)), this);
-        version->setWordWrap(false);
-        header->addWidget(version, 0, Qt::AlignTop | Qt::AlignRight);
+        // Upper right: the (optional) QtMesh ID account, with the version on
+        // its heading row so the header stays as short as before.
+        header->addWidget(new QtMeshIdPanel(
+            kSurface, this,
+            QStringLiteral("Version %1").arg(QStringLiteral(QTMESHEDITOR_VERSION))),
+            0, Qt::AlignTop);
         mainLayout->addLayout(header);
     }
 
@@ -360,4 +363,13 @@ void WelcomeDialog::setDiscoverySuggestion(const QVariantMap& suggestion,
     });
     row->addWidget(hide, 0, Qt::AlignTop);
     m_suggestionHost->addWidget(card);
+
+    // The dialog was sized before the card existed, and word-wrapped labels
+    // do not raise a layout's minimum height, so grow to fit it.
+    if (QLayout* top = layout()) {
+        top->activate();
+        const int needed = top->totalHeightForWidth(width());
+        if (needed > height())
+            resize(width(), needed);
+    }
 }

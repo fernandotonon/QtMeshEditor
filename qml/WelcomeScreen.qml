@@ -77,6 +77,121 @@ Rectangle {
                 }
             }
 
+            // ---- QtMesh ID (optional account; one compact row) ----
+            Rectangle {
+                id: accountBar
+                objectName: "qtmeshIdBar"
+                readonly property string state_: WelcomeScreenController.accountState
+                Layout.fillWidth: true
+                implicitHeight: accountRow.implicitHeight + 16
+                radius: 8
+                color: "transparent"
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                RowLayout {
+                    id: accountRow
+                    anchors { fill: parent; leftMargin: 10; rightMargin: 10; topMargin: 8; bottomMargin: 8 }
+                    spacing: 10
+
+                    // Avatar (initials) when signed in, else a neutral ID badge.
+                    Rectangle {
+                        width: 28; height: 28; radius: 14
+                        color: accountBar.state_ === "signedIn"
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.inputColor
+                        border.color: PropertiesPanelController.borderColor
+                        border.width: accountBar.state_ === "signedIn" ? 0 : 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: accountBar.state_ === "signedIn"
+                                ? (WelcomeScreenController.accountInitials || "?") : "ID"
+                            color: accountBar.state_ === "signedIn"
+                                ? "#ffffff" : PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            font.bold: true
+                        }
+                    }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+                        Text {
+                            text: "QtMesh ID"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 12
+                            font.bold: true
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                            font.pixelSize: 11
+                            text: {
+                                switch (accountBar.state_) {
+                                case "signedIn":
+                                    return "✓ Connected as " + WelcomeScreenController.accountName
+                                case "connecting":
+                                    return "Connecting… finish signing in in your browser."
+                                case "expired":
+                                    return "Your session expired. Sign in again to reconnect QtMesh Cloud."
+                                default:
+                                    return "Your account for the QtMesh ecosystem: QtMesh Cloud projects "
+                                         + "and progress sync. Optional — the editor works without it."
+                                }
+                            }
+                        }
+                    }
+
+                    // Actions: compact text links, secondary to New Scene / Open File.
+                    Repeater {
+                        model: {
+                            switch (accountBar.state_) {
+                            case "signedIn":
+                                return [{ label: "Manage Account", act: "manage" },
+                                        { label: "Sign out", act: "signout" }]
+                            case "connecting":
+                                return []
+                            case "expired":
+                                return [{ label: "Sign in with QtMesh ID", act: "signin" }]
+                            default:
+                                return [{ label: "Sign in with QtMesh ID", act: "signin" },
+                                        { label: "Create a free account", act: "create" }]
+                            }
+                        }
+                        delegate: Text {
+                            required property var modelData
+                            text: modelData.label
+                            color: PropertiesPanelController.highlightColor
+                            font.pixelSize: 12
+                            font.bold: modelData.act === "signin"
+                            font.underline: linkMA.containsMouse || activeFocus
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.Button
+                            Accessible.name: modelData.label
+                            function trigger() {
+                                switch (modelData.act) {
+                                case "signin": WelcomeScreenController.signInWithQtMeshId(); break
+                                case "create": WelcomeScreenController.createQtMeshIdAccount(); break
+                                case "manage": WelcomeScreenController.manageQtMeshIdAccount(); break
+                                case "signout": WelcomeScreenController.signOutOfQtMeshId(); break
+                                }
+                            }
+                            Keys.onReturnPressed: trigger()
+                            Keys.onEnterPressed: trigger()
+                            Keys.onSpacePressed: trigger()
+                            MouseArea {
+                                id: linkMA
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: parent.trigger()
+                            }
+                        }
+                    }
+                }
+            }
+
             // ---- Separator ----
             Rectangle {
                 Layout.fillWidth: true

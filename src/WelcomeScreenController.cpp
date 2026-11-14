@@ -1,6 +1,8 @@
 #include "WelcomeScreenController.h"
 #include "SentryReporter.h"
 #include "QtMeshEcosystem.h"
+#include "QtMeshId.h"
+#include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
 #include <QSettings>
@@ -11,6 +13,8 @@ WelcomeScreenController* WelcomeScreenController::m_pSingleton = nullptr;
 WelcomeScreenController::WelcomeScreenController()
     : QObject(nullptr)
 {
+    connect(QtMeshId::instance(), &QtMeshId::sessionChanged,
+            this, &WelcomeScreenController::accountChanged);
 }
 
 WelcomeScreenController* WelcomeScreenController::instance()
@@ -143,4 +147,47 @@ bool WelcomeScreenController::openEcosystemLink(const QString& id)
             return QtMeshEcosystem::open(link, kSurface);
     }
     return false;
+}
+
+QString WelcomeScreenController::accountState() const
+{
+    return QtMeshId::stateId(QtMeshId::instance()->state());
+}
+
+QString WelcomeScreenController::accountName() const
+{
+    return QtMeshId::instance()->displayName();
+}
+
+QString WelcomeScreenController::accountInitials() const
+{
+    return QtMeshId::instance()->initials();
+}
+
+void WelcomeScreenController::signInWithQtMeshId()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: sign in (welcome_overlay)"));
+    // Deferred: the sign-in prompt runs a nested event loop, which must not
+    // start inside the QML click handler that called us.
+    QTimer::singleShot(0, QtMeshId::instance(), []() { QtMeshId::instance()->signIn(); });
+}
+
+void WelcomeScreenController::createQtMeshIdAccount()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: create account (welcome_overlay)"));
+    QTimer::singleShot(0, QtMeshId::instance(), []() { QtMeshId::instance()->signIn(); });
+}
+
+void WelcomeScreenController::manageQtMeshIdAccount()
+{
+    QtMeshId::openManageAccount(QStringLiteral("welcome_overlay"));
+}
+
+void WelcomeScreenController::signOutOfQtMeshId()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: sign out (welcome_overlay)"));
+    QtMeshId::instance()->signOut();
 }

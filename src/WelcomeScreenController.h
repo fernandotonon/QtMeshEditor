@@ -27,6 +27,11 @@ class WelcomeScreenController : public QObject
     Q_PROPERTY(QVariantList showcaseGames READ showcaseGames CONSTANT)
     Q_PROPERTY(QString tagline READ tagline CONSTANT)
     Q_PROPERTY(QString platformsSummary READ platformsSummary CONSTANT)
+    // QtMesh ID (shared state in QtMeshId; never any credential here).
+    // accountState: "signedOut" | "connecting" | "signedIn" | "expired".
+    Q_PROPERTY(QString accountState READ accountState NOTIFY accountChanged)
+    Q_PROPERTY(QString accountName READ accountName NOTIFY accountChanged)
+    Q_PROPERTY(QString accountInitials READ accountInitials NOTIFY accountChanged)
 
 public:
     static WelcomeScreenController* instance();
@@ -56,12 +61,23 @@ public:
     /// "github", "sponsor", ...). Returns false for an unknown id.
     Q_INVOKABLE bool openEcosystemLink(const QString& id);
 
+    QString accountState() const;
+    QString accountName() const;
+    QString accountInitials() const;
+    /// Browser device-code sign-in (a no-op while one is already running).
+    Q_INVOKABLE void signInWithQtMeshId();
+    /// Same flow: new accounts are created on the QtMesh ID page.
+    Q_INVOKABLE void createQtMeshIdAccount();
+    Q_INVOKABLE void manageQtMeshIdAccount();
+    Q_INVOKABLE void signOutOfQtMeshId();
+
 signals:
     void recentFilesChanged();
     void visibleChanged();
     void requestOpenFile(const QString& path);
     void requestOpenFileDialog();
     void requestNewScene();
+    void accountChanged();
 
 private:
     WelcomeScreenController();

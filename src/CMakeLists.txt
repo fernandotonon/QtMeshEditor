@@ -339,6 +339,8 @@ WelcomeScreenController.cpp
 WelcomeDialog.cpp
 QtMeshEcosystem.cpp
 EcosystemWidgets.cpp
+QtMeshId.cpp
+QtMeshIdPanel.cpp
 ScanConfig.cpp
 ScanEngine.cpp
 PlatformProfile.cpp
@@ -560,6 +562,8 @@ WelcomeScreenController.h
 WelcomeDialog.h
 QtMeshEcosystem.h
 EcosystemWidgets.h
+QtMeshId.h
+QtMeshIdPanel.h
 ScanConfig.h
 ScanEngine.h
 PlatformProfile.h
