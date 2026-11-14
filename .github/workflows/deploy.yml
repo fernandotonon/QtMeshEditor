@@ -74,6 +74,8 @@ jobs:
       # Published :latest may lag behind Dockerfile/runtime deps (e.g. libsecret).
       # Build from this repo's Dockerfile + the latest release .deb to validate the image.
       - name: Build qtmesh Docker image for asset scan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           VERSION="$(grep -E '^[[:space:]]*project\([[:space:]]*QtMeshEditor[[:space:]]+VERSION' CMakeLists.txt \
@@ -87,7 +89,41 @@ jobs:
             curl -fsSL -o qtmesheditor_amd64.deb \
               "https://github.com/fernandotonon/QtMeshEditor/releases/download/3.4.0/qtmesheditor_amd64.deb"
           fi
-          docker build --platform linux/amd64 -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
+          build_image() {
+            docker build --platform linux/amd64 -t ghcr.io/fernandotonon/qtmesh:ci-scan -f Dockerfile --build-arg VERSION="${VERSION}" .
+          }
+          # The image's Ubuntu must provide every glibc symbol the binary needs.
+          # A .deb built on a newer runner than the Docker base (3.68.0 was built
+          # on ubuntu-26.04 when ubuntu-latest moved) fails at load time, so the
+          # scan would test a binary that cannot start. Fall back to the newest
+          # earlier release that loads.
+          binary_loads() {
+            local out
+            out="$(docker run --rm --entrypoint ldd ghcr.io/fernandotonon/qtmesh:ci-scan \
+                     /usr/share/qtmesheditor/qtmesheditor 2>&1 || true)"
+            ! grep -q "not found" <<<"$out"
+          }
+          build_image
+          if ! binary_loads; then
+            echo "::warning::Release ${VERSION} .deb does not load on the Docker base image; trying earlier releases."
+            loaded=false
+            for tag in $(gh release list --repo "${GITHUB_REPOSITORY}" --limit 6 \
+                           --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName'); do
+              [ "$tag" = "$VERSION" ] && continue
+              curl -fsSL -o qtmesheditor_amd64.deb \
+                "https://github.com/fernandotonon/QtMeshEditor/releases/download/${tag}/qtmesheditor_amd64.deb" || continue
+              build_image
+              if binary_loads; then
+                echo "::notice::Scanning with the ${tag} package."
+                loaded=true
+                break
+              fi
+            done
+            if [ "$loaded" != true ]; then
+              echo "::error::No recent release .deb loads on the Docker base image."
+              exit 1
+            fi
+          fi
 
       - name: Scan media/ via Docker (ci-scan image)
         run: |
@@ -684,7 +720,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -765,7 +801,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
@@ -863,7 +899,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
             qt_host: linux
             qt_arch: linux_gcc_64
             qt_dir: gcc_64
@@ -1335,7 +1371,7 @@ jobs:
     # Skip unit tests on release — they already ran on the PR and master push
     if: github.event_name != 'release'
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Hard cap on the whole job. The full sweep takes ~12 min normally
     # (build + xvfb + ~25 suites + coverage + sonar). Cap at 90 so a
     # cold ccache build on a large PR still finishes under the limit.
@@ -3403,7 +3439,7 @@ jobs:
       matrix:
         include:
           - arch: amd64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - arch: arm64
             runner: ubuntu-24.04-arm
     steps:
