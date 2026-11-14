@@ -136,6 +136,13 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
         }
     });
 
+    // Quiet text links, not buttons: Cloud and Sponsor stay discoverable
+    // without competing with Get Started.
+    bottomLayout->addSpacing(12);
+    bottomLayout->addWidget(EcosystemWidgets::linkButton(
+        QStringLiteral("QtMesh Cloud"), QtMeshEcosystem::Link::Cloud, kSurface, this));
+    bottomLayout->addWidget(EcosystemWidgets::linkButton(
+        QStringLiteral("Sponsor"), QtMeshEcosystem::Link::Sponsor, kSurface, this));
     bottomLayout->addStretch();
 
     auto* getStartedBtn = new QPushButton(QStringLiteral("Get Started"), this);

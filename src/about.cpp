@@ -193,7 +193,7 @@ QWidget* About::buildAboutTab()
     thanks->setPalette(thanksPal);
     layout->addWidget(thanks);
     layout->addStretch();
-    return page;
+    return scrollPage(page, this);
 }
 
 QWidget* About::buildEcosystemTab()
@@ -322,5 +322,5 @@ QWidget* About::buildSupportTab()
         layout->addSpacing(4);
     }
     layout->addStretch();
-    return page;
+    return scrollPage(page, this);
 }

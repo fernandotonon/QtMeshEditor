@@ -804,9 +804,11 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                 "trellis2: the trellis-cli at %1 has no shape-guide support (--ss-control). "
                 "If that path is an older install set by %2 or the QSettings key %3, clear it to use the bundled runtime; "
                 "otherwise rebuild the bundled runtime (cmake/TrellisCpp.cmake pins a trellis.cpp with --ss-control), "
-                "or set the guide strength to 0 to only bake onto the guide.")
+                "or, from qtmesh/MCP, pass --guide-strength 0 with --bake-onto-guide to bake onto the guide without shape control "
+                "(the Inspector only bakes onto the guide from strength %4).")
                     .arg(QDir::toNativeSeparators(cli), QLatin1String(kEnvCliVar),
-                         QLatin1String(kCliSettingsKey)));
+                         QLatin1String(kCliSettingsKey),
+                         QString::number(ShapeGuide::kBakeOnGuideMinStrength, 'f', 1)));
         return failFromTrellisCliProcess(proc, errBuf);
     }
     Trellis2Interchange::ReadResult rr =
