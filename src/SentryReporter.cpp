@@ -196,7 +196,7 @@ void SentryReporter::showConsentDialog()
     QMessageBox msgBox;
     msgBox.setWindowTitle(QObject::tr("Crash Reporting"));
     msgBox.setText(QObject::tr(
-        "QtMeshEditor automatically sends anonymous crash reports "
+        "QtMesh Editor automatically sends anonymous crash reports "
         "to help improve the application.\n\n"
         "You can disable this at any time in Help > Send Crash Reports."));
     msgBox.setStandardButtons(QMessageBox::Ok);

@@ -54,7 +54,7 @@ Rectangle {
                 Layout.alignment: Qt.AlignHCenter
 
                 Text {
-                    text: "QtMeshEditor"
+                    text: "QtMesh Editor"
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 22
                     font.bold: true
@@ -526,7 +526,7 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Text {
-                    text: "Made with QtMeshEditor"
+                    text: "Made with QtMesh Editor"
                     color: Qt.darker(PropertiesPanelController.textColor, 1.3)
                     font.pixelSize: 11
                     font.bold: true

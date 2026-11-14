@@ -4202,7 +4202,7 @@ void MainWindow::setupCloudAccountStatusControl()
             prompt->setText(tr("Did you get what you came for today?"));
             break;
         case FeedbackPromptController::Trigger::FirstImport:
-            prompt->setText(tr("How is QtMeshEditor working out so far?"));
+            prompt->setText(tr("How is QtMesh Editor working out so far?"));
             break;
         }
         prompt->setInformativeText(tr(

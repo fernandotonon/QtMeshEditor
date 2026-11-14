@@ -334,7 +334,7 @@ QString Trellis2Predictor::runtimeDescription()
     if (!trellisCliPath().isEmpty())
         return QStringLiteral(
             "TRELLIS.2 models not downloaded yet. Open AI Model Settings → "
-            "QtMeshEditor Models and download 'TRELLIS.2 (trellis.cpp)' "
+            "QtMesh Editor Models and download 'TRELLIS.2 (trellis.cpp)' "
             "(plus 'TRELLIS.2 cascade' for the Balanced/High presets).");
     return QStringLiteral(
         "TRELLIS.2 runtime not installed. Either build trellis.cpp and point "

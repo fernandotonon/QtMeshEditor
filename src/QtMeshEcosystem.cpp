@@ -101,7 +101,7 @@ QString tagline()
 QString description()
 {
     return QStringLiteral(
-        "QtMeshEditor is an open-source 3D creation and asset pipeline tool "
+        "QtMesh Editor is an open-source 3D creation and asset pipeline tool "
         "combining modeling, asset conversion, AI-assisted 3D generation, rigging, "
         "and animation into a unified development workflow.");
 }

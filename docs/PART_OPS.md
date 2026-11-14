@@ -1,6 +1,6 @@
 # PartOps — AI segmented parts, split, explode & join
 
-PartOps (epic #859) turns QtMeshEditor's AI **mesh segmentation** into real mesh
+PartOps (epic #859) turns QtMesh Editor's AI **mesh segmentation** into real mesh
 authoring operations: take one fused character mesh, detect its parts
 (head / torso / arms / legs …), and **split**, **explode**, **join**, or
 **solidify** them. Works in the GUI, the `qtmesh` CLI, and over MCP — all three

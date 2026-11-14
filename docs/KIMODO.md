@@ -2,7 +2,7 @@
 
 **Built with Meta Llama 3.**
 
-QtMeshEditor generates skeletal animation from text with NVIDIA **Kimodo** (`Kimodo-SOMA-RP-v1.2`), then retargets
+QtMesh Editor generates skeletal animation from text with NVIDIA **Kimodo** (`Kimodo-SOMA-RP-v1.2`), then retargets
 it onto your rig. It runs **natively**: the text encoder through the bundled llama.cpp and the motion model through
 ONNX Runtime, with no Python. An optional Python sidecar (`ai/kimodo/`) remains as an alternative runtime.
 
@@ -105,7 +105,7 @@ difference and 0.003 cm root difference, with identical foot contacts (`scripts/
 
 ## QtMesh T2M: the small, experimental alternative
 
-The same panel has a **Model** picker: *NVIDIA Kimodo (default)* or *QtMesh T2M (experimental, small)*, QtMeshEditor's
+The same panel has a **Model** picker: *NVIDIA Kimodo (default)* or *QtMesh T2M (experimental, small)*, QtMesh Editor's
 own text-to-motion model (trained on Kimodo-generated clips and our CC0/CC-BY motion library). It is meant for lower-end machines:
 
 | On this Mac (M-series, one 3 s clip) | NVIDIA Kimodo | QtMesh T2M |

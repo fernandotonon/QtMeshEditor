@@ -103,5 +103,5 @@ TEST(QtMeshEcosystem, OpenUrlRefusesAnythingButHttps)
 TEST(QtMeshEcosystem, IdentityStrings)
 {
     EXPECT_EQ(tagline(), QStringLiteral("Create. Refine. Play."));
-    EXPECT_TRUE(description().startsWith(QStringLiteral("QtMeshEditor is an open-source 3D creation")));
+    EXPECT_TRUE(description().startsWith(QStringLiteral("QtMesh Editor is an open-source 3D creation")));
 }

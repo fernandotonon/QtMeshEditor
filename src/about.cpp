@@ -1,4 +1,5 @@
 #include "about.h"
+#include "AppBranding.h"
 #include "EcosystemWidgets.h"
 #include "QtMeshEcosystem.h"
 
@@ -58,7 +59,7 @@ QLabel* boldLabel(const QString& text, QWidget* parent)
 About::About(QWidget *parent) :
     QDialog(parent)
 {
-    setWindowTitle(tr("About QtMeshEditor"));
+    setWindowTitle(tr("About %1").arg(AppBranding::displayName()));
     setWindowIcon(QIcon(QStringLiteral(":/icones/icone.ico")));
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
     setMinimumWidth(600);
@@ -78,7 +79,7 @@ About::About(QWidget *parent) :
 
     auto* titles = new QVBoxLayout();
     titles->setSpacing(2);
-    auto* name = new QLabel(QStringLiteral("QtMeshEditor"), this);
+    auto* name = new QLabel(AppBranding::displayName(), this);
     QFont nf = name->font();
     nf.setPointSizeF(nf.pointSizeF() * 1.7);
     nf.setBold(true);
@@ -181,7 +182,7 @@ QWidget* About::buildAboutTab()
     layout->addWidget(EcosystemWidgets::sectionHeader(tr("Acknowledgments"), page));
     auto* thanks = EcosystemWidgets::linkLabel(
         tr("Thanks to %1 and all open-source contributors who have helped improve "
-           "QtMeshEditor over the years.")
+           "QtMesh Editor over the years.")
             .arg(link(QStringLiteral("https://github.com/akira215"), QStringLiteral("Akira")))
         + QStringLiteral("<br>")
         + link(QStringLiteral("https://github.com/fernandotonon/QtMeshEditor/graphs/contributors"),
@@ -207,7 +208,7 @@ QWidget* About::buildEcosystemTab()
     pillars->setVerticalSpacing(2);
     const struct { const char* title; const char* body; } kPillars[] = {
         { "Create", "Generate and import 3D assets." },
-        { "Refine", "Model, rig, animate and optimise them in QtMeshEditor." },
+        { "Refine", "Model, rig, animate and optimise them in QtMesh Editor." },
         { "Play", "Explore games built with these workflows." },
     };
     for (int i = 0; i < 3; ++i) {
@@ -230,7 +231,7 @@ QWidget* About::buildEcosystemTab()
     products->setVerticalSpacing(8);
     const struct { const char* name; const char* body; QtMeshEcosystem::Link link; const char* linkText; }
         kProducts[] = {
-        { "QtMeshEditor", "Open-source 3D editor and asset pipeline.",
+        { "QtMesh Editor", "Open-source 3D editor and asset pipeline.",
           QtMeshEcosystem::Link::GitHub, "GitHub" },
         { "QtMesh Cloud", "Cloud projects, uploads and account services for your assets.",
           QtMeshEcosystem::Link::Cloud, "qtmesh.dev" },
@@ -251,7 +252,7 @@ QWidget* About::buildEcosystemTab()
     layout->addLayout(products);
 
     layout->addSpacing(4);
-    layout->addWidget(EcosystemWidgets::sectionHeader(tr("Made with QtMeshEditor"), page));
+    layout->addWidget(EcosystemWidgets::sectionHeader(tr("Made with QtMesh Editor"), page));
     auto* cards = new QGridLayout();
     cards->setSpacing(10);
     const auto& games = QtMeshEcosystem::showcaseGames();
@@ -286,7 +287,7 @@ QWidget* About::buildSupportTab()
     auto* layout = pageLayout(page);
 
     auto* intro = new QLabel(tr(
-        "QtMeshEditor is an independently developed open-source project. "
+        "QtMesh Editor is an independently developed open-source project. "
         "If it is useful to you, here are a few ways to help it keep growing. "
         "All of them are optional."), page);
     intro->setWordWrap(true);

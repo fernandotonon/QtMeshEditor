@@ -3,7 +3,7 @@ cask "qtmesheditor" do
   sha256 "@SHA256@"
 
   url "https://github.com/fernandotonon/QtMeshEditor/releases/download/#{version}/QtMeshEditor-#{version}-MacOS.dmg"
-  name "QtMeshEditor"
+  name "QtMesh Editor"
   desc "Qt-based Ogre3D Mesh Editor with AI-enhanced Material Editor"
   homepage "https://github.com/fernandotonon/QtMeshEditor"
 

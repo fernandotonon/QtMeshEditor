@@ -1,7 +1,7 @@
 # TripoSplat — image → 3D Gaussians → game-ready mesh
 
 `--backend triposplat` runs VAST-AI's TripoSplat (MIT) natively: one image in,
-up to 262,144 3D Gaussians out, then QtMeshEditor turns them into a textured,
+up to 262,144 3D Gaussians out, then QtMesh Editor turns them into a textured,
 game-ready mesh. The raw Gaussians are kept too, as a standard 3DGS `.ply` —
 that file is the representation TripoSplat's own demos render (SuperSplat,
 SparkJS, and the splat plugins for Unity / Unreal / Godot load it).
@@ -116,8 +116,8 @@ xatlas many minutes.
 
 ## Known issue
 
-Re-importing a generated GLB into QtMeshEditor shows dark speckle on the
+Re-importing a generated GLB into QtMesh Editor shows dark speckle on the
 normal-mapped material even with a perfectly flat normal map; the same file
-renders clean in Blender, and the mesh renders clean in QtMeshEditor straight
+renders clean in Blender, and the mesh renders clean in QtMesh Editor straight
 from generation or as `.mesh`. Ruled out: normals, tangent validity,
 binormals, material, gamma, the UV (0,0) faces. Tracked separately.

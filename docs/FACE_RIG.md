@@ -1,7 +1,7 @@
 # Face auto-rig: ARKit blendshapes on any humanoid face
 
 Epic [#889](https://github.com/fernandotonon/QtMeshEditor/issues/889). Given an
-unrigged neutral **face** mesh, QtMeshEditor generates the 52 **ARKit**
+unrigged neutral **face** mesh, QtMesh Editor generates the 52 **ARKit**
 blendshapes (`jawOpen`, `mouthSmileLeft`, `eyeBlinkLeft`, `browInnerUp`, …) and
 attaches them as morph targets, so the mesh can be driven by face performance
 capture ([#869](https://github.com/fernandotonon/QtMeshEditor/issues/869),

@@ -103,7 +103,7 @@ void LLMSettingsWidget::setupUI()
     m_tabWidget->addTab(modelsTab, "LLM Models");
     m_tabWidget->addTab(settingsTab, "Settings");
     m_tabWidget->addTab(downloadTab, "LLM Download");
-    m_tabWidget->addTab(aiModelsTab, "QtMeshEditor Models");
+    m_tabWidget->addTab(aiModelsTab, "QtMesh Editor Models");
 
 #ifdef ENABLE_STABLE_DIFFUSION
     QWidget *sdModelsTab = new QWidget();
@@ -458,7 +458,7 @@ void LLMSettingsWidget::setupAIModelCatalogTab(QWidget *parent)
 {
     QVBoxLayout *layout = new QVBoxLayout(parent);
 
-    QGroupBox *modelsGroup = new QGroupBox("QtMeshEditor Models", parent);
+    QGroupBox *modelsGroup = new QGroupBox("QtMesh Editor Models", parent);
     QVBoxLayout *modelsLayout = new QVBoxLayout(modelsGroup);
 
     m_aiModelCatalogList = new QListWidget(modelsGroup);
@@ -916,7 +916,7 @@ void LLMSettingsWidget::onAIModelCatalogDownloadClicked()
     if (!item)
         return;
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Download QtMeshEditor model"));
+                                  QStringLiteral("Download QtMesh Editor model"));
     AIModelCatalog::instance()->downloadModel(item->data(Qt::UserRole).toString());
     updateAIModelCatalogButtons();
 }
@@ -924,7 +924,7 @@ void LLMSettingsWidget::onAIModelCatalogDownloadClicked()
 void LLMSettingsWidget::onAIModelCatalogDownloadAllClicked()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Download all QtMeshEditor models"));
+                                  QStringLiteral("Download all QtMesh Editor models"));
     AIModelCatalog::instance()->downloadAllModels();
     updateAIModelCatalogButtons();
 }
@@ -944,7 +944,7 @@ void LLMSettingsWidget::onAIModelCatalogDeleteClicked()
         return;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Delete QtMeshEditor model files"));
+                                  QStringLiteral("Delete QtMesh Editor model files"));
     AIModelCatalog::instance()->deleteModel(item->data(Qt::UserRole).toString());
 }
 
@@ -952,27 +952,27 @@ void LLMSettingsWidget::onAIModelCatalogDeleteAllClicked()
 {
     QMessageBox::StandardButton reply = QMessageBox::question(
         this, "Remove All Model Files",
-        "Remove all downloaded QtMeshEditor model files?",
+        "Remove all downloaded QtMesh Editor model files?",
         QMessageBox::Yes | QMessageBox::No);
     if (reply == QMessageBox::No)
         return;
 
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Delete all QtMeshEditor model files"));
+                                  QStringLiteral("Delete all QtMesh Editor model files"));
     AIModelCatalog::instance()->deleteAllModels();
 }
 
 void LLMSettingsWidget::onAIModelCatalogRefreshClicked()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Refresh QtMeshEditor model catalog"));
+                                  QStringLiteral("Refresh QtMesh Editor model catalog"));
     AIModelCatalog::instance()->refresh();
 }
 
 void LLMSettingsWidget::onAIModelCatalogOpenFolderClicked()
 {
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
-                                  QStringLiteral("Open QtMeshEditor models folder"));
+                                  QStringLiteral("Open QtMesh Editor models folder"));
     const QString folderPath = AppStorage::aiModelsRoot();
     QDir dir;
     if (!dir.mkpath(folderPath)) {

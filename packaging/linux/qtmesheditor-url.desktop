@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=QtMeshEditor Cloud Link
-Comment=Open a QtMesh Cloud project in QtMeshEditor
+Name=QtMesh Editor Cloud Link
+Comment=Open a QtMesh Cloud project in QtMesh Editor
 GenericName=QtMesh Cloud Handler
 Exec=qtmesheditor %u
 Icon=qtmesheditor

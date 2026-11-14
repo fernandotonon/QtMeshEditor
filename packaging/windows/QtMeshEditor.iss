@@ -1,5 +1,8 @@
 ; Inno Setup script — per-user install with HKCU file associations (#664)
+; MyAppName is the technical name (install folder, exe, ProgIDs): keep it so
+; upgrades land in the same place. MyAppDisplayName is what users see.
 #define MyAppName "QtMeshEditor"
+#define MyAppDisplayName "QtMesh Editor"
 #define MyAppVersion "@PROJECT_VERSION@"
 #define MyAppPublisher "Fernando Tonon"
 #define MyAppURL "https://github.com/fernandotonon/QtMeshEditor"
@@ -7,14 +10,14 @@
 
 [Setup]
 AppId={{A4B8D6F2-3C1E-4F9A-9B2D-664E8A3F9B2D}
-AppName={#MyAppName}
+AppName={#MyAppDisplayName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
 DefaultDirName={localappdata}\Programs\{#MyAppName}
-DefaultGroupName={#MyAppName}
+DefaultGroupName={#MyAppDisplayName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputBaseFilename=QtMeshEditor-{#MyAppVersion}-setup-Windows
@@ -28,14 +31,20 @@ ArchitecturesInstallIn64BitMode=x64
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "fileassoc"; Description: "Register QtMeshEditor as an ""Open with"" handler for 3D model files"; GroupDescription: "File associations:"; Flags: checkedonce
+Name: "fileassoc"; Description: "Register {#MyAppDisplayName} as an ""Open with"" handler for 3D model files"; GroupDescription: "File associations:"; Flags: checkedonce
 
 [Files]
 Source: "..\..\bin\*"; DestDir: "{app}\bin"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; Shortcuts created under the pre-rebrand name by older installers.
+Type: files; Name: "{autodesktop}\QtMeshEditor.lnk"
+Type: files; Name: "{autoprograms}\QtMeshEditor\QtMeshEditor.lnk"
+Type: dirifempty; Name: "{autoprograms}\QtMeshEditor"
+
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\bin\{#MyAppExeName}"
+Name: "{group}\{#MyAppDisplayName}"; Filename: "{app}\bin\{#MyAppExeName}"
+Name: "{autodesktop}\{#MyAppDisplayName}"; Filename: "{app}\bin\{#MyAppExeName}"
 
 [Registry]
 ; Open With only — do not replace the user's default ProgID for each extension.
@@ -89,10 +98,10 @@ Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd"; ValueType: string
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\bin\{#MyAppExeName},0"; Tasks: fileassoc
 Root: HKCU; Subkey: "Software\Classes\QtMeshEditor.Model.tmd\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Tasks: fileassoc
 
-Root: HKCU; Subkey: "Software\Classes\qtmesh"; ValueType: string; ValueName: ""; ValueData: "URL:QtMeshEditor Protocol"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\qtmesh"; ValueType: string; ValueName: ""; ValueData: "URL:QtMesh Editor Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\qtmesh"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\qtmesh\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"",0"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\qtmesh\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\bin\{#MyAppExeName}"" ""%1"""; Flags: uninsdeletekey
 
 [Run]
-Filename: "{app}\bin\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\bin\{#MyAppExeName}"; Description: "Launch {#MyAppDisplayName}"; Flags: nowait postinstall skipifsilent

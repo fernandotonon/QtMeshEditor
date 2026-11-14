@@ -75,7 +75,7 @@ Dialog {
                 width: implicitWidth
             }
             TabButton {
-                text: "QtMeshEditor Models"
+                text: "QtMesh Editor Models"
                 width: implicitWidth
             }
             TabButton {
@@ -395,7 +395,7 @@ Dialog {
 
                             Text {
                                 Layout.fillWidth: true
-                                text: "QtMeshEditor Models"
+                                text: "QtMesh Editor Models"
                                 font.pointSize: 12
                                 font.bold: true
                                 color: textColor
@@ -1140,7 +1140,7 @@ Dialog {
 
         Text {
             width: 360
-            text: "Remove all downloaded QtMeshEditor model files?"
+            text: "Remove all downloaded QtMesh Editor model files?"
             color: textColor
             wrapMode: Text.WordWrap
         }

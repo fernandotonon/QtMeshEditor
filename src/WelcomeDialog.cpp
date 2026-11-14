@@ -1,4 +1,5 @@
 #include "WelcomeDialog.h"
+#include "AppBranding.h"
 #include "EcosystemWidgets.h"
 #include "Manager.h"
 #include "MeshImporterExporter.h"
@@ -55,7 +56,7 @@ QFileDialog::Options WelcomeDialog::openFileDialogOptions()
 WelcomeDialog::WelcomeDialog(QWidget* parent)
     : QDialog(parent)
 {
-    setWindowTitle(QStringLiteral("Welcome to QtMeshEditor"));
+    setWindowTitle(QStringLiteral("Welcome to %1").arg(AppBranding::displayName()));
     setWindowIcon(QIcon(QStringLiteral(":/icones/icone.ico")));
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
     // Width only: an explicit minimum HEIGHT would override the layout's own
@@ -79,7 +80,7 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
 
         auto* titles = new QVBoxLayout();
         titles->setSpacing(2);
-        auto* title = new QLabel(QStringLiteral("QtMeshEditor"), this);
+        auto* title = new QLabel(AppBranding::displayName(), this);
         QFont tf = title->font();
         tf.setPointSizeF(tf.pointSizeF() * 1.7);
         tf.setBold(true);
@@ -283,7 +284,7 @@ QWidget* WelcomeDialog::buildShowcase()
 
     auto* headerRow = new QHBoxLayout();
     headerRow->addWidget(EcosystemWidgets::sectionHeader(
-        QStringLiteral("Made with QtMeshEditor"), section));
+        QStringLiteral("Made with QtMesh Editor"), section));
     headerRow->addStretch();
     headerRow->addWidget(EcosystemWidgets::linkButton(
         QStringLiteral("Explore QtMesh Games →"), QtMeshEcosystem::Link::Games,
@@ -310,7 +311,7 @@ QWidget* WelcomeDialog::buildShowcase()
             : platform.name);
     }
     layout->addWidget(EcosystemWidgets::mutedLabel(
-        QStringLiteral("Games built with QtMeshEditor assets and workflows. Platforms: ")
+        QStringLiteral("Games built with QtMesh Editor assets and workflows. Platforms: ")
             + platformBits.join(QStringLiteral(" · ")) + QLatin1Char('.'),
         section));
     return section;

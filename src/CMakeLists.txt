@@ -564,6 +564,7 @@ QtMeshEcosystem.h
 EcosystemWidgets.h
 QtMeshId.h
 QtMeshIdPanel.h
+AppBranding.h
 ScanConfig.h
 ScanEngine.h
 PlatformProfile.h

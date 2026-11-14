@@ -591,6 +591,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EcosystemWidgets.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshId.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QtMeshIdPanel.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AppBranding.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h
