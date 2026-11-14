@@ -212,12 +212,14 @@ bool QtMeshId::signIn(QWidget* parent)
     };
 
     const auto pollOnce = [&]() {
+        // In-flight guard first: a tick during a pending request must neither
+        // start a second one nor expire the sign-in under it.
+        if (pollInFlight || cancelled)
+            return;
         if (attempts >= maxAttempts) {
             failSignIn(tr("The sign-in request expired. Start sign in again."));
             return;
         }
-        if (pollInFlight || cancelled)
-            return;
         ++attempts;
 
         pollInFlight = true;
