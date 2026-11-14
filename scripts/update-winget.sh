@@ -53,13 +53,13 @@ PackageLocale: en-US
 Publisher: Fernando Tonon
 PublisherUrl: https://github.com/fernandotonon
 PublisherSupportUrl: https://github.com/fernandotonon/QtMeshEditor/issues
-PackageName: QtMeshEditor
+PackageName: QtMesh Editor
 PackageUrl: https://github.com/fernandotonon/QtMeshEditor
 License: MIT
 LicenseUrl: https://github.com/fernandotonon/QtMeshEditor/blob/master/License
 ShortDescription: Free 3D asset tool for indie game developers
 Description: |-
-  QtMeshEditor is a free 3D asset tool for indie game developers.
+  QtMesh Editor (formerly QtMeshEditor) is a free 3D asset tool for indie game developers.
   Merge animations from multiple files, convert between 40+ formats,
   edit materials with AI, and inspect skeletons and bone weights.
   Supports GUI, CLI (qtmesh), and REST API via MCP server.

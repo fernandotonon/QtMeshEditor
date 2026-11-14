@@ -4,7 +4,7 @@
 
 name: qtmesheditor
 adopt-info: qtmesheditor
-title: QtMeshEditor
+title: QtMesh Editor
 summary: Free 3D asset tool for indie game developers
 description: |
   Merge Mixamo animations, convert between 40+ 3D formats, edit materials

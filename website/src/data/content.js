@@ -14,31 +14,31 @@ export const links = {
 export const media = {
   mergeDemo: {
     src: 'https://github.com/user-attachments/assets/441f90c5-1968-4838-8001-4ca24856a501',
-    alt: 'QtMeshEditor animation merge workflow with imported FBX assets'
+    alt: 'QtMesh Editor animation merge workflow with imported FBX assets'
   },
   pipelineCiCd: {
     src: 'https://github.com/user-attachments/assets/1c7a7965-4bec-4e6d-8197-78d4435c8d46',
-    alt: 'QtMeshEditor CI/CD pipeline overview'
+    alt: 'QtMesh Editor CI/CD pipeline overview'
   },
   skeletonPreview: {
     src: 'https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1',
-    alt: 'Bone weight and skeleton validation preview in QtMeshEditor'
+    alt: 'Bone weight and skeleton validation preview in QtMesh Editor'
   },
   mcpPreview: {
     src: 'https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07',
-    alt: 'MCP tool integration controlling QtMeshEditor'
+    alt: 'MCP tool integration controlling QtMesh Editor'
   },
   aiMaterials: {
     src: 'https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e',
-    alt: 'AI-assisted material editor in QtMeshEditor'
+    alt: 'AI-assisted material editor in QtMesh Editor'
   }
 };
 
 export const hero = {
   title: 'Catch 3D asset issues before they break your game.',
   subtitle:
-    'QtMeshEditor helps developers and technical artists lint, validate, fix, and track 3D asset pipelines across GUI, CLI, Docker, GitHub Actions, and QtMesh Cloud reporting.',
-  ctaPrimary: 'Download QtMeshEditor',
+    'QtMesh Editor helps developers and technical artists lint, validate, fix, and track 3D asset pipelines across GUI, CLI, Docker, GitHub Actions, and QtMesh Cloud reporting.',
+  ctaPrimary: 'Download QtMesh Editor',
   ctaSecondary: 'View on GitHub',
   ctaDocs: 'Documentation'
 };

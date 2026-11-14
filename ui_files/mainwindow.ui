@@ -20,7 +20,7 @@
    <bool>true</bool>
   </property>
   <property name="windowTitle">
-   <string>QtMeshEditor</string>
+   <string>QtMesh Editor</string>
   </property>
   <property name="windowIcon">
    <iconset>

@@ -1,5 +1,10 @@
 #include "WelcomeScreenController.h"
 #include "SentryReporter.h"
+#include "QtMeshEcosystem.h"
+#include "QtMeshId.h"
+#include <QTimer>
+#include <QUrl>
+#include <QVariantMap>
 #include <QSettings>
 #include <QFileInfo>
 
@@ -8,6 +13,8 @@ WelcomeScreenController* WelcomeScreenController::m_pSingleton = nullptr;
 WelcomeScreenController::WelcomeScreenController()
     : QObject(nullptr)
 {
+    connect(QtMeshId::instance(), &QtMeshId::sessionChanged,
+            this, &WelcomeScreenController::accountChanged);
 }
 
 WelcomeScreenController* WelcomeScreenController::instance()
@@ -92,4 +99,95 @@ void WelcomeScreenController::dismiss(bool dontShowAgain)
     }
 
     setVisible(false);
+}
+
+QVariantList WelcomeScreenController::showcaseGames() const
+{
+    QVariantList out;
+    for (const auto& game : QtMeshEcosystem::showcaseGames()) {
+        QVariantMap m;
+        m.insert(QStringLiteral("id"), game.id);
+        m.insert(QStringLiteral("title"), game.title);
+        m.insert(QStringLiteral("blurb"), game.blurb);
+        m.insert(QStringLiteral("platform"), game.platform);
+        // qrc:/ form so a QML Image can load the compiled-in thumbnail.
+        m.insert(QStringLiteral("thumbnail"), QStringLiteral("qrc") + game.thumbnail);
+        out.append(m);
+    }
+    return out;
+}
+
+QString WelcomeScreenController::tagline() const
+{
+    return QtMeshEcosystem::tagline();
+}
+
+QString WelcomeScreenController::platformsSummary() const
+{
+    QStringList bits;
+    for (const auto& platform : QtMeshEcosystem::platforms()) {
+        bits.append(platform.url.isEmpty()
+            ? QStringLiteral("%1 (%2)").arg(platform.name, platform.status.toLower())
+            : platform.name);
+    }
+    return bits.join(QStringLiteral(" · "));
+}
+
+bool WelcomeScreenController::openEcosystemLink(const QString& id)
+{
+    static const QString kSurface = QStringLiteral("welcome_overlay");
+    for (const auto& game : QtMeshEcosystem::showcaseGames()) {
+        if (game.id == id)
+            return QtMeshEcosystem::openUrl(QUrl(game.url), QStringLiteral("game:") + id, kSurface);
+    }
+    using QtMeshEcosystem::Link;
+    for (Link link : {Link::Website, Link::GitHub, Link::Cloud, Link::Games,
+                      Link::Sponsor, Link::Contribute, Link::Issues}) {
+        if (QtMeshEcosystem::linkId(link) == id)
+            return QtMeshEcosystem::open(link, kSurface);
+    }
+    return false;
+}
+
+QString WelcomeScreenController::accountState() const
+{
+    return QtMeshId::stateId(QtMeshId::instance()->state());
+}
+
+QString WelcomeScreenController::accountName() const
+{
+    return QtMeshId::instance()->displayName();
+}
+
+QString WelcomeScreenController::accountInitials() const
+{
+    return QtMeshId::instance()->initials();
+}
+
+void WelcomeScreenController::signInWithQtMeshId()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: sign in (welcome_overlay)"));
+    // Deferred: the sign-in prompt runs a nested event loop, which must not
+    // start inside the QML click handler that called us.
+    QTimer::singleShot(0, QtMeshId::instance(), []() { QtMeshId::instance()->signIn(); });
+}
+
+void WelcomeScreenController::createQtMeshIdAccount()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: create account (welcome_overlay)"));
+    QTimer::singleShot(0, QtMeshId::instance(), []() { QtMeshId::instance()->signIn(); });
+}
+
+void WelcomeScreenController::manageQtMeshIdAccount()
+{
+    QtMeshId::openManageAccount(QStringLiteral("welcome_overlay"));
+}
+
+void WelcomeScreenController::signOutOfQtMeshId()
+{
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
+                                  QStringLiteral("QtMesh ID: sign out (welcome_overlay)"));
+    QtMeshId::instance()->signOut();
 }

@@ -5,7 +5,7 @@
 -->
 <component type="desktop-application">
   <id>io.github.fernandotonon.QtMeshEditor</id>
-  <name>QtMeshEditor</name>
+  <name>QtMesh Editor</name>
   <summary>Free 3D asset tool for indie game developers</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
@@ -44,6 +44,8 @@
     <category>Viewer</category>
   </categories>
   <keywords>
+    <keyword>QtMeshEditor</keyword>
+    <keyword>QtMesh</keyword>
     <keyword>3D</keyword>
     <keyword>mesh</keyword>
     <keyword>FBX</keyword>

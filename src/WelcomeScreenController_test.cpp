@@ -5,6 +5,8 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QFile>
+#include <QVariantMap>
 
 class WelcomeScreenControllerTests : public ::testing::Test {
 protected:
@@ -183,4 +185,27 @@ TEST_F(WelcomeScreenControllerTests, NewSceneEmitsRequestAndHides) {
 
     EXPECT_EQ(spy.count(), 1);
     EXPECT_FALSE(controller->isVisible());
+}
+
+TEST_F(WelcomeScreenControllerTests, ShowcaseGamesExposeQmlLoadableThumbnails)
+{
+    const QVariantList games = controller->showcaseGames();
+    ASSERT_GE(games.size(), 4);
+    for (const QVariant& v : games) {
+        const QVariantMap g = v.toMap();
+        EXPECT_FALSE(g.value("id").toString().isEmpty());
+        EXPECT_FALSE(g.value("title").toString().isEmpty());
+        const QString thumb = g.value("thumbnail").toString();
+        ASSERT_TRUE(thumb.startsWith("qrc:/ecosystem/")) << thumb.toStdString();
+        EXPECT_TRUE(QFile::exists(thumb.mid(3))) << thumb.toStdString();
+    }
+    EXPECT_EQ(controller->tagline(), QStringLiteral("Create. Refine. Play."));
+    EXPECT_TRUE(controller->platformsSummary().contains(QStringLiteral("Steam")));
+}
+
+TEST_F(WelcomeScreenControllerTests, OpenEcosystemLinkRejectsUnknownIds)
+{
+    // Unknown ids never reach the browser.
+    EXPECT_FALSE(controller->openEcosystemLink(QStringLiteral("not-a-game")));
+    EXPECT_FALSE(controller->openEcosystemLink(QString()));
 }

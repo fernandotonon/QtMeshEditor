@@ -1,8 +1,8 @@
 [Desktop Entry]
-Name=QtMeshEditor
+Name=QtMesh Editor
 Comment=Open and inspect 3D models (FBX, glTF, OBJ, and more)
 GenericName=3D Model Viewer
-Keywords=3D;mesh;FBX;glTF;model;material;animation;viewer;
+Keywords=QtMeshEditor;QtMesh;3D;mesh;FBX;glTF;model;material;animation;viewer;
 Exec=qtmesheditor %F
 Icon=${SNAP}/meta/gui/icon.png
 Terminal=false

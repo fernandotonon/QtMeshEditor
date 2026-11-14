@@ -1,13 +1,13 @@
-# QtMeshEditor Sentry Telemetry
+# QtMesh Editor Sentry Telemetry
 
-QtMeshEditor uses the existing `SentryReporter` wrapper for both crash reporting and anonymous product telemetry. Do not add another analytics SDK or emit telemetry directly from feature code.
+QtMesh Editor uses the existing `SentryReporter` wrapper for both crash reporting and anonymous product telemetry. Do not add another analytics SDK or emit telemetry directly from feature code.
 
 ## Privacy Rules
 
-- Default PII collection is not enabled. The bundled sentry-native SDK has no `sendDefaultPii` option, and QtMeshEditor only sets an opaque `user.id`.
+- Default PII collection is not enabled. The bundled sentry-native SDK has no `sendDefaultPii` option, and QtMesh Editor only sets an opaque `user.id`.
 - The installation identifier is a random UUID created only after telemetry is enabled and stored at `telemetry/anonymousInstallationId` in `QSettings`.
 - Sentry `user.id` is `install:<uuid>`. The UUID is never derived from MAC address, disk serial, hostname, username, account data, IP address, hardware fingerprint, file content, prompts or model data.
-- If telemetry is disabled, QtMeshEditor does not generate or submit the anonymous installation ID.
+- If telemetry is disabled, QtMesh Editor does not generate or submit the anonymous installation ID.
 - Reset mechanism: call `SentryReporter::resetAnonymousInstallationId()` or remove the `telemetry/anonymousInstallationId` QSettings key. Disabling telemetry through `SentryReporter::setEnabled(false)` also removes it.
 - Breadcrumbs and event contexts are sanitized by `SentryReporter`; paths, filenames, prompts, emails, GitHub identifiers and tokens are redacted.
 - `QTMESH_TELEMETRY_ROLE` may be `developer`, `ci` or `tester`. Any other value is submitted as `user`. This appears as `telemetry.role` so internal activity can be filtered without location data.

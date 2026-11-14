@@ -419,7 +419,7 @@ QList<AIModelCatalog::ModelSpec> AIModelCatalog::specs() const
         out << ModelSpec{
             QStringLiteral("triposplat"), tr("TripoSplat"), tr("Image to 3D"),
             tr("VAST-AI TripoSplat (MIT): generates up to 262k 3D Gaussians from one image; "
-               "QtMeshEditor meshes and textures them and keeps the raw splats as a .ply. "
+               "QtMesh Editor meshes and textures them and keeps the raw splats as a .ply. "
                "Includes Meta's DINOv3 image encoder (DINOv3 License; its text is downloaded with the models)."),
             QStringLiteral("~6.1 GB"), onnxAvailable ? QString() : tr("Requires an ONNX-enabled build"),
             onnxAvailable, files};
@@ -675,8 +675,8 @@ void AIModelCatalog::downloadAllModels()
 
     if (m_pendingFiles.isEmpty()) {
         setStatusMessage(unavailable > 0
-            ? tr("All available QtMeshEditor models are already downloaded.")
-            : tr("All QtMeshEditor models are already downloaded."));
+            ? tr("All available QtMesh Editor models are already downloaded.")
+            : tr("All QtMesh Editor models are already downloaded."));
         emit modelsChanged();
         return;
     }
@@ -684,8 +684,8 @@ void AIModelCatalog::downloadAllModels()
     m_activeModelId = QStringLiteral("__all__");
     m_activeDownloadStartedMs = QDateTime::currentMSecsSinceEpoch();
     m_activeModelName = unavailable > 0
-        ? tr("all available QtMeshEditor models")
-        : tr("all QtMeshEditor models");
+        ? tr("all available QtMesh Editor models")
+        : tr("all QtMesh Editor models");
     emit activeModelChanged();
     SentryReporter::captureTelemetryEvent(QStringLiteral("ai.model_download_all.started"),
         QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("gui")},
@@ -787,7 +787,7 @@ void AIModelCatalog::deleteAllModels()
     }
 
     SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                  tr("Deleting all QtMeshEditor model files"));
+                                  tr("Deleting all QtMesh Editor model files"));
 
     bool removedAny = false;
     QStringList failedPaths;
@@ -814,18 +814,18 @@ void AIModelCatalog::deleteAllModels()
     }
 
     if (!failedPaths.isEmpty()) {
-        setStatusMessage(tr("Could not delete %1 QtMeshEditor model file(s).").arg(failedPaths.size()));
+        setStatusMessage(tr("Could not delete %1 QtMesh Editor model file(s).").arg(failedPaths.size()));
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                      tr("Failed to delete %1 QtMeshEditor model file(s)")
+                                      tr("Failed to delete %1 QtMesh Editor model file(s)")
                                           .arg(failedPaths.size()),
                                       QStringLiteral("error"));
     } else {
         setStatusMessage(removedAny
-            ? tr("Deleted all downloaded QtMeshEditor model files.")
-            : tr("No downloaded QtMeshEditor model files found."));
+            ? tr("Deleted all downloaded QtMesh Editor model files.")
+            : tr("No downloaded QtMesh Editor model files found."));
         if (removedAny) {
             SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
-                                          tr("Deleted all QtMeshEditor model files"));
+                                          tr("Deleted all QtMesh Editor model files"));
         }
     }
     emit modelsChanged();

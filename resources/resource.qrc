@@ -21,4 +21,14 @@
         <file>spring.png</file>
         <file>scale.png</file>
     </qresource>
+    <!-- QtMesh Games showcase thumbnails (384x216, from games.qtmesh.dev) for the
+         Welcome / About screens. Compiled in so the screens work offline. -->
+    <qresource prefix="/ecosystem">
+        <file alias="scrapfall.jpg">ecosystem/scrapfall.jpg</file>
+        <file alias="ironfang.jpg">ecosystem/ironfang.jpg</file>
+        <file alias="mall-chase.jpg">ecosystem/mall-chase.jpg</file>
+        <file alias="bite-by-bite.jpg">ecosystem/bite-by-bite.jpg</file>
+        <file alias="data-core-clash.jpg">ecosystem/data-core-clash.jpg</file>
+        <file alias="mothership-raiders.jpg">ecosystem/mothership-raiders.jpg</file>
+    </qresource>
 </RCC>

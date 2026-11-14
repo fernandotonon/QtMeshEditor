@@ -3,17 +3,17 @@
 Status: **authoritative record** for the `qtmesh generate3d --backend trellis2` integration.
 Audited: 2026-08-30, against the pinned upstream revisions below. Re-audit whenever a pin moves.
 
-QtMeshEditor's TRELLIS.2 integration is designed around one hard constraint:
+QtMesh Editor's TRELLIS.2 integration is designed around one hard constraint:
 
 > **NVIDIA nvdiffrast and nvdiffrec are excluded — not installed, not imported, not
 > dynamically loaded, not bundled, not invoked indirectly, and not ported/translated.**
 > Both are under the *NVIDIA Source Code License*, which limits use to
 > "research or evaluation purposes only" for everyone but NVIDIA. That is incompatible
-> with QtMeshEditor's permissive commercial redistribution (Homebrew / Snap / WinGet /
+> with QtMesh Editor's permissive commercial redistribution (Homebrew / Snap / WinGet /
 > Docker / Marketplace).
 
 Everything those libraries do for the upstream reference implementation (UV-space
-rasterization, texture baking, PBR preview rendering) is performed by **QtMeshEditor's own
+rasterization, texture baking, PBR preview rendering) is performed by **QtMesh Editor's own
 C++ code** (`src/ImageTo3D/Trellis2Bake.{h,cpp}`, xatlas + meshoptimizer + a conventional
 scanline/barycentric rasterizer and trilinear sparse-volume sampler — standard, publicly
 documented graphics algorithms; no NVIDIA source was read, copied, or translated for it).
@@ -36,11 +36,11 @@ documented graphics algorithms; no NVIDIA source was read, copied, or translated
 
 ## 2. Runtime dependency table
 
-"Redistributed" = shipped inside QtMeshEditor binaries/packages. **Nothing in this table is
+"Redistributed" = shipped inside QtMesh Editor binaries/packages. **Nothing in this table is
 redistributed** — the whole Python environment is user-installed into
 `<AppData>/trellis2/` by `ai/trellis2/install.py` (the same "downloads on first use" stance
 as every other AI model in this project). "Required" = required at runtime for the TRELLIS.2
-backend specifically (all other QtMeshEditor features work without any of this).
+backend specifically (all other QtMesh Editor features work without any of this).
 
 | Dependency | Purpose | Version/pin | License | Redistributed | Downloaded separately | Required at runtime | Commercial use |
 |---|---|---|---|---|---|---|---|
@@ -55,13 +55,13 @@ backend specifically (all other QtMeshEditor features work without any of this).
 | huggingface_hub | weight downloads | (transformers dep) | Apache-2.0 | no | yes | yes | ✅ |
 | numpy, pillow | array/image IO | — | BSD / HPND | no | yes | yes | ✅ |
 | easydict | config dicts (used by `o_voxel.rasterize`) | 1.13 | **LGPL-3.0** ⚠️ | no | yes | yes (transitive import) | ✅ (pure-Python, imported unmodified from a user-installed env; flagged as the only copyleft item — see §5) |
-| trimesh | upstream GLB assembly | not installed | MIT | no | no | **no** (QtMeshEditor writes the asset) | ✅ |
+| trimesh | upstream GLB assembly | not installed | MIT | no | no | **no** (QtMesh Editor writes the asset) | ✅ |
 | utils3d | upstream renderers/datasets only | not installed | MIT | no | no | **no** | ✅ |
 | opencv / imageio / imageio-ffmpeg / gradio / kornia / timm / lpips / pandas / tensorboard | upstream demos, training, video previews | not installed | various permissive (+LGPL ffmpeg binary) | no | no | **no** | n/a |
 | spconv | alternative sparse-conv backend | not installed | Apache-2.0 | no | no | no (default is FlexGEMM) | ✅ |
 | kaolin, diffusers, rembg (PyPI) | **not used anywhere** by TRELLIS.2 | — | — | no | no | no | n/a |
 | **nvdiffrast** | upstream UV rasterization in `o_voxel.postprocess.to_glb` + preview renderers | **EXCLUDED** | NVIDIA Source Code License (1-Way Commercial) — *"non-commercially… research or evaluation purposes only"* | **never** | **never** | **no — replaced by `Trellis2Bake`** | ❌ |
-| **nvdiffrec** (`nvdiffrec_render` fork) | upstream env-map lighting for PBR previews (`pbr_mesh_renderer`) | **EXCLUDED** | NVIDIA Source Code License for nvdiffrec (same restriction) | **never** | **never** | **no — QtMeshEditor's HDR/IBL renderer covers previews** | ❌ |
+| **nvdiffrec** (`nvdiffrec_render` fork) | upstream env-map lighting for PBR previews (`pbr_mesh_renderer`) | **EXCLUDED** | NVIDIA Source Code License for nvdiffrec (same restriction) | **never** | **never** | **no — QtMesh Editor's HDR/IBL renderer covers previews** | ❌ |
 
 ### Model weights
 
@@ -71,17 +71,17 @@ backend specifically (all other QtMeshEditor features work without any of this).
 | `microsoft/TRELLIS-image-large` `ss_dec_conv3d_16l8_fp16` only (rev `25e0d31f…`) | sparse-structure decoder referenced by `pipeline.json` | MIT | no — HF download on first generation | ✅ |
 | `facebook/dinov3-vitl16-pretrain-lvd1689m` | image conditioning encoder | **DINOv3 License** (custom Meta) | no — **gated** HF download by the user | ✅ with conditions (§4) |
 | `briaai/RMBG-2.0` | upstream default background remover (named in `pipeline.json`) | **CC BY-NC 4.0** ❌ | **never downloaded or loaded** — bypassed (§3) | ❌ non-commercial |
-| `ZhengPeng7/BiRefNet` | MIT alternative background remover | MIT | not used (QtMeshEditor does its own bg removal) | ✅ |
-| U²-Net (`u2net.onnx`, already shipped-on-demand by QtMeshEditor #764) | the background removal actually used | Apache-2.0 code, permissive weights | existing on-demand download | ✅ |
+| `ZhengPeng7/BiRefNet` | MIT alternative background remover | MIT | not used (QtMesh Editor does its own bg removal) | ✅ |
+| U²-Net (`u2net.onnx`, already shipped-on-demand by QtMesh Editor #764) | the background removal actually used | Apache-2.0 code, permissive weights | existing on-demand download | ✅ |
 
 ## 3. Where nvdiffrast/nvdiffrec live upstream, and how each use is avoided
 
 Complete grep of the pinned revision (`grep -rn 'nvdiffrast\|nvdiffrec' --include=*.py`):
 
-| Upstream site | What it does | How QtMeshEditor avoids it |
+| Upstream site | What it does | How QtMesh Editor avoids it |
 |---|---|---|
 | `o-voxel/o_voxel/postprocess.py` (top-level `import nvdiffrast.torch`) | `to_glb()`: rasterize UV atlas → texel 3D positions → BVH snap to hi-res mesh → trilinear volume sample → trimesh GLB | **Never called.** `generate.py` exports raw vertices/faces + the sparse attribute volume to the QTM3D interchange; UV unwrap, rasterization, sampling and baking happen in C++ (`Trellis2Bake`). `install.py` patches the MIT file `o_voxel/__init__.py` to import `postprocess` lazily, so `import o_voxel` no longer requires nvdiffrast to be installed at all. |
-| `trellis2/renderers/mesh_renderer.py`, `pbr_mesh_renderer.py` (lazy imports; `pbr_mesh_renderer` also imports `nvdiffrec_render.light`) | turntable/PBR preview videos | **Never imported** — `trellis2/renderers/__init__.py` is lazy (`__getattr__`); `generate.py` never touches renderers. Previews come from QtMeshEditor's own Ogre/RTSS + HDR/IBL pipeline. |
+| `trellis2/renderers/mesh_renderer.py`, `pbr_mesh_renderer.py` (lazy imports; `pbr_mesh_renderer` also imports `nvdiffrec_render.light`) | turntable/PBR preview videos | **Never imported** — `trellis2/renderers/__init__.py` is lazy (`__getattr__`); `generate.py` never touches renderers. Previews come from QtMesh Editor's own Ogre/RTSS + HDR/IBL pipeline. |
 | `trellis2/pipelines/trellis2_texturing.py` (top-level import) | the separate "texture an existing mesh" pipeline | **Never imported** — `trellis2/pipelines/__init__.py` is lazy; only `Trellis2ImageTo3DPipeline` is loaded. |
 | `example.py` / `app.py` | demo scripts (comment: 2^24-vertex nvdiffrast limit) | not used. |
 
@@ -96,11 +96,11 @@ mode, and reports their absence in its dependency report (Phase 15).
 
 `TRELLIS.2-4B/pipeline.json` sets the rembg model to `briaai/RMBG-2.0` (CC BY-NC 4.0), and
 the upstream `BiRefNet.__init__` downloads it **eagerly at pipeline construction**. The
-QtMeshEditor sidecar therefore:
+QtMesh Editor sidecar therefore:
 
 1. replaces `trellis2.pipelines.rembg.BiRefNet` with an inert stub **before**
    `from_pretrained` runs, so the weights are never downloaded or loaded;
-2. always feeds the pipeline an **RGBA image whose alpha was produced by QtMeshEditor's own
+2. always feeds the pipeline an **RGBA image whose alpha was produced by QtMesh Editor's own
    U²-Net background remover** (Apache-2.0, already part of #764) — upstream's
    `preprocess_image()` uses a supplied alpha channel directly and never calls the rembg
    model on such input.
@@ -116,7 +116,7 @@ generation**, so it is not replaced.
   permitted **with conditions** (include the license, display **"Built with DINOv3"**,
   derivatives inherit the license); acceptable-use policy and export-control restrictions
   apply; the HF repo is **gated** (user must accept terms and use their own HF token).
-- QtMeshEditor **does not redistribute** DINOv3. `install.py`/first run download it under the
+- QtMesh Editor **does not redistribute** DINOv3. `install.py`/first run download it under the
   *user's* HF account after they accept Meta's terms. The "Built with DINOv3" notice appears
   in `ai/trellis2/THIRD_PARTY_LICENSES.md` and `docs/TRELLIS2.md`.
 - Consequence: it is **incorrect** to describe the TRELLIS.2 integration as "entirely MIT".
@@ -156,6 +156,6 @@ prohibition comments/guards in `ai/trellis2/*.py`, the CI check script, and the 
 Linux + NVIDIA GPU with **≥ 24 GB VRAM** (verified on A100/H100 upstream; `low_vram: true`
 staggers models CPU↔GPU), CUDA 12.4, PyTorch 2.6.0+cu124, flash-attn (or xformers). No CPU,
 no Apple Silicon path — on machines without a suitable GPU the backend reports "runtime not
-available" and QtMeshEditor's TripoSR/TripoSG ONNX backends remain the local option.
+available" and QtMesh Editor's TripoSR/TripoSG ONNX backends remain the local option.
 Using CUDA/PyTorch is fine license-wise (BSD-3); the exclusion above concerns only the
 research-only NVIDIA libraries, not ordinary GPU runtimes.

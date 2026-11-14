@@ -1,9 +1,9 @@
 
-# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor 
+# <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMesh Editor 
 
 Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D assets with GUI + CLI + CI/CD support.
 
-**Open 3D files from your OS** — after install, double-click `.fbx`, `.glb`, `.gltf`, `.obj`, `.dae`, `.stl`, `.ply`, `.mesh`, and PS1 `.rsd`/`.tmd` in Finder, Explorer, or your Linux file manager (or use **Open With**). QtMeshEditor loads the model in the running window; a second launch focuses the existing instance instead of spawning another process. Portable Windows ZIP users can run `bin/scripts/register-windows-file-associations.ps1` to register handlers without admin rights.
+**Open 3D files from your OS** — after install, double-click `.fbx`, `.glb`, `.gltf`, `.obj`, `.dae`, `.stl`, `.ply`, `.mesh`, and PS1 `.rsd`/`.tmd` in Finder, Explorer, or your Linux file manager (or use **Open With**). QtMesh Editor loads the model in the running window; a second launch focuses the existing instance instead of spawning another process. Portable Windows ZIP users can run `bin/scripts/register-windows-file-associations.ps1` to register handlers without admin rights.
 
 [![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it!
 
@@ -322,7 +322,7 @@ them (glTF preferred — verified round-trip).
 
 ### ✨ Merge Mixamo Animations in Seconds
 
-Download animations from [Mixamo](https://www.mixamo.com), drop them into QtMeshEditor, and merge into a single file — export as glTF, FBX, Collada, OBJ, or Ogre Mesh.
+Download animations from [Mixamo](https://www.mixamo.com), drop them into QtMesh Editor, and merge into a single file — export as glTF, FBX, Collada, OBJ, or Ogre Mesh.
 
 ![Merge Animations Demo](https://github.com/user-attachments/assets/441f90c5-1968-4838-8001-4ca24856a501)
 

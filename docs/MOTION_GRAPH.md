@@ -1,6 +1,6 @@
 # Motion graph (#526)
 
-> **Preview / authoring only.** The graph lets you try out clip logic inside QtMeshEditor. Export writes only the clips. Engine-native graphs (Unity Mecanim, Unreal AnimBP, Godot AnimationTree) are out of scope; the graph itself is saved only in a sidecar next to the asset.
+> **Preview / authoring only.** The graph lets you try out clip logic inside QtMesh Editor. Export writes only the clips. Engine-native graphs (Unity Mecanim, Unreal AnimBP, Godot AnimationTree) are out of scope; the graph itself is saved only in a sidecar next to the asset.
 
 A motion graph is a small state machine over an entity's clips. Use it to preview character logic such as idle → walk → run, or a weapon draw that returns to idle, before rebuilding it in your engine.
 

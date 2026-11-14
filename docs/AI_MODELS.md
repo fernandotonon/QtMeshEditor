@@ -1,7 +1,7 @@
-# AI models used in QtMeshEditor
+# AI models used in QtMesh Editor
 
 An at-a-glance index of every AI model (and model-like asset) the project uses:
-what it is, what it does inside QtMeshEditor, and under what licence.
+what it is, what it does inside QtMesh Editor, and under what licence.
 
 - **Nothing is bundled in the binary.** Models download on first use (or from
   *AI Model Settings*) into `<AppData>/ai_models/…`, unless noted. Most are
@@ -24,12 +24,12 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 
 ## 1. Image / text → 3D mesh
 
-| Model | What it is | Used in QtMeshEditor for | Licence |
+| Model | What it is | Used in QtMesh Editor for | Licence |
 |---|---|---|---|
-| **TRELLIS.2-4B** (Microsoft) | 4B sparse-voxel flow model producing geometry plus real PBR (base colour, metallic, roughness, alpha). Runs via trellis.cpp (GGUF) or a CUDA Python sidecar. | Highest-quality `generate3d` / "AI: Image → 3D" backend, the default when installed. QtMeshEditor adds its own alpha matte, game-ready simplify, xatlas UV and PBR bake. | MIT (code + weights) |
+| **TRELLIS.2-4B** (Microsoft) | 4B sparse-voxel flow model producing geometry plus real PBR (base colour, metallic, roughness, alpha). Runs via trellis.cpp (GGUF) or a CUDA Python sidecar. | Highest-quality `generate3d` / "AI: Image → 3D" backend, the default when installed. QtMesh Editor adds its own alpha matte, game-ready simplify, xatlas UV and PBR bake. | MIT (code + weights) |
 | **Pixal3D** (TencentARC) | TRELLIS.2 fork using view-aligned projection conditioning; reuses TRELLIS.2 decoders. | Alternative `generate3d --backend pixal3d`, worth trying on characters. | MIT |
 | **TripoSG** (VAST-AI) | 1.5B rectified-flow DiT over an SDF VAE (4 ONNX graphs). Geometry only. | `--backend triposg`: higher-fidelity geometry than TripoSR, slower. Colour is baked from the input photo + TripoSR's colour field. | MIT |
-| **TripoSplat** (VAST-AI) | Flow model generating up to 262k 3D Gaussians (5 ONNX graphs, native C++, no Python). | `--backend triposplat`: detailed shape + colour; QtMeshEditor meshes the splats on a 1024³ grid, simplifies, bakes colour + a detail normal map, and keeps the raw splats as a 3DGS `.ply`. Slow on CPU (~25 min). See [TRIPOSPLAT.md](TRIPOSPLAT.md). | MIT; DINOv3 encoder under the DINOv3 License; FLUX.2 VAE Apache-2.0 |
+| **TripoSplat** (VAST-AI) | Flow model generating up to 262k 3D Gaussians (5 ONNX graphs, native C++, no Python). | `--backend triposplat`: detailed shape + colour; QtMesh Editor meshes the splats on a 1024³ grid, simplifies, bakes colour + a detail normal map, and keeps the raw splats as a 3DGS `.ply`. Slow on CPU (~25 min). See [TRIPOSPLAT.md](TRIPOSPLAT.md). | MIT; DINOv3 encoder under the DINOv3 License; FLUX.2 VAE Apache-2.0 |
 | **TripoSR** (Tripo AI + Stability) | Single-image triplane reconstruction (fp32 / int8 ONNX). | Default fast `generate3d` backend and the colour source for TripoSG. | MIT |
 | **U²-Net** | Salient-object segmentation (ONNX). | Removes the background from input photos before 3D reconstruction (`--remove-bg`). | Apache-2.0 |
 | **SmolVLM-500M** (+ mmproj) | Small vision-language model (GGUF, via llama.cpp `mtmd`). | Captions reference images in the image-to-3D panel. | *(see upstream; not yet recorded in THIRD_PARTY_AI_MODELS.md)* |
@@ -38,7 +38,7 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 
 ## 2. Textures and materials
 
-| Model | What it is | Used in QtMeshEditor for | Licence |
+| Model | What it is | Used in QtMesh Editor for | Licence |
 |---|---|---|---|
 | **PBRify_Remix** (3 SPAN models) | Normal / roughness / height predictors from one albedo image (ONNX). | "Generate PBR maps from diffuse", `qtmesh material --generate-pbr`, and the PBR stage of `generate3d`. Roughness also has an offline heuristic. | CC0-1.0 |
 | **Real-ESRGAN x2plus / x4plus** | Super-resolution (ONNX). | Texture upscaling 2×/4×, and optional upscale of baked 3D-generation textures. | BSD-3-Clause |
@@ -49,7 +49,7 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 
 ## 3. Rigging and skinning
 
-| Model | What it is | Used in QtMeshEditor for | Licence |
+| Model | What it is | Used in QtMesh Editor for | Licence |
 |---|---|---|---|
 | **UniRig** (VAST-AI / Tsinghua) | Autoregressive transformer predicting a skeleton from geometry (ONNX encoder + decoder). | `qtmesh rig --algo unirig` and the Inspector Rigging section. Falls back to the template rig when unavailable. | MIT (code + weights); trained on Articulation-XL2.0 (CC-BY-4.0) |
 | **SkinTokens / TokenRig** (VAST-AI) | Qwen3-0.6B-based learned skin-weight predictor (5 ONNX graphs, ~2.3 GB). | **Default** skinning algorithm (`qtmesh skin`, `auto_rig --skin`). Falls back to geodesic-voxel bind. | MIT |
@@ -57,7 +57,7 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 
 ## 4. Animation and motion
 
-| Model | What it is | Used in QtMeshEditor for | Licence |
+| Model | What it is | Used in QtMesh Editor for | Licence |
 |---|---|---|---|
 | **RMIB in-betweener** (ours, trained on CMU MoCap) | Robust-Motion-In-betweening-style transformer on a 22-joint skeleton (ONNX, ~13 MB). | `qtmesh anim --in-between`, dope-sheet "AI in-between", MCP `motion_in_between`. Falls back to a cubic-Hermite/slerp spline. | Our weights; CMU data is permissive |
 | **Motion library** (curated clips, not a model) | CC0 / CC-BY mocap clips on the 22-joint canonical skeleton. | Default text-to-motion: keyword-matched clip retargeted onto the rig (`qtmesh anim --generate`). Credits in `ATTRIBUTION.md`. | CC0 / CC-BY per clip |
@@ -72,7 +72,7 @@ GGUF), **stable-diffusion.cpp** (`ENABLE_STABLE_DIFFUSION`), **trellis.cpp**
 
 ## 5. Mesh analysis
 
-| Model | What it is | Used in QtMeshEditor for | Licence |
+| Model | What it is | Used in QtMesh Editor for | Licence |
 |---|---|---|---|
 | **Mesh segmentation family** (ours) | PointNet++-style point-cloud segmenters: body, vegetation, vehicle, building, plus a 4-way category classifier. | Edit Mode "Select by Part (AI)", `qtmesh segment` / PartOps split-explode, material-per-part and rig priors. Falls back to geometric segmentation. | Our weights, trained on synthetic and permissive (CC0 / CC-BY) data |
 
@@ -89,7 +89,7 @@ or a recommended one. The catalog is in `LLMManager::populateRecommendedModels`.
 | Gemma 4 E4B / 12B / 26B-A4B | Larger Gemma options. |
 | Qwen 3.5 9B (16 GB machines), Qwen 3.6 27B and 35B-A3B | Higher-quality agent planning on bigger machines. |
 
-What the LLM does in QtMeshEditor:
+What the LLM does in QtMesh Editor:
 - The **AI Chat agent** plans multi-step tasks over the MCP tool set (select,
   rig, generate, export…).
 - **Material from a description** (Material Editor "Generate",

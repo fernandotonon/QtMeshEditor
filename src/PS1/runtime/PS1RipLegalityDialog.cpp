@@ -36,7 +36,7 @@ PS1RipLegalityDialog::PS1RipLegalityDialog(QWidget *parent)
 
     auto *layout = new QVBoxLayout(this);
     auto *text = new QLabel(
-        tr("QtMeshEditor's PS1 Runtime Ripper is intended for use with games and a BIOS "
+        tr("QtMesh Editor's PS1 Runtime Ripper is intended for use with games and a BIOS "
            "you legally own. Provide your own BIOS file. No game data is bundled.\n\n"
            "Use only for personal preservation, modding, or educational purposes."),
         this);

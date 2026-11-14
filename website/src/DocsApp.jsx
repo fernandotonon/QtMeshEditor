@@ -184,7 +184,7 @@ export default function DocsApp() {
 
           <section className={s.section} id="installation">
             <h2 className={s.sectionTitle}>Installation</h2>
-            <p className={s.para}>qtmesh is the command-line interface bundled with QtMeshEditor. It supports 40+ 3D formats and runs on Windows, macOS, and Linux.</p>
+            <p className={s.para}>qtmesh is the command-line interface bundled with QtMesh Editor. It supports 40+ 3D formats and runs on Windows, macOS, and Linux.</p>
 
             <h3 className={s.subsection}>Package Managers</h3>
             <CodeBlock>{`# Windows (WinGet)
@@ -222,7 +222,7 @@ cmake --build build --target QtMeshEditor -j4
           <section className={s.section} id="file-associations">
             <h2 className={s.sectionTitle}>Open 3D Files from the OS</h2>
             <p className={s.para}>
-              QtMeshEditor registers as a document handler on macOS, Windows, and Linux. After install,
+              QtMesh Editor registers as a document handler on macOS, Windows, and Linux. After install,
               double-click supported models or use your file manager&apos;s <strong>Open With</strong> menu.
               Launching with a file path loads it in the GUI; if the app is already running, the existing
               window is focused and the new file is imported (single-instance).
@@ -612,7 +612,7 @@ Summary:
           <section className={s.section} id="perf-overview">
             <h2 className={s.sectionTitle}>Performance Concepts</h2>
             <p className={s.para}>
-              QtMeshEditor ships three first-class performance analyses, all accessible from the
+              QtMesh Editor ships three first-class performance analyses, all accessible from the
               CLI, the MCP server, and the Inspector's <Code>Run Validation</Code> checklist.
               They never modify your source files unless you explicitly ask — analysis is
               read-only by default, rewrites are opt-in.
@@ -1655,7 +1655,7 @@ scopes:
           <section className={s.section} id="cloud-privacy">
             <h2 className={s.sectionTitle}>QtMesh Cloud — Privacy &amp; Security</h2>
             <p className={s.para}>
-              QtMeshEditor can upload <strong>asset projects</strong> from the GUI, CLI (<Code>qtmesh cloud upload</Code>),
+              QtMesh Editor can upload <strong>asset projects</strong> from the GUI, CLI (<Code>qtmesh cloud upload</Code>),
               or MCP (<Code>cloud_upload</Code>). This is separate from CI scan-badge ingestion above — both use your
               QtMesh Cloud account, but upload different payloads.
             </p>
@@ -1670,7 +1670,7 @@ scopes:
             <h3 className={s.subsection}>What does not get uploaded</h3>
             <ul className={s.para} style={{ marginTop: '0.6rem', paddingLeft: '1.25rem' }}>
               <li>Your OS username, home directory, or full local paths (paths are sanitised before upload).</li>
-              <li>Access or refresh tokens — these stay in your local QtMeshEditor preferences file on this machine (per-user <Code>QSettings</Code> store), not in upload payloads.</li>
+              <li>Access or refresh tokens — these stay in your local QtMesh Editor preferences file on this machine (per-user <Code>QSettings</Code> store), not in upload payloads.</li>
               <li>Files outside the resolved dependency set unless you explicitly include them via <Code>--include</Code> globs.</li>
               <li>Anything until you confirm an upload (GUI dialog, CLI prompt, or MCP explicit call).</li>
             </ul>
@@ -1893,7 +1893,7 @@ fi`}</CodeBlock>
           </section>
 
           <footer style={{ borderTop: '1px solid var(--stroke)', padding: '2rem 0', marginTop: '3rem', color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center' }}>
-            <a href="./index.html" style={{ color: 'var(--accent-1)', textDecoration: 'none' }}>QtMeshEditor</a>
+            <a href="./index.html" style={{ color: 'var(--accent-1)', textDecoration: 'none' }}>QtMesh Editor</a>
             {' '}&middot;{' '}
             <a href="https://github.com/fernandotonon/QtMeshEditor" target="_blank" rel="noopener" style={{ color: 'var(--accent-1)', textDecoration: 'none' }}>GitHub</a>
             {' '}&middot;{' '}
