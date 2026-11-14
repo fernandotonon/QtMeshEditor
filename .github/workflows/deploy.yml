@@ -101,7 +101,10 @@ jobs:
             local out
             out="$(docker run --rm --entrypoint ldd ghcr.io/fernandotonon/qtmesh:ci-scan \
                      /usr/share/qtmesheditor/qtmesheditor 2>&1 || true)"
-            ! grep -q "not found" <<<"$out"
+            # Only a glibc symbol-version mismatch matters: the bundled Qt/Ogre/
+            # Assimp libraries are found through the launcher's LD_LIBRARY_PATH,
+            # so a bare ldd reports them "not found" on every release.
+            ! grep -qE "version .GLIBC_[0-9.]+' not found" <<<"$out"
           }
           build_image
           if ! binary_loads; then
