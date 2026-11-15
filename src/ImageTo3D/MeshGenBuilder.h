@@ -3,6 +3,7 @@
 
 #include "MeshGenPredictor.h"
 
+#include <QImage>
 #include <QString>
 
 namespace Ogre {
@@ -62,6 +63,23 @@ struct BuildOptions {
 Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                                 const QString& baseName,
                                 const BuildOptions& opts = {});
+
+// Pack two baked scalar maps into one glTF-convention metallic-roughness
+// texture: .r = occlusion (white — none is baked, and a 0 lane darkens the
+// whole surface), .g = roughness, .b = metallic.
+//
+// This exists because BOTH consumers of the `metallic` canonical slot read it
+// as a PACKED map: Ogre's Cook-Torrance SRS samples .g/.b off whatever texture
+// sits there, and glTF's metallicRoughnessTexture is defined the same way.
+// Binding a single-channel grayscale metallic PNG makes it expand to R=G=B, so
+// roughness is silently read out of the metallic lane and the real roughness
+// map is ignored entirely.
+//
+// Either input may be null (the other still packs, with a neutral lane for the
+// missing one); both null returns a null QImage. Mismatched sizes are tolerated
+// — a generated asset with slightly wrong shading beats no asset.
+QImage packOcclusionRoughnessMetallic(const QImage& roughness,
+                                      const QImage& metallic);
 
 } // namespace MeshGenBuilder
 

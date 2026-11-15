@@ -1034,6 +1034,79 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMeshWithUnusedSharedVertex_RemapPreserve
     expectEntityHasSingleQuadBinding(entity, {0, 1, 2, 3});
 }
 
+// Packed metallic-roughness export: the `metallic` slot is the packed map
+// and becomes glTF's metallicRoughnessTexture with factor 1 — but only when
+// it HAS a texture. A PBR preset creates it empty as a placeholder, and that
+// must leave the roughness map in charge and the material non-metallic.
+namespace {
+QJsonObject exportSingleMaterialGltf(const std::string& matName,
+                                     const std::vector<std::pair<std::string, std::string>>& slotList,
+                                     const QString& dir)
+{
+    auto& tm = Ogre::TextureManager::getSingleton();
+    auto mat = Ogre::MaterialManager::getSingleton().create(
+        matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (const auto& [slot, tex] : slotList) {
+        if (!tex.empty() && !tm.getByName(tex))
+            tm.createManual(tex, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_BYTE_RGBA);
+        auto* tus = tex.empty() ? pass->createTextureUnitState()
+                                : pass->createTextureUnitState(tex);
+        tus->setName(slot);
+    }
+    mat->compile();
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh(matName + "_mesh");
+    auto* sn = manager->addSceneNode(QString::fromStdString(matName + "_node"));
+    auto* en = manager->createEntity(sn, mesh);
+    en->getSubEntity(0)->setMaterial(mat);
+    en->getMesh()->getSubMesh(0)->setMaterialName(matName);
+    const QString file = dir + "/mr.scene.gltf";
+    EXPECT_EQ(MeshImporterExporter::sceneExporter(file), 0);
+    manager->destroySceneNode(sn);
+    QFile f(file);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return QJsonDocument::fromJson(f.readAll()).object();
+}
+
+QString mrTextureUri(const QJsonObject& gltf)
+{
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    if (!pbr.contains("metallicRoughnessTexture"))
+        return {};
+    const int t = pbr["metallicRoughnessTexture"].toObject()["index"].toInt();
+    const int img = gltf["textures"].toArray().at(t).toObject()["source"].toInt();
+    return gltf["images"].toArray().at(img).toObject()["uri"].toString();
+}
+} // namespace
+
+TEST_F(SceneSaveLoadTest, PackedMetallicRoughnessWinsTheGltfMrTexture) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QJsonObject gltf = exportSingleMaterialGltf("MrPackedMat",
+        {{"albedo", "mrp_albedo.png"}, {"roughness", "mrp_rough.png"},
+         {"metallic", "mrp_packed.png"}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mrp_packed")) << mrTextureUri(gltf).toStdString();
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    EXPECT_DOUBLE_EQ(pbr["metallicFactor"].toDouble(-1.0), 1.0);
+}
+
+TEST_F(SceneSaveLoadTest, EmptyMetallicPlaceholderDoesNotClaimTheMrTexture) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QJsonObject gltf = exportSingleMaterialGltf("MrPlaceholderMat",
+        {{"albedo", "mre_albedo.png"}, {"roughness", "mre_rough.png"},
+         {"metallic", ""}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mre_rough")) << mrTextureUri(gltf).toStdString();
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    // Assimp writes 0 when no factor is given; packed mode would write 1.
+    EXPECT_NE(pbr["metallicFactor"].toDouble(0.0), 1.0);
+}
+
 // Slice F3 export-side PBR slot dispatch:
 // buildAiMaterialFromOgre routed every TUS that wasn't named "normal_map"
 // to aiTextureType_DIFFUSE — so on re-import roughness/metallic/ao/emissive

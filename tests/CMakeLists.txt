@@ -324,6 +324,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvSeamOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GlbImageEmbed.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/WebPImage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MarchingCubes.cpp
@@ -392,6 +393,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TextureInpaint_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenControllerSave_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshGenBuilderOrm_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshSegmenter.cpp

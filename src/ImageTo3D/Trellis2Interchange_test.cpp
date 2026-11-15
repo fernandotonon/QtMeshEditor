@@ -155,6 +155,13 @@ TEST(Trellis2InterchangeTest, ReadsTrellisCppDump)
     EXPECT_FLOAT_EQ(r.data.origin[0], -0.5f);
     EXPECT_EQ(r.data.voxelCoords[3], 60u);
     EXPECT_EQ(r.data.voxelAttrs[0], 255);            // 1.0 -> 255
+    // Base color is stored RAW: TRELLIS.2 already predicts sRGB (Microsoft's
+    // GLB export writes these values straight into baseColorTexture). The
+    // old extra linear->sRGB encode turned 0.8 into 231 and 0.5 into 188.
+    EXPECT_EQ(r.data.voxelAttrs[1], 204);            // 0.8 -> 204, not 231
+    EXPECT_EQ(r.data.voxelAttrs[7], 128);            // 0.5 -> 128, not 188
+    EXPECT_EQ(r.data.meta.value(QStringLiteral("colorSpace")).toString(),
+              QStringLiteral("srgb-v2"));
     EXPECT_EQ(r.data.voxelAttrs[4], 64);             // 0.25 -> 64
     EXPECT_EQ(r.data.voxelAttrs[11], 128);           // 0.5 -> 128
 
@@ -170,4 +177,91 @@ TEST(Trellis2InterchangeTest, ReadsTrellisCppDump)
     // Truncation must be rejected.
     EXPECT_FALSE(Trellis2Interchange::readTrellisCppDump(
                      QStringLiteral("/nonexistent/x.trellisraw")).ok);
+}
+
+namespace {
+
+// Writes `d` and rewrites the color-space tag in the file in place (same
+// byte length, JSON whitespace pads the shorter value), so tests can produce
+// files exactly as older builds stamped them.
+QString writeWithTag(const QTemporaryDir& tmp, const Trellis2Interchange::Data& d,
+                     const QByteArray& replacement)
+{
+    const QString path = QDir(tmp.path()).filePath("tagged.qtm3d");
+    QString err;
+    if (!Trellis2Interchange::write(path, d, &err))
+        return QString();
+    QFile f(path);
+    if (!f.open(QIODevice::ReadWrite))
+        return QString();
+    QByteArray bytes = f.readAll();
+    const QByteArray current("\"colorSpace\":\"srgb-v2\"");
+    const qsizetype at = bytes.indexOf(current);
+    if (at < 0 || replacement.size() != current.size())
+        return QString();
+    bytes.replace(at, current.size(), replacement);
+    f.seek(0);
+    f.write(bytes);
+    return path;
+}
+
+} // namespace
+
+TEST(Trellis2InterchangeTest, OldSrgbTagIsDecodedOnceOnLoad)
+{
+    // Files written between #978 and the fix carry raw output run through an
+    // unneeded linear->sRGB encode and the tag "srgb". Reading undoes it once.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Trellis2Interchange::Data d = makeSample();
+    d.voxelAttrs = {231, 188, 0, 10, 200, 255,     // 0.8 / 0.5 encoded by the old code
+                    255, 0, 128, 250, 20, 128};
+    const QString path = writeWithTag(tmp, d, QByteArray("\"colorSpace\":\"srgb\"   "));
+    ASSERT_FALSE(path.isEmpty());
+    const auto r = Trellis2Interchange::read(path);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_NEAR(r.data.voxelAttrs[0], 204, 1);  // back to 0.8
+    EXPECT_NEAR(r.data.voxelAttrs[1], 128, 1);  // back to 0.5
+    EXPECT_EQ(r.data.voxelAttrs[2], 0);
+    EXPECT_EQ(r.data.voxelAttrs[3], 10);        // metallic: untouched
+    EXPECT_EQ(r.data.voxelAttrs[4], 200);       // roughness: untouched
+    EXPECT_EQ(r.data.voxelAttrs[6], 255);
+    EXPECT_NEAR(r.data.voxelAttrs[8], 55, 1);   // 128 (sRGB) -> 0.216
+    EXPECT_EQ(r.data.voxelAttrs[9], 250);
+    EXPECT_EQ(r.data.meta.value(QStringLiteral("colorSpace")).toString(),
+              QStringLiteral("srgb-v2"));
+}
+
+TEST(Trellis2InterchangeTest, UntaggedFilesAreRawAndKeptAsIs)
+{
+    // Pre-#978 files and the Python sidecar write raw model output with no
+    // tag: those were right all along and must not be converted.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const Trellis2Interchange::Data d = makeSample();
+    const QString path = writeWithTag(tmp, d, QByteArray("\"colorSpacX\":\"srgb-v2\""));
+    ASSERT_FALSE(path.isEmpty());
+    const auto r = Trellis2Interchange::read(path);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.data.voxelAttrs, d.voxelAttrs);
+}
+
+TEST(Trellis2InterchangeTest, RoundTripNeverReconverts)
+{
+    // A stale "srgb" in the in-memory meta must not survive write(): the next
+    // read() would decode data that is already correct.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    Trellis2Interchange::Data d = makeSample();
+    d.meta.insert(QStringLiteral("colorSpace"), QStringLiteral("srgb"));
+    const QString path = QDir(tmp.path()).filePath("rt.qtm3d");
+    QString err;
+    ASSERT_TRUE(Trellis2Interchange::write(path, d, &err)) << err.toStdString();
+    const auto r1 = Trellis2Interchange::read(path);
+    ASSERT_TRUE(r1.ok);
+    EXPECT_EQ(r1.data.voxelAttrs, d.voxelAttrs);
+    ASSERT_TRUE(Trellis2Interchange::write(path, r1.data, &err));
+    const auto r2 = Trellis2Interchange::read(path);
+    ASSERT_TRUE(r2.ok);
+    EXPECT_EQ(r2.data.voxelAttrs, d.voxelAttrs);
 }

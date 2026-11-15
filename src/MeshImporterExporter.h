@@ -89,6 +89,11 @@ public:
     /// be re-applied. (Chunk 4b: Edit Mode topology ops use this to
     /// preserve bump mapping after subdivide / extrude / etc.)
     static void applyNormalMapsToEntity(const Ogre::Entity* entity);
+    // Overwrites the mesh's VES_TANGENT (float4) values with robust tangents
+    // (MeshGenBaker::computeTangents). Returns how many vertices had a zero
+    // tangent before — what Ogre's buildTangentVectors leaves on vertices
+    // whose faces are all tiny in UV space, rendered as black spots.
+    static int recomputeTangentsRobust(Ogre::Mesh* mesh);
 
     /// Register a directory for mesh sidecars and Assimp texture lookup.
     static void registerImportResourceDirectory(const QString& absoluteDir);
