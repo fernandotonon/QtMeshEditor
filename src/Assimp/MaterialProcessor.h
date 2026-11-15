@@ -5,6 +5,8 @@
 
 #include <QString>
 
+#include <cstddef>
+
 class MaterialProcessor
 {
 public:
@@ -19,6 +21,11 @@ private:
     Ogre::TexturePtr loadTexture(const Ogre::String& filename, const aiString& path, const aiScene* scene);
     Ogre::TexturePtr resolveTexture(const std::string& filename, const aiString& path, const aiScene* scene);
     Ogre::TexturePtr loadTextureFromFile(const QString& absolutePath, const Ogre::String& resourceName);
+    // Encoded image bytes (PNG/JPEG/... or WebP) -> a texture named `resourceName`.
+    // WebP is decoded here (libwebp): Ogre's stb_image codec cannot read it.
+    static Ogre::TexturePtr loadTextureFromBytes(const Ogre::String& resourceName,
+                                                 const void* data, std::size_t size,
+                                                 const Ogre::String& formatHint);
     void applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName);
 
     QString m_sourceDirectory;

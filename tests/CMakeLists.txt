@@ -324,6 +324,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvSeamOps.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ApplyAtlas.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EmbeddedTextureCache.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/WebPImage.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalMapGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MarchingCubes.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ImageTo3D/MeshRefine.cpp
@@ -737,6 +738,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         Qt::QuickControls2
         meshoptimizer
         xatlas
+        qtmesh_webp
         qtmesh_sodium
         qtmesh_updater
     )
