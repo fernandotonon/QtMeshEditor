@@ -528,6 +528,12 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/QuadriFlow.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/KimodoMotionCorrection.cmake)
 
 ##############################################################
+#  libwebp — decoder only, for WebP textures embedded in glTF
+#  (EXT_texture_webp). See cmake/WebP.cmake.
+##############################################################
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/WebP.cmake)
+
+##############################################################
 #  stb — Radiance .hdr decode for HDR environment maps (#467).
 ##############################################################
 FetchContent_Declare(
