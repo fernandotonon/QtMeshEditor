@@ -84,3 +84,26 @@ TEST(PaintChannelTest, DefaultBrushColorIsWhiteAndInRange) {
         EXPECT_EQ(b, 255);
     }
 }
+
+TEST(PaintChannelTest, ScalarSessionsSeedFromTheirOrmLane) {
+    using namespace PaintChannelNS;
+    EXPECT_EQ(ormLane(Channel::AO), 0);
+    EXPECT_EQ(ormLane(Channel::Roughness), 1);
+    EXPECT_EQ(ormLane(Channel::Metallic), 2);
+    EXPECT_EQ(ormLane(Channel::BaseColor), -1);
+    EXPECT_EQ(ormLane(Channel::Height), -1);
+
+    // A packed texel (AO 255, rough 0, metal 0) must seed roughness as 0, not
+    // as its luminance (~76); a greyscale map is unchanged; alpha is kept.
+    std::vector<uint8_t> px = {255, 0, 0, 200,   90, 90, 90, 255};
+    extractOrmLane(px, ormLane(Channel::Roughness));
+    EXPECT_EQ(px, (std::vector<uint8_t>{0, 0, 0, 200,   90, 90, 90, 255}));
+
+    std::vector<uint8_t> metal = {255, 180, 40, 255};
+    extractOrmLane(metal, ormLane(Channel::Metallic));
+    EXPECT_EQ(metal, (std::vector<uint8_t>{40, 40, 40, 255}));
+
+    std::vector<uint8_t> untouched = {1, 2, 3, 4};
+    extractOrmLane(untouched, -1);
+    EXPECT_EQ(untouched, (std::vector<uint8_t>{1, 2, 3, 4}));
+}

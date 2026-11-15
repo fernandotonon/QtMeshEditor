@@ -1071,6 +1071,19 @@ QJsonObject exportSingleMaterialGltf(const std::string& matName,
     return QJsonDocument::fromJson(f.readAll()).object();
 }
 
+// A 2x2 texture of one colour, registered under `name` (replacing any old one).
+void makeSolidTexture(const std::string& name, uint8_t r, uint8_t g, uint8_t b)
+{
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+        tm.remove(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    std::vector<uint8_t> px;
+    for (int i = 0; i < 4; ++i) { px.push_back(r); px.push_back(g); px.push_back(b); px.push_back(255); }
+    Ogre::Image img;
+    img.loadDynamicImage(px.data(), 2, 2, 1, Ogre::PF_BYTE_RGBA, false);
+    tm.loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, img);
+}
+
 QString mrTextureUri(const QJsonObject& gltf)
 {
     const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
@@ -1085,13 +1098,16 @@ QString mrTextureUri(const QJsonObject& gltf)
 TEST_F(SceneSaveLoadTest, PackedMetallicRoughnessWinsTheGltfMrTexture) {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
+    makeSolidTexture("mrp_packed.png", 255, 180, 40);   // AO / rough / metal
     const QJsonObject gltf = exportSingleMaterialGltf("MrPackedMat",
         {{"albedo", "mrp_albedo.png"}, {"roughness", "mrp_rough.png"},
          {"metallic", "mrp_packed.png"}}, tmp.path());
     ASSERT_FALSE(gltf.isEmpty());
     EXPECT_TRUE(mrTextureUri(gltf).contains("mrp_packed")) << mrTextureUri(gltf).toStdString();
     const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
-    EXPECT_DOUBLE_EQ(pbr["metallicFactor"].toDouble(-1.0), 1.0);
+    // glTF's default metallicFactor is 1.0, and Assimp omits a factor equal to
+    // its default: absent means 1.
+    EXPECT_DOUBLE_EQ(pbr["metallicFactor"].toDouble(1.0), 1.0);
 }
 
 TEST_F(SceneSaveLoadTest, EmptyMetallicPlaceholderDoesNotClaimTheMrTexture) {
@@ -1103,8 +1119,38 @@ TEST_F(SceneSaveLoadTest, EmptyMetallicPlaceholderDoesNotClaimTheMrTexture) {
     ASSERT_FALSE(gltf.isEmpty());
     EXPECT_TRUE(mrTextureUri(gltf).contains("mre_rough")) << mrTextureUri(gltf).toStdString();
     const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
-    // Assimp writes 0 when no factor is given; packed mode would write 1.
-    EXPECT_NE(pbr["metallicFactor"].toDouble(0.0), 1.0);
+    // Assimp writes 0 when no factor is given; packed mode would leave 1
+    // (absent = the glTF default 1).
+    ASSERT_TRUE(pbr.contains("metallicFactor"));
+    EXPECT_NE(pbr["metallicFactor"].toDouble(1.0), 1.0);
+}
+
+TEST_F(SceneSaveLoadTest, GreyscaleMetallicMapDoesNotClaimTheMrTexture) {
+    // An FBX import binds a standalone greyscale metallic map to `metallic`.
+    // As glTF's MR texture its green lane would read as roughness, so the
+    // roughness map keeps the slot.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    makeSolidTexture("mrg_metal.png", 90, 90, 90);
+    const QJsonObject gltf = exportSingleMaterialGltf("MrGreyMetalMat",
+        {{"albedo", "mrg_albedo.png"}, {"roughness", "mrg_rough.png"},
+         {"metallic", "mrg_metal.png"}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mrg_rough")) << mrTextureUri(gltf).toStdString();
+}
+
+TEST(MetallicMapLooksScalar, TellsGreyscaleFromPacked) {
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(QImage()));
+    QImage grey(128, 128, QImage::Format_RGB32);
+    grey.fill(QColor(70, 70, 70));
+    EXPECT_TRUE(MeshImporterExporter::metallicMapLooksScalar(grey));
+    QImage packed = grey;
+    packed.fill(QColor(255, 200, 0));
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(packed));
+    // One packed texel among grey ones is enough (the sample grid covers it).
+    QImage mostlyGrey = grey;
+    mostlyGrey.setPixel(0, 0, qRgb(255, 120, 10));
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(mostlyGrey));
 }
 
 // Slice F3 export-side PBR slot dispatch:
