@@ -296,6 +296,7 @@ commands/RecordMocapClipCommand.cpp
 commands/LipsyncClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
+GlbImageEmbed.cpp
 NormalMapGenerator.cpp
 ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
@@ -538,6 +539,7 @@ TexturePaintController.h
 VertexColorBaker.h
 ApplyAtlas.h
 EmbeddedTextureCache.h
+GlbImageEmbed.h
 NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
