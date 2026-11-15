@@ -2705,6 +2705,16 @@ bool TexturePaintController::ensurePaintableTexture(int resolution)
         SentryReporter::addBreadcrumb("ui.action",
             QStringLiteral("Texture paint: loaded existing %1×%2 from '%3'")
                 .arg(m_buffer.width()).arg(m_buffer.height()).arg(existingTex));
+        const int lane = PaintChannelNS::ormLane(m_activeChannel);
+        if (lane >= 0) {
+            // Paint the channel's own lane, not the RGB of a packed ORM image
+            // (see extractOrmLane). The greyed buffer must never be written
+            // back into that image in place: after a glTF import it is the
+            // same texture the `metallic` slot renders as the packed map.
+            PaintChannelNS::extractOrmLane(m_buffer.data(), lane);
+            m_originalTexture.reset();
+            m_forceManualPaintTexture = true;
+        }
     }
 
     static unsigned int s_unique = 0;

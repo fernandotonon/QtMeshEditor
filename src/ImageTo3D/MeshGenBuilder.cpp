@@ -405,20 +405,6 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             if (opts.generatePbrMaps) {
                 normalPath   = saveMap(result.normalMap,   "normal");
                 roughnessPath = saveMap(result.roughnessMap, "roughness");
-                // The `metallic` slot is read by Ogre's Cook-Torrance SRS as
-                // a PACKED glTF metallic-roughness map (.r=AO, .g=roughness,
-                // .b=metallic — see RTShaderHelper, which passes exactly this
-                // texture to the SRS). Binding the single-channel metallic
-                // PNG there made a grey image expand to R=G=B, so the shader
-                // read ROUGHNESS from the metallic lane and ignored the real
-                // roughness map entirely: a generated box whose TRELLIS
-                // metallic was 0.75 rendered as chrome with roughness 0.75
-                // instead of its baked 0.62. Pack the two real maps into one
-                // RGB texture so each lane carries what the shader expects.
-                metallicPath = saveMap(
-                    packOcclusionRoughnessMetallic(result.roughnessMap,
-                                                   result.metallicMap),
-                    "metallic");
             }
 
             // Optional PBR stage (#404): synthesize normal + roughness from the
@@ -448,6 +434,31 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                          + pr.error + ") — continuing with diffuse only.")
                             .toStdString());
                 }
+            }
+
+            // The `metallic` slot is read by Ogre's Cook-Torrance SRS as
+            // a PACKED glTF metallic-roughness map (.r=AO, .g=roughness,
+            // .b=metallic — see RTShaderHelper, which passes exactly this
+            // texture to the SRS). Binding the single-channel metallic
+            // PNG there made a grey image expand to R=G=B, so the shader
+            // read ROUGHNESS from the metallic lane and ignored the real
+            // roughness map entirely: a generated box whose TRELLIS
+            // metallic was 0.75 rendered as chrome with roughness 0.75
+            // instead of its baked 0.62. Pack the two real maps into one
+            // RGB texture so each lane carries what the shader expects.
+            // Packed AFTER the synthesis above, from the FINAL roughness map:
+            // when only the roughness was synthesized, packing the predictor's
+            // (absent) one would freeze the neutral 204 into the lane glTF
+            // consumers read, leaving the synthesized map unused.
+            if (opts.generatePbrMaps && !result.metallicMap.isNull()) {
+                QImage rough = result.roughnessMap;
+                if (rough.isNull() && !roughnessPath.isEmpty())
+                    rough = QImage(roughnessPath);
+                if (!rough.isNull() && rough.size() != result.metallicMap.size())
+                    rough = rough.scaled(result.metallicMap.size(), Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation);
+                metallicPath = saveMap(packOcclusionRoughnessMetallic(rough, result.metallicMap),
+                                       "metallic");
             }
 
             // Register the directory so Ogre's resource system (and the

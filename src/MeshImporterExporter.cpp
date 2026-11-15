@@ -82,6 +82,7 @@ THE SOFTWARE.
 #include "FaceRig/FaceRigAttach.h"
 #include "ExportOptimizer.h"
 #include "RTShaderHelper.h"
+#include "EmbeddedTextureCache.h"
 
 // Debug trace helper for #681 export-crash repro. Writes to a
 // dedicated file because stderr is consumed by MCP mode and the
@@ -369,15 +370,73 @@ static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent, const std::string
     return node;
 }
 
+bool MeshImporterExporter::metallicMapLooksScalar(const QImage& image)
+{
+    if (image.isNull())
+        return false;
+    const QImage img = image.convertToFormat(QImage::Format_RGB32);
+    // A 64x64 sample grid: enough to see any packed texel (its AO lane is
+    // 255 or matches neither of the others) without reading 4K maps whole.
+    const int stepX = std::max(1, img.width() / 64);
+    const int stepY = std::max(1, img.height() / 64);
+    for (int y = 0; y < img.height(); y += stepY)
+        for (int x = 0; x < img.width(); x += stepX) {
+            const QRgb p = img.pixel(x, y);
+            if (std::abs(qRed(p) - qGreen(p)) > 3 || std::abs(qGreen(p) - qBlue(p)) > 3)
+                return false;
+        }
+    return true;
+}
+
+// Pixels of a bound texture for the export decision below: the import-time
+// embedded bytes first (FBX embeds are not on disk), else the loaded texture.
+// Null when neither is available.
+static QImage textureImageForExport(const std::string& name)
+{
+    const std::vector<uint8_t> bytes = EmbeddedTextureCache::retrieve(name);
+    if (!bytes.empty()) {
+        QImage img;
+        if (img.loadFromData(bytes.data(), static_cast<int>(bytes.size())))
+            return img;
+    }
+    try {
+        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(
+            name, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        if (!tex)
+            return {};
+        if (!tex->isLoaded())
+            tex->load();
+        Ogre::Image oi;
+        tex->convertToImage(oi);
+        const int w = static_cast<int>(oi.getWidth());
+        const int h = static_cast<int>(oi.getHeight());
+        if (w <= 0 || h <= 0)
+            return {};
+        QImage out(w, h, QImage::Format_RGBA8888);
+        Ogre::PixelBox dst(w, h, 1, Ogre::PF_BYTE_RGBA, out.bits());
+        Ogre::PixelUtil::bulkPixelConversion(oi.getPixelBox(), dst);
+        return out;
+    } catch (...) {
+        return {};
+    }
+}
+
 // The canonical PACKED metallic-roughness map: the `metallic` slot WITH a
-// texture. A PBR preset creates that slot empty as an inspector placeholder;
-// an empty one must not switch the export to packed-map mode (metallic
-// factor 1, no specular, roughness map displaced from index 0).
+// texture that is not a plain greyscale metallic map.
+//  * A PBR preset creates that slot empty as an inspector placeholder; an
+//    empty one must not switch the export to packed-map mode (metallic factor
+//    1, no specular, roughness map displaced from index 0).
+//  * An FBX import binds a standalone greyscale METALNESS map there. As glTF's
+//    MR texture its green lane would read as roughness, so it keeps the
+//    pre-packed export (the roughness map leads). Packing such pairs into one
+//    ORM texture on export is not done here.
 static bool isPackedMetallicRoughness(const Ogre::TextureUnitState* t)
 {
-    return t->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED
-        && t->getName() == "metallic"
-        && !t->getTextureName().empty();
+    if (t->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED
+        || t->getName() != "metallic" || t->getTextureName().empty())
+        return false;
+    return !MeshImporterExporter::metallicMapLooksScalar(
+        textureImageForExport(t->getTextureName()));
 }
 
 // Convert an Ogre material to an aiMaterial (colors + textures)
@@ -475,7 +534,7 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
                 ++metalIdx;
                 // An empty placeholder slot carries no packed map: nothing
                 // below applies to it.
-                if (!isPackedMetallicRoughness(tus))
+                if (!packedMrClaimed)
                     continue;
                 // glTF has ONE combined metallic-roughness texture, and
                 // Assimp's glTF2 exporter fills it from DIFFUSE_ROUGHNESS

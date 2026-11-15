@@ -41,7 +41,9 @@ THE SOFTWARE.
 //   * VertexColor is not a texture channel at all — it routes to the existing
 //     per-vertex paint path (EditModeController), so it has no slot name.
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace PaintChannelNS {
 
@@ -66,6 +68,33 @@ inline bool isScalar(Channel c)
 {
     return c == Channel::Roughness || c == Channel::Metallic
         || c == Channel::AO || c == Channel::Height;
+}
+
+/// Lane of the packed ORM texture (.r = AO, .g = roughness, .b = metallic) a
+/// scalar channel lives in; -1 for channels that are not in it.
+inline int ormLane(Channel c)
+{
+    switch (c) {
+    case Channel::AO:        return 0;
+    case Channel::Roughness: return 1;
+    case Channel::Metallic:  return 2;
+    default:                 return -1;
+    }
+}
+
+/// Seed a scalar paint session from an RGBA8 slot image: every pixel becomes
+/// grey = its `lane` value (alpha kept). A glTF import binds the PACKED
+/// metallic-roughness image to the `roughness` slot too, and the bake collapses
+/// the painted buffer to luminance, so without this an untouched packed texel
+/// (255, 0, 0) baked back as roughness ~76. A plain greyscale map is unchanged.
+inline void extractOrmLane(std::vector<uint8_t>& rgba, int lane)
+{
+    if (lane < 0 || lane > 2)
+        return;
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+        const uint8_t v = rgba[i + static_cast<size_t>(lane)];
+        rgba[i] = rgba[i + 1] = rgba[i + 2] = v;
+    }
 }
 
 /// True for full-RGB colour channels (blitted straight to their slot).

@@ -1,4 +1,5 @@
 #include "GlbImageEmbed.h"
+#include "WebPImage.h"
 
 #include <QBuffer>
 #include <QDir>
@@ -41,8 +42,10 @@ void padTo4(QByteArray& b, char fill)
         b.append(fill);
 }
 
-// glTF consumers decode only PNG and JPEG (+ WebP through
-// EXT_texture_webp). Identify those by their bytes, never by the file name.
+// Core glTF images are PNG or JPEG only. Identify those by their bytes, never
+// by the file name. (WebP would also need EXT_texture_webp on the texture and
+// in extensionsUsed/Required, which Assimp's exporter does not write, so it is
+// re-encoded like any other format.)
 QString mimeFor(const QByteArray& data)
 {
     if (data.startsWith("\x89PNG"))
@@ -50,19 +53,21 @@ QString mimeFor(const QByteArray& data)
     if (data.size() >= 2 && static_cast<uchar>(data[0]) == 0xFF
         && static_cast<uchar>(data[1]) == 0xD8)
         return QStringLiteral("image/jpeg");
-    if (data.size() >= 12 && data.startsWith("RIFF") && data.mid(8, 4) == "WEBP")
-        return QStringLiteral("image/webp");
     return {};
 }
 
-// Anything else (BMP, TGA, ...) is re-encoded as PNG so the embedded bytes
-// match their mimeType. False when Qt cannot read it (e.g. HDR): the image
-// then stays an external reference rather than being embedded mislabelled.
+// Anything else (WebP, BMP, TGA, ...) is re-encoded as PNG so the embedded
+// bytes match their mimeType. False when it cannot be read (e.g. HDR): the
+// image then stays an external reference rather than being embedded
+// mislabelled.
 bool transcodeToPng(QByteArray& data, const QString& fileName)
 {
     QImage img;
-    if (!img.loadFromData(data, QFileInfo(fileName).suffix().toLatin1().constData())
-        && !img.loadFromData(data))
+    if (WebPImage::looksLikeWebP(data.constData(), static_cast<size_t>(data.size())))
+        img = WebPImage::decode(data.constData(), static_cast<size_t>(data.size()));
+    else if (!img.loadFromData(data, QFileInfo(fileName).suffix().toLatin1().constData()))
+        img.loadFromData(data);
+    if (img.isNull())
         return false;
     QByteArray png;
     QBuffer buf(&png);
@@ -148,9 +153,15 @@ Result embedExternalImages(const QString& glbPath)
         if (uri.isEmpty() || uri.startsWith(QLatin1String("data:"))
             || img.contains(QStringLiteral("bufferView")))
             continue;
-        const QString decoded = QUrl::fromPercentEncoding(uri.toUtf8());
-        const QString path = QFileInfo(decoded).isAbsolute()
-            ? decoded : dir.filePath(decoded);
+        // Assimp writes the file name as-is (no percent-encoding), while
+        // conforming writers percent-encode it: try the literal name first so
+        // a file really named `a%20b.png` is not swapped for `a b.png`.
+        auto resolve = [&dir](const QString& name) {
+            return QFileInfo(name).isAbsolute() ? name : dir.filePath(name);
+        };
+        QString path = resolve(uri);
+        if (!QFileInfo::exists(path))
+            path = resolve(QUrl::fromPercentEncoding(uri.toUtf8()));
         QFile tex(path);
         if (!tex.open(QIODevice::ReadOnly)) {
             r.missing.append(uri);
