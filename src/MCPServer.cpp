@@ -3655,8 +3655,14 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                 : opts.bakeOntoGuide ? ShapeGuide::kBakeOnGuideMinStrength : 0.33));
             if (tripoSGGuide) {
                 opts.guideFromTripoSG = true;
-                // First use downloads the TripoSG graphs (~6 GB).
-                if (TripoSGPredictor::ensureModelBlocking(false).isEmpty())
+                // First use downloads the TripoSG graphs (~6 GB): Stop must
+                // reach the transfer.
+                m_toolCancelRequested = false;
+                const QString enc = TripoSGPredictor::ensureModelBlocking(
+                    false, [this]() { return m_toolCancelRequested; });
+                if (m_toolCancelRequested)
+                    return makeErrorResult(QStringLiteral("cancelled"));
+                if (enc.isEmpty())
                     return makeErrorResult("guide 'triposg': TripoSG models unavailable.");
             }
             opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));

@@ -791,7 +791,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
-        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        const QString enc = TripoSGPredictor::ensureModelBlocking(
+            false, [this]() { return m_cancel.load(); });
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
         if (enc.isEmpty()) {
             setBusy(false);
             emit error(tr("TripoSG models unavailable — they download on first "
@@ -853,7 +859,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
             // (the downloader needs the main thread).
             emit statusMessage(tr("Checking TripoSG models…"));
             okGuide = TripoSGPredictor::isAvailable()
-                && !TripoSGPredictor::ensureModelBlocking(false).isEmpty();
+                && !TripoSGPredictor::ensureModelBlocking(
+                       false, [this]() { return m_cancel.load(); }).isEmpty();
+            if (m_cancel.load()) {
+                setBusy(false);
+                emit statusMessage(tr("Cancelled."));
+                return;
+            }
             if (!okGuide)
                 gerr = TripoSGPredictor::isAvailable()
                     ? tr("TripoSG models unavailable")
