@@ -297,6 +297,7 @@ commands/LipsyncClipCommand.cpp
 ApplyAtlas.cpp
 EmbeddedTextureCache.cpp
 GlbImageEmbed.cpp
+WebPImage.cpp
 NormalMapGenerator.cpp
 ImageTo3D/MarchingCubes.cpp
 ImageTo3D/MeshRefine.cpp
@@ -540,6 +541,7 @@ VertexColorBaker.h
 ApplyAtlas.h
 EmbeddedTextureCache.h
 GlbImageEmbed.h
+WebPImage.h
 NormalMapGenerator.h
 MemoryEstimator.h
 DrawCallAnalyzer.h
@@ -884,6 +886,7 @@ Qt::QuickWidgets
 Qt::QuickControls2
 meshoptimizer
 xatlas
+qtmesh_webp
 qtmesh_sodium
 )
 
@@ -1188,7 +1191,7 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2
-    meshoptimizer xatlas qtmesh_sodium qtmesh_updater)
+    meshoptimizer xatlas qtmesh_webp qtmesh_sodium qtmesh_updater)
 
     if(stb_SOURCE_DIR)
         target_include_directories(UnitTests PRIVATE ${stb_SOURCE_DIR})
