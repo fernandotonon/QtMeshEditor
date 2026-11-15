@@ -296,6 +296,15 @@ const std::vector<PresetInfo>& presets()
     return kList;
 }
 
+void tripoSGToEditorFrame(std::vector<float>& positions, float scale)
+{
+    for (size_t v = 0; v + 2 < positions.size(); v += 3) {
+        positions[v]     = -positions[v] * scale;      // 180 degrees about Y
+        positions[v + 1] =  positions[v + 1] * scale;
+        positions[v + 2] = -positions[v + 2] * scale;
+    }
+}
+
 bool isPreset(const QString& id)
 {
     for (const PresetInfo& p : presets())

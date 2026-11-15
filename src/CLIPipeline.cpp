@@ -13593,8 +13593,14 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         for (const ShapeGuide::PresetInfo& p : ShapeGuide::presets())
             listing += p.id.leftJustified(12) + p.category.leftJustified(12)
                        + p.hint + QLatin1Char('\n');
+        listing += ShapeGuide::kTripoSGGuideId.leftJustified(12)
+                   + QStringLiteral("Generated").leftJustified(12)
+                   + QStringLiteral("TripoSG geometry of the same image (grid %1, default "
+                                    "strength %2); add --bake-onto-guide to keep it as the mesh\n")
+                         .arg(ShapeGuide::kTripoSGGuideResolution)
+                         .arg(ShapeGuide::kTripoSGGuideDefaultStrength);
         listing += QStringLiteral(
-            "\nuse: --guide <id | mesh file | .obj> [--guide-strength 0.33] "
+            "\nuse: --guide <id | triposg | mesh file | .obj> [--guide-strength 0.33] "
             "[--bake-onto-guide] [--guide-reach 0.08]\n"
             "     --export-guide <id> -o guide.obj   writes a preset to edit\n");
         cliWrite(listing);
@@ -13621,7 +13627,10 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
     }
     // Baking onto the guide outputs the guide mesh, so without an explicit
     // strength use the one from which the generation hugs it.
-    if (bakeOntoGuide && !guideStrengthSet)
+    const bool tripoSGGuide = ShapeGuide::isTripoSGGuide(guideSpec);
+    if (tripoSGGuide && !guideStrengthSet)
+        guideStrength = ShapeGuide::kTripoSGGuideDefaultStrength;
+    else if (bakeOntoGuide && !guideStrengthSet)
         guideStrength = ShapeGuide::kBakeOnGuideMinStrength;
     // Reject a guide that cannot be used BEFORE a prompt image is generated or
     // a backend is prepared (minutes of work). Presets, .obj files and missing
@@ -13636,7 +13645,15 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             return 2;
         }
         const QFileInfo gfi(guideSpec);
-        if (!gfi.exists() || gfi.suffix().compare(QLatin1String("obj"), Qt::CaseInsensitive) == 0) {
+        if (tripoSGGuide) {
+            // Generated from the input image later (MeshGenPredictor).
+            if (!TripoSGPredictor::isAvailable()) {
+                err() << "Error: --guide triposg needs an ONNX-enabled build "
+                         "(rebuild with -DENABLE_ONNX)." << Qt::endl;
+                return 2;
+            }
+            guideResolvedEarly = true;
+        } else if (!gfi.exists() || gfi.suffix().compare(QLatin1String("obj"), Qt::CaseInsensitive) == 0) {
             QString gerr;
             if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr)) {
                 err() << "Error: " << gerr << Qt::endl;
@@ -13717,7 +13734,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                  "[--seed 42] [--preset fast|balanced|high] [--game-preset ID] [--target-tris 0|1..10000000]"
                  " [--texture-supersample 1|2] [--tex-res 512|1024] [--no-source]"
                  " [--pixal-fov DEG] [--no-naf]"
-                 " [--guide ID|mesh] [--guide-strength 0.33] [--bake-onto-guide] [--guide-reach 0.08]"
+                 " [--guide ID|triposg|mesh] [--guide-strength 0.33] [--bake-onto-guide] [--guide-reach 0.08]"
               << Qt::endl;
         err() << "       qtmesh generate3d --prompt \"a goblin warrior\" -o out.glb "
                  "[--image-model FLUX.2-klein-4B] [...same options]" << Qt::endl;
@@ -13961,7 +13978,15 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
         }
         ShapeGuide::Mesh guide = std::move(earlyGuide);
         QString gerr;
-        if (!guideResolvedEarly && !ShapeGuideScene::resolve(guideSpec, guide, &gerr)) {
+        if (tripoSGGuide) {
+            opts.guideFromTripoSG = true;
+            if (TripoSGPredictor::ensureModelBlocking(false).isEmpty()) {
+                err() << "Error: --guide triposg: TripoSG models unavailable (looked in "
+                      << QFileInfo(TripoSGPredictor::imageEncoderPath()).absolutePath()
+                      << ")." << Qt::endl;
+                return 1;
+            }
+        } else if (!guideResolvedEarly && !ShapeGuideScene::resolve(guideSpec, guide, &gerr)) {
             err() << "Error: " << gerr << Qt::endl;
             return 2;
         }
@@ -13977,8 +14002,9 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
                       << ") — the guide will not steer the generation." << Qt::endl;
         }
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
-            QStringLiteral("cli strength=%1 bake=%2 tris=%3")
-                .arg(guideStrength).arg(bakeOntoGuide).arg(opts.guideIndices.size() / 3));
+            QStringLiteral("cli strength=%1 bake=%2 tris=%3 triposg=%4")
+                .arg(guideStrength).arg(bakeOntoGuide).arg(opts.guideIndices.size() / 3)
+                .arg(tripoSGGuide));
     }
     if (useTrellis2) {
         opts.removeBackground = true;   // trellis2 needs an alpha matte; the

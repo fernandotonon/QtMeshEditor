@@ -434,3 +434,14 @@ TEST(CLIPipelineCmdGenerate3dCoverage, SplatPathMayNotOverwriteMeshOrInput)
     EXPECT_EQ(CLIPipeline::cmdGenerate3d(sameAsInput.argc(), sameAsInput.argv()), 2);
     EXPECT_TRUE(QFileInfo::exists(inPath));   // and the input is untouched
 }
+
+TEST(CLIPipelineCmdGenerate3dCoverage, TripoSGGuideNeedsATrellisBackend)
+{
+    // `--guide triposg` is not a file: it must reach the backend check (not
+    // fail as "guide not found") and be refused on a non-TRELLIS backend.
+    Gen3dArgv args({"generate3d", kMissingImage, "--backend", "triposr",
+                    "--guide", "triposg"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(args.argc(), args.argv()), 2);
+    Gen3dArgv list({"generate3d", "--list-guides"});
+    EXPECT_EQ(CLIPipeline::cmdGenerate3d(list.argc(), list.argv()), 0);
+}

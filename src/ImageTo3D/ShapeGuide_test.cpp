@@ -188,3 +188,27 @@ TEST(ShapeGuide, FitFindsTheTurnOfAThreeQuarterGeneration)
         m.positions, m.indices, m.positions, m.indices);
     EXPECT_NEAR(still.yaw, 0.0f, 1e-6f);
 }
+
+TEST(ShapeGuide, TripoSGGuideIdIsRecognised)
+{
+    EXPECT_TRUE(ShapeGuide::isTripoSGGuide(QStringLiteral("triposg")));
+    EXPECT_TRUE(ShapeGuide::isTripoSGGuide(QStringLiteral(" TripoSG ")));
+    EXPECT_FALSE(ShapeGuide::isTripoSGGuide(QStringLiteral("car")));
+    EXPECT_FALSE(ShapeGuide::isTripoSGGuide(QStringLiteral("/tmp/triposg.obj")));
+    EXPECT_FALSE(ShapeGuide::isPreset(ShapeGuide::kTripoSGGuideId));
+    // 256 (TripoSG's default) terraces the surface and stripes the bake.
+    EXPECT_GT(ShapeGuide::kTripoSGGuideResolution, 256);
+    EXPECT_GE(ShapeGuide::kTripoSGGuideDefaultStrength, ShapeGuide::kBakeOnGuideMinStrength);
+}
+
+TEST(ShapeGuide, TripoSGOutputTurnsToFaceTheCameraLikeTheBuilder)
+{
+    // TripoSG's front is -Z; MeshGenBuilder turns it 180 degrees about Y and the
+    // node is scaled x2. The guide must land where that generation would.
+    std::vector<float> p = {0.1f, 0.2f, -0.3f,   -0.4f, 0.5f, 0.6f};
+    ShapeGuide::tripoSGToEditorFrame(p, 2.0f);
+    const std::vector<float> want = {-0.2f, 0.4f, 0.6f,   0.8f, 1.0f, -1.2f};
+    ASSERT_EQ(p.size(), want.size());
+    for (size_t i = 0; i < p.size(); ++i)
+        EXPECT_FLOAT_EQ(p[i], want[i]) << i;
+}

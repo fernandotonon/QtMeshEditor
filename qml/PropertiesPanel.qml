@@ -2766,14 +2766,17 @@ Rectangle {
                     id: mgGuide
                     width: 190
                     enabled: !MeshGenController.busy
-                    model: ["None", "Selected mesh in scene", "Mesh file…"]
+                    model: ["None", "Selected mesh in scene", "Mesh file…",
+                            "TripoSG (from the image)"]
                     currentIndex: 0
                     property string filePath: ""
                     readonly property bool isSelected: currentIndex === 1
                     readonly property bool isFile: currentIndex === 2
+                    readonly property bool isTripoSG: currentIndex === 3
                     readonly property bool active: currentIndex > 0
                     readonly property string spec: isSelected ? "selected"
-                                                 : isFile ? filePath : ""
+                                                 : isFile ? filePath
+                                                 : isTripoSG ? "triposg" : ""
                     // Re-read on every selection change (selectedMeshName() is
                     // a plain call, not a property).
                     readonly property string selectedName:
@@ -2783,6 +2786,10 @@ Rectangle {
                             var f = MeshGenController.pickGuideFile()
                             if (f.length > 0) filePath = f
                             else if (filePath.length === 0) currentIndex = 0
+                        } else if (index === 3) {
+                            // Measured: 0.8 keeps TRELLIS.2 on TripoSG's shape
+                            // (ShapeGuide::kTripoSGGuideDefaultStrength).
+                            mgGuideStrength.value = 0.8
                         }
                     }
                 }
@@ -2793,8 +2800,11 @@ Rectangle {
                               ? ("Uses: " + (mgGuide.selectedName || "(select a mesh)")
                                  + ", as shown (scale and rotation count). ")
                               : mgGuide.isFile ? (mgGuide.filePath || "(no file)") + ". "
+                              : mgGuide.isTripoSG ? "TripoSG builds the shape from the same image first "
+                                 + "(grid 384, adds ~30 min on CPU); bake onto it to keep TripoSG's mesh "
+                                 + "with TRELLIS.2's textures. "
                               : "Ready-made blockouts: Add Primitive > Blockouts. ")
-                      + (mgGuide.active ? "The image should show the same kind of object, front-on." : "")
+                      + (mgGuide.active && !mgGuide.isTripoSG ? "The image should show the same kind of object, front-on." : "")
                 color: PropertiesPanelController.textColor
                 opacity: mgGuide.active ? 1.0 : 0.7
                 font.pixelSize: 10
