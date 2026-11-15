@@ -1,8 +1,10 @@
 #include "GlbImageEmbed.h"
 
+#include <QBuffer>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -39,7 +41,9 @@ void padTo4(QByteArray& b, char fill)
         b.append(fill);
 }
 
-QString mimeFor(const QByteArray& data, const QString& fileName)
+// glTF consumers decode only PNG and JPEG (+ WebP through
+// EXT_texture_webp). Identify those by their bytes, never by the file name.
+QString mimeFor(const QByteArray& data)
 {
     if (data.startsWith("\x89PNG"))
         return QStringLiteral("image/png");
@@ -48,12 +52,24 @@ QString mimeFor(const QByteArray& data, const QString& fileName)
         return QStringLiteral("image/jpeg");
     if (data.size() >= 12 && data.startsWith("RIFF") && data.mid(8, 4) == "WEBP")
         return QStringLiteral("image/webp");
-    const QString ext = QFileInfo(fileName).suffix().toLower();
-    if (ext == QLatin1String("jpg") || ext == QLatin1String("jpeg"))
-        return QStringLiteral("image/jpeg");
-    if (ext == QLatin1String("webp"))
-        return QStringLiteral("image/webp");
-    return QStringLiteral("image/png");
+    return {};
+}
+
+// Anything else (BMP, TGA, ...) is re-encoded as PNG so the embedded bytes
+// match their mimeType. False when Qt cannot read it (e.g. HDR): the image
+// then stays an external reference rather than being embedded mislabelled.
+bool transcodeToPng(QByteArray& data, const QString& fileName)
+{
+    QImage img;
+    if (!img.loadFromData(data, QFileInfo(fileName).suffix().toLatin1().constData())
+        && !img.loadFromData(data))
+        return false;
+    QByteArray png;
+    QBuffer buf(&png);
+    if (!buf.open(QIODevice::WriteOnly) || !img.save(&buf, "PNG"))
+        return false;
+    data = png;
+    return true;
 }
 
 } // namespace
@@ -140,10 +156,18 @@ Result embedExternalImages(const QString& glbPath)
             r.missing.append(uri);
             continue;
         }
-        const QByteArray data = tex.readAll();
+        QByteArray data = tex.readAll();
         if (data.isEmpty()) {
             r.missing.append(uri);
             continue;
+        }
+        QString mime = mimeFor(data);
+        if (mime.isEmpty()) {
+            if (!transcodeToPng(data, path)) {
+                r.unsupported.append(uri);
+                continue;
+            }
+            mime = QStringLiteral("image/png");
         }
         padTo4(bin, '\0');
         QJsonObject view;
@@ -153,7 +177,7 @@ Result embedExternalImages(const QString& glbPath)
         bin.append(data);
         img.remove(QStringLiteral("uri"));
         img.insert(QStringLiteral("bufferView"), static_cast<int>(views.size()));
-        img.insert(QStringLiteral("mimeType"), mimeFor(data, path));
+        img.insert(QStringLiteral("mimeType"), mime);
         views.append(view);
         images[i] = img;
         ++r.embedded;

@@ -369,6 +369,17 @@ static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent, const std::string
     return node;
 }
 
+// The canonical PACKED metallic-roughness map: the `metallic` slot WITH a
+// texture. A PBR preset creates that slot empty as an inspector placeholder;
+// an empty one must not switch the export to packed-map mode (metallic
+// factor 1, no specular, roughness map displaced from index 0).
+static bool isPackedMetallicRoughness(const Ogre::TextureUnitState* t)
+{
+    return t->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED
+        && t->getName() == "metallic"
+        && !t->getTextureName().empty();
+}
+
 // Convert an Ogre material to an aiMaterial (colors + textures)
 static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
 {
@@ -391,9 +402,7 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
         // 0 free before the `metallic` branch is ever reached.
         bool packedMrClaimed = false;
         for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti) {
-            const auto* t = pass->getTextureUnitState(ti);
-            if (t->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED
-                && t->getName() == "metallic") {
+            if (isPackedMetallicRoughness(pass->getTextureUnitState(ti))) {
                 packedMrClaimed = true;
                 break;
             }
@@ -464,6 +473,10 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
             } else if (tusName == "metallic") {
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, metalIdx));
                 ++metalIdx;
+                // An empty placeholder slot carries no packed map: nothing
+                // below applies to it.
+                if (!isPackedMetallicRoughness(tus))
+                    continue;
                 // glTF has ONE combined metallic-roughness texture, and
                 // Assimp's glTF2 exporter fills it from DIFFUSE_ROUGHNESS
                 // FIRST, falling back to METALNESS only if that is absent
@@ -4018,6 +4031,8 @@ static void embedGlbImages(const QString& glbPath)
     }
     if (!r.missing.isEmpty())
         qWarning() << "glb: textures not found next to the file, left external:" << r.missing;
+    if (!r.unsupported.isEmpty())
+        qWarning() << "glb: textures in a format glTF cannot embed, left external:" << r.unsupported;
     if (r.embedded > 0)
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
             QStringLiteral("glb embedded %1 texture(s)").arg(r.embedded));

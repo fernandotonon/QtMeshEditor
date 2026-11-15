@@ -175,3 +175,39 @@ TEST(GlbImageEmbed, RejectsNonGlbInput)
     EXPECT_FALSE(r.ok);
     EXPECT_FALSE(r.error.isEmpty());
 }
+
+TEST(GlbImageEmbed, OtherFormatsAreReEncodedAsPngOrLeftExternal)
+{
+    // glTF readers decode PNG/JPEG/WebP only: a BMP must not be embedded with
+    // its own bytes under an image/png label, and an unreadable format must
+    // stay an external reference.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    QImage img(3, 2, QImage::Format_RGB32);
+    img.fill(QColor(10, 200, 30));
+    ASSERT_TRUE(img.save(dir.filePath("albedo.bmp"), "BMP"));
+    writeFile(dir.filePath("sky.hdr"), QByteArray("#?RADIANCE\nnot really\n"));
+    const QString glb = dir.filePath("asset.glb");
+    writeFile(glb, makeGlb(QJsonArray{QJsonObject{{"uri", "albedo.bmp"}},
+                                      QJsonObject{{"uri", "sky.hdr"}}}));
+
+    const auto r = GlbImageEmbed::embedExternalImages(glb);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.embedded, 1);
+    EXPECT_EQ(r.unsupported, QStringList{"sky.hdr"});
+
+    const Parsed p = parse(glb);
+    const QJsonArray images = p.json.value("images").toArray();
+    const QJsonObject bmp = images.at(0).toObject();
+    EXPECT_EQ(bmp.value("mimeType").toString(), QString("image/png"));
+    const QJsonObject v = p.json.value("bufferViews").toArray()
+                              .at(bmp.value("bufferView").toInt()).toObject();
+    const QByteArray bytes = p.bin.mid(static_cast<qsizetype>(v.value("byteOffset").toDouble()),
+                                       static_cast<qsizetype>(v.value("byteLength").toDouble()));
+    EXPECT_TRUE(bytes.startsWith("\x89PNG"));
+    QImage back;
+    ASSERT_TRUE(back.loadFromData(bytes, "PNG"));
+    EXPECT_EQ(back.size(), QSize(3, 2));
+    EXPECT_EQ(QColor(back.pixel(1, 1)), QColor(10, 200, 30));
+    EXPECT_EQ(images.at(1).toObject().value("uri").toString(), QString("sky.hdr"));
+}
