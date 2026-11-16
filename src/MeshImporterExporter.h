@@ -95,6 +95,13 @@ public:
     // whose faces are all tiny in UV space, rendered as black spots.
     static int recomputeTangentsRobust(Ogre::Mesh* mesh);
 
+    // True when an image bound to the `metallic` slot is a plain greyscale
+    // METALLIC map (R == G == B everywhere sampled, e.g. an FBX Stingray
+    // import) rather than the packed metallic-roughness map (.r=AO,
+    // .g=roughness, .b=metallic) the slot normally holds. A null image is not
+    // scalar (the packed contract applies). Exposed for tests.
+    static bool metallicMapLooksScalar(const QImage& image);
+
     /// Register a directory for mesh sidecars and Assimp texture lookup.
     static void registerImportResourceDirectory(const QString& absoluteDir);
 

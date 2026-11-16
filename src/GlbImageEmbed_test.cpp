@@ -211,3 +211,62 @@ TEST(GlbImageEmbed, OtherFormatsAreReEncodedAsPngOrLeftExternal)
     EXPECT_EQ(QColor(back.pixel(1, 1)), QColor(10, 200, 30));
     EXPECT_EQ(images.at(1).toObject().value("uri").toString(), QString("sky.hdr"));
 }
+
+TEST(GlbImageEmbed, LiteralFileNameWinsOverItsPercentDecodedTwin)
+{
+    // Assimp writes names unencoded: `rough%20map.png` names that very file,
+    // even when a `rough map.png` sits next to it.
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    const QByteArray literal = pngBytes(Qt::blue);
+    const QByteArray decoded = pngBytes(Qt::yellow);
+    writeFile(dir.filePath("rough%20map.png"), literal);
+    writeFile(dir.filePath("rough map.png"), decoded);
+    const QString glb = dir.filePath("asset.glb");
+    writeFile(glb, makeGlb(QJsonArray{QJsonObject{{"uri", "rough%20map.png"}}}));
+
+    const auto r = GlbImageEmbed::embedExternalImages(glb);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.embedded, 1);
+    const Parsed p = parse(glb);
+    const QJsonObject img = p.json.value("images").toArray().at(0).toObject();
+    const QJsonObject v = p.json.value("bufferViews").toArray()
+                              .at(img.value("bufferView").toInt()).toObject();
+    EXPECT_EQ(p.bin.mid(static_cast<qsizetype>(v.value("byteOffset").toDouble()),
+                        static_cast<qsizetype>(v.value("byteLength").toDouble())),
+              literal);
+}
+
+TEST(GlbImageEmbed, WebPIsReEncodedAsPng)
+{
+    // Core glTF has no image/webp; embedding it as-is would need
+    // EXT_texture_webp, which the exporter does not declare.
+    // 4x2 lossless WebP (the fixture of WebPImage_test.cpp).
+    static const unsigned char kWebP[] = {
+        0x52, 0x49, 0x46, 0x46, 0x4c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x4c,
+        0x40, 0x00, 0x00, 0x00, 0x2f, 0x03, 0x40, 0x00, 0x10, 0x3f, 0x40, 0x16, 0x60, 0xb2, 0x20, 0xfa,
+        0x82, 0xca, 0x5f, 0x66, 0x1a, 0x64, 0xc2, 0x10, 0xfb, 0xf5, 0xef, 0xe2, 0x52, 0x0d, 0x99, 0x80,
+        0xc5, 0x74, 0xf0, 0x6b, 0xa4, 0x7f, 0x9b, 0x11, 0x48, 0xda, 0xd8, 0x7c, 0x3c, 0xf9, 0x03, 0x80,
+        0x57, 0xe4, 0x90, 0x6b, 0xd6, 0x57, 0xeb, 0x41, 0x28, 0x80, 0xc6, 0x60, 0x22, 0x09, 0xa6, 0x5f,
+        0x44, 0xff, 0x03, 0x1b};
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+    writeFile(dir.filePath("albedo.webp"),
+              QByteArray(reinterpret_cast<const char*>(kWebP), sizeof(kWebP)));
+    const QString glb = dir.filePath("asset.glb");
+    writeFile(glb, makeGlb(QJsonArray{QJsonObject{{"uri", "albedo.webp"}}}));
+
+    const auto r = GlbImageEmbed::embedExternalImages(glb);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    ASSERT_EQ(r.embedded, 1);
+    const Parsed p = parse(glb);
+    const QJsonObject img = p.json.value("images").toArray().at(0).toObject();
+    EXPECT_EQ(img.value("mimeType").toString(), QString("image/png"));
+    const QJsonObject v = p.json.value("bufferViews").toArray()
+                              .at(img.value("bufferView").toInt()).toObject();
+    QImage back;
+    ASSERT_TRUE(back.loadFromData(
+        p.bin.mid(static_cast<qsizetype>(v.value("byteOffset").toDouble()),
+                  static_cast<qsizetype>(v.value("byteLength").toDouble())), "PNG"));
+    EXPECT_EQ(back.size(), QSize(4, 2));
+}

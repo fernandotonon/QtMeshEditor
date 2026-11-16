@@ -21,15 +21,16 @@ struct Result {
     bool ok = false;          // file parsed and (if anything changed) rewritten
     int embedded = 0;         // images moved into the BIN chunk
     QStringList missing;      // uris whose file could not be read (kept as uri)
-    QStringList unsupported;  // not PNG/JPEG/WebP and not readable by Qt to
-                              // re-encode as PNG (e.g. HDR): kept as uri
+    QStringList unsupported;  // not PNG/JPEG and not readable to re-encode
+                              // as PNG (e.g. HDR): kept as uri
     QString error;            // set when ok == false
 };
 
 // `glbPath` must be a binary glTF. Image uris are resolved relative to the
-// .glb's directory (percent-encoding decoded); `data:` uris and images that
-// already use a bufferView are left alone. PNG/JPEG/WebP are embedded as-is,
-// other formats Qt can read are re-encoded as PNG. A file that needs no
+// .glb's directory (the literal name first, then percent-decoded); `data:`
+// uris and images that already use a bufferView are left alone. PNG/JPEG are
+// embedded as-is, other readable formats (WebP, BMP, TGA, ...) are re-encoded
+// as PNG. A file that needs no
 // change is not rewritten.
 Result embedExternalImages(const QString& glbPath);
 
