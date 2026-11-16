@@ -229,6 +229,15 @@ public:
         float   guideRayReach = 0.08f;
         bool    guideKeepPlacement = true;
         QString guideEncoderPath;
+        // TRELLIS.2 / Pixal3D: build the guide with TripoSG from the same image
+        // first (ShapeGuide::kTripoSGGuideId; overrides guidePositions/Indices).
+        // Needs ENABLE_ONNX and the TripoSG models already on disk (callers run
+        // TripoSGPredictor::ensureModelBlocking on a thread with an event loop).
+        // Resolution 384, not TripoSG's 256: see ShapeGuide::kTripoSGGuideResolution.
+        // The guide is simplified to targetTriangles (or
+        // ShapeGuide::kTripoSGGuideDefaultTriangles when that is 0).
+        bool    guideFromTripoSG = false;
+        int     guideTripoSGResolution = 384;
     };
 
     struct Result {

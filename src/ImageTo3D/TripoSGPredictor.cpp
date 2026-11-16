@@ -103,7 +103,7 @@ bool TripoSGPredictor::modelsPresent(bool int8Tier)
 
 bool TripoSGPredictor::isAvailable() { return false; }
 
-QString TripoSGPredictor::ensureModelBlocking(bool) { return {}; }
+QString TripoSGPredictor::ensureModelBlocking(bool, const std::function<bool()>&) { return {}; }
 
 MeshGenPredictor::Result TripoSGPredictor::predict(
     const QImage&, const Options&, const MeshGenPredictor::ProgressFn&)
@@ -119,7 +119,8 @@ MeshGenPredictor::Result TripoSGPredictor::predict(
 
 bool TripoSGPredictor::isAvailable() { return true; }
 
-QString TripoSGPredictor::ensureModelBlocking(bool int8Tier)
+QString TripoSGPredictor::ensureModelBlocking(bool int8Tier,
+                                              const std::function<bool()>& cancelled)
 {
     if (modelsPresent(int8Tier))
         return imageEncoderPath();
@@ -159,6 +160,7 @@ QString TripoSGPredictor::ensureModelBlocking(bool int8Tier)
         req.destination = dest;
         req.label = label;
         req.timeoutMs = 3600000;
+        req.cancelled = cancelled;
         // #1037: one shared blocking wait — keeps the downloader's own error text
         // and the synchronous-rejection guard every consumer used to lack.
         const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
@@ -181,6 +183,8 @@ QString TripoSGPredictor::ensureModelBlocking(bool int8Tier)
                               QString::fromLatin1(kDitStepDataFile)) });
     }
     for (const auto& f : files) {
+        if (cancelled && cancelled())
+            return {};
         if (!QFileInfo::exists(f.path) && !downloadOne(f.file, f.path))
             return {};
     }

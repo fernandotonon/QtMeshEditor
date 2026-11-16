@@ -3338,8 +3338,13 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
         if (!trellisRuntime)
             return makeErrorResult("'guide' needs backend 'trellis2' or 'pixal3d'.");
         QString gerr;
-        if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr))
+        if (ShapeGuide::isTripoSGGuide(guideSpec)) {
+            // Generated from the input image by MeshGenPredictor.
+            if (!TripoSGPredictor::isAvailable())
+                return makeErrorResult("guide 'triposg' needs an ONNX-enabled build.");
+        } else if (!ShapeGuideScene::resolve(guideSpec, earlyGuide, &gerr)) {
             return makeErrorResult(QStringLiteral("guide: %1").arg(gerr));
+        }
     }
     if (imagePath.trimmed().isEmpty() && genPrompt.isEmpty())
         return makeErrorResult("'image_path' or 'prompt' is required.");
@@ -3642,10 +3647,24 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
             opts.guidePositions = std::move(earlyGuide.positions);
             opts.guideIndices = std::move(earlyGuide.indices);
             opts.bakeOntoGuide = args.value("bake_onto_guide").toBool();
+            const bool tripoSGGuide = ShapeGuide::isTripoSGGuide(guideSpec);
             // Baking onto the guide outputs the guide mesh: without an explicit
             // strength use the one from which the generation hugs it.
             opts.guideStrength = static_cast<float>(args.value("guide_strength").toDouble(
-                opts.bakeOntoGuide ? ShapeGuide::kBakeOnGuideMinStrength : 0.33));
+                tripoSGGuide ? ShapeGuide::kTripoSGGuideDefaultStrength
+                : opts.bakeOntoGuide ? ShapeGuide::kBakeOnGuideMinStrength : 0.33));
+            if (tripoSGGuide) {
+                opts.guideFromTripoSG = true;
+                // First use downloads the TripoSG graphs (~6 GB): Stop must
+                // reach the transfer.
+                m_toolCancelRequested = false;
+                const QString enc = TripoSGPredictor::ensureModelBlocking(
+                    false, [this]() { return m_toolCancelRequested; });
+                if (m_toolCancelRequested)
+                    return makeErrorResult(QStringLiteral("cancelled"));
+                if (enc.isEmpty())
+                    return makeErrorResult("guide 'triposg': TripoSG models unavailable.");
+            }
             opts.guideRayReach = static_cast<float>(args.value("guide_reach").toDouble(0.08));
             if (opts.guideStrength > 0.0f) {
                 // Stop must reach the (first-use, ~240 MB) encoder download.
@@ -3656,8 +3675,8 @@ QJsonObject MCPServer::toolGenerateMeshFromImage(const QJsonObject &args)
                     return makeErrorResult(QStringLiteral("cancelled"));
             }
             SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.shape_guide"),
-                QStringLiteral("mcp strength=%1 bake=%2").arg(opts.guideStrength)
-                    .arg(opts.bakeOntoGuide));
+                QStringLiteral("mcp strength=%1 bake=%2 triposg=%3").arg(opts.guideStrength)
+                    .arg(opts.bakeOntoGuide).arg(opts.guideFromTripoSG));
         }
     } else if (!guideSpec.isEmpty()) {
         return makeErrorResult("'guide' needs backend 'trellis2' or 'pixal3d'.");
@@ -13632,9 +13651,13 @@ QJsonArray MCPServer::buildToolsList()
                 guideIds << p.id;
             props["guide"] = QJsonObject{{"type", "string"}, {"description", QStringLiteral(
                 "trellis2/pixal3d only. Shape guide: a rough blockout that steers where the "
-                "generation puts its volume. A preset id (%1), a mesh file path, or the name "
-                "of a mesh in the scene. The image should show the same kind of object.")
-                .arg(guideIds.join(", "))}};
+                "generation puts its volume. A preset id (%1), a mesh file path, the name "
+                "of a mesh in the scene, or 'triposg' (TripoSG builds the guide from the same "
+                "image at grid %2; default strength %3; with bake_onto_guide the result keeps "
+                "TripoSG's mesh with TRELLIS.2's textures). The image should show the same kind of object.")
+                .arg(guideIds.join(", "))
+                .arg(ShapeGuide::kTripoSGGuideResolution)
+                .arg(ShapeGuide::kTripoSGGuideDefaultStrength)}};
             props["guide_strength"] = QJsonObject{{"type", "number"}, {"description",
                 "0..1 (default 0.33): share of the sparse-structure steps the guide replaces. "
                 "~0.3 = the image leads and the guide fixes size/placement; 0.5+ follows the "

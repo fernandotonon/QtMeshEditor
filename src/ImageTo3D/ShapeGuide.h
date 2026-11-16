@@ -45,6 +45,34 @@ struct Mesh {
 // explicit strength, and the predictor warns below it.
 inline constexpr float kBakeOnGuideMinStrength = 0.6f;
 
+// ---- TripoSG as the guide ----------------------------------------------------
+// `--guide triposg`: the guide is not a file but TripoSG's geometry of the SAME
+// image, so the result can keep TripoSG's sharper shape (with
+// --bake-onto-guide) while TRELLIS.2 paints it. Measured on a car photo:
+//  * the SDF grid must be finer than TripoSG's own default (256): at 256 the
+//    surface is terraced and the bake rays (cast along the guide's normals)
+//    land in the gaps between terraces and pick up dark interior colour =
+//    black stripes across the paint. 384 removed them (~2.4x the CPU time).
+//  * 0.8 strength keeps TRELLIS.2 on the guide's shape, so its colours land
+//    where the guide's surface is.
+inline const QString kTripoSGGuideId = QStringLiteral("triposg");
+inline constexpr int kTripoSGGuideResolution = 384;
+inline constexpr float kTripoSGGuideDefaultStrength = 0.8f;
+// Triangle budget of the TripoSG guide when the caller sets none: it becomes
+// the output mesh with --bake-onto-guide, and the dense 384 grid surface
+// (~1M triangles) is far more than a texture bake or the 64^3 guide voxels need.
+inline constexpr int kTripoSGGuideDefaultTriangles = 50000;
+inline bool isTripoSGGuide(const QString& spec)
+{
+    return spec.trimmed().compare(kTripoSGGuideId, Qt::CaseInsensitive) == 0;
+}
+// TripoSG predictor output (+Y up, front towards -Z, unit box) -> the editor
+// frame a guide is given in (front towards +Z: MeshGenBuilder's 180 degree turn
+// about Y) at the size a TripoSG generation arrives with (MeshGenBuilder scales
+// those x`scale`; a result baked onto the guide comes back at the guide's own
+// size, so the guide carries that scale). In place.
+void tripoSGToEditorFrame(std::vector<float>& positions, float scale);
+
 struct PresetInfo {
     QString id;        // stable id: "house", "car", ...
     QString label;     // UI label

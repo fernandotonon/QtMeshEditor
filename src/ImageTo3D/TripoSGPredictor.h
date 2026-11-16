@@ -6,6 +6,8 @@
 #include <QImage>
 #include <QString>
 
+#include <functional>
+
 // TripoSG single-image → 3D geometry backend (follow-up to epic #764).
 //
 // TripoSG (VAST-AI-Research, SIGGRAPH 2025, "TripoSG: High-Fidelity 3D Shape
@@ -95,7 +97,11 @@ public:
     // Ensure all graphs exist, downloading any missing one on first use
     // (blocks via a local event loop — call on a thread WITH an event loop).
     // Returns the encoder path when everything is present, else empty.
-    static QString ensureModelBlocking(bool int8Tier = false);
+    // `cancelled` (optional) is polled during the transfers: when it returns
+    // true the download stops and this returns empty (Stop must reach a
+    // first-use download of ~6 GB).
+    static QString ensureModelBlocking(bool int8Tier = false,
+                                       const std::function<bool()>& cancelled = {});
 
     // Run the full TripoSG pipeline. Same Result/Stage/ProgressFn contract as
     // MeshGenPredictor::predict (Stage::Encode covers the image encoder,

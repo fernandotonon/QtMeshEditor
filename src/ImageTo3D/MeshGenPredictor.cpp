@@ -13,6 +13,7 @@
 #include "SplatToMesh.h"
 #include "Trellis2Predictor.h" // Backend::Trellis2 dispatch (no ONNX needed)
 #include "Trellis2Bake.h"      // game-ready simplify + detail-normal bake (all backends)
+#include "ShapeGuide.h"        // TripoSG shape guide (frame + defaults)
 
 #include <QDir>
 #include <QFileInfo>
@@ -251,9 +252,14 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
 {
     // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
     // `--model pixal3d` for the latter and everything downstream is shared.
-    if (isTrellisRuntime(opts.backend))
-        return predictTrellis2(image, opts, progress);
     Result r;
+    if (isTrellisRuntime(opts.backend) && !opts.guideFromTripoSG)
+        return predictTrellis2(image, opts, progress);
+    if (opts.guideFromTripoSG) {
+        r.error = QStringLiteral("The TripoSG shape guide needs an ONNX-enabled build "
+                                 "— rebuild with -DENABLE_ONNX.");
+        return r;
+    }
     r.error = QStringLiteral(
         "Image-to-3D needs an ONNX-enabled build — rebuild with -DENABLE_ONNX.");
     return r;
@@ -335,6 +341,61 @@ MeshGenPredictor::Result fail(const QString& msg)
     r.error = msg;
     return r;
 }
+
+// TripoSG geometry (matte over white -> flow -> grid decode -> polish ->
+// game-ready simplify). Shared by Backend::TripoSG and the TripoSG shape guide
+// of the TRELLIS backends.
+MeshGenPredictor::Result predictTripoSGGeometry(const QImage& image,
+                                                const MeshGenPredictor::Options& opts,
+                                                int sdfResolution,
+                                                int targetTriangles,
+                                                bool strictBudget,
+                                                const MeshGenPredictor::ProgressFn& progress)
+{
+    QImage subject = image;
+    if (opts.removeBackground) {
+        // TripoSG's reference pipeline composites the cut-out over WHITE
+        // (unlike TripoSR's gray-128) — see docs/TRIPOSG_EXPORT_NOTES.md.
+        // Resolve for the requested tier; Best silently degrades to Fast
+        // when BiRefNet is not downloaded (normal at ~930 MB), and the
+        // resolved tier is fed back so the matte matches the model.
+        BackgroundRemover::Quality usedQ = opts.mattingQuality;
+        const QString bgModel =
+            BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &usedQ);
+        BackgroundRemover::Options bg;
+        bg.quality = usedQ;   // #1016: the tier that actually resolved
+        bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
+        const BackgroundRemover::Result br =
+            BackgroundRemover::removeBackgroundWithFallback(image, bgModel, bg);
+        subject = br.image;
+    }
+    TripoSGPredictor::Options sg;
+    sg.sdfResolution    = sdfResolution;
+    sg.flowSteps        = opts.flowSteps;
+    sg.guidanceScale    = opts.guidanceScale;
+    // Same default (42) as TripoSG's own; lets a caller re-roll a shape the
+    // model invented for the unseen side (e.g. an open car door).
+    sg.seed             = opts.seed;
+    // int8 tier DROPPED for TripoSG: the quantized 1.5B DiT degrades to
+    // blobs over the flow loop (verified live even with per-channel
+    // quant), and dynamic-int8 MatMuls are no faster than fp32 on ARM.
+    // The tier picker stays meaningful for TripoSR only.
+    sg.useInt8Dit       = false;
+    sg.smoothMesh       = opts.smoothMesh;
+    sg.smoothIterations = opts.smoothIterations;
+    sg.refineSurface    = opts.refineSurface;
+    sg.chunkPoints      = opts.chunkPoints;
+    MeshGenPredictor::Result r = TripoSGPredictor::predict(subject, sg, progress);
+    // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
+    r.bakeTripoSROrientation = false;
+    // Game-ready simplification (geometry-only backend — nothing to bake;
+    // the later GUI AI-texture pass unwraps/bakes the SIMPLIFIED mesh,
+    // which is exactly what you want for skinning-friendly assets).
+    if (r.ok)
+        applyGameReady(r, targetTriangles, strictBudget, nullptr, nullptr);
+    return r;
+}
+
 
 } // namespace
 
@@ -522,60 +583,45 @@ MeshGenPredictor::Result MeshGenPredictor::predictImpl(const QImage& image,
     // ---- Backend dispatch: TRELLIS.2 (out-of-process sidecar) ----------------
     // Trellis2 and Pixal3D are the SAME runtime — predictTrellis2 passes
     // `--model pixal3d` for the latter and everything downstream is shared.
-    if (isTrellisRuntime(opts.backend))
-        return predictTrellis2(image, opts, progress);
+    if (isTrellisRuntime(opts.backend)) {
+        if (!opts.guideFromTripoSG)
+            return predictTrellis2(image, opts, progress);
+        // TripoSG builds the guide from the same image; TRELLIS.2 then follows
+        // it (and with bakeOntoGuide paints it). See ShapeGuide.h.
+        const int guideTris = opts.targetTriangles > 0
+            ? opts.targetTriangles : ShapeGuide::kTripoSGGuideDefaultTriangles;
+        Result sg = predictTripoSGGeometry(image, opts,
+                                           std::max(64, opts.guideTripoSGResolution),
+                                           guideTris, /*strict*/ false, progress);
+        if (!sg.ok)
+            return fail(QStringLiteral("TripoSG guide: %1").arg(sg.error));
+        Options t2 = opts;
+        t2.guideFromTripoSG = false;
+        t2.guidePositions = std::move(sg.positions);
+        t2.guideIndices = std::move(sg.indices);
+        ShapeGuide::tripoSGToEditorFrame(t2.guidePositions, Result{}.nodeScale);
+        Result r = predictTrellis2(image, t2, progress);
+        const QString note = QStringLiteral("TripoSG guide (grid %1, %2 triangles)")
+                                 .arg(std::max(64, opts.guideTripoSGResolution))
+                                 .arg(t2.guideIndices.size() / 3);
+        r.guideNote = r.guideNote.isEmpty() ? note : note + QStringLiteral("; ") + r.guideNote;
+        if (!sg.warning.isEmpty())
+            r.warning = r.warning.isEmpty() ? sg.warning : sg.warning + QStringLiteral(" ") + r.warning;
+        return r;
+    }
 
     // ---- Backend dispatch: TripoSplat (Gaussians -> mesh) ---------------------
     if (opts.backend == Backend::TripoSplat)
         return predictTripoSplat(image, opts, progress);
 
     // ---- Backend dispatch: TripoSG (rectified-flow, geometry-only) ----------
-    if (opts.backend == Backend::TripoSG) {
-        QImage subject = image;
-        if (opts.removeBackground) {
-            // TripoSG's reference pipeline composites the cut-out over WHITE
-            // (unlike TripoSR's gray-128) — see docs/TRIPOSG_EXPORT_NOTES.md.
-            // Resolve for the requested tier; Best silently degrades to Fast
-            // when BiRefNet is not downloaded (normal at ~930 MB), and the
-            // resolved tier is fed back so the matte matches the model.
-            BackgroundRemover::Quality usedQ = opts.mattingQuality;
-            const QString bgModel =
-                BackgroundRemover::resolveModelBlocking(opts.mattingQuality, &usedQ);
-            BackgroundRemover::Options bg;
-            bg.quality = usedQ;   // #1016: the tier that actually resolved
-            bg.bgR = 255; bg.bgG = 255; bg.bgB = 255;
-            const BackgroundRemover::Result br =
-                BackgroundRemover::removeBackgroundWithFallback(image, bgModel, bg);
-            subject = br.image;
-        }
-        TripoSGPredictor::Options sg;
-        sg.sdfResolution    = opts.sdfResolution;
-        sg.flowSteps        = opts.flowSteps;
-        sg.guidanceScale    = opts.guidanceScale;
-        // int8 tier DROPPED for TripoSG: the quantized 1.5B DiT degrades to
-        // blobs over the flow loop (verified live even with per-channel
-        // quant), and dynamic-int8 MatMuls are no faster than fp32 on ARM.
-        // The tier picker stays meaningful for TripoSR only.
-        sg.useInt8Dit       = false;
-        sg.smoothMesh       = opts.smoothMesh;
-        sg.smoothIterations = opts.smoothIterations;
-        sg.refineSurface    = opts.refineSurface;
-        sg.chunkPoints      = opts.chunkPoints;
-        Result r = TripoSGPredictor::predict(subject, sg, progress);
-        // TripoSG's field is already +Y-up — skip the TripoSR frame bake.
-        r.bakeTripoSROrientation = false;
-        // Game-ready simplification (geometry-only backend — nothing to bake;
-        // the later GUI AI-texture pass unwraps/bakes the SIMPLIFIED mesh,
-        // which is exactly what you want for skinning-friendly assets).
-        if (r.ok)
-            applyGameReady(r, opts.targetTriangles, opts.targetTrianglesStrict,
-                           nullptr, nullptr);
-        // TripoSG is geometry-only. Colour comes SOLELY from the AI image
-        // generation pass (multi-view depth-ControlNet, run later in the GUI
-        // layer) — no TripoSR field colouring. With no AI texture the mesh
-        // ships uncoloured (neutral clay material in MeshGenBuilder).
-        return r;
-    }
+    // Geometry-only: colour comes SOLELY from the AI image generation pass
+    // (multi-view depth-ControlNet, run later in the GUI layer). With no AI
+    // texture the mesh ships uncoloured (neutral clay material in MeshGenBuilder).
+    if (opts.backend == Backend::TripoSG)
+        return predictTripoSGGeometry(image, opts, opts.sdfResolution,
+                                      opts.targetTriangles,
+                                      opts.targetTrianglesStrict, progress);
     if (!QFileInfo::exists(encoderModelPath) || !QFileInfo::exists(decoderModelPath))
         return fail(QStringLiteral("MeshGen: TripoSR model not found (not hosted yet? "
                                    "see docs/IMAGE_TO_3D_SPIKE_764.md)."));

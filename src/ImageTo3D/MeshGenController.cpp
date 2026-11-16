@@ -791,7 +791,13 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
     } else if (useSG) {
         // TripoSG always runs the fp32 DiT — the int8 tier is dropped
         // (quantized geometry degrades to blobs; no ARM speed win).
-        const QString enc = TripoSGPredictor::ensureModelBlocking(false);
+        const QString enc = TripoSGPredictor::ensureModelBlocking(
+            false, [this]() { return m_cancel.load(); });
+        if (m_cancel.load()) {
+            setBusy(false);
+            emit statusMessage(tr("Cancelled."));
+            return;
+        }
         if (enc.isEmpty()) {
             setBusy(false);
             emit error(tr("TripoSG models unavailable — they download on first "
@@ -844,10 +850,27 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
         ? std::clamp(options.value(QLatin1String("guide_reach")).toFloat(), 0.0f, 1.0f)
         : 0.08f;
     QString guideEncoder;
+    const bool guideFromTripoSG = useT2 && ShapeGuide::isTripoSGGuide(guideSpec);
     if (useT2 && !guideSpec.isEmpty() && guideSpec != QLatin1String("none")) {
         QString gerr;
         bool okGuide = false;
-        if (guideSpec == QLatin1String("selected")) {
+        if (guideFromTripoSG) {
+            // Generated from the image on the worker; the graphs download HERE
+            // (the downloader needs the main thread).
+            emit statusMessage(tr("Checking TripoSG models…"));
+            okGuide = TripoSGPredictor::isAvailable()
+                && !TripoSGPredictor::ensureModelBlocking(
+                       false, [this]() { return m_cancel.load(); }).isEmpty();
+            if (m_cancel.load()) {
+                setBusy(false);
+                emit statusMessage(tr("Cancelled."));
+                return;
+            }
+            if (!okGuide)
+                gerr = TripoSGPredictor::isAvailable()
+                    ? tr("TripoSG models unavailable")
+                    : tr("the TripoSG guide needs an ONNX-enabled build");
+        } else if (guideSpec == QLatin1String("selected")) {
             Ogre::Entity* e = selectedMeshEntity();
             okGuide = e ? ShapeGuideScene::fromEntity(e, *guide, &gerr)
                         : (gerr = tr("select a mesh to use as the shape guide"), false);
@@ -906,7 +929,7 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                                      t2TargetTrisStrict, t2MaxTexture,
                                      t2Supersample, wantClean, wantPartUv,
                                      guide, guideStrength, bakeOntoGuide,
-                                     guideReach, guideEncoder,
+                                     guideReach, guideEncoder, guideFromTripoSG,
                                      imageStem = fi.completeBaseName()]() {
         auto post = [this](const QString& stage, int done, int total) {
             QMetaObject::invokeMethod(this, "progress", Qt::QueuedConnection,
@@ -1003,7 +1026,8 @@ void MeshGenController::generate(const QString& imagePath, int resolution,
                 QDir(AppStorage::persistentRoot())
                     .filePath(QStringLiteral("generated_sources"));
             opts.trellis2SourceKeepBaseName = imageStem;
-            if (!guide->empty()) {
+            if (!guide->empty() || guideFromTripoSG) {
+                opts.guideFromTripoSG = guideFromTripoSG;
                 opts.guidePositions = guide->positions;
                 opts.guideIndices = guide->indices;
                 opts.guideStrength = guideStrength;
