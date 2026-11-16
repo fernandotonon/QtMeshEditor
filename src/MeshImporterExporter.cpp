@@ -32,6 +32,8 @@ THE SOFTWARE.
 #include "UsdBridge.h"
 #include "DNA/DnaScene.h"
 #include "FeedbackReportHelper.h"
+#include "GlbImageEmbed.h"
+#include "ImageTo3D/MeshGenBaker.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
@@ -80,6 +82,7 @@ THE SOFTWARE.
 #include "FaceRig/FaceRigAttach.h"
 #include "ExportOptimizer.h"
 #include "RTShaderHelper.h"
+#include "EmbeddedTextureCache.h"
 
 // Debug trace helper for #681 export-crash repro. Writes to a
 // dedicated file because stderr is consumed by MCP mode and the
@@ -367,6 +370,75 @@ static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent, const std::string
     return node;
 }
 
+bool MeshImporterExporter::metallicMapLooksScalar(const QImage& image)
+{
+    if (image.isNull())
+        return false;
+    const QImage img = image.convertToFormat(QImage::Format_RGB32);
+    // A 64x64 sample grid: enough to see any packed texel (its AO lane is
+    // 255 or matches neither of the others) without reading 4K maps whole.
+    const int stepX = std::max(1, img.width() / 64);
+    const int stepY = std::max(1, img.height() / 64);
+    for (int y = 0; y < img.height(); y += stepY)
+        for (int x = 0; x < img.width(); x += stepX) {
+            const QRgb p = img.pixel(x, y);
+            if (std::abs(qRed(p) - qGreen(p)) > 3 || std::abs(qGreen(p) - qBlue(p)) > 3)
+                return false;
+        }
+    return true;
+}
+
+// Pixels of a bound texture for the export decision below: the import-time
+// embedded bytes first (FBX embeds are not on disk), else the loaded texture.
+// Null when neither is available.
+static QImage textureImageForExport(const std::string& name)
+{
+    const std::vector<uint8_t> bytes = EmbeddedTextureCache::retrieve(name);
+    if (!bytes.empty()) {
+        QImage img;
+        if (img.loadFromData(bytes.data(), static_cast<int>(bytes.size())))
+            return img;
+    }
+    try {
+        Ogre::TexturePtr tex = Ogre::TextureManager::getSingleton().getByName(
+            name, Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        if (!tex)
+            return {};
+        if (!tex->isLoaded())
+            tex->load();
+        Ogre::Image oi;
+        tex->convertToImage(oi);
+        const int w = static_cast<int>(oi.getWidth());
+        const int h = static_cast<int>(oi.getHeight());
+        if (w <= 0 || h <= 0)
+            return {};
+        QImage out(w, h, QImage::Format_RGBA8888);
+        Ogre::PixelBox dst(w, h, 1, Ogre::PF_BYTE_RGBA, out.bits());
+        Ogre::PixelUtil::bulkPixelConversion(oi.getPixelBox(), dst);
+        return out;
+    } catch (...) {
+        return {};
+    }
+}
+
+// The canonical PACKED metallic-roughness map: the `metallic` slot WITH a
+// texture that is not a plain greyscale metallic map.
+//  * A PBR preset creates that slot empty as an inspector placeholder; an
+//    empty one must not switch the export to packed-map mode (metallic factor
+//    1, no specular, roughness map displaced from index 0).
+//  * An FBX import binds a standalone greyscale METALNESS map there. As glTF's
+//    MR texture its green lane would read as roughness, so it keeps the
+//    pre-packed export (the roughness map leads). Packing such pairs into one
+//    ORM texture on export is not done here.
+static bool isPackedMetallicRoughness(const Ogre::TextureUnitState* t)
+{
+    if (t->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED
+        || t->getName() != "metallic" || t->getTextureName().empty())
+        return false;
+    return !MeshImporterExporter::metallicMapLooksScalar(
+        textureImageForExport(t->getTextureName()));
+}
+
 // Convert an Ogre material to an aiMaterial (colors + textures)
 static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
 {
@@ -382,9 +454,32 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
         aiColor4D diffuse(d.r, d.g, d.b, d.a);
         aiMat->AddProperty(&diffuse, 1, AI_MATKEY_COLOR_DIFFUSE);
 
-        auto s = pass->getSpecular();
-        aiColor4D specular(s.r, s.g, s.b, s.a);
-        aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
+        // Whether this pass carries the canonical PACKED metallic-roughness
+        // texture (the `metallic` slot). Determined in a PRE-PASS because the
+        // slot order the material writer emits is roughness-then-metallic:
+        // the `roughness` branch has to know to leave DIFFUSE_ROUGHNESS index
+        // 0 free before the `metallic` branch is ever reached.
+        bool packedMrClaimed = false;
+        for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti) {
+            if (isPackedMetallicRoughness(pass->getTextureUnitState(ti))) {
+                packedMrClaimed = true;
+                break;
+            }
+        }
+
+        // PBR materials (packed metallic-roughness map) do NOT export the
+        // Ogre pass specular. It is a fixed-function highlight colour, black
+        // on generated assets, and Assimp's glTF2 exporter turns ANY
+        // AI_MATKEY_COLOR_SPECULAR into KHR_materials_specular with that
+        // colour as specularColorFactor (its "is zero" test compares against
+        // the default {1,1,1}), so black became specularColorFactor [0,0,0]:
+        // no specular reflection at all, the flat "plastic" look in every
+        // glTF viewer. Leaving it out keeps the glTF default (F0 from IOR).
+        if (!packedMrClaimed) {
+            auto s = pass->getSpecular();
+            aiColor4D specular(s.r, s.g, s.b, s.a);
+            aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
+        }
 
         auto a = pass->getAmbient();
         aiColor4D ambient(a.r, a.g, a.b, a.a);
@@ -437,7 +532,54 @@ static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
             } else if (tusName == "metallic") {
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_METALNESS, metalIdx));
                 ++metalIdx;
+                // An empty placeholder slot carries no packed map: nothing
+                // below applies to it.
+                if (!packedMrClaimed)
+                    continue;
+                // glTF has ONE combined metallic-roughness texture, and
+                // Assimp's glTF2 exporter fills it from DIFFUSE_ROUGHNESS
+                // FIRST, falling back to METALNESS only if that is absent
+                // (glTF2Exporter.cpp: GetMatTex(... DIFFUSE_ROUGHNESS) then
+                // ... METALNESS). Our `metallic` slot is the canonical
+                // PACKED map (.r=AO, .g=roughness, .b=metallic), while the
+                // `roughness` slot is a single-channel convenience map. That
+                // is the project-wide contract, not a generated-asset
+                // special case: RTShaderHelper hands this slot's texture
+                // straight to Ogre's Cook-Torrance SRS as the packed map,
+                // and TexturePaintController's scalar bake composites into
+                // exactly these lanes (`orm.fill(AO=255, rough=255, metal=0)`).
+                // Without this line the exporter picked the grayscale
+                // roughness PNG as the MR texture, so every glTF consumer
+                // read metallic out of the ROUGHNESS lane (a generated box
+                // exported as 0.62 metal). Registering the packed map here
+                // too makes the correct texture win the DIFFUSE_ROUGHNESS
+                // slot; the `roughness` branch below is now a no-op for
+                // materials that carry both, which is the intended order.
+                // Index 0 specifically: Assimp's GetMatTex reads the FIRST
+                // texture of the type, and the canonical slot order emitted
+                // by the material writer puts `roughness` BEFORE `metallic`,
+                // so appending at roughIdx would leave the single-channel
+                // map at index 0 and change nothing. `packedMrClaimed` then
+                // stops the later `roughness` branch from overwriting it.
+                aiMat->AddProperty(&texPath,
+                    AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, 0));
+                if (roughIdx == 0)
+                    roughIdx = 1;
+                // Assimp defaults metallicFactor to 0 when the source sets
+                // no AI_MATKEY_METALLIC_FACTOR, which multiplies the packed
+                // texture away entirely. The texture IS the authority here,
+                // so both factors are 1.0 (what trellis.cpp's own GLB writer
+                // emits for the same data).
+                const float one = 1.0f;
+                aiMat->AddProperty(&one, 1, AI_MATKEY_METALLIC_FACTOR);
+                aiMat->AddProperty(&one, 1, AI_MATKEY_ROUGHNESS_FACTOR);
             } else if (tusName == "roughness") {
+                // Never take index 0 from the packed metallic-roughness map
+                // (see the `metallic` branch): glTF consumers read lane .g
+                // of THAT texture as roughness, so the single-channel map is
+                // exported only as a secondary reference.
+                if (packedMrClaimed && roughIdx == 0)
+                    roughIdx = 1;
                 aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE_ROUGHNESS, roughIdx));
                 ++roughIdx;
             } else if (tusName == "ao") {
@@ -1589,6 +1731,98 @@ bool meshHasTextureCoordinates(const Ogre::Mesh* mesh)
 
 } // namespace
 
+namespace {
+
+// Reads `count` float components of `elem` for every vertex of `vd`.
+std::vector<float> readVertexFloats(const Ogre::VertexData* vd,
+                                    const Ogre::VertexElement* elem, int count)
+{
+    std::vector<float> out;
+    if (!elem)
+        return out;
+    const size_t n = vd->vertexCount;
+    out.resize(n * static_cast<size_t>(count));
+    auto buf = vd->vertexBufferBinding->getBuffer(elem->getSource());
+    Ogre::HardwareBufferLockGuard lock(buf, Ogre::HardwareBuffer::HBL_READ_ONLY);
+    const auto* base = static_cast<const unsigned char*>(lock.pData)
+        + vd->vertexStart * buf->getVertexSize();
+    for (size_t v = 0; v < n; ++v) {
+        const auto* p = reinterpret_cast<const float*>(
+            base + v * buf->getVertexSize() + elem->getOffset());
+        for (int c = 0; c < count; ++c)
+            out[v * count + c] = p[c];
+    }
+    return out;
+}
+
+} // namespace
+
+// Recomputes the VES_TANGENT values of `mesh` with MeshGenBaker::computeTangents
+// (double-precision UV-area weighting, Gram-Schmidt against the normal, and a
+// perpendicular fallback when a vertex has no usable UV gradient). The element
+// must already exist as float4 (buildTangentVectors creates it). Returns how
+// many vertices Ogre's builder had left with a zero tangent.
+int MeshImporterExporter::recomputeTangentsRobust(Ogre::Mesh* mesh)
+{
+    if (!mesh)
+        return 0;
+    int zeroBefore = 0;
+    auto process = [&](Ogre::VertexData* vd, const std::vector<const Ogre::SubMesh*>& users) {
+        if (!vd || vd->vertexCount == 0)
+            return;
+        auto* decl = vd->vertexDeclaration;
+        const auto* pe = decl->findElementBySemantic(Ogre::VES_POSITION);
+        const auto* ne = decl->findElementBySemantic(Ogre::VES_NORMAL);
+        const auto* ue = decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES, 0);
+        const auto* te = decl->findElementBySemantic(Ogre::VES_TANGENT);
+        if (!pe || !ue || !te || pe->getType() != Ogre::VET_FLOAT3
+            || ue->getType() != Ogre::VET_FLOAT2 || te->getType() != Ogre::VET_FLOAT4
+            || (ne && ne->getType() != Ogre::VET_FLOAT3))
+            return;
+        const std::vector<float> pos = readVertexFloats(vd, pe, 3);
+        const std::vector<float> nrm = readVertexFloats(vd, ne, 3);
+        const std::vector<float> uv = readVertexFloats(vd, ue, 2);
+        std::vector<uint32_t> idx;
+        for (const Ogre::SubMesh* sm : users) {
+            const Ogre::IndexData* id = sm->indexData;
+            if (!id || id->indexCount == 0 || sm->operationType != Ogre::RenderOperation::OT_TRIANGLE_LIST)
+                continue;
+            Ogre::HardwareBufferLockGuard il(id->indexBuffer, Ogre::HardwareBuffer::HBL_READ_ONLY);
+            const bool is32 = id->indexBuffer->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+            for (size_t i = 0; i < id->indexCount; ++i) {
+                const size_t k = id->indexStart + i;
+                idx.push_back(is32 ? static_cast<const uint32_t*>(il.pData)[k]
+                                   : static_cast<const uint16_t*>(il.pData)[k]);
+            }
+        }
+        if (idx.empty())
+            return;
+        const std::vector<float> tan = MeshGenBaker::computeTangents(pos, idx, uv, nrm);
+
+        auto buf = vd->vertexBufferBinding->getBuffer(te->getSource());
+        Ogre::HardwareBufferLockGuard tl(buf, Ogre::HardwareBuffer::HBL_NORMAL);
+        auto* base = static_cast<unsigned char*>(tl.pData) + vd->vertexStart * buf->getVertexSize();
+        for (size_t v = 0; v < vd->vertexCount; ++v) {
+            auto* t = reinterpret_cast<float*>(base + v * buf->getVertexSize() + te->getOffset());
+            if (t[0] == 0.0f && t[1] == 0.0f && t[2] == 0.0f)
+                ++zeroBefore;
+            for (int c = 0; c < 4; ++c)
+                t[c] = tan[v * 4 + c];
+        }
+    };
+    std::vector<const Ogre::SubMesh*> sharedUsers;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sm = mesh->getSubMesh(i);
+        if (sm->useSharedVertices)
+            sharedUsers.push_back(sm);
+        else
+            process(sm->vertexData, {sm});
+    }
+    if (mesh->sharedVertexData && !sharedUsers.empty())
+        process(mesh->sharedVertexData, sharedUsers);
+    return zeroBefore;
+}
+
 // Apply RTSS normal map shaders to any materials that have a normal-map texture
 // unit. Called after loading .mesh/.xml files where MaterialProcessor doesn't run.
 // Also reachable as MeshImporterExporter::applyNormalMapsToEntity for callers
@@ -1612,8 +1846,17 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
                 // storeParityInW=true → VET_FLOAT4 tangents with handedness in w,
                 // matching what MeshProcessor exports and what RTSS expects.
                 mesh->buildTangentVectors(Ogre::VES_TANGENT, 0, 0, false, false, true);
+                // Ogre's builder leaves (0,0,0) on every vertex whose faces
+                // are all tiny in UV space — common on generated assets
+                // with thousands of UV islands — and the normal-mapping
+                // shader turns a zero tangent into a black pixel. That was
+                // the "black spots only in QtMesh Editor" artifact: Blender
+                // and macOS Preview compute their own tangents. Keep the
+                // element Ogre just created, overwrite its values.
+                const int repaired = recomputeTangentsRobust(mesh.get());
                 log.logMessage("applyNormalMapsToEntity: built tangents for '" +
-                               mesh->getName() + "'");
+                               mesh->getName() + "' (" + std::to_string(repaired) +
+                               " zero tangents from Ogre's builder replaced)");
             } catch (const Ogre::Exception& e) {
                 log.logMessage("applyNormalMapsToEntity: could not build tangents for '" +
                                mesh->getName() + "': " + e.getDescription());
@@ -3836,6 +4079,24 @@ int findMorphNode(const QJsonObject& root, int poseCount, int* outNumTargets)
     return -1;
 }
 
+// Embed the textures a .glb export references by file name (see
+// GlbImageEmbed). Never throws; a failure leaves the (valid) file as written.
+static void embedGlbImages(const QString& glbPath)
+{
+    const GlbImageEmbed::Result r = GlbImageEmbed::embedExternalImages(glbPath);
+    if (!r.ok) {
+        qWarning() << "glb: could not embed textures:" << r.error;
+        return;
+    }
+    if (!r.missing.isEmpty())
+        qWarning() << "glb: textures not found next to the file, left external:" << r.missing;
+    if (!r.unsupported.isEmpty())
+        qWarning() << "glb: textures in a format glTF cannot embed, left external:" << r.unsupported;
+    if (r.embedded > 0)
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("glb embedded %1 texture(s)").arg(r.embedded));
+}
+
 // Inject morph-weight animations into an already-written .gltf/.glb file.
 // No-op (leaves the file untouched) if the entity has no morph weight clips,
 // the file has no morph targets, or anything fails to parse.
@@ -4790,6 +5051,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                     injectMorphWeightAnimations(file.filePath(), e,
                                                 /*isBinary=*/formatId == "glb2");
 
+                // A .glb must be self-contained: move the texture files the
+                // export just wrote next to it into the BIN chunk.
+                if (formatId == "glb2")
+                    embedGlbImages(file.filePath());
+
                 // Morph-target NAME sidecar for formats whose exporter cannot
                 // carry the names. glTF/glb now carry them natively
                 // (`mesh.extras.targetNames`, #921) and FBX writes them per
@@ -5526,6 +5792,8 @@ int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallb
                 injectMorphWeightAnimations(file.filePath(), entityPair,
                                             /*isBinary=*/formatId == "glb2");
         }
+        if (formatId == "glb2")
+            embedGlbImages(file.filePath());
 
         // Pose libraries have no representation in any mesh format, and a
         // scene has many entities, so they go in a sidecar keyed by scene

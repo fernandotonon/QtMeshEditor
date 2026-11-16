@@ -1,11 +1,15 @@
 #include "MaterialProcessor.h"
 #include "RTShaderHelper.h"
 #include "EmbeddedTextureCache.h"
+#include "WebPImage.h"
 
 #include <cstddef>
 #include <cstring>
 
+#include <QBuffer>
+#include <QByteArray>
 #include <QDir>
+#include <QImage>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
@@ -389,14 +393,6 @@ Ogre::TexturePtr MaterialProcessor::loadTextureFromFile(const QString& absoluteP
     if (bytes.isEmpty())
         return {};
 
-    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
-        const_cast<char*>(bytes.constData()),
-        static_cast<size_t>(bytes.size()),
-        false,
-        true));
-    Ogre::Image img;
-    img.load(stream, QFileInfo(absolutePath).suffix().toLower().toStdString());
-
     auto& tm = Ogre::TextureManager::getSingleton();
     if (tm.resourceExists(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)) {
         try {
@@ -404,7 +400,41 @@ Ogre::TexturePtr MaterialProcessor::loadTextureFromFile(const QString& absoluteP
         } catch (...) {
         }
     }
-    return tm.loadImage(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, img);
+    return loadTextureFromBytes(resourceName, bytes.constData(),
+                                static_cast<std::size_t>(bytes.size()),
+                                QFileInfo(absolutePath).suffix().toLower().toStdString());
+}
+
+Ogre::TexturePtr MaterialProcessor::loadTextureFromBytes(const Ogre::String& resourceName,
+                                                         const void* data, std::size_t size,
+                                                         const Ogre::String& formatHint)
+{
+    auto& tm = Ogre::TextureManager::getSingleton();
+    const auto& group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+    // WebP by CONTENT, not by hint: embedded glTF images (EXT_texture_webp)
+    // arrive with a "webp" hint, files may carry any extension, and the
+    // embedded-texture cache has no hint at all.
+    if (WebPImage::looksLikeWebP(data, size)) {
+        QString error;
+        const QImage rgba = WebPImage::decode(data, size, &error);
+        if (rgba.isNull())
+            OGRE_EXCEPT(Ogre::Exception::ERR_INVALIDPARAMS,
+                        "WebP texture '" + resourceName + "': " + error.toStdString(),
+                        "MaterialProcessor::loadTextureFromBytes");
+        // Format_RGBA8888 is bytes R,G,B,A == PF_BYTE_RGBA. loadImage copies
+        // the pixels to the texture, so `rgba` only has to outlive this call.
+        Ogre::Image img;
+        img.loadDynamicImage(const_cast<uchar*>(rgba.constBits()),
+                             static_cast<Ogre::uint32>(rgba.width()),
+                             static_cast<Ogre::uint32>(rgba.height()), 1,
+                             Ogre::PF_BYTE_RGBA, false);
+        return tm.loadImage(resourceName, group, img);
+    }
+    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
+        const_cast<void*>(data), size, false, true));
+    Ogre::Image img;
+    img.load(stream, formatHint);
+    return tm.loadImage(resourceName, group, img);
 }
 
 Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String& filename,
@@ -421,19 +451,29 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String& filename,
             // back to them. Issue #508. `aiTexel*` (4-byte BGRA struct
             // for raw, byte stream for compressed) → `const std::byte*`
             // is the canonical idiom for "opaque bytes".
-            EmbeddedTextureCache::store(
-                filename,
-                reinterpret_cast<const std::byte*>(texture->pcData),
-                texture->mWidth);
-            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth));
-            Ogre::Image img;
-            img.load(stream, texture->achFormatHint);
-
-            return Ogre::TextureManager::getSingleton().loadImage(
+            const std::size_t byteCount = texture->mWidth;
+            if (WebPImage::looksLikeWebP(texture->pcData, byteCount)) {
+                // Stash a PNG re-encode, not the WebP: the FBX exporter embeds
+                // these bytes in Video.Content and FBX readers cannot decode
+                // WebP. (glTF EXT_texture_webp; Assimp >= 6.0.3 hands the
+                // WebP image over with a "webp" format hint.)
+                const QImage rgba = WebPImage::decode(texture->pcData, byteCount);
+                QByteArray png;
+                QBuffer buffer(&png);
+                if (!rgba.isNull() && buffer.open(QIODevice::WriteOnly)
+                    && rgba.save(&buffer, "PNG")) {
+                    EmbeddedTextureCache::store(
+                        filename, reinterpret_cast<const std::byte*>(png.constData()),
+                        static_cast<std::size_t>(png.size()));
+                }
+            } else {
+                EmbeddedTextureCache::store(
                     filename,
-                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                    img
-                    );
+                    reinterpret_cast<const std::byte*>(texture->pcData),
+                    byteCount);
+            }
+            return loadTextureFromBytes(filename, texture->pcData, byteCount,
+                                        texture->achFormatHint);
         } else {
             // The texture data is raw. Stash the raw payload too — note
             // it's *uncompressed* RGB8, which most FBX readers won't
@@ -510,21 +550,12 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String& filename,
     const std::vector<uint8_t> cached = EmbeddedTextureCache::retrieve(filename);
     if (!cached.empty()) {
         try {
-            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(
-                const_cast<uint8_t*>(cached.data()),
-                cached.size(),
-                false,
-                true));
-            Ogre::Image img;
             const char* hint = "";
             if (cached.size() >= 8 && std::memcmp(cached.data(), "\x89PNG\r\n\x1a\n", 8) == 0)
                 hint = "png";
             else if (cached.size() >= 2 && cached[0] == 0xff && cached[1] == 0xd8)
                 hint = "jpg";
-            img.load(stream, hint);
-            return tm.loadImage(filename,
-                                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                                img);
+            return loadTextureFromBytes(filename, cached.data(), cached.size(), hint);
         } catch (...) {
         }
     }

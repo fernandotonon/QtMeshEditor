@@ -102,11 +102,29 @@ const uint8_t* checkedBlob(const QByteArray& blob, qint64 blobBase,
 
 } // namespace
 
-// IEC 61966-2-1 linear -> sRGB transfer.
-static float linearToSrgb(float v)
+// Base-color color space of the stored voxel attributes.
+//
+// TRELLIS.2 predicts base color ALREADY sRGB-encoded: Microsoft's own GLB
+// export (o_voxel -> trimesh) writes the raw attribute values straight into
+// the glTF baseColorTexture, which glTF defines as sRGB, and trellis.cpp's
+// own GLB writer does the same (value * 255, no transfer function). Verified
+// against an official TRELLIS.2 asset: its texture mean (93, 78, 63) was
+// exactly linear->sRGB of ours, i.e. we were encoding twice and every bake
+// came out washed out and pale.
+//
+// Stamps:
+//   "srgb-v2"  raw model output, display-ready (what everything writes now)
+//   "srgb"     written between #978 and this fix: raw output run through a
+//              linear->sRGB encode it never needed. Undone once on load.
+//   (none)     pre-#978 files and the Python sidecar: raw output, correct.
+static const char* const kColorSpaceCurrent = "srgb-v2";
+static const char* const kColorSpaceDoubleEncoded = "srgb";
+
+// IEC 61966-2-1 sRGB -> linear transfer (inverse of the old, wrong encode).
+static float srgbToLinear(float v)
 {
-    return v <= 0.0031308f ? v * 12.92f
-                           : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+    return v <= 0.04045f ? v / 12.92f
+                         : std::pow((v + 0.055f) / 1.055f, 2.4f);
 }
 
 ReadResult read(const QString& path)
@@ -271,23 +289,20 @@ ReadResult read(const QString& path)
         r.error = QStringLiteral("empty mesh");
         return r;
     }
-    // LEGACY color space: qtm3d files written before the sRGB stamp hold
-    // LINEAR base-color lanes (both the trellis.cpp dump path and the
-    // Python sidecar wrote the model's raw linear output). Convert them on
-    // load so old preserved sources re-bake with correct brightness; files
-    // stamped "srgb" are already display-ready.
-    if (d.meta.value(QStringLiteral("colorSpace")).toString()
-            != QLatin1String("srgb")
-        && !d.voxelAttrs.empty()) {
+    // Color space (see kColorSpaceCurrent): only files stamped with the old
+    // "srgb" tag carry the double encode; undo it so they re-bake with the
+    // colors the model predicted. Untagged files hold raw output already.
+    const QString cs = d.meta.value(QStringLiteral("colorSpace")).toString();
+    if (cs == QLatin1String(kColorSpaceDoubleEncoded) && !d.voxelAttrs.empty()) {
         for (size_t i = 0; i < d.voxelAttrs.size(); ++i) {
             if (i % 6 >= 3)
                 continue;
-            const float lin = d.voxelAttrs[i] / 255.0f;
+            const float v = d.voxelAttrs[i] / 255.0f;
             d.voxelAttrs[i] = static_cast<uint8_t>(
-                linearToSrgb(lin) * 255.0f + 0.5f);
+                srgbToLinear(v) * 255.0f + 0.5f);
         }
-        d.meta.insert(QStringLiteral("colorSpace"), QStringLiteral("srgb"));
     }
+    d.meta.insert(QStringLiteral("colorSpace"), QLatin1String(kColorSpaceCurrent));
     r.ok = true;
     return r;
 }
@@ -345,12 +360,10 @@ bool write(const QString& path, const Data& data, QString* error)
     }
 
     QJsonObject meta = data.meta;
-    // In-memory Data is display-ready (sRGB) by contract — the legacy-linear
-    // interpretation applies only to FILES from pre-conversion builds.
-    // Stamp unlabeled data so a write()/read() round trip is lossless
-    // instead of gamma-converting fresh bytes as if they were legacy.
-    if (!meta.contains(QStringLiteral("colorSpace")))
-        meta.insert(QStringLiteral("colorSpace"), QStringLiteral("srgb"));
+    // In-memory Data is display-ready by contract (read() normalises every
+    // file to kColorSpaceCurrent), so always stamp the current tag: a stale
+    // "srgb" carried in meta must not make the next read() decode again.
+    meta.insert(QStringLiteral("colorSpace"), QLatin1String(kColorSpaceCurrent));
     meta.insert(QStringLiteral("resolution"), data.resolution);
     meta.insert(QStringLiteral("voxelSize"), static_cast<double>(data.voxelSize));
     meta.insert(QStringLiteral("origin"),
@@ -493,24 +506,16 @@ ReadResult readTrellisCppDump(const QString& path)
             // treat non-finite lanes as 0.
             float cl = !std::isfinite(v) ? 0.0f
                 : (v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v));
-            // trellis.cpp emits LINEAR-light colors (no gamma anywhere in
-            // its pipeline — verified against the source). Encode the BASE
-            // COLOR channels (lanes 0..2 of the 6-lane layout) to sRGB
-            // before quantizing, or every texture bakes murky-dark (a
-            // bright-green goblin measured mean luminance 0.096 raw vs a
-            // plausible 0.32 in sRGB). Metallic/roughness/alpha stay linear
-            // by definition.
-            if (i % 6 < 3)
-                cl = linearToSrgb(cl);
+            // Stored as predicted: the base-color lanes are already sRGB
+            // (see kColorSpaceCurrent). An extra linear->sRGB encode here
+            // made every TRELLIS.2 bake pale and washed out.
             d.voxelAttrs[i] = static_cast<uint8_t>(cl * 255.0f + 0.5f);
         }
     }
     d.meta.insert(QStringLiteral("generator"), QStringLiteral("trellis.cpp"));
     d.meta.insert(QStringLiteral("resolution"), res);
-    // Stamp the color space so a re-bake of this preserved source doesn't
-    // convert twice; qtm3d files WITHOUT the stamp predate the conversion
-    // and hold linear values (read() converts those on load).
-    d.meta.insert(QStringLiteral("colorSpace"), QStringLiteral("srgb"));
+    // Stamp the color space so a preserved source is never converted again.
+    d.meta.insert(QStringLiteral("colorSpace"), QLatin1String(kColorSpaceCurrent));
     r.ok = true;
     return r;
 }

@@ -10,6 +10,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QImage>
 #include <QStandardPaths>
 
 #include <OgreEntity.h>
@@ -25,6 +26,7 @@
 #include <OgreSceneNode.h>
 #include <OgreSubMesh.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -67,6 +69,47 @@ std::vector<float> computeNormals(const std::vector<float>& pos,
 } // namespace
 
 namespace MeshGenBuilder {
+
+// Pack the two real baked scalar maps into one glTF-convention
+// metallic-roughness texture: .r = occlusion (WHITE — we bake none, and a 0
+// lane darkens the whole surface; the Unreal ORM rule in PaintBakeTargets),
+// .g = roughness, .b = metallic. Ogre's Cook-Torrance SRS samples exactly
+// these lanes off whatever texture sits on the `metallic` slot, so the two
+// grayscale PNGs cannot be bound there directly.
+//
+// Sizes are expected to match (both come from the same bake at the same
+// atlas resolution); a mismatched or missing map falls back to a neutral
+// lane rather than failing the build, since a generated asset with slightly
+// wrong shading beats no asset at all.
+QImage packOcclusionRoughnessMetallic(const QImage& roughness,
+                                      const QImage& metallic)
+{
+    if (roughness.isNull() && metallic.isNull())
+        return QImage();
+    const QImage r = roughness.isNull()
+        ? QImage() : roughness.convertToFormat(QImage::Format_Grayscale8);
+    const QImage m = metallic.isNull()
+        ? QImage() : metallic.convertToFormat(QImage::Format_Grayscale8);
+    const int w = std::max(r.width(), m.width());
+    const int h = std::max(r.height(), m.height());
+    if (w <= 0 || h <= 0)
+        return QImage();
+    QImage out(w, h, QImage::Format_RGB888);
+    for (int y = 0; y < h; ++y) {
+        const uchar* rl = (!r.isNull() && y < r.height())
+            ? r.constScanLine(y) : nullptr;
+        const uchar* ml = (!m.isNull() && y < m.height())
+            ? m.constScanLine(y) : nullptr;
+        uchar* ol = out.scanLine(y);
+        for (int x = 0; x < w; ++x) {
+            ol[x * 3 + 0] = 255;                                  // occlusion
+            ol[x * 3 + 1] = (rl && x < r.width()) ? rl[x] : 204;   // roughness
+            ol[x * 3 + 2] = (ml && x < m.width()) ? ml[x] : 0;     // metallic
+        }
+    }
+    return out;
+}
+
 
 Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& meshName,
                       const QString& texturePngPath)
@@ -362,7 +405,6 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
             if (opts.generatePbrMaps) {
                 normalPath   = saveMap(result.normalMap,   "normal");
                 roughnessPath = saveMap(result.roughnessMap, "roughness");
-                metallicPath = saveMap(result.metallicMap, "metallic");
             }
 
             // Optional PBR stage (#404): synthesize normal + roughness from the
@@ -392,6 +434,31 @@ Ogre::SceneNode* buildSceneNode(const MeshGenPredictor::Result& result,
                          + pr.error + ") — continuing with diffuse only.")
                             .toStdString());
                 }
+            }
+
+            // The `metallic` slot is read by Ogre's Cook-Torrance SRS as
+            // a PACKED glTF metallic-roughness map (.r=AO, .g=roughness,
+            // .b=metallic — see RTShaderHelper, which passes exactly this
+            // texture to the SRS). Binding the single-channel metallic
+            // PNG there made a grey image expand to R=G=B, so the shader
+            // read ROUGHNESS from the metallic lane and ignored the real
+            // roughness map entirely: a generated box whose TRELLIS
+            // metallic was 0.75 rendered as chrome with roughness 0.75
+            // instead of its baked 0.62. Pack the two real maps into one
+            // RGB texture so each lane carries what the shader expects.
+            // Packed AFTER the synthesis above, from the FINAL roughness map:
+            // when only the roughness was synthesized, packing the predictor's
+            // (absent) one would freeze the neutral 204 into the lane glTF
+            // consumers read, leaving the synthesized map unused.
+            if (opts.generatePbrMaps && !result.metallicMap.isNull()) {
+                QImage rough = result.roughnessMap;
+                if (rough.isNull() && !roughnessPath.isEmpty())
+                    rough = QImage(roughnessPath);
+                if (!rough.isNull() && rough.size() != result.metallicMap.size())
+                    rough = rough.scaled(result.metallicMap.size(), Qt::IgnoreAspectRatio,
+                                         Qt::SmoothTransformation);
+                metallicPath = saveMap(packOcclusionRoughnessMetallic(rough, result.metallicMap),
+                                       "metallic");
             }
 
             // Register the directory so Ogre's resource system (and the

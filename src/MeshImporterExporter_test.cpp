@@ -1034,6 +1034,125 @@ TEST_F(SceneSaveLoadTest, RoundTrip_QuadMeshWithUnusedSharedVertex_RemapPreserve
     expectEntityHasSingleQuadBinding(entity, {0, 1, 2, 3});
 }
 
+// Packed metallic-roughness export: the `metallic` slot is the packed map
+// and becomes glTF's metallicRoughnessTexture with factor 1 — but only when
+// it HAS a texture. A PBR preset creates it empty as a placeholder, and that
+// must leave the roughness map in charge and the material non-metallic.
+namespace {
+QJsonObject exportSingleMaterialGltf(const std::string& matName,
+                                     const std::vector<std::pair<std::string, std::string>>& slotList,
+                                     const QString& dir)
+{
+    auto& tm = Ogre::TextureManager::getSingleton();
+    auto mat = Ogre::MaterialManager::getSingleton().create(
+        matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+    for (const auto& [slot, tex] : slotList) {
+        if (!tex.empty() && !tm.getByName(tex))
+            tm.createManual(tex, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                            Ogre::TEX_TYPE_2D, 1, 1, 0, Ogre::PF_BYTE_RGBA);
+        auto* tus = tex.empty() ? pass->createTextureUnitState()
+                                : pass->createTextureUnitState(tex);
+        tus->setName(slot);
+    }
+    mat->compile();
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh(matName + "_mesh");
+    auto* sn = manager->addSceneNode(QString::fromStdString(matName + "_node"));
+    auto* en = manager->createEntity(sn, mesh);
+    en->getSubEntity(0)->setMaterial(mat);
+    en->getMesh()->getSubMesh(0)->setMaterialName(matName);
+    const QString file = dir + "/mr.scene.gltf";
+    EXPECT_EQ(MeshImporterExporter::sceneExporter(file), 0);
+    manager->destroySceneNode(sn);
+    QFile f(file);
+    if (!f.open(QIODevice::ReadOnly))
+        return {};
+    return QJsonDocument::fromJson(f.readAll()).object();
+}
+
+// A 2x2 texture of one colour, registered under `name` (replacing any old one).
+void makeSolidTexture(const std::string& name, uint8_t r, uint8_t g, uint8_t b)
+{
+    auto& tm = Ogre::TextureManager::getSingleton();
+    if (tm.resourceExists(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+        tm.remove(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    std::vector<uint8_t> px;
+    for (int i = 0; i < 4; ++i) { px.push_back(r); px.push_back(g); px.push_back(b); px.push_back(255); }
+    Ogre::Image img;
+    img.loadDynamicImage(px.data(), 2, 2, 1, Ogre::PF_BYTE_RGBA, false);
+    tm.loadImage(name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, img);
+}
+
+QString mrTextureUri(const QJsonObject& gltf)
+{
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    if (!pbr.contains("metallicRoughnessTexture"))
+        return {};
+    const int t = pbr["metallicRoughnessTexture"].toObject()["index"].toInt();
+    const int img = gltf["textures"].toArray().at(t).toObject()["source"].toInt();
+    return gltf["images"].toArray().at(img).toObject()["uri"].toString();
+}
+} // namespace
+
+TEST_F(SceneSaveLoadTest, PackedMetallicRoughnessWinsTheGltfMrTexture) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    makeSolidTexture("mrp_packed.png", 255, 180, 40);   // AO / rough / metal
+    const QJsonObject gltf = exportSingleMaterialGltf("MrPackedMat",
+        {{"albedo", "mrp_albedo.png"}, {"roughness", "mrp_rough.png"},
+         {"metallic", "mrp_packed.png"}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mrp_packed")) << mrTextureUri(gltf).toStdString();
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    // glTF's default metallicFactor is 1.0, and Assimp omits a factor equal to
+    // its default: absent means 1.
+    EXPECT_DOUBLE_EQ(pbr["metallicFactor"].toDouble(1.0), 1.0);
+}
+
+TEST_F(SceneSaveLoadTest, EmptyMetallicPlaceholderDoesNotClaimTheMrTexture) {
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const QJsonObject gltf = exportSingleMaterialGltf("MrPlaceholderMat",
+        {{"albedo", "mre_albedo.png"}, {"roughness", "mre_rough.png"},
+         {"metallic", ""}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mre_rough")) << mrTextureUri(gltf).toStdString();
+    const QJsonObject pbr = gltf["materials"].toArray().at(0).toObject()["pbrMetallicRoughness"].toObject();
+    // Assimp writes 0 when no factor is given; packed mode would leave 1
+    // (absent = the glTF default 1).
+    ASSERT_TRUE(pbr.contains("metallicFactor"));
+    EXPECT_NE(pbr["metallicFactor"].toDouble(1.0), 1.0);
+}
+
+TEST_F(SceneSaveLoadTest, GreyscaleMetallicMapDoesNotClaimTheMrTexture) {
+    // An FBX import binds a standalone greyscale metallic map to `metallic`.
+    // As glTF's MR texture its green lane would read as roughness, so the
+    // roughness map keeps the slot.
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    makeSolidTexture("mrg_metal.png", 90, 90, 90);
+    const QJsonObject gltf = exportSingleMaterialGltf("MrGreyMetalMat",
+        {{"albedo", "mrg_albedo.png"}, {"roughness", "mrg_rough.png"},
+         {"metallic", "mrg_metal.png"}}, tmp.path());
+    ASSERT_FALSE(gltf.isEmpty());
+    EXPECT_TRUE(mrTextureUri(gltf).contains("mrg_rough")) << mrTextureUri(gltf).toStdString();
+}
+
+TEST(MetallicMapLooksScalar, TellsGreyscaleFromPacked) {
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(QImage()));
+    QImage grey(128, 128, QImage::Format_RGB32);
+    grey.fill(QColor(70, 70, 70));
+    EXPECT_TRUE(MeshImporterExporter::metallicMapLooksScalar(grey));
+    QImage packed = grey;
+    packed.fill(QColor(255, 200, 0));
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(packed));
+    // One packed texel among grey ones is enough (the sample grid covers it).
+    QImage mostlyGrey = grey;
+    mostlyGrey.setPixel(0, 0, qRgb(255, 120, 10));
+    EXPECT_FALSE(MeshImporterExporter::metallicMapLooksScalar(mostlyGrey));
+}
+
 // Slice F3 export-side PBR slot dispatch:
 // buildAiMaterialFromOgre routed every TUS that wasn't named "normal_map"
 // to aiTextureType_DIFFUSE — so on re-import roughness/metallic/ao/emissive
