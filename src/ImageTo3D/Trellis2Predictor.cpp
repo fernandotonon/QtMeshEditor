@@ -204,15 +204,6 @@ QString Trellis2Predictor::generateScriptPath()
     return QFileInfo::exists(gen) ? gen : QString();
 }
 
-int Trellis2Predictor::effectiveTexVolumeRes(int requested, int geometryRes, bool pixal3d)
-{
-    if (requested == 512 || requested == 1024)
-        return requested;
-    if (pixal3d || geometryRes <= 512)
-        return 0;
-    return 512;
-}
-
 QString Trellis2Predictor::trellisCliPath()
 {
     QString cli = qEnvironmentVariable(kEnvCliVar);
@@ -675,11 +666,12 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
                      QStringLiteral("--models"),    models2,
                      QStringLiteral("--res"),       QString::number(res),
                      QStringLiteral("--seed"),      QString::number(opts.seed)};
-    // Texture-volume resolution (see effectiveTexVolumeRes: auto = 512 on
-    // the TRELLIS.2 cascades, whose res-1024 texture flow in trellis.cpp
-    // gives wrong materials).
-    if (const int texRes = effectiveTexVolumeRes(opts.texVolumeRes, res, opts.pixal3d))
-        args << QStringLiteral("--tex-res") << QString::number(texRes);
+    // Texture-volume resolution. 0 leaves trellis-cli on its own default; a
+    // simple prop (a box, a mat) does not need the larger volume, and the
+    // smaller one is markedly faster.
+    if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
+        args << QStringLiteral("--tex-res")
+             << QString::number(opts.texVolumeRes);
     if (opts.pixal3d) {
         // Same runtime, same model directory — only the flow weights differ
         // (trellis-cli prefixes them with `pixal3d_`; the decoders are shared).

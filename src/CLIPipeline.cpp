@@ -13688,9 +13688,7 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
             "(border locking sets a floor around ~500; TRELLIS.2 raw decodes are "
             "~150k at res 512 / ~300k cascade / up to several million uncapped)\n"
             "  --texture-size N      64..8192 px for the baked maps (xatlas treats it as a hint)\n"
-            "  --tex-res 512|1024    TRELLIS.2 texture VOLUME resolution (separate from the bake size;\n"
-            "                        default 512 on the balanced/high cascades: trellis.cpp's res-1024\n"
-            "                        texture flow gives wrong materials, e.g. metallic cloth)\n"
+            "  --tex-res 512|1024    TRELLIS.2 texture VOLUME resolution (separate from the bake size)\n"
             "  a roblox-* preset with a custom value past its platform limit is honoured and warned about\n");
         cliWrite(listing);
         return 0;

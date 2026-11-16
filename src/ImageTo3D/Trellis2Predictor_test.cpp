@@ -209,18 +209,3 @@ TEST(Trellis2PredictorTest, SecondConcurrentGenerationIsRefused)
         << later.error.toStdString();
 #endif   // !Q_OS_WIN
 }
-
-TEST(Trellis2PredictorTest, TextureVolumeDefaultsTo512OnTheCascades)
-{
-    // trellis.cpp's res-1024 texture flow gives wrong materials (a navy suit
-    // came back metallic teal next to Microsoft's PyTorch run), so AUTO uses
-    // the 512 texture volume on the 1024/1536 cascades.
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(0, 1024, false), 512);
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(0, 1536, false), 512);
-    // A 512 generation needs no flag; Pixal3D has no res-512 texture flow.
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(0, 512, false), 0);
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(0, 1024, true), 0);
-    // An explicit request always wins.
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(1024, 1024, false), 1024);
-    EXPECT_EQ(Trellis2Predictor::effectiveTexVolumeRes(512, 1536, true), 512);
-}
