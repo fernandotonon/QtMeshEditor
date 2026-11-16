@@ -236,6 +236,29 @@ TEST(MeshGenBakerTest, TangentsFollowUAndHandedness)
     EXPECT_FLOAT_EQ(m[3], -1.0f);
 }
 
+TEST(MeshGenBakerTest, ViewportTangentsUseOgresParity)
+{
+    // The viewport shader rebuilds B = cross(N, T) * w with Ogre's parity,
+    // which TangentSpaceCalc::calculateParity defines as -1 when
+    // (dP/du x dP/dv) . n >= 0 — the REVERSE of the textbook w. Every baked
+    // normal map encodes against that (Trellis2Bake kViewportBitangentSign),
+    // so tangents written into Ogre buffers must carry it: the textbook w
+    // inverted the green channel per UV chart and lit half a generated face
+    // from the wrong side along a chart border.
+    const std::vector<float> n{0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::vector<float> uv{0, 0, 1, 0, 1, 1, 0, 1};          // u x v along +n
+    const std::vector<float> uvMirror{0, 1, 1, 1, 1, 0, 0, 0};    // u x v along -n
+    const auto t = MeshGenBaker::computeViewportTangents(kQuadPos, kQuadIdx, uv, n);
+    const auto m = MeshGenBaker::computeViewportTangents(kQuadPos, kQuadIdx, uvMirror, n);
+    const auto textbook = MeshGenBaker::computeTangents(kQuadPos, kQuadIdx, uv, n);
+    for (int v = 0; v < 4; ++v) {
+        EXPECT_FLOAT_EQ(t[4 * v + 3], -1.0f);
+        EXPECT_FLOAT_EQ(m[4 * v + 3], 1.0f);
+        for (int k = 0; k < 3; ++k)   // only w differs
+            EXPECT_FLOAT_EQ(t[4 * v + k], textbook[4 * v + k]);
+    }
+}
+
 TEST(MeshGenBakerTest, TangentsNeverZeroOnDegenerateUv)
 {
     // Every UV collapsed to one point: no usable gradient anywhere. Ogre's

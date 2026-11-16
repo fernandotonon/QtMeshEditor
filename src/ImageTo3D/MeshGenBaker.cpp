@@ -322,4 +322,15 @@ std::vector<float> computeTangents(const std::vector<float>& positions,
     return out;
 }
 
+std::vector<float> computeViewportTangents(const std::vector<float>& positions,
+                                           const std::vector<uint32_t>& indices,
+                                           const std::vector<float>& uvs,
+                                           const std::vector<float>& normals)
+{
+    std::vector<float> t = computeTangents(positions, indices, uvs, normals);
+    for (size_t i = 3; i < t.size(); i += 4)
+        t[i] = -t[i];
+    return t;
+}
+
 } // namespace MeshGenBaker

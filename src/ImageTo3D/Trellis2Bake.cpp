@@ -65,6 +65,10 @@ inline uint64_t packKey(int64_t x, int64_t y, int64_t z)
 // and planar facets wherever the source tilts away from the coarse target (jaw,
 // cheeks, shoulders, folds). Verified in the real viewport on a generated
 // character: this sign gives coherent folds, the textbook one gives blotches.
+// The tangents the viewport receives must therefore carry Ogre's parity too:
+// MeshGenBaker::computeViewportTangents (w negated), never computeTangents'
+// textbook w, or every chart's green channel renders inverted and chart
+// borders show as hard lighting seams.
 constexpr float kViewportBitangentSign = -1.0f;
 
 // Minimum cosine between a target vertex normal and the low-pass SOURCE normal

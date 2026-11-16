@@ -166,8 +166,8 @@ Ogre::Mesh* buildMesh(const MeshGenPredictor::Result& result, const QString& mes
     // MeshGenBaker::computeTangents.
     std::vector<float> tangents;
     if (hasUv)
-        tangents = MeshGenBaker::computeTangents(result.positions, result.indices,
-                                                 result.uvs, normals);
+        tangents = MeshGenBaker::computeViewportTangents(result.positions, result.indices,
+                                                         result.uvs, normals);
     if (hasUv) {
         offset += decl->addElement(0, offset, Ogre::VET_FLOAT2,
                                    Ogre::VES_TEXTURE_COORDINATES, 0).getSize();
