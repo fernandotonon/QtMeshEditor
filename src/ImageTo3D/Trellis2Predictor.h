@@ -68,7 +68,7 @@ public:
         bool partUvIslands = true;  // PartUnwrap islands (see MeshGenPredictor::Options)
         int  supersample   = 1;     // 1 or 2 (2 = 2×2 subsamples per texel)
         bool bakeNormalMap = true;  // source detail normals onto the simplified target
-        int  texVolumeRes  = 0;     // 0 = sidecar default | 512 | 1024
+        int  texVolumeRes  = 0;     // 0 = auto (see effectiveTexVolumeRes) | 512 | 1024
         // Which flow weights the model directory holds. Pixal3D is a fork of
         // TRELLIS.2 that replaces the global DINOv3 cross-attention with
         // view-aligned PROJECTION conditioning; the samplers and decoders are
@@ -122,6 +122,16 @@ public:
     // Compiled in unconditionally (no ONNX needed). What actually gates the
     // backend is runtimeAvailable().
     static bool isAvailable();
+
+    // Texture-volume resolution passed to trellis-cli (--tex-res), 0 = none.
+    // An explicit 512/1024 is honoured. AUTO picks 512 for the 1024/1536
+    // cascades of TRELLIS.2: trellis.cpp's res-1024 texture flow gives cloth
+    // and skin wrong materials next to Microsoft's PyTorch pipeline (same
+    // image + seed: a navy suit came back teal at metallic 0.68 vs 0.01, skin
+    // orange), while its res-512 texture flow on the same 1024 mesh matches
+    // (suit metallic 0.03, navy; skin close). Pixal3D ships no res-512 texture
+    // flow, and a 512 generation needs no flag.
+    static int effectiveTexVolumeRes(int requested, int geometryRes, bool pixal3d);
 
     // The backend has TWO interchangeable runtime flavors (#966):
     //   TrellisCpp    — the C++/GGML trellis.cpp CLI (CUDA/Vulkan/Metal, no
