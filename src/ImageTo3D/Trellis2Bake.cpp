@@ -67,6 +67,10 @@ inline uint64_t packKey(int64_t x, int64_t y, int64_t z)
 // character: this sign gives coherent folds, the textbook one gives blotches.
 constexpr float kViewportBitangentSign = -1.0f;
 
+// Minimum cosine between a target vertex normal and the low-pass SOURCE normal
+// sampled at its closest source point for the source normal to replace it.
+constexpr float kSourceNormalAgreement = 0.9f;
+
 // Area-weighted smooth vertex normals.
 std::vector<float> smoothNormals(const std::vector<float>& positions,
                                  const std::vector<uint32_t>& indices)
@@ -2537,7 +2541,13 @@ BakeResult bake(const std::vector<float>& targetPositions,
             if (!(len3(Ns) > 1e-12f))
                 continue;
             normalize3(Ns);
-            if (dot3(Ns, Nt) > 0.35f)   // roughly the same way as the target
+            // Only when the source agrees closely (~26 degrees). The old
+            // ~70 degree acceptance (0.35) let the low-pass source field tilt
+            // shading across sharp features (hair strands, lapels, ears,
+            // glasses): measured on a TRELLIS.2 character, faces with a vertex
+            // normal > 60 degrees off their own face fell from 4.4% to 1.1%
+            // of the surface area (never replacing at all: 1.16%).
+            if (dot3(Ns, Nt) > kSourceNormalAgreement)
                 std::memcpy(Nt, Ns, sizeof(Ns));
         }
     }
