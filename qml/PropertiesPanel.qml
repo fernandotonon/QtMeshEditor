@@ -227,6 +227,10 @@ Rectangle {
         // Apply the text being typed now (value only updates on Enter / focus loss): call before reading
         // `value` from an action that the user can trigger while still editing.
         function commit() { iifInput.editingFinished() }
+        // editingFinished assigns `text`, which drops its binding to `value`; keep the two in sync
+        // when `value` is set from outside (e.g. a Random button), or the next commit() restores the
+        // stale text.
+        onValueChanged: iifInput.text = String(value)
         width: 56; height: 22; radius: 3
         color: PropertiesPanelController.inputColor
         border.color: iifInput.activeFocus ? PropertiesPanelController.highlightColor
@@ -2768,6 +2772,7 @@ Rectangle {
                 }
                 InspectorButton {
                     text: "Random"
+                    width: 70   // InspectorButton sizes from parent.width; a Row has none
                     clickEnabled: !MeshGenController.busy
                     anchors.verticalCenter: parent.verticalCenter
                     onClicked: mgT2Seed.value = Math.floor(Math.random() * 1000000)

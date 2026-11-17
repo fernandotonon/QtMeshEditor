@@ -524,8 +524,11 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     // 0.48 and gave fully clean seeds where the full-res input gave none.
     // PillowResample is bit-exact with Pillow; skipped when the image already
     // fits (the premultiply round trip would still alter it). Pixal3D was not
-    // measured, so it keeps the previous input.
-    if (!opts.pixal3d) {
+    // measured, so it keeps the previous input. trellis.cpp only: the Python
+    // sidecar runs upstream's preprocess_image itself, and it decides whether
+    // the input carries a matte from the image it receives — a resample could
+    // round a barely-translucent alpha up to opaque and make it refuse the input.
+    if (!opts.pixal3d && kind == RuntimeKind::TrellisCpp) {
         const QSize fit = PillowResample::fitLongSide(subject.size());
         if (fit != subject.size()) {
             const QImage scaled = PillowResample::resizeLikePillow(subject, fit);
