@@ -227,6 +227,10 @@ Rectangle {
         // Apply the text being typed now (value only updates on Enter / focus loss): call before reading
         // `value` from an action that the user can trigger while still editing.
         function commit() { iifInput.editingFinished() }
+        // editingFinished assigns `text`, which drops its binding to `value`; keep the two in sync
+        // when `value` is set from outside (e.g. a Random button), or the next commit() restores the
+        // stale text.
+        onValueChanged: iifInput.text = String(value)
         width: 56; height: 22; radius: 3
         color: PropertiesPanelController.inputColor
         border.color: iifInput.activeFocus ? PropertiesPanelController.highlightColor
@@ -2746,6 +2750,43 @@ Rectangle {
                     property int superValue: superValues[currentIndex]
                 }
             }
+            // Seed: TRELLIS.2 results vary a lot between seeds (the 1024
+            // texture model in particular can make cloth look metallic on
+            // some seeds and not others), so the seed is exposed for re-rolls.
+            Row {
+                spacing: 6
+                visible: mgBackendCombo.t2Selected
+                Text {
+                    text: "Seed"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorIntField {
+                    id: mgT2Seed
+                    width: 90
+                    from: 0; to: 2147483647; value: 42
+                    enabled: !MeshGenController.busy
+                    accessibleLabel: "TRELLIS.2 seed"
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                InspectorButton {
+                    text: "Random"
+                    width: 70   // InspectorButton sizes from parent.width; a Row has none
+                    clickEnabled: !MeshGenController.busy
+                    anchors.verticalCenter: parent.verticalCenter
+                    onClicked: mgT2Seed.value = Math.floor(Math.random() * 1000000)
+                }
+            }
+            Text {
+                visible: mgBackendCombo.t2Selected
+                text: "  Known TRELLIS.2 issue: the 1024 texture model can make cloth look metallic "
+                    + "or shift colours on some seeds. If it does, try another seed."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10
+                wrapMode: Text.WordWrap
+                width: parent.width - 16
+            }
 
             // ---- Shape guide (TRELLIS.2 / Pixal3D) ------------------------------
             // A rough blockout (the selected mesh, or a mesh file) steers where
@@ -3162,6 +3203,8 @@ Rectangle {
                         genOptions["preset"] = mgT2Preset.presetValue
                         genOptions["texture_size"] = mgT2Tex.sizeValue
                         genOptions["texture_supersample"] = mgT2Super.superValue
+                        mgT2Seed.commit()
+                        genOptions["seed"] = mgT2Seed.value
                         if (mgGuide.active && mgGuide.spec.length > 0) {
                             genOptions["guide"] = mgGuide.spec
                             genOptions["guide_strength"] = mgGuideStrength.value

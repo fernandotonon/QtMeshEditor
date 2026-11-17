@@ -65,7 +65,20 @@ inline uint64_t packKey(int64_t x, int64_t y, int64_t z)
 // and planar facets wherever the source tilts away from the coarse target (jaw,
 // cheeks, shoulders, folds). Verified in the real viewport on a generated
 // character: this sign gives coherent folds, the textbook one gives blotches.
+// The tangents the viewport receives must therefore carry Ogre's parity too:
+// MeshGenBaker::computeViewportTangents (w negated), never computeTangents'
+// textbook w, or every chart's green channel renders inverted and chart
+// borders show as hard lighting seams.
 constexpr float kViewportBitangentSign = -1.0f;
+
+// Minimum cosine between a target vertex normal and the low-pass SOURCE normal
+// sampled at its closest source point for the source normal to replace it.
+constexpr float kSourceNormalAgreement = 0.9f;
+// Half-width of the blend around kSourceNormalAgreement (cosine): a hard cut
+// let two neighbours whose agreement straddles the threshold land ~26 degrees
+// apart. Below 0.86 (~31 degrees) the target normal is kept, above 0.94
+// (~20 degrees) the source normal is used, smoothstep in between.
+constexpr float kSourceNormalBlend = 0.04f;
 
 // Area-weighted smooth vertex normals.
 std::vector<float> smoothNormals(const std::vector<float>& positions,
@@ -2537,8 +2550,28 @@ BakeResult bake(const std::vector<float>& targetPositions,
             if (!(len3(Ns) > 1e-12f))
                 continue;
             normalize3(Ns);
-            if (dot3(Ns, Nt) > 0.35f)   // roughly the same way as the target
+            // Only when the source agrees closely (~26 degrees, blended over
+            // ~20..31 degrees). The old
+            // ~70 degree acceptance (0.35) let the low-pass source field tilt
+            // shading across sharp features (hair strands, lapels, ears,
+            // glasses): measured on a TRELLIS.2 character, faces with a vertex
+            // normal > 60 degrees off their own face fell from 4.4% to 1.1%
+            // of the surface area (never replacing at all: 1.16%).
+            const float lo = kSourceNormalAgreement - kSourceNormalBlend;
+            const float hi = kSourceNormalAgreement + kSourceNormalBlend;
+            const float x = std::clamp((dot3(Ns, Nt) - lo) / (hi - lo), 0.0f, 1.0f);
+            const float w = x * x * (3.0f - 2.0f * x);
+            if (w >= 1.0f) {
                 std::memcpy(Nt, Ns, sizeof(Ns));
+            } else if (w > 0.0f) {
+                float Nb[3];
+                for (int k = 0; k < 3; ++k)
+                    Nb[k] = Nt[k] + w * (Ns[k] - Nt[k]);
+                if (len3(Nb) > 1e-12f) {   // the two are within ~31 degrees, never opposite
+                    normalize3(Nb);
+                    std::memcpy(Nt, Nb, sizeof(Nb));
+                }
+            }
         }
     }
     std::vector<float> tTangent;    // xyzw per vertex (w = handedness)

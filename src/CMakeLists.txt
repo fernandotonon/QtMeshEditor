@@ -304,6 +304,7 @@ ImageTo3D/MeshRefine.cpp
 ImageTo3D/MeshGenCleanup.cpp
 ImageTo3D/MeshGenBaker.cpp
 ImageTo3D/PartUnwrap.cpp
+ImageTo3D/PillowResample.cpp
 ImageTo3D/MeshGenPredictor.cpp
 ImageTo3D/GameReadyPresets.cpp
 ImageTo3D/TripoSGPredictor.cpp

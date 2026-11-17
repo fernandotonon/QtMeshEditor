@@ -115,7 +115,7 @@ if(CMAKE_OSX_DEPLOYMENT_TARGET)
          -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
 endif()
 
-set(_trellis_git_tag 53db2ce3f2c41f753335ab91654c7cb9dcaa1631)
+set(_trellis_git_tag c0a11752e1e5e3a0ec8118080df2e8c826c3ef10)
 # With UPDATE_DISCONNECTED, CMake < 3.27 does not re-clone when only GIT_TAG
 # changes, so an existing build tree would keep building the old checkout.
 # Record the pin and drop the clone state when it moves.

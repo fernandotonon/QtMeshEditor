@@ -1,6 +1,7 @@
 #include "Trellis2Predictor.h"
 
 #include "BackgroundRemover.h"
+#include "PillowResample.h"
 #include "Trellis2Bake.h"
 #include "Trellis2Interchange.h"
 #include "ShapeGuide.h"
@@ -515,6 +516,27 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
         }
     }
 
+    // ---- 1b. upstream input preparation (TRELLIS.2 only) ----------------------
+    // Microsoft's preprocess_image shrinks the input to a 1024 px long side
+    // with Pillow's LANCZOS before cropping. The res-1024 texture flow reacts
+    // to that resample: measured over seeds 1-6 on a navy-suit character, this
+    // (plus the tight crop below) took the mean suit metallic from 0.69 to
+    // 0.48 and gave fully clean seeds where the full-res input gave none.
+    // PillowResample is bit-exact with Pillow; skipped when the image already
+    // fits (the premultiply round trip would still alter it). Pixal3D was not
+    // measured, so it keeps the previous input. trellis.cpp only: the Python
+    // sidecar runs upstream's preprocess_image itself, and it decides whether
+    // the input carries a matte from the image it receives — a resample could
+    // round a barely-translucent alpha up to opaque and make it refuse the input.
+    if (!opts.pixal3d && kind == RuntimeKind::TrellisCpp) {
+        const QSize fit = PillowResample::fitLongSide(subject.size());
+        if (fit != subject.size()) {
+            const QImage scaled = PillowResample::resizeLikePillow(subject, fit);
+            if (!scaled.isNull())
+                subject = scaled;
+        }
+    }
+
     // ---- 2. sidecar process --------------------------------------------------
     QTemporaryDir tmp;
     if (!tmp.isValid())
@@ -672,6 +694,10 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (opts.texVolumeRes == 512 || opts.texVolumeRes == 1024)
         args << QStringLiteral("--tex-res")
              << QString::number(opts.texVolumeRes);
+    // Upstream crops to the subject bbox with no margin; trellis-cli's
+    // default is x1.10. See step 1b for the measurement.
+    if (!opts.pixal3d)
+        args << QStringLiteral("--crop-margin") << QStringLiteral("1.0");
     if (opts.pixal3d) {
         // Same runtime, same model directory — only the flow weights differ
         // (trellis-cli prefixes them with `pixal3d_`; the decoders are shared).
@@ -796,6 +822,13 @@ MeshGenPredictor::Result Trellis2Predictor::predict(
     if (cancelled)
         return failResult(QStringLiteral("cancelled"));
     if (proc.exitStatus() != QProcess::NormalExit || proc.exitCode() != 0) {
+        if (errBuf.contains("unknown option: --crop-margin"))
+            return failResult(QStringLiteral(
+                "trellis2: the trellis-cli at %1 is older than this QtMesh Editor (no --crop-margin). "
+                "If that path is an older install set by %2 or the QSettings key %3, clear it to use the "
+                "bundled runtime; otherwise rebuild the bundled runtime (cmake/TrellisCpp.cmake).")
+                    .arg(QDir::toNativeSeparators(cli), QLatin1String(kEnvCliVar),
+                         QLatin1String(kCliSettingsKey)));
         if (guideControlUsed && errBuf.contains("unknown option: --ss-control"))
             // Name the binary that ran: the usual cause is a stale override
             // (QTMESH_TRELLIS2_CLI / QSettings ai/trellis2Cli) pointing at an

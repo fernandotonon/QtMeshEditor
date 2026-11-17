@@ -105,6 +105,20 @@ std::vector<float> computeTangents(const std::vector<float>& positions,
                                    const std::vector<float>& uvs,
                                    const std::vector<float>& normals);
 
+// computeTangents with the handedness (w) NEGATED: the parity the viewport's
+// normal-mapping shader expects. Ogre's own TangentSpaceCalc stores the
+// reverse of the textbook parity ("the 'V' texture coordinate is actually
+// left handed") and the RTSS rebuilds the bitangent as cross(N, T) * w, so
+// the bakes (Trellis2Bake's kViewportBitangentSign) encode against that
+// convention. Use THIS for every tangent written into an Ogre vertex buffer;
+// writing the textbook w inverts the normal map's green channel per UV
+// chart, which shows as hard lighting seams along chart borders (half a face
+// lit as if from the other side).
+std::vector<float> computeViewportTangents(const std::vector<float>& positions,
+                                           const std::vector<uint32_t>& indices,
+                                           const std::vector<float>& uvs,
+                                           const std::vector<float>& normals);
+
 } // namespace MeshGenBaker
 
 #endif // MESH_GEN_BAKER_H

@@ -1757,7 +1757,7 @@ std::vector<float> readVertexFloats(const Ogre::VertexData* vd,
 
 } // namespace
 
-// Recomputes the VES_TANGENT values of `mesh` with MeshGenBaker::computeTangents
+// Recomputes the VES_TANGENT values of `mesh` with MeshGenBaker::computeViewportTangents
 // (double-precision UV-area weighting, Gram-Schmidt against the normal, and a
 // perpendicular fallback when a vertex has no usable UV gradient). The element
 // must already exist as float4 (buildTangentVectors creates it). Returns how
@@ -1797,7 +1797,10 @@ int MeshImporterExporter::recomputeTangentsRobust(Ogre::Mesh* mesh)
         }
         if (idx.empty())
             return;
-        const std::vector<float> tan = MeshGenBaker::computeTangents(pos, idx, uv, nrm);
+        // Ogre's parity (w negated): the element was created by buildTangentVectors
+        // with storeParityInW, and the RTSS and every baked normal map in the
+        // project follow that convention.
+        const std::vector<float> tan = MeshGenBaker::computeViewportTangents(pos, idx, uv, nrm);
 
         auto buf = vd->vertexBufferBinding->getBuffer(te->getSource());
         Ogre::HardwareBufferLockGuard tl(buf, Ogre::HardwareBuffer::HBL_NORMAL);
