@@ -123,8 +123,8 @@ struct Params {
     Hair::Params hairProcedural;
     Hair::FitAdjust hairFit;
     /// Procedural clothes (see Clothing.h): a style id ("none", "tshirt", "longsleeve", "tank" / "none", "shorts", "pants") and a colour each.
-    QString topStyle = QStringLiteral("none");
-    QString bottomStyle = QStringLiteral("none");
+    QString topStyle = QStringLiteral("tshirt");
+    QString bottomStyle = QStringLiteral("shorts");
     Rgb topColour{0.80f, 0.80f, 0.78f};
     Rgb bottomColour{0.24f, 0.31f, 0.47f};
     /// Rest the lids lower than the sculpted "open" shape (the old default looked too wide open) and make the blink shapes close the eye
@@ -214,6 +214,9 @@ struct BuildReport {
     int joints = 0;
     int seamTriangles = 0;           ///< triangles of the strip that stitches the head's neck to the body
     int morphTargets = 0;
+    int mouthDeltasRepaired = 0;        ///< (channel, vertex) mouth-corner deltas replaced by repairMouthMorphs
+    int mouthHolesCapped = 0;           ///< triangles closing the slits beside the mouth corners
+    int mouthBridgeTriangles = 0;       ///< the strip joining the lips to the mouth lining (native head)
     float neckCutY = 0.0f;           ///< world y (m) of the neck cut
     float headScale = 1.0f;
     LipFrame lips;

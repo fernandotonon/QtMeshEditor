@@ -1658,52 +1658,52 @@ void EditableMesh::recalculateNormalsFlat()
     }
 }
 
-int EditableMesh::countDegenerateTriangles(float epsilon) const
+bool EditableMesh::isDegenerateTriangle(const Ogre::Vector3& v0, const Ogre::Vector3& v1, const Ogre::Vector3& v2, float relativeEps)
+{
+    const float longest2 = std::max({(v1 - v0).squaredLength(), (v2 - v1).squaredLength(), (v0 - v2).squaredLength()});
+    if (longest2 <= 0.0f)
+        return true;   // all three corners coincide
+    // height over the longest edge = |cross| / longest^2 (twice the area over the base, over the base again)
+    return (v1 - v0).crossProduct(v2 - v0).length() < relativeEps * longest2;
+}
+
+namespace {
+bool triangleIsDegenerate(const EditableSubMesh& sub, const EditableTriangle& tri, float relativeEps)
+{
+    const uint32_t a = tri.indices[0], b = tri.indices[1], c = tri.indices[2];
+    if (a == b || b == c || a == c)
+        return true;
+    return EditableMesh::isDegenerateTriangle(sub.vertices[a].position, sub.vertices[b].position, sub.vertices[c].position,
+                                              relativeEps);
+}
+
+bool triangleInRange(const EditableSubMesh& sub, const EditableTriangle& tri)
+{
+    return tri.indices[0] < sub.vertices.size() && tri.indices[1] < sub.vertices.size() && tri.indices[2] < sub.vertices.size();
+}
+}  // namespace
+
+int EditableMesh::countDegenerateTriangles(float relativeEps) const
 {
     int count = 0;
-    for (const auto& sub : m_subMeshes) {
-        for (const auto& tri : sub.triangles) {
-            if (tri.indices[0] >= sub.vertices.size() ||
-                tri.indices[1] >= sub.vertices.size() ||
-                tri.indices[2] >= sub.vertices.size())
-                continue;
-
-            const Ogre::Vector3& v0 = sub.vertices[tri.indices[0]].position;
-            const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
-            const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
-
-            float area = (v1 - v0).crossProduct(v2 - v0).length();
-            if (area < epsilon)
+    for (const auto& sub : m_subMeshes)
+        for (const auto& tri : sub.triangles)
+            if (triangleInRange(sub, tri) && triangleIsDegenerate(sub, tri, relativeEps))
                 ++count;
-        }
-    }
     return count;
 }
 
-int EditableMesh::removeDegenerateTriangles(float epsilon)
+int EditableMesh::removeDegenerateTriangles(float relativeEps)
 {
     int totalRemoved = 0;
     for (auto& sub : m_subMeshes) {
         std::vector<EditableTriangle> kept;
         kept.reserve(sub.triangles.size());
         for (const auto& tri : sub.triangles) {
-            if (tri.indices[0] >= sub.vertices.size() ||
-                tri.indices[1] >= sub.vertices.size() ||
-                tri.indices[2] >= sub.vertices.size()) {
+            if (!triangleInRange(sub, tri) || triangleIsDegenerate(sub, tri, relativeEps))
                 ++totalRemoved;
-                continue;
-            }
-
-            const Ogre::Vector3& v0 = sub.vertices[tri.indices[0]].position;
-            const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
-            const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
-
-            float area = (v1 - v0).crossProduct(v2 - v0).length();
-            if (area < epsilon) {
-                ++totalRemoved;
-            } else {
+            else
                 kept.push_back(tri);
-            }
         }
         sub.triangles = std::move(kept);
     }

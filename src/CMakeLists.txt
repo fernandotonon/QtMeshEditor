@@ -249,6 +249,7 @@ CharacterGen/HairImport.cpp
 CharacterGen/EyeTexture.cpp
 CharacterGen/Eyelashes.cpp
 CharacterGen/LidClose.cpp
+CharacterGen/MouthMorphRepair.cpp
 CharacterGen/Clothing.cpp
 CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
