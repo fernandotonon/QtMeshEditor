@@ -585,15 +585,25 @@ public:
     bool isFlatNormals() const { return m_flatNormals; }
 
     /**
-     * @brief Count the number of degenerate triangles (area below epsilon).
+     * @brief Whether a triangle is degenerate: two corners share a vertex index, or its height is below `relativeEps` times its
+     * own longest edge (collinear or coincident corners). The test is SCALE-INVARIANT: an absolute area threshold flagged every
+     * small but well-shaped triangle of a model built in metres (a 1 mm triangle has a cross product of 1e-6) and "removing" them
+     * punched holes into teeth, eyes and lips.
      */
-    int countDegenerateTriangles(float epsilon = 1e-6f) const;
+    static bool isDegenerateTriangle(const Ogre::Vector3& v0, const Ogre::Vector3& v1, const Ogre::Vector3& v2,
+                                     float relativeEps = 1e-5f);
 
     /**
-     * @brief Remove degenerate triangles (area below epsilon).
+     * @brief Count the degenerate triangles (see isDegenerateTriangle).
+     */
+    int countDegenerateTriangles(float relativeEps = 1e-5f) const;
+
+    /**
+     * @brief Remove the degenerate triangles (see isDegenerateTriangle). Vertices are left in place, so UVs, skin weights and
+     * morph targets keep addressing the same vertices.
      * @return Number of triangles removed.
      */
-    int removeDegenerateTriangles(float epsilon = 1e-6f);
+    int removeDegenerateTriangles(float relativeEps = 1e-5f);
 
     /**
      * @brief Calculate the axis-aligned bounding box of the entire mesh.

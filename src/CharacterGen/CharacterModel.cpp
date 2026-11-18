@@ -3,6 +3,7 @@
 #include "Clothing.h"
 #include "Eyelashes.h"
 #include "LidClose.h"
+#include "MouthMorphRepair.h"
 #include "HairTint.h"
 #include <QImage>
 #include <QBuffer>
@@ -27,6 +28,7 @@
 #include <limits>
 #include <map>
 #include <random>
+#include <set>
 #include <unordered_map>
 
 namespace CharacterGen {
@@ -504,6 +506,11 @@ QStringList colourNames(ColourKind kind)
     return n;
 }
 
+// The ICT mouth interior is a little large for the MHR head: at jawOpen 1 the back of the lower gums and teeth came out through the
+// underside of the jaw (~190 vertices on every seed measured). Scaled by 0.85 (its motion too) about its own centre and 5 mm
+// forward, nothing comes out and the teeth sit closer behind the lips (6 mm put its front rim through the closed lips).
+constexpr float kMouthScale = 0.85f;
+constexpr float kMouthForward = 0.005f;   // metres, towards the face
 constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
 
 QString characterEyeDir()
@@ -1016,6 +1023,107 @@ bool addHairStudioHair(const Params& p, const Dna::Mesh& body, Dna::Rig& rig, Bu
     return true;
 }
 
+// The mouth corners of the MHR head (see MouthMorphRepair.h). The lip-seam landmarks cover the middle ~70 % of the mouth, so the
+// corners lie ~1.4x their half width from the centre; 1.8x keeps the whole corner patch and stays clear of the nose and the chin.
+static bool mouthRegionOf(const Assets& a, const std::vector<float>& positions, int V, std::array<double, 3>* centre, double* radius)
+{
+    std::array<double, 3> c{0.0, 0.0, 0.0};
+    if (a.landmarkLip.empty()) return false;
+    for (int32_t v : a.landmarkLip) {
+        if (v < 0 || v >= V) return false;
+        for (size_t k = 0; k < 3; ++k) c[k] += positions[size_t(v) * 3 + k];
+    }
+    for (double& x : c) x /= double(a.landmarkLip.size());
+    double half = 0.0;
+    for (int32_t v : a.landmarkLip) half = std::max(half, std::fabs(double(positions[size_t(v) * 3]) - c[0]));
+    if (half <= 0.0) return false;
+    *centre = c;
+    *radius = half * 1.8;
+    return true;
+}
+
+// Append a reversed copy of each listed face. The copies get their own layouts with the normals negated, so they shade like a
+// surface facing the other way instead of going dark. Exactly one of the pair faces the camera, so they never fight.
+static void appendBackFaces(Dna::Mesh& body, const std::vector<size_t>& faceIndices)
+{
+    std::unordered_map<uint32_t, uint32_t> flipped;   // original layout -> flipped layout
+    for (size_t fi : faceIndices) {
+        std::vector<uint32_t> rev(body.faces[fi].rbegin(), body.faces[fi].rend());
+        for (uint32_t& li : rev) {
+            auto it = flipped.find(li);
+            if (it == flipped.end()) {
+                Dna::Mesh::Layout l = body.layouts[li];
+                const uint32_t ni = uint32_t(body.normals.size() / 3);
+                for (int k = 0; k < 3; ++k) body.normals.push_back(-body.normals[size_t(l.normal) * 3 + size_t(k)]);
+                l.normal = ni;
+                body.layouts.push_back(l);
+                it = flipped.emplace(li, uint32_t(body.layouts.size() - 1)).first;
+            }
+            li = it->second;
+        }
+        body.faces.push_back(std::move(rev));
+    }
+}
+
+// The inside of the head, seen through the open mouth. The MHR head is a single skin with no cavity, and ICT's cavity walls (which
+// the mouth interior brings) are narrower than the MHR cheeks: looking into the mouth past them showed the culled back of the skin
+// (the cheeks, the back of the head, the neck), i.e. the background. Reversed copies of the head and neck skin give it an inner
+// surface; every copy samples one texel of the lips, so it reads as the inside of the mouth. From outside the copies always face away
+// (they are the back of a closed surface), so they are culled or hidden behind the skin. The skin around an open eye is left out: the
+// gap between the lids and the eyeball must not show lip colour.
+static void appendMouthLining(Dna::Mesh& body, size_t forwardFaces, const std::array<double, 3>& centre, uint32_t liningUv,
+                              const std::vector<size_t>& skip, const std::vector<std::array<float, 3>>& openEyes)
+{
+    constexpr double kReach = 0.25;     // m from the mouth centre: the whole head and the neck
+    constexpr double kEyeClear = 0.0165; // m around an open eye's centre: the eyeball (~1.4 cm) and the lid opening around it
+    const std::set<size_t> skipped(skip.begin(), skip.end());
+    std::vector<size_t> lining;
+    for (size_t fi = 0; fi < forwardFaces; ++fi) {
+        if (skipped.count(fi)) continue;
+        double c[3] = {0.0, 0.0, 0.0};
+        for (uint32_t li : body.faces[fi])
+            for (size_t k = 0; k < 3; ++k) c[k] += body.positions[size_t(body.layouts[li].position) * 3 + k];
+        for (double& x : c) x /= double(body.faces[fi].size());
+        const auto near = [&c](const std::array<double, 3>& p, double r) {
+            const double dx = c[0] - p[0], dy = c[1] - p[1], dz = c[2] - p[2];
+            return dx * dx + dy * dy + dz * dz <= r * r;
+        };
+        if (!near(centre, kReach)) continue;
+        if (std::any_of(openEyes.begin(), openEyes.end(),
+                        [&near](const std::array<float, 3>& e) { return near({double(e[0]), double(e[1]), double(e[2])}, kEyeClear); }))
+            continue;
+        lining.push_back(fi);
+    }
+    const size_t first = body.faces.size();
+    appendBackFaces(body, lining);
+    std::set<uint32_t> relaid;
+    for (size_t fi = first; fi < body.faces.size(); ++fi)
+        for (uint32_t li : body.faces[fi])
+            if (relaid.insert(li).second) body.layouts[li].uv = liningUv;
+}
+
+// The body faces (indices into body.faces, forward faces only) that the expression shapes turn over at the mouth corners.
+static std::vector<size_t> mouthBackFaceCandidates(const std::vector<int32_t>& faces, int channels, const Dna::Mesh& body,
+                                                   size_t forwardFaces, int V, const std::array<double, 3>& centre, double radius,
+                                                   const std::vector<float>& arkit)
+{
+    std::set<std::array<uint32_t, 3>> turned;
+    for (int32_t f : mouthFacesTurnedOver(body.positions, V, faces, centre, radius, arkit, channels)) {
+        std::array<uint32_t, 3> k{uint32_t(faces[size_t(f) * 3]), uint32_t(faces[size_t(f) * 3 + 1]), uint32_t(faces[size_t(f) * 3 + 2])};
+        std::sort(k.begin(), k.end());
+        turned.insert(k);
+    }
+    std::vector<size_t> out;
+    for (size_t fi = 0; fi < forwardFaces && !turned.empty(); ++fi) {
+        const auto& face = body.faces[fi];
+        if (face.size() != 3) continue;
+        std::array<uint32_t, 3> k{body.layouts[face[0]].position, body.layouts[face[1]].position, body.layouts[face[2]].position};
+        std::sort(k.begin(), k.end());
+        if (turned.count(k)) out.push_back(fi);
+    }
+    return out;
+}
+
 // The lips of the built body: the lip-seam landmarks give the centre and the width of the mouth (the seam covers the middle ~70 % of
 // it). Expressed in the final coordinates, i.e. after the 180 degree turn about Y that faces the character towards -Z.
 LipFrame lipFrameOf(const Assets& a, const Dna::Mesh& body, bool facePlusZ)
@@ -1518,6 +1626,32 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             body.faces.push_back(std::move(face));
         }
     }
+    // The few-vertex slits beside the mouth corners open into holes with the jaw: close them (see mouthHoleCaps). The caps join the
+    // faces the mouth repair works on, so the corner opens as one surface.
+    std::vector<int32_t> mouthFaces = a.mhrFaces;
+    if (p.nativeHead) {
+        std::array<double, 3> centre{};
+        double radius = 0.0;
+        if (mouthRegionOf(a, body.positions, V, &centre, &radius)) {
+            const std::vector<int32_t> caps = mouthHoleCaps(body.positions, V, a.mhrFaces, centre, radius);
+            for (size_t i = 0; i + 2 < caps.size(); i += 3) {
+                std::vector<uint32_t> face;
+                for (size_t k = 0; k < 3; ++k) {
+                    const uint32_t pi = uint32_t(caps[i + k]), ti = uvOfPosition[pi];
+                    const uint64_t key = (uint64_t(pi) << 32) | ti;
+                    auto it = seenLayouts.find(key);
+                    if (it == seenLayouts.end()) {
+                        it = seenLayouts.emplace(key, uint32_t(body.layouts.size())).first;
+                        body.layouts.push_back({pi, ti, pi});
+                    }
+                    face.push_back(it->second);
+                }
+                body.faces.push_back(std::move(face));
+            }
+            mouthFaces.insert(mouthFaces.end(), caps.begin(), caps.end());
+            rep.mouthHolesCapped = int(caps.size() / 3);
+        }
+    }
     // Soften the crease below the joint: relax the body rows just under the hole (the hole's own edge stays put, the strip is
     // stitched to it) so the body's slope eases into the head's flare instead of meeting it at an angle.
     if (!cutPoly.empty()) {
@@ -1698,27 +1832,12 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         }
     }
     body.normals = positionNormals(body.positions, body.faces, body.layouts);
+    // Faces appended after this point are reversed copies (the seam's back, the mouth corners, the head lining). The garments are
+    // cut from the outward skin only: a reversed copy cancels its face's normal and would be cut into the garment as well.
+    const size_t outwardFaces = body.faces.size();
     // both sides of the stitching strip render: the back faces get their own layouts with the normals negated, so they shade
     // like a surface facing the other way instead of going dark
-    {
-        std::unordered_map<uint32_t, uint32_t> flipped;   // original layout -> flipped layout
-        for (size_t fi : seamFaces) {
-            std::vector<uint32_t> rev(body.faces[fi].rbegin(), body.faces[fi].rend());
-            for (uint32_t& li : rev) {
-                auto it = flipped.find(li);
-                if (it == flipped.end()) {
-                    Dna::Mesh::Layout l = body.layouts[li];
-                    const uint32_t ni = uint32_t(body.normals.size() / 3);
-                    for (int k = 0; k < 3; ++k) body.normals.push_back(-body.normals[size_t(l.normal) * 3 + size_t(k)]);
-                    l.normal = ni;
-                    body.layouts.push_back(l);
-                    it = flipped.emplace(li, uint32_t(body.layouts.size() - 1)).first;
-                }
-                li = it->second;
-            }
-            body.faces.push_back(std::move(rev));
-        }
-    }
+    appendBackFaces(body, seamFaces);
     rep.bodyVertices = int(body.positions.size() / 3);
     rep.bodyTriangles = int(body.faces.size());
 
@@ -1804,6 +1923,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     // The mouth interior (ICT gums, tongue, teeth) follows the lips of this face: its centre sits at a fixed offset from the centroid
     // of the lip sheet's vertices (fitted by hand on one character).
     float mouthShift[3] = {0.0f, 0.008065f + 0.004f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
+    float mouthCentre[3] = {0.0f, 0.0f, 0.0f};   // the interior is scaled about this point (after the shift)
+    float mouthScale = 1.0f;
     if (p.nativeHead && !a.landmarkLip.empty()) {
         double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
         for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
@@ -1813,7 +1934,13 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 for (int v = q->v0; v <= q->v1; ++v) { for (int k = 0; k < 3; ++k) C[k] += headPos[size_t(v) * 3 + size_t(k)]; ++cn; }
         if (cn > 0) {
             const double om[3] = {0.0, -0.008544 + 0.004, -0.031834};   // offset from the lip landmark: 0.5 mm below (a tooth length, 8 mm, higher than the first fit: with the jaw open the upper teeth showed and the lower ones did not), 31.8 mm behind
-            for (int k = 0; k < 3; ++k) mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
+            for (int k = 0; k < 3; ++k) {
+                mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
+                mouthCentre[k] = float(C[k] / double(cn)) + mouthShift[k];
+            }
+            mouthShift[2] += kMouthForward;
+            mouthCentre[2] += kMouthForward;
+            mouthScale = kMouthScale;
         }
     }
     bool pupilChannels = false;
@@ -1836,6 +1963,39 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             if (rebased[0] || rebased[1]) recomputeBodyNormals(body, seamFaces.size(), V);
         }
     }
+    // ---- mouth corners: the shipped deltas tear the crumpled corner patch into dark shards (jawOpen, mouthClose, ...) ----
+    if (p.nativeHead && !a.landmarkLip.empty() && arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3) {
+        if (arkit != &arkitTuned) {
+            arkitTuned = *arkit;
+            arkit = &arkitTuned;
+        }
+        std::array<double, 3> centre{};
+        double radius = 0.0;
+        if (mouthRegionOf(a, body.positions, V, &centre, &radius)) {
+            rep.mouthDeltasRepaired = repairMouthMorphs(body.positions, V, mouthFaces, centre, radius, arkitTuned, a.ictExpressions);
+            // what is still turned over is the fold of the lip corner itself: render it from both sides (see mouthFacesTurnedOver)
+            // the corner fold (the faces the shapes turn over, and the slit caps) blends its normals from the upper lip to the lower lip
+            {
+                std::set<int32_t> foldVertices;
+                for (int32_t f : mouthFacesTurnedOver(body.positions, V, mouthFaces, centre, radius, arkitTuned, a.ictExpressions))
+                    for (size_t k = 0; k < 3; ++k) foldVertices.insert(mouthFaces[size_t(f) * 3 + k]);
+                for (size_t i = a.mhrFaces.size(); i < mouthFaces.size(); ++i) foldVertices.insert(mouthFaces[i]);
+                blendCornerNormals(V, mouthFaces, std::vector<int32_t>(foldVertices.begin(), foldVertices.end()), body.normals);
+            }
+            const size_t forward = body.faces.size() - seamFaces.size();
+            const std::vector<size_t> corner = mouthBackFaceCandidates(mouthFaces, a.ictExpressions, body, forward, V, centre, radius, arkitTuned);
+            appendBackFaces(body, corner);
+            // the lining samples the lips at a lip-seam vertex (the inner edge of the lip)
+            const uint32_t lipVertex = uint32_t(a.landmarkLip.front());
+            const auto lipLayout = std::find_if(body.layouts.begin(), body.layouts.end(),
+                                                [lipVertex](const Dna::Mesh::Layout& l) { return l.position == lipVertex; });
+            std::vector<std::array<float, 3>> openEyes;
+            for (const EyeSeat& e : eyeSeat)
+                if (p.openEyes && e.seated) openEyes.push_back(e.centre);
+            if (lipLayout != body.layouts.end()) appendMouthLining(body, forward, centre, lipLayout->uv, corner, openEyes);
+            rep.bodyTriangles = int(body.faces.size());
+        }
+    }
     const EyeMesh* custom = wantEyes ? customEyeMesh() : nullptr;
     const EyeMesh* eyeObj = !wantEyes ? nullptr : (custom ? custom : proceduralEyeMesh());
     if (eyeObj && !custom) rep.eyeTexturePng = bakeEyeTexturePng(p.eye);
@@ -1851,7 +2011,12 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         std::vector<int> globalOf;
         std::unordered_map<uint64_t, uint32_t> seen;
         m.uvs = a.ictTexcoords;
-        for (const char* pn : g.parts) {
+        // The MHR head has no mouth cavity (its lip sheet is cut open, see scripts/build-character-assets.py), and ICT's cavity walls
+        // belong to the face mesh it replaces: without them the open mouth showed the inside of the head (and through it, the
+        // background) between the gums and the lip corners. They join the interior, placed and moved with it.
+        std::vector<const char*> parts = g.parts;
+        if (p.nativeHead && std::strcmp(g.mesh, "head_mouth") == 0) parts.push_back("mouth_socket");
+        for (const char* pn : parts) {
             const IctPart* part = a.part(QString::fromLatin1(pn));
             if (!part) { rep.warnings << QStringLiteral("ICT part '%1' is missing").arg(QString::fromLatin1(pn)); continue; }
             // ICT's sclera is a full shell in FRONT of the iris (meant to be translucent over it). With flat colours it would hide
@@ -1887,9 +2052,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         globalOf.push_back(gv);
                         for (int i = 0; i < 3; ++i) m.positions.push_back(headPos[size_t(gv) * 3 + i]);
                         if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) {
-                            m.positions.back() += mouthShift[2];
-                            m.positions[m.positions.size() - 2] += mouthShift[1];
-                            m.positions[m.positions.size() - 3] += mouthShift[0];
+                            float* q = &m.positions[m.positions.size() - 3];
+                            for (size_t k = 0; k < 3; ++k) q[k] = mouthCentre[k] + mouthScale * (q[k] + mouthShift[k] - mouthCentre[k]);
                         }
                     }
                     const uint32_t li = uint32_t(local[size_t(gv)]), ti = uint32_t(a.polyTexcoord[b + k]);
@@ -1940,7 +2104,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
         for (int e = 0; e < a.ictExpressions; ++e) {
             const QString& shapeName = e < a.expressionNames.size() ? a.expressionNames[e] : QString();
             const bool jawShape = shapeName.startsWith(QLatin1String("jaw"));
-            const float follow = (mouthInterior && jawShape) ? kMouthJawFollow : 1.0f;
+            // the interior is scaled as a whole (see kMouthScale), its motion included
+            const float follow = ((mouthInterior && jawShape) ? kMouthJawFollow : 1.0f) * (mouthInterior ? mouthScale : 1.0f);
             Dna::BlendShapeTarget bt;
             bt.channel = e;
             const float* d = a.ictExpression.data() + size_t(e) * a.ictNeutral.size();
@@ -1977,7 +2142,11 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rig.meshes.push_back(std::move(m));
         }
     }
-    addClothes(p, body, rig, rep);
+    {
+        Dna::Mesh outward = body;
+        outward.faces.resize(std::min(outward.faces.size(), outwardFaces));
+        addClothes(p, outward, rig, rep);
+    }
     if (!p.nativeHead && !p.hairStyle.isEmpty())
         rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
     if (p.nativeHead && !p.hairStyle.isEmpty())   // the scalp is painted into the skin wherever the hair grows

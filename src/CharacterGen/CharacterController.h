@@ -205,8 +205,8 @@ private:
     QString m_hairColour = QStringLiteral("#3d2517");
     double m_bodyHair = 0.5;
     bool m_eyelashes = true;
-    QString m_topStyle = QStringLiteral("none");
-    QString m_bottomStyle = QStringLiteral("none");
+    QString m_topStyle = QStringLiteral("tshirt");
+    QString m_bottomStyle = QStringLiteral("shorts");
     QString m_topColour = QStringLiteral("#cccbc7");
     QString m_bottomColour = QStringLiteral("#3d4f78");
     std::shared_ptr<CharacterGen::Assets> m_assets;

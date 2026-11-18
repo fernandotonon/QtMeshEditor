@@ -263,11 +263,11 @@ TEST(EditableMeshCoverageTest, RecalculateNormalsFlatDiffersFromSmoothAtSharedVe
 }
 
 // ===========================================================================
-// countDegenerateTriangles() — default-epsilon (1e-6f) overload boundary
+// countDegenerateTriangles() — default relative epsilon (1e-5: height < 1e-5 x longest edge)
 // ===========================================================================
 
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonValidTriangleIsZero) {
-    // A clearly non-degenerate triangle: cross length = 1 >> 1e-6.
+    // A clearly non-degenerate triangle: height / longest edge ~0.7 >> 1e-5.
     EditableMesh mesh;
     EditableSubMesh sub;
     sub.vertices = { mkVtx(0, 0, 0), mkVtx(1, 0, 0), mkVtx(0, 1, 0) };
@@ -281,7 +281,7 @@ TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonValidTriangleIsZero)
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonZeroAreaIsDegenerate) {
     EditableMesh mesh;
     EditableSubMesh sub;
-    // Collinear -> cross length exactly 0 < 1e-6.
+    // Collinear -> height exactly 0.
     sub.vertices = { mkVtx(0, 0, 0), mkVtx(1, 0, 0), mkVtx(2, 0, 0) };
     sub.triangles = { mkTri(0, 1, 2) };
     mesh.subMeshes().push_back(std::move(sub));
@@ -290,29 +290,25 @@ TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonZeroAreaIsDegenerate
 }
 
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonJustBelowBoundary) {
-    // Construct a triangle whose cross-product LENGTH (the quantity the
-    // impl compares, NOT 0.5*length) is just below 1e-6 so the default
-    // epsilon classifies it as degenerate.
-    //
-    // cross length for base b along X and height h along Y of a triangle
-    // (0,0,0),(b,0,0),(0,h,0) = |(b,0,0) x (0,h,0)| = b*h.
-    // Pick b = 1, h = 5e-7 -> cross length = 5e-7 < 1e-6 -> degenerate.
+    // The impl compares |cross| / longest_edge^2 (the height over the longest
+    // edge) against the relative epsilon. For (0,0,0),(1,0,0),(0,h,0) that is
+    // ~h: h = 5e-7 < 1e-5 -> degenerate.
     EditableMesh mesh;
     EditableSubMesh sub;
     sub.vertices = { mkVtx(0, 0, 0), mkVtx(1.0f, 0, 0), mkVtx(0, 5e-7f, 0) };
     sub.triangles = { mkTri(0, 1, 2) };
     mesh.subMeshes().push_back(std::move(sub));
 
-    // cross length ~5e-7 < 1e-6 default epsilon.
+    // relative height ~5e-7 < 1e-5 default epsilon.
     EXPECT_EQ(mesh.countDegenerateTriangles(), 1);
 }
 
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonJustAboveBoundary) {
-    // cross length = b*h = 1 * 2e-6 = 2e-6 > 1e-6 default epsilon -> NOT
-    // degenerate under the default, even though it is a razor-thin sliver.
+    // relative height = 2e-5 > 1e-5 default epsilon -> NOT degenerate under
+    // the default, even though it is a razor-thin sliver.
     EditableMesh mesh;
     EditableSubMesh sub;
-    sub.vertices = { mkVtx(0, 0, 0), mkVtx(1.0f, 0, 0), mkVtx(0, 2e-6f, 0) };
+    sub.vertices = { mkVtx(0, 0, 0), mkVtx(1.0f, 0, 0), mkVtx(0, 2e-5f, 0) };
     sub.triangles = { mkTri(0, 1, 2) };
     mesh.subMeshes().push_back(std::move(sub));
 
@@ -320,7 +316,7 @@ TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonJustAboveBoundary) {
 
     // But with a larger explicit epsilon it IS classified as degenerate,
     // confirming the boundary is epsilon-driven.
-    EXPECT_EQ(mesh.countDegenerateTriangles(1e-5f), 1);
+    EXPECT_EQ(mesh.countDegenerateTriangles(1e-4f), 1);
 }
 
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonMixedTriangles) {
@@ -333,17 +329,33 @@ TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonMixedTriangles) {
         mkVtx(0, 0, 0),       // 0
         mkVtx(1, 0, 0),       // 1
         mkVtx(0, 1, 0),       // 2  valid big triangle
-        mkVtx(0, 2e-6f, 0),   // 3  -> with (0,1) gives cross 2e-6 (above eps)
-        mkVtx(0, 5e-7f, 0),   // 4  -> with (0,1) gives cross 5e-7 (below eps)
+        mkVtx(0, 2e-5f, 0),   // 3  -> with (0,1): relative height 2e-5 (above eps)
+        mkVtx(0, 5e-7f, 0),   // 4  -> with (0,1): relative height 5e-7 (below eps)
     };
     sub.triangles = {
         mkTri(0, 1, 2), // area 1, valid
-        mkTri(0, 1, 3), // cross 2e-6, NOT degenerate under default
-        mkTri(0, 1, 4), // cross 5e-7, degenerate under default
+        mkTri(0, 1, 3), // relative height 2e-5, NOT degenerate under default
+        mkTri(0, 1, 4), // relative height 5e-7, degenerate under default
     };
     mesh.subMeshes().push_back(std::move(sub));
 
     EXPECT_EQ(mesh.countDegenerateTriangles(), 1);
+}
+
+TEST(EditableMeshCoverageTest, SmallWellShapedTrianglesAreNotDegenerate) {
+    // A 1 mm right triangle (a tooth or eyelid on a model built in metres) has a
+    // cross product of 1e-6: the old absolute test flagged it and "Remove
+    // Degenerates" punched holes into the model. The test is scale-invariant now.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.vertices = { mkVtx(0, 0, 0), mkVtx(0.001f, 0, 0), mkVtx(0, 0.001f, 0), mkVtx(0.0005f, 0, 0) };
+    sub.triangles = { mkTri(0, 1, 2), mkTri(0, 1, 3) /* collinear: really degenerate */ };
+    mesh.subMeshes().push_back(std::move(sub));
+
+    EXPECT_EQ(mesh.countDegenerateTriangles(), 1);
+    EXPECT_EQ(mesh.removeDegenerateTriangles(), 1);
+    ASSERT_EQ(mesh.subMeshes()[0].triangles.size(), 1u);
+    EXPECT_EQ(mesh.subMeshes()[0].triangles[0].indices[2], 2u);   // the real triangle survived
 }
 
 TEST(EditableMeshCoverageTest, CountDegenerateDefaultEpsilonSkipsOutOfRangeIndices) {
