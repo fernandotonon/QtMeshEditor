@@ -219,7 +219,8 @@ endif()
 # the plain FetchContent behaviour: no download here, FetchContent applies its own rules.
 string(TOUPPER "${_ort_fetch_name}" _ort_fetch_upper)
 set(_ort_fetch_local FALSE)
-if(DEFINED FETCHCONTENT_SOURCE_DIR_${_ort_fetch_upper} OR FETCHCONTENT_FULLY_DISCONNECTED)
+# The value, not DEFINED: FetchContent leaves an EMPTY cache entry for the override behind.
+if(FETCHCONTENT_SOURCE_DIR_${_ort_fetch_upper} OR FETCHCONTENT_FULLY_DISCONNECTED)
     set(_ort_fetch_local TRUE)
 endif()
 

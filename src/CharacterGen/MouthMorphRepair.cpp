@@ -361,6 +361,7 @@ namespace {
 std::vector<double> halfArcParams(std::vector<std::array<float, 3>>& loop, std::vector<int32_t>& order, const std::array<double, 3>& axis)
 {
     const size_t n = loop.size();
+    if (n == 0) return {};
     double area = 0.0;
     for (size_t i = 0; i < n; ++i) {
         const auto& p = loop[i];
@@ -405,6 +406,7 @@ std::vector<std::array<int32_t, 3>> bridgeLoops(const std::vector<std::array<flo
     for (size_t i = 0; i < ib.size(); ++i) ib[i] = int32_t(A.size() + i);
     const std::vector<double> ta = halfArcParams(A, ia, axis), tb = halfArcParams(B, ib, axis);
     const size_t nA = A.size(), nB = B.size();
+    if (nA == 0 || nB == 0 || ta.size() != nA || tb.size() != nB) return out;
     const auto pos = [&](int32_t v) { return v < int32_t(nA) ? A0[size_t(v)] : B0[size_t(v) - nA]; };
     const auto push = [&](int32_t a, int32_t b, int32_t c) {
         const auto p0 = pos(a), p1 = pos(b), p2 = pos(c);
