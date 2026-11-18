@@ -317,6 +317,119 @@ void blendCornerNormals(int vertexCount, const std::vector<int32_t>& faces, cons
     }
 }
 
+std::vector<std::vector<int32_t>> boundaryLoops(const std::vector<int32_t>& faces, int vertexCount)
+{
+    std::set<std::pair<int32_t, int32_t>> edges;
+    for (size_t f = 0; f + 2 < faces.size(); f += 3)
+        for (size_t k = 0; k < 3; ++k) {
+            const int32_t a = faces[f + k], b = faces[f + (k + 1) % 3];
+            if (a >= 0 && b >= 0 && a < vertexCount && b < vertexCount && a != b) edges.insert({a, b});
+        }
+    std::map<int32_t, std::vector<int32_t>> next;
+    for (const auto& [a, b] : edges)
+        if (!edges.count({b, a})) next[a].push_back(b);
+    std::set<std::pair<int32_t, int32_t>> used;
+    std::vector<std::vector<int32_t>> out;
+    for (const auto& [start, outs] : next)
+        for (int32_t first : outs) {
+            if (used.count({start, first})) continue;
+            std::vector<int32_t> loop{start};
+            int32_t v = start, w = first;
+            bool closed = false;
+            while (!used.count({v, w})) {
+                used.insert({v, w});
+                if (w == start) { closed = true; break; }
+                loop.push_back(w);
+                const auto it = next.find(w);
+                if (it == next.end()) break;
+                int32_t n = -1;
+                for (int32_t c : it->second)
+                    if (!used.count({w, c})) { n = c; break; }
+                if (n < 0) break;
+                v = w;
+                w = n;
+            }
+            if (closed && loop.size() >= 3) out.push_back(std::move(loop));
+        }
+    return out;
+}
+
+namespace {
+
+// Each vertex's parameter along a closed loop, in [0, 2): [0, 1] along the half from the rightmost vertex (largest x) to the leftmost,
+// [1, 2) back. The loop is first turned to run counter-clockwise about the axis in the xy plane.
+std::vector<double> halfArcParams(std::vector<std::array<float, 3>>& loop, std::vector<int32_t>& order, const std::array<double, 3>& axis)
+{
+    const size_t n = loop.size();
+    double area = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        const auto& p = loop[i];
+        const auto& q = loop[(i + 1) % n];
+        area += (p[0] - axis[0]) * (q[1] - axis[1]) - (q[0] - axis[0]) * (p[1] - axis[1]);
+    }
+    if (area < 0.0) {
+        std::reverse(loop.begin(), loop.end());
+        std::reverse(order.begin(), order.end());
+    }
+    size_t right = 0, left = 0;
+    for (size_t i = 0; i < n; ++i) {
+        if (loop[i][0] > loop[right][0]) right = i;
+        if (loop[i][0] < loop[left][0]) left = i;
+    }
+    std::rotate(loop.begin(), loop.begin() + long(right), loop.end());
+    std::rotate(order.begin(), order.begin() + long(right), order.end());
+    left = (left + n - right) % n;
+    std::vector<double> arc(n + 1, 0.0);
+    for (size_t i = 0; i < n; ++i) {
+        const auto& p = loop[i];
+        const auto& q = loop[(i + 1) % n];
+        arc[i + 1] = arc[i] + std::sqrt(std::pow(q[0] - p[0], 2.0) + std::pow(q[1] - p[1], 2.0) + std::pow(q[2] - p[2], 2.0));
+    }
+    std::vector<double> t(n);
+    const double half = std::max(arc[left], 1e-12), rest = std::max(arc[n] - arc[left], 1e-12);
+    for (size_t i = 0; i < n; ++i) t[i] = i <= left ? arc[i] / half : 1.0 + (arc[i] - arc[left]) / rest;
+    if (left == 0) for (size_t i = 0; i < n; ++i) t[i] = 2.0 * arc[i] / std::max(arc[n], 1e-12);
+    return t;
+}
+
+}  // namespace
+
+std::vector<std::array<int32_t, 3>> bridgeLoops(const std::vector<std::array<float, 3>>& A0, const std::vector<std::array<float, 3>>& B0,
+                                               const std::array<double, 3>& axis)
+{
+    std::vector<std::array<int32_t, 3>> out;
+    if (A0.size() < 3 || B0.size() < 3) return out;
+    std::vector<std::array<float, 3>> A = A0, B = B0;
+    std::vector<int32_t> ia(A.size()), ib(B.size());
+    for (size_t i = 0; i < ia.size(); ++i) ia[i] = int32_t(i);
+    for (size_t i = 0; i < ib.size(); ++i) ib[i] = int32_t(A.size() + i);
+    const std::vector<double> ta = halfArcParams(A, ia, axis), tb = halfArcParams(B, ib, axis);
+    const size_t nA = A.size(), nB = B.size();
+    const auto pos = [&](int32_t v) { return v < int32_t(nA) ? A0[size_t(v)] : B0[size_t(v) - nA]; };
+    const auto push = [&](int32_t a, int32_t b, int32_t c) {
+        const auto p0 = pos(a), p1 = pos(b), p2 = pos(c);
+        const double e1[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]}, e2[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+        const double nrm[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+        const double cx = (p0[0] + p1[0] + p2[0]) / 3.0, cy = (p0[1] + p1[1] + p2[1]) / 3.0;
+        const double towards = nrm[0] * (axis[0] - cx) + nrm[1] * (axis[1] - cy);
+        if (towards < 0.0) out.push_back({a, c, b});
+        else out.push_back({a, b, c});
+    };
+    size_t i = 0, j = 0;
+    while (i < nA || j < nB) {
+        const double nextA = i < nA ? (i + 1 < nA ? ta[i + 1] : 2.0) : 1e9;
+        const double nextB = j < nB ? (j + 1 < nB ? tb[j + 1] : 2.0) : 1e9;
+        if (nextA <= nextB) {
+            push(ia[i], ia[(i + 1) % nA], ib[j % nB]);
+            ++i;
+        } else {
+            push(ia[i % nA], ib[(j + 1) % nB], ib[j]);
+            ++j;
+        }
+    }
+    return out;
+}
+
 double worstMouthStretch(const std::vector<float>& positions, int vertexCount, const std::vector<int32_t>& faces,
                          const std::array<double, 3>& centre, double radius, const std::vector<float>& arkit, int channel)
 {

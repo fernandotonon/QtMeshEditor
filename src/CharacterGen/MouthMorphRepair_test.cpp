@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 
 using namespace CharacterGen;
@@ -144,4 +145,46 @@ TEST(MouthMorphRepair, CornerNormalsBlendFromOneSideToTheOther)
     EXPECT_NEAR(normals[size_t(g.centre()) * 3 + 1], 0.0f, 0.05f);       // the change is in the middle...
     for (int j = 1; j < g.n; ++j) EXPECT_GT(y(j), y(j - 1));                // ...and gradual
     for (int32_t v : inner) EXPECT_NEAR(std::hypot(normals[size_t(v) * 3], normals[size_t(v) * 3 + 1]), 1.0f, 1e-4f);
+}
+
+TEST(MouthMorphRepair, BoundaryLoopsFindTheHoleAndTheRim)
+{
+    Grid g;
+    const std::vector<int32_t> faces = gridWithHoles(g, -1);   // the outer rim (40 vertices) and the one-cell hole (4)
+    std::vector<size_t> sizes;
+    for (const auto& l : boundaryLoops(faces, g.vertices())) sizes.push_back(l.size());
+    std::sort(sizes.begin(), sizes.end());
+    EXPECT_EQ(sizes, (std::vector<size_t>{4, 40}));
+}
+
+TEST(MouthMorphRepair, BridgeJoinsTwoLoopsCornerToCornerFacingTheAxis)
+{
+    // an inner ellipse (the lips' edge, 12 vertices) and a wider one 5 mm behind it (the lining's rim, 20), started at different
+    // points and running in opposite directions
+    const auto ellipse = [](int n, float a, float b, float z, int start, bool reverse) {
+        std::vector<std::array<float, 3>> l;
+        for (int i = 0; i < n; ++i) {
+            const int k = reverse ? (start - i + n) % n : (start + i) % n;
+            const float t = 6.2831853f * float(k) / float(n);
+            l.push_back({a * std::cos(t), b * std::sin(t), z});
+        }
+        return l;
+    };
+    const auto A = ellipse(12, 0.024f, 0.006f, 0.0f, 3, false), B = ellipse(20, 0.026f, 0.010f, -0.005f, 7, true);
+    const auto tris = bridgeLoops(A, B, {0.0, 0.0, 0.0});
+    ASSERT_EQ(tris.size(), A.size() + B.size());
+    for (const auto& t : tris) {
+        int fromA = 0;
+        for (int32_t v : t) fromA += v < int32_t(A.size()) ? 1 : 0;
+        EXPECT_TRUE(fromA == 1 || fromA == 2);   // every triangle spans the gap
+        const auto p = [&](int32_t v) { return v < int32_t(A.size()) ? A[size_t(v)] : B[size_t(v) - A.size()]; };
+        const auto p0 = p(t[0]), p1 = p(t[1]), p2 = p(t[2]);
+        const float e1[3] = {p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]}, e2[3] = {p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2]};
+        const float n[3] = {e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]};
+        const float cx = (p0[0] + p1[0] + p2[0]) / 3.0f, cy = (p0[1] + p1[1] + p2[1]) / 3.0f;
+        EXPECT_GE(-(n[0] * cx + n[1] * cy), 0.0f);   // faces the axis
+        // no triangle crosses from the upper half to the lower half (the corners are matched)
+        const bool up = p0[1] + p1[1] + p2[1] > 0.0f;
+        for (const auto& q : {p0, p1, p2}) EXPECT_TRUE(std::fabs(q[1]) < 1e-4f || (q[1] > 0.0f) == up);
+    }
 }

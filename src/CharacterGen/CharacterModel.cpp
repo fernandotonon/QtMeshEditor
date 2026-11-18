@@ -511,6 +511,7 @@ QStringList colourNames(ColourKind kind)
 // forward, nothing comes out and the teeth sit closer behind the lips (6 mm put its front rim through the closed lips).
 constexpr float kMouthScale = 0.85f;
 constexpr float kMouthForward = 0.005f;   // metres, towards the face
+constexpr float kMouthUp = 0.003f;        // metres: the teeth sat a little low behind the lips
 constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
 
 QString characterEyeDir()
@@ -1100,6 +1101,122 @@ static void appendMouthLining(Dna::Mesh& body, size_t forwardFaces, const std::a
     for (size_t fi = first; fi < body.faces.size(); ++fi)
         for (uint32_t li : body.faces[fi])
             if (relaid.insert(li).second) body.layouts[li].uv = liningUv;
+}
+
+// The MHR lips end at a thin edge and ICT's mouth lining (the socket walls brought with the mouth interior) starts a little behind
+// it: with the jaw open the gap between them showed the head lining. A strip joins the lips' inner edge to the lining's front rim.
+// Its lip side is made of COPIES of the lip-edge vertices inside the mouth mesh, with their skin weights and expression deltas, so
+// the strip stays attached to the lips in every pose; its other side is the lining's own rim. Returns the strip's triangle count.
+static int bridgeMouthToLips(Dna::Mesh& m, const Dna::Mesh& body, const std::vector<int32_t>& mouthFaces, int V,
+                             const std::vector<float>& arkit, int channels, int jawOpen)
+{
+    // the lips' inner edge: the longest body boundary loop around the mouth (the opening, one loop since its slits are capped)
+    const std::vector<std::vector<int32_t>> lipLoops = boundaryLoops(mouthFaces, V);
+    // the lining's rims, by position
+    std::vector<int32_t> mf;
+    for (const auto& f : m.faces)
+        for (size_t k = 1; k + 1 < f.size(); ++k)
+            for (uint32_t li : {f[0], f[k], f[k + 1]}) mf.push_back(int32_t(m.layouts[li].position));
+    const int mv = int(m.positions.size() / 3);
+    const std::vector<std::vector<int32_t>> rims = boundaryLoops(mf, mv);
+    const auto centroid = [](const std::vector<int32_t>& l, const std::vector<float>& pos) {
+        std::array<double, 3> c{0.0, 0.0, 0.0};
+        for (int32_t v : l)
+            for (size_t k = 0; k < 3; ++k) c[k] += pos[size_t(v) * 3 + k] / double(l.size());
+        return c;
+    };
+    const auto dist = [](const std::array<double, 3>& x, const std::array<double, 3>& y) {
+        return std::sqrt((x[0] - y[0]) * (x[0] - y[0]) + (x[1] - y[1]) * (x[1] - y[1]) + (x[2] - y[2]) * (x[2] - y[2]));
+    };
+    // the rim the lips belong to: the lining loop nearest the centre of some long body loop (the mouth opening)
+    const std::vector<int32_t>* lip = nullptr;
+    const std::vector<int32_t>* rim = nullptr;
+    double best = 0.015;   // m: further apart than this, the two are not the mouth's
+    for (const auto& r : rims) {
+        if (r.size() < 12) continue;
+        const auto rc = centroid(r, m.positions);
+        for (const auto& l : lipLoops) {
+            if (l.size() < 12 || l.size() > 200) continue;
+            const double d = dist(centroid(l, body.positions), rc);
+            if (d < best) { best = d; lip = &l; rim = &r; }
+        }
+    }
+    if (!lip || !rim) return 0;
+    std::vector<std::array<float, 3>> A, B;
+    for (int32_t v : *lip) A.push_back({body.positions[size_t(v) * 3], body.positions[size_t(v) * 3 + 1], body.positions[size_t(v) * 3 + 2]});
+    for (int32_t v : *rim) B.push_back({m.positions[size_t(v) * 3], m.positions[size_t(v) * 3 + 1], m.positions[size_t(v) * 3 + 2]});
+    // Closed, the lips' edge is a flat slit (its upper and lower halves on top of each other): the two loops are matched in the
+    // jaw-open pose, where both are wide open and their halves cannot be confused.
+    std::vector<std::array<float, 3>> openA = A, openB = B;
+    if (jawOpen >= 0 && jawOpen < channels) {
+        const float* d = arkit.data() + size_t(jawOpen) * size_t(V) * 3;
+        for (size_t i = 0; i < A.size(); ++i)
+            for (size_t k = 0; k < 3; ++k) openA[i][k] += d[size_t((*lip)[i]) * 3 + k] * kCmToM;
+        for (const auto& bt : m.blendShapeTargets) {
+            if (bt.channel != jawOpen) continue;
+            std::unordered_map<uint32_t, size_t> at;
+            for (size_t i = 0; i < bt.vertexIndices.size(); ++i) at.emplace(bt.vertexIndices[i], i);
+            for (size_t j = 0; j < B.size(); ++j) {
+                const auto it = at.find(uint32_t((*rim)[j]));
+                if (it != at.end())
+                    for (size_t k = 0; k < 3; ++k) openB[j][k] += bt.deltas[it->second * 3 + k];
+            }
+        }
+    }
+    std::array<double, 3> lc{0.0, 0.0, 0.0};
+    for (const auto& q : openA)
+        for (size_t k = 0; k < 3; ++k) lc[k] += q[k] / double(openA.size());
+    const std::vector<std::array<int32_t, 3>> tris = bridgeLoops(openA, openB, lc);
+    if (tris.empty()) return 0;
+    // a layout (texture coordinate) of each rim vertex; the copies take the one of the rim vertex nearest them
+    std::vector<uint32_t> rimUv(rim->size(), 0);
+    {
+        std::unordered_map<uint32_t, uint32_t> uvOf;
+        for (const auto& l : m.layouts) uvOf.emplace(l.position, l.uv);
+        for (size_t i = 0; i < rim->size(); ++i) rimUv[i] = uvOf[uint32_t((*rim)[i])];
+    }
+    const size_t first = size_t(mv);
+    std::vector<uint32_t> layoutOf(A.size() + B.size());
+    for (size_t i = 0; i < A.size(); ++i) {
+        const int32_t v = (*lip)[i];
+        m.positions.insert(m.positions.end(), A[i].begin(), A[i].end());
+        m.skin.push_back(size_t(v) < body.skin.size() ? body.skin[size_t(v)] : std::vector<Dna::SkinInfluence>{});
+        size_t nearest = 0;
+        float bd = 1e30f;
+        for (size_t j = 0; j < B.size(); ++j) {
+            const float d = (B[j][0] - A[i][0]) * (B[j][0] - A[i][0]) + (B[j][1] - A[i][1]) * (B[j][1] - A[i][1]) + (B[j][2] - A[i][2]) * (B[j][2] - A[i][2]);
+            if (d < bd) { bd = d; nearest = j; }
+        }
+        const uint32_t pi = uint32_t(first + i);
+        layoutOf[i] = uint32_t(m.layouts.size());
+        m.layouts.push_back({pi, rimUv[nearest], pi});
+    }
+    for (size_t j = 0; j < B.size(); ++j) {
+        const uint32_t pi = uint32_t((*rim)[j]);
+        layoutOf[A.size() + j] = uint32_t(m.layouts.size());
+        m.layouts.push_back({pi, rimUv[j], pi});
+    }
+    for (const auto& t : tris) m.faces.push_back({layoutOf[size_t(t[0])], layoutOf[size_t(t[1])], layoutOf[size_t(t[2])]});
+    // the copies move with the lips in every expression
+    for (int e = 0; e < channels; ++e) {
+        Dna::BlendShapeTarget* bt = nullptr;
+        for (auto& x : m.blendShapeTargets)
+            if (x.channel == e) bt = &x;
+        const float* d = arkit.data() + size_t(e) * size_t(V) * 3;
+        for (size_t i = 0; i < A.size(); ++i) {
+            const float* dv = d + size_t((*lip)[i]) * 3;
+            if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 2e-3f) continue;   // the body's own threshold (cm)
+            if (!bt) {
+                m.blendShapeTargets.push_back({});
+                bt = &m.blendShapeTargets.back();
+                bt->channel = e;
+            }
+            bt->vertexIndices.push_back(uint32_t(first + i));
+            for (int k = 0; k < 3; ++k) bt->deltas.push_back(dv[k] * kCmToM);
+        }
+    }
+    m.normals = positionNormals(m.positions, m.faces, m.layouts);
+    return int(tris.size());
 }
 
 // The body faces (indices into body.faces, forward faces only) that the expression shapes turn over at the mouth corners.
@@ -1938,6 +2055,8 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 mouthShift[k] = float(M[k] / double(a.landmarkLip.size()) + om[k] - C[k] / double(cn));
                 mouthCentre[k] = float(C[k] / double(cn)) + mouthShift[k];
             }
+            mouthShift[1] += kMouthUp;
+            mouthCentre[1] += kMouthUp;
             mouthShift[2] += kMouthForward;
             mouthCentre[2] += kMouthForward;
             mouthScale = kMouthScale;
@@ -2117,6 +2236,9 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             }
             if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
         }
+        if (p.nativeHead && std::strcmp(g.mesh, "head_mouth") == 0 && arkit->size() == size_t(a.ictExpressions) * size_t(V) * 3)
+            rep.mouthBridgeTriangles = bridgeMouthToLips(m, body, mouthFaces, V, *arkit, a.ictExpressions,
+                                                         int(a.expressionNames.indexOf(QStringLiteral("jawOpen"))));
         rep.headVertices += int(pc);
         rep.headTriangles += int(m.faces.size());
         rep.meshNames << m.name;

@@ -214,8 +214,9 @@ struct BuildReport {
     int joints = 0;
     int seamTriangles = 0;           ///< triangles of the strip that stitches the head's neck to the body
     int morphTargets = 0;
-    int mouthDeltasRepaired = 0;
-    int mouthHolesCapped = 0;           ///< triangles closing the slits beside the mouth corners     ///< (channel, vertex) mouth-corner deltas replaced by repairMouthMorphs
+    int mouthDeltasRepaired = 0;        ///< (channel, vertex) mouth-corner deltas replaced by repairMouthMorphs
+    int mouthHolesCapped = 0;           ///< triangles closing the slits beside the mouth corners
+    int mouthBridgeTriangles = 0;       ///< the strip joining the lips to the mouth lining (native head)
     float neckCutY = 0.0f;           ///< world y (m) of the neck cut
     float headScale = 1.0f;
     LipFrame lips;

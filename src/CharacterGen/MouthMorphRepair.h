@@ -50,6 +50,17 @@ std::vector<int32_t> mouthHoleCaps(const std::vector<float>& positions, int vert
 void blendCornerNormals(int vertexCount, const std::vector<int32_t>& faces, const std::vector<int32_t>& vertices,
                         std::vector<float>& normals, int iterations = 200);
 
+/// The closed boundary loops of a triangle list (indices into `vertexCount` positions), each in the direction of its faces' edges.
+/// A boundary vertex shared by two loops (a pinch) ends one walk; such loops come back split or short and can be told apart by size.
+std::vector<std::vector<int32_t>> boundaryLoops(const std::vector<int32_t>& faces, int vertexCount);
+
+/// A triangle strip joining two closed loops around a common axis (parallel to z through `axis` x/y): the lips' inner edge and the
+/// front rim of the mouth lining. Both loops are split at their leftmost and rightmost vertices (the mouth corners) and each half is
+/// walked by arc length, so the corners meet the corners whatever the vertex counts. Indices: 0..A.size()-1 are A's vertices,
+/// A.size().. are B's. Every triangle faces the axis (it is seen from inside the mouth).
+std::vector<std::array<int32_t, 3>> bridgeLoops(const std::vector<std::array<float, 3>>& A, const std::vector<std::array<float, 3>>& B,
+                                               const std::array<double, 3>& axis);
+
 /// Largest posed/rest longest-edge ratio over the checked faces of one channel (for tests and diagnostics).
 double worstMouthStretch(const std::vector<float>& positions, int vertexCount, const std::vector<int32_t>& faces,
                          const std::array<double, 3>& centre, double radius, const std::vector<float>& arkit, int channel);
