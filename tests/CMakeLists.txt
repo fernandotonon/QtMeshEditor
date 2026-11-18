@@ -216,6 +216,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MultiViewTextureBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VertexColorBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBaker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneTextureBaker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATBakerController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/IsometricSpritesController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/VATShaderEmitter.cpp

@@ -29,7 +29,8 @@
 /// Not implemented (intentional):
 ///   * Tiled / multi-part files.
 ///   * Compression (zip / piz / pxr24).
-///   * Half-precision channels (the whole point is full float32 precision).
+///   * Half-precision RGB (only the RGBA variant has a half writer, used
+///     by the bone texture's `rgba16f` encoding).
 ///   * Alpha / Z / sampled-rate / arbitrary attributes.
 namespace MinimalEXR {
 
@@ -57,5 +58,19 @@ bool writeRGBA32F(const QString& path,
                   int width,
                   int height,
                   const std::vector<float>& rgbaData);
+
+/// Half-float (EXR pixel type HALF) variant of `writeRGBA32F`: the same
+/// interleaved RGBA float input, stored as IEEE 754 binary16 (round to
+/// nearest even; out-of-range values become +/-Inf). Bone texture
+/// `rgba16f` encoding (#1166).
+bool writeRGBA16F(const QString& path,
+                  int width,
+                  int height,
+                  const std::vector<float>& rgbaData);
+
+/// IEEE 754 binary32 <-> binary16 conversion (round to nearest even).
+/// Public so callers can predict exactly what a half texture will hold.
+uint16_t floatToHalf(float value);
+float halfToFloat(uint16_t half);
 
 } // namespace MinimalEXR

@@ -6,6 +6,59 @@
 
 namespace MinimalEXR {
 
+uint16_t floatToHalf(float value)
+{
+    uint32_t f;
+    std::memcpy(&f, &value, sizeof(f));
+    const uint32_t sign = (f >> 16) & 0x8000u;
+    const uint32_t absf = f & 0x7fffffffu;
+    if (absf >= 0x7f800000u) {                       // Inf / NaN
+        return static_cast<uint16_t>(sign | 0x7c00u | (absf > 0x7f800000u ? 0x200u : 0u));
+    }
+    if (absf >= 0x477ff000u) {                       // rounds past 65504 -> Inf
+        return static_cast<uint16_t>(sign | 0x7c00u);
+    }
+    if (absf < 0x38800000u) {                        // subnormal half (or zero)
+        if (absf < 0x33000000u) return static_cast<uint16_t>(sign);  // < half of the smallest subnormal
+        const uint32_t mant = (absf & 0x007fffffu) | 0x00800000u;
+        const int shift = 126 - static_cast<int>(absf >> 23);       // 14..24
+        uint32_t h = mant >> shift;
+        const uint32_t rem = mant & ((1u << shift) - 1u);
+        const uint32_t halfway = 1u << (shift - 1);
+        if (rem > halfway || (rem == halfway && (h & 1u))) ++h;
+        return static_cast<uint16_t>(sign | h);
+    }
+    // Normal: rebias exponent 127 -> 15, round mantissa 23 -> 10 bits (nearest even).
+    uint32_t h = ((absf - 0x38000000u) >> 13);
+    const uint32_t rem = absf & 0x1fffu;
+    if (rem > 0x1000u || (rem == 0x1000u && (h & 1u))) ++h;
+    return static_cast<uint16_t>(sign | h);
+}
+
+float halfToFloat(uint16_t h)
+{
+    const uint32_t sign = (static_cast<uint32_t>(h) & 0x8000u) << 16;
+    const uint32_t exp = (h >> 10) & 0x1fu;
+    uint32_t mant = h & 0x3ffu;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) {
+            f = sign;
+        } else {                                      // subnormal -> normalise
+            int e = -1;
+            do { ++e; mant <<= 1; } while ((mant & 0x400u) == 0);
+            f = sign | (static_cast<uint32_t>(127 - 15 - e) << 23) | ((mant & 0x3ffu) << 13);
+        }
+    } else if (exp == 31) {
+        f = sign | 0x7f800000u | (mant << 13);
+    } else {
+        f = sign | ((exp + 127 - 15) << 23) | (mant << 13);
+    }
+    float out;
+    std::memcpy(&out, &f, sizeof(out));
+    return out;
+}
+
 namespace {
 
 // EXR LE writers — the format is always little-endian regardless of host.
@@ -69,7 +122,7 @@ void writeAttr(QByteArray& buf,
 // to match what every EXR-reading tool expects to find.
 // Channel list in EXR's required alphabetical order. 3 channels → B,G,R;
 // 4 channels → A,B,G,R (alpha sorts first).
-QByteArray buildChannelListF32(int channels) {
+QByteArray buildChannelList(int channels, uint32_t pixelType) {
     QByteArray out;
     const char* names3[3] = { "B", "G", "R" };
     const char* names4[4] = { "A", "B", "G", "R" };
@@ -77,7 +130,7 @@ QByteArray buildChannelListF32(int channels) {
     for (int ci = 0; ci < channels; ++ci) {
         const char* n = names[ci];
         writeCStr(out, n);
-        writeU32LE(out, 2u);   // FLOAT
+        writeU32LE(out, pixelType);   // 1 = HALF, 2 = FLOAT
         out.append('\0');      // pLinear = 0
         out.append('\0');      // reserved
         out.append('\0');
@@ -129,11 +182,12 @@ namespace {
 // Shared writer: `channels` is 3 (interleaved RGB) or 4 (interleaved
 // RGBA). Scanlines are emitted channel-planar in the declared
 // (alphabetical) channel order, as the EXR scanline format requires.
-bool writeF32Impl(const QString& path,
-                  int width,
-                  int height,
-                  int channels,
-                  const std::vector<float>& rgbData)
+bool writeImpl(const QString& path,
+               int width,
+               int height,
+               int channels,
+               bool half,
+               const std::vector<float>& rgbData)
 {
     if (width <= 0 || height <= 0) return false;
     if (channels != 3 && channels != 4) return false;
@@ -150,7 +204,7 @@ bool writeF32Impl(const QString& path,
 
     // Attributes — name\0 type\0 size payload, terminated by a single NUL.
     writeAttr(header, "channels",            "chlist",
-              buildChannelListF32(channels));
+              buildChannelList(channels, half ? 1u : 2u));
     writeAttr(header, "compression",         "compression",
               buildU8(0));                              // NO_COMPRESSION
     writeAttr(header, "dataWindow",          "box2i",
@@ -176,8 +230,9 @@ bool writeF32Impl(const QString& path,
     //
     // Each scanline payload = 4 (y) + 4 (size) + (width × 3 channels ×
     // 4 bytes/float) = 8 + width × 12.
+    const uint64_t bytesPerSample = half ? 2u : 4u;
     const uint64_t scanlinePayloadSize = 8u
-        + static_cast<uint64_t>(width) * static_cast<uint64_t>(channels) * 4u;
+        + static_cast<uint64_t>(width) * static_cast<uint64_t>(channels) * bytesPerSample;
     const uint64_t offsetTableSize = static_cast<uint64_t>(height) * 8u;
     const uint64_t firstScanlineOffset =
         static_cast<uint64_t>(header.size()) + offsetTableSize;
@@ -198,7 +253,17 @@ bool writeF32Impl(const QString& path,
     pixels.reserve(static_cast<int>(
         static_cast<uint64_t>(height) * scanlinePayloadSize));
     const uint32_t pixelDataSize =
-        static_cast<uint32_t>(width) * static_cast<uint32_t>(channels) * 4u;
+        static_cast<uint32_t>(width) * static_cast<uint32_t>(channels)
+        * static_cast<uint32_t>(bytesPerSample);
+    auto writeSample = [&](float v) {
+        if (half) {
+            const uint16_t h = floatToHalf(v);
+            const char b[2] = { static_cast<char>(h & 0xff), static_cast<char>(h >> 8) };
+            pixels.append(b, 2);
+        } else {
+            writeF32LE(pixels, v);
+        }
+    };
 
     for (int y = 0; y < height; ++y) {
         writeI32LE(pixels, y);
@@ -209,13 +274,13 @@ bool writeF32Impl(const QString& path,
             + static_cast<size_t>(y) * static_cast<size_t>(width) * c;
         // A channel first (alphabetical order) when present.
         if (channels == 4)
-            for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 3]);
+            for (int x = 0; x < width; ++x) writeSample(row[x * c + 3]);
         // B channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 2]);
+        for (int x = 0; x < width; ++x) writeSample(row[x * c + 2]);
         // G channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 1]);
+        for (int x = 0; x < width; ++x) writeSample(row[x * c + 1]);
         // R channel.
-        for (int x = 0; x < width; ++x) writeF32LE(pixels, row[x * c + 0]);
+        for (int x = 0; x < width; ++x) writeSample(row[x * c + 0]);
     }
 
     // ── Write to disk in one shot ────────────────────────────────────
@@ -235,7 +300,7 @@ bool writeRGB32F(const QString& path,
                  int height,
                  const std::vector<float>& rgbData)
 {
-    return writeF32Impl(path, width, height, 3, rgbData);
+    return writeImpl(path, width, height, 3, false, rgbData);
 }
 
 bool writeRGBA32F(const QString& path,
@@ -243,7 +308,15 @@ bool writeRGBA32F(const QString& path,
                   int height,
                   const std::vector<float>& rgbaData)
 {
-    return writeF32Impl(path, width, height, 4, rgbaData);
+    return writeImpl(path, width, height, 4, false, rgbaData);
+}
+
+bool writeRGBA16F(const QString& path,
+                  int width,
+                  int height,
+                  const std::vector<float>& rgbaData)
+{
+    return writeImpl(path, width, height, 4, true, rgbaData);
 }
 
 } // namespace MinimalEXR

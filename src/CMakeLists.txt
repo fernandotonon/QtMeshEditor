@@ -210,6 +210,7 @@ TexturePaintBuffer.cpp
 TexturePaintController.cpp
 VertexColorBaker.cpp
 VATBaker.cpp
+BoneTextureBaker.cpp
 VATBakerController.cpp
 VATShaderEmitter.cpp
 IsometricSpritesController.cpp
