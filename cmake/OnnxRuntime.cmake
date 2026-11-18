@@ -47,6 +47,16 @@ option(QTMESH_ONNX_GPU
     "Download GPU ONNX Runtime (CUDA on Linux x64; adds ~700 MB provider libs)"
     ${_qtmesh_onnx_gpu_default})
 
+# Where the archive comes from. GITHUB = the release archive (the historical source);
+# NUGET = Microsoft's own Microsoft.ML.OnnxRuntime package from nuget.org, the same build
+# laid out like the archive; AUTO = GitHub, then NuGet when the GitHub download fails.
+# github.com/microsoft/onnxruntime went offline in November 2026 (404 for the repository
+# and every release asset) while the NuGet package stayed up; both are SHA-256 pinned.
+set(QTMESH_ONNX_SOURCE "AUTO" CACHE STRING "ONNX Runtime download source: AUTO, GITHUB or NUGET")
+set_property(CACHE QTMESH_ONNX_SOURCE PROPERTY STRINGS AUTO GITHUB NUGET)
+set(_ort_nuget_rid "")   # set below for the platforms the NuGet package covers
+set(_ort_nuget_sha256 "6871ccbc97f3d5bdb4095a1dcec33aa78d56f6ed8de5980ef5fa1d9f2e7c679a")
+
 # Select the archive + its SHA256 for this platform.
 if(APPLE)
     set(_ort_fetch_name "qtmesh_onnxruntime")
@@ -54,6 +64,7 @@ if(APPLE)
        OR (NOT CMAKE_OSX_ARCHITECTURES AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64"))
         set(_ort_archive "onnxruntime-osx-arm64-${QTMESH_ONNX_VERSION}.tgz")
         set(_ort_sha256  "2e1344a1926ee50eb25b38153cb6992c3567515aef0e677a1a520a1798896d6f")
+        set(_ort_nuget_rid "osx-arm64")
     else()
         message(STATUS "ONNX Runtime: no ${QTMESH_ONNX_VERSION} archive for Intel/universal macOS; "
                        "using ${QTMESH_ONNX_MAC_LEGACY_VERSION} universal2")
@@ -73,6 +84,7 @@ elseif(UNIX)
         endif()
         set(_ort_archive "onnxruntime-linux-aarch64-${QTMESH_ONNX_VERSION}.tgz")
         set(_ort_sha256  "5317505e2da99be65f8e2775ba3c2afd6d2961fd78aba1bd8f56159f48820c78")
+        set(_ort_nuget_rid "linux-arm64")
         set(_ort_fetch_name "qtmesh_onnxruntime")
     else()
         if(QTMESH_ONNX_GPU)
@@ -82,6 +94,7 @@ elseif(UNIX)
         else()
             set(_ort_archive "onnxruntime-linux-x64-${QTMESH_ONNX_VERSION}.tgz")
             set(_ort_sha256  "c849e36a1ef3e22d4ff217b9d1ce4a3cf5b9467b975610913ae959ad5b16bdc9")
+            set(_ort_nuget_rid "linux-x64")
             set(_ort_fetch_name "qtmesh_onnxruntime")
         endif()
     endif()
@@ -93,6 +106,7 @@ elseif(WIN32)
     endif()
     set(_ort_archive "onnxruntime-win-x64-${QTMESH_ONNX_VERSION}.zip")
     set(_ort_sha256  "5869e26bb25314375f2d5ef1877e3ea06b1543d6c710e6e4a1ec2f7177ab4b2c")
+    set(_ort_nuget_rid "win-x64")
     set(_ort_fetch_name "qtmesh_onnxruntime")
     set(_ort_libname "onnxruntime.dll")
 else()
@@ -100,16 +114,130 @@ else()
                         "Disable with -DENABLE_ONNX=OFF or add the archive here.")
 endif()
 
-include(FetchContent)
-FetchContent_Declare(
-    ${_ort_fetch_name}
-    URL "${QTMESH_ONNX_BASE_URL}/${_ort_archive}"
-    URL_HASH SHA256=${_ort_sha256}
-)
-FetchContent_MakeAvailable(${_ort_fetch_name})
+# Downloads `url` to `out` and checks its SHA-256. Sets `ok_var` to TRUE on success, FALSE
+# when the download failed; a file that arrives with the WRONG digest is a hard error (never
+# silently fall back past a tampered or changed archive).
+function(_qtmesh_ort_download url out sha256 ok_var)
+    if(EXISTS "${out}")
+        file(SHA256 "${out}" _have)
+        if(_have STREQUAL sha256)
+            set(${ok_var} TRUE PARENT_SCOPE)
+            return()
+        endif()
+        file(REMOVE "${out}")
+    endif()
+    message(STATUS "ONNX Runtime: downloading ${url}")
+    file(DOWNLOAD "${url}" "${out}.part" STATUS _status TLS_VERIFY ON)
+    list(GET _status 0 _code)
+    if(NOT _code EQUAL 0)
+        list(GET _status 1 _msg)
+        message(STATUS "ONNX Runtime: download failed (${_msg})")
+        file(REMOVE "${out}.part")
+        set(${ok_var} FALSE PARENT_SCOPE)
+        return()
+    endif()
+    file(SHA256 "${out}.part" _have)
+    if(NOT _have STREQUAL sha256)
+        file(REMOVE "${out}.part")
+        message(FATAL_ERROR "ONNX Runtime: SHA-256 mismatch for ${url}\n"
+                            "  expected ${sha256}\n  got      ${_have}")
+    endif()
+    file(RENAME "${out}.part" "${out}")
+    set(${ok_var} TRUE PARENT_SCOPE)
+endfunction()
 
-# FetchContent sets <name>_SOURCE_DIR
-set(QTMESH_ONNX_ROOT "${${_ort_fetch_name}_SOURCE_DIR}")
+# Lays the NuGet package out like the release archive (include/ + lib/ with the same file
+# names, including the SONAME links), so everything below and the packaging globs in
+# src/CMakeLists.txt work unchanged. The libraries in the package carry the same install
+# names as the archive's (@rpath/libonnxruntime.1.dylib, libonnxruntime.so.1).
+function(_qtmesh_ort_stage_nuget nupkg rid root)
+    set(_stamp "${root}/.qtmesh-ort-${QTMESH_ONNX_VERSION}-${rid}")
+    if(EXISTS "${_stamp}")
+        return()
+    endif()
+    file(REMOVE_RECURSE "${root}" "${root}-x")
+    file(ARCHIVE_EXTRACT INPUT "${nupkg}" DESTINATION "${root}-x"
+         PATTERNS "build/native/include/*" "runtimes/${rid}/native/*")
+    file(MAKE_DIRECTORY "${root}/lib")
+    file(COPY "${root}-x/build/native/include/" DESTINATION "${root}/include")
+    set(_native "${root}-x/runtimes/${rid}/native")
+    set(_v "${QTMESH_ONNX_VERSION}")
+    if(rid MATCHES "^osx")
+        file(COPY_FILE "${_native}/libonnxruntime.dylib" "${root}/lib/libonnxruntime.${_v}.dylib")
+        file(CREATE_LINK "libonnxruntime.${_v}.dylib" "${root}/lib/libonnxruntime.1.dylib" SYMBOLIC)
+        file(CREATE_LINK "libonnxruntime.${_v}.dylib" "${root}/lib/libonnxruntime.dylib" SYMBOLIC)
+    elseif(rid MATCHES "^linux")
+        file(COPY_FILE "${_native}/libonnxruntime.so" "${root}/lib/libonnxruntime.so.${_v}")
+        file(CREATE_LINK "libonnxruntime.so.${_v}" "${root}/lib/libonnxruntime.so.1" SYMBOLIC)
+        file(CREATE_LINK "libonnxruntime.so.1" "${root}/lib/libonnxruntime.so" SYMBOLIC)
+        if(EXISTS "${_native}/libonnxruntime_providers_shared.so")
+            file(COPY_FILE "${_native}/libonnxruntime_providers_shared.so"
+                           "${root}/lib/libonnxruntime_providers_shared.so")
+        endif()
+    else()
+        file(GLOB _win_files "${_native}/*")
+        file(COPY ${_win_files} DESTINATION "${root}/lib")
+    endif()
+    file(REMOVE_RECURSE "${root}-x")
+    file(TOUCH "${_stamp}")
+endfunction()
+
+string(TOUPPER "${QTMESH_ONNX_SOURCE}" _ort_source)
+if(NOT _ort_source MATCHES "^(AUTO|GITHUB|NUGET)$")
+    message(FATAL_ERROR "QTMESH_ONNX_SOURCE must be AUTO, GITHUB or NUGET (got '${QTMESH_ONNX_SOURCE}')")
+endif()
+if(NOT _ort_nuget_rid OR NOT QTMESH_ONNX_VERSION STREQUAL "1.31.1")
+    # The pinned package digest belongs to 1.31.1, and the package has no universal2 or
+    # CUDA build: those configurations can only use the GitHub archive.
+    if(_ort_source STREQUAL "NUGET")
+        message(FATAL_ERROR "QTMESH_ONNX_SOURCE=NUGET: no NuGet mapping for ${_ort_archive}")
+    endif()
+    set(_ort_nuget_rid "")
+endif()
+
+set(_ort_dl_dir "${CMAKE_BINARY_DIR}/_deps/qtmesh_onnxruntime_downloads")
+file(MAKE_DIRECTORY "${_ort_dl_dir}")
+set(_ort_local_archive "${_ort_dl_dir}/${_ort_archive}")
+# A build directory configured before this fallback existed already holds the archive
+# FetchContent downloaded: reuse it instead of going back to the network.
+set(_ort_old_copy
+    "${CMAKE_BINARY_DIR}/_deps/${_ort_fetch_name}-subbuild/${_ort_fetch_name}-populate-prefix/src/${_ort_archive}")
+if(NOT EXISTS "${_ort_local_archive}" AND EXISTS "${_ort_old_copy}")
+    file(COPY_FILE "${_ort_old_copy}" "${_ort_local_archive}")
+endif()
+
+set(_ort_have_archive FALSE)
+if(NOT _ort_source STREQUAL "NUGET")
+    _qtmesh_ort_download("${QTMESH_ONNX_BASE_URL}/${_ort_archive}" "${_ort_local_archive}"
+                         "${_ort_sha256}" _ort_have_archive)
+endif()
+
+if(_ort_have_archive)
+    include(FetchContent)
+    FetchContent_Declare(
+        ${_ort_fetch_name}
+        URL "${_ort_local_archive}"
+        URL_HASH SHA256=${_ort_sha256}
+    )
+    FetchContent_MakeAvailable(${_ort_fetch_name})
+    # FetchContent sets <name>_SOURCE_DIR
+    set(QTMESH_ONNX_ROOT "${${_ort_fetch_name}_SOURCE_DIR}")
+elseif(_ort_nuget_rid)
+    set(_ort_nupkg "${_ort_dl_dir}/microsoft.ml.onnxruntime.${QTMESH_ONNX_VERSION}.nupkg")
+    _qtmesh_ort_download(
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${QTMESH_ONNX_VERSION}/microsoft.ml.onnxruntime.${QTMESH_ONNX_VERSION}.nupkg"
+        "${_ort_nupkg}" "${_ort_nuget_sha256}" _ort_have_nupkg)
+    if(NOT _ort_have_nupkg)
+        message(FATAL_ERROR "ONNX Runtime: neither the GitHub archive nor the NuGet package "
+                            "could be downloaded. Disable with -DENABLE_ONNX=OFF.")
+    endif()
+    set(QTMESH_ONNX_ROOT "${CMAKE_BINARY_DIR}/_deps/qtmesh_onnxruntime_nuget_${_ort_nuget_rid}")
+    _qtmesh_ort_stage_nuget("${_ort_nupkg}" "${_ort_nuget_rid}" "${QTMESH_ONNX_ROOT}")
+    message(STATUS "ONNX Runtime: using the NuGet package (${_ort_nuget_rid})")
+else()
+    message(FATAL_ERROR "ONNX Runtime: could not download ${QTMESH_ONNX_BASE_URL}/${_ort_archive} "
+                        "and this configuration has no NuGet fallback. Disable with -DENABLE_ONNX=OFF.")
+endif()
 set(QTMESH_ONNX_INCLUDE_DIR "${QTMESH_ONNX_ROOT}/include")
 
 file(GLOB _ort_libs
