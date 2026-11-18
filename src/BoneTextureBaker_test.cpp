@@ -38,6 +38,7 @@ The MIT License
 
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <random>
 
 using namespace BoneTexture;
@@ -754,11 +755,16 @@ TEST(BoneTextureSurface, ShaderTemplatesAreGodotOnly)
     ASSERT_TRUE(tmp.isValid());
     EXPECT_TRUE(VATShaderEmitter::writeBoneTextureShaders(tmp.path(), { QStringLiteral("unity") }).isEmpty());
     EXPECT_TRUE(VATShaderEmitter::writeBoneTextureShaders(QString(), { QStringLiteral("godot") }).isEmpty());
-    QFile probe(QStringLiteral(":/vat-shaders/bone_texture.gdshader"));
-    if (!probe.exists()) {
+    // A target that links the VAT shader collection must carry the bone
+    // templates too: a dropped qrc entry has to fail here, not skip.
+    if (!QFile::exists(QStringLiteral(":/vat-shaders/openvat.gdshader"))) {
         SUCCEED() << "vat_shaders.qrc not linked into this test binary";
         return;
     }
+    ASSERT_TRUE(QFile::exists(QStringLiteral(":/vat-shaders/bone_texture.gdshader")));
+    ASSERT_TRUE(QFile::exists(QStringLiteral(":/vat-shaders/BoneTextureMesh.gd")));
+    EXPECT_EQ(VATShaderEmitter::boneTextureFiles({ QStringLiteral("godot") }),
+              (QStringList{ QStringLiteral("bone_texture.gdshader"), QStringLiteral("BoneTextureMesh.gd") }));
     const QStringList written = VATShaderEmitter::writeBoneTextureShaders(tmp.path(), { QStringLiteral("GODOT") });
     ASSERT_EQ(written.size(), 3) << written.join(QLatin1Char(',')).toStdString();
     EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("bone_texture.gdshader"))));
@@ -787,4 +793,127 @@ TEST_F(BoneTextureOgreTest, BakeToDirectoryWritesTextureSidecarAndWarnsOnUnknown
     EXPECT_TRUE(r.meshPath.isEmpty());
     ASSERT_FALSE(r.warnings.isEmpty());
     EXPECT_TRUE(r.warnings.join(QLatin1Char(' ')).contains(QStringLiteral("unreal")));
+}
+
+
+// ---------------------------------------------------------------------------
+// Review round (#1174): publication, half range, size preflight, masks.
+// ---------------------------------------------------------------------------
+
+TEST(BoneTextureWrite, HalfEncodingRefusesValuesPastTheHalfRange)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BakedClips b;
+    b.bones = { { QStringLiteral("root"), -1 } };
+    Clip c; c.name = QStringLiteral("Far"); c.frameCount = 1;
+    b.clips = { c };
+    layoutClips(b.clips);
+    b.frames = { { { translation(70000.0f, 0, 0) } } };
+    const WriteResult r = write(b, tmp.path(), QStringLiteral("far"), QStringLiteral("rgba16f"));
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("rgba32f"))) << r.error.toStdString();
+    EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files).isEmpty());
+    // float32 holds it fine.
+    EXPECT_TRUE(write(b, tmp.path(), QStringLiteral("far"), QStringLiteral("rgba32f")).ok);
+}
+
+TEST(BoneTextureWrite, FailedSidecarKeepsThePreviousBakeConsistent)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const BakedClips first = taggedBake(2, 3, 2);
+    ASSERT_TRUE(write(first, tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
+    const QString texPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.exr"));
+    const QString jsonPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json"));
+    QFile t(texPath);
+    ASSERT_TRUE(t.open(QIODevice::ReadOnly));
+    const QByteArray oldTexture = t.readAll();
+    t.close();
+
+    // Make the sidecar unwritable: replace it with a directory.
+    ASSERT_TRUE(QFile::remove(jsonPath));
+    ASSERT_TRUE(QDir().mkdir(jsonPath));
+    const BakedClips second = taggedBake(4, 5, 5);   // different size
+    const WriteResult r = write(second, tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f"));
+    EXPECT_FALSE(r.ok);
+    ASSERT_TRUE(t.open(QIODevice::ReadOnly));
+    EXPECT_EQ(t.readAll(), oldTexture) << "the previous texture must be put back";
+    // No staging files left behind.
+    for (const QString& f : QDir(tmp.path()).entryList(QDir::Files))
+        EXPECT_FALSE(f.endsWith(QStringLiteral(".tmp"))) << f.toStdString();
+}
+
+TEST(BoneTextureLayout, FrameCountSaturatesInsteadOfOverflowing)
+{
+    EXPECT_EQ(frameCountFor(1.0e6, 1.0e6), std::numeric_limits<int>::max());
+    EXPECT_EQ(frameCountFor(1.0, 30.0), 31);
+}
+
+TEST_F(BoneTextureOgreTest, SizeLimitIsCheckedBeforeSampling)
+{
+    auto* entity = createBlendedSkinEntity("BT_Preflight");
+    SampleOptions opts;
+    opts.fps = 1.0e9;   // ~1e9 frames: must fail fast, not allocate
+    BakedClips out;
+    QString err;
+    EXPECT_FALSE(sampleEntity(entity, opts, &out, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("lower the fps"))) << err.toStdString();
+    EXPECT_TRUE(out.frames.empty());
+    opts.fps = 10.0;
+    opts.maxTextureSize = 5;   // 2 bones need 6 texels
+    EXPECT_FALSE(sampleEntity(entity, opts, &out, &err));
+    EXPECT_TRUE(err.contains(QStringLiteral("texel-wide"))) << err.toStdString();
+}
+
+TEST_F(BoneTextureOgreTest, BlendMasksAreLiftedWhileSamplingAndRestored)
+{
+    auto* entity = createBlendedSkinEntity("BT_Mask");
+    auto* sway = entity->getAnimationState("Sway");
+    // Mask the Spine (handle 1) out entirely, as a layered graph would.
+    sway->createBlendMask(2, 1.0f);
+    sway->setBlendMaskEntry(1, 0.0f);
+
+    BakedClips masked;
+    QString err;
+    SampleOptions opts;
+    opts.clips = { QStringLiteral("Sway") };
+    opts.fps = 4.0;
+    ASSERT_TRUE(sampleEntity(entity, opts, &masked, &err)) << err.toStdString();
+    ASSERT_TRUE(sway->hasBlendMask()) << "the caller's mask is restored";
+    EXPECT_FLOAT_EQ(sway->getBlendMaskEntry(1), 0.0f);
+
+    sway->destroyBlendMask();
+    BakedClips plain;
+    ASSERT_TRUE(sampleEntity(entity, opts, &plain, &err)) << err.toStdString();
+    // The masked bake must equal the unmasked one (the mask was lifted).
+    for (size_t f = 0; f < plain.frames[0].size(); ++f)
+        for (size_t b = 0; b < 2; ++b)
+            expectMatNear(masked.frames[0][f][b], plain.frames[0][f][b], 1e-6f);
+}
+
+TEST_F(BoneTextureOgreTest, RejectedRequestLeavesAnExistingBakeUntouched)
+{
+    auto* entity = createBlendedSkinEntity("BT_Untouched");
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BakeRequest req;
+    req.outputDir = tmp.path();
+    req.basename = QStringLiteral("hero");
+    req.fps = 10.0;
+    req.exportMesh = false;
+    ASSERT_TRUE(bakeToDirectory(entity, req).ok);
+    const QStringList before = QDir(tmp.path()).entryList(QDir::Files);
+    QFile j(QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json")));
+    ASSERT_TRUE(j.open(QIODevice::ReadOnly));
+    const QByteArray sidecar = j.readAll();
+    j.close();
+
+    req.clips = { QStringLiteral("NoSuchClip") };
+    req.exportMesh = true;
+    const BakeReport r = bakeToDirectory(entity, req);
+    EXPECT_FALSE(r.ok);
+    EXPECT_EQ(QDir(tmp.path()).entryList(QDir::Files), before) << "no glb written for a rejected bake";
+    ASSERT_TRUE(j.open(QIODevice::ReadOnly));
+    EXPECT_EQ(j.readAll(), sidecar);
 }

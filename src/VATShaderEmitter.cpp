@@ -136,6 +136,16 @@ QStringList VATShaderEmitter::boneTextureEngines()
     return out;
 }
 
+QStringList VATShaderEmitter::boneTextureFiles(const QStringList& engines)
+{
+    QStringList out;
+    for (const auto& s : kBoneSpecs) {
+        if (engines.contains(QString::fromLatin1(s.engine), Qt::CaseInsensitive))
+            out.append(QString::fromLatin1(s.outputName));
+    }
+    return out;
+}
+
 QStringList VATShaderEmitter::writeBoneTextureShaders(const QString& outputDir,
                                                       const QStringList& engines)
 {

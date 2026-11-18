@@ -284,3 +284,19 @@ TEST_F(VATBakerControllerSceneTest, BoneTextureModeOffersAllClipsAndBakes) {
     ASSERT_EQ(finishedSpy.count(), 1);
     EXPECT_FALSE(finishedSpy.first().at(0).toBool());
 }
+
+TEST_F(VATBakerControllerSceneTest, BoneTextureRefusesUnknownTarget) {
+    auto* entity = createAnimatedTestEntity("VAT_Ctrl_BonesTarget");
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->append(entity);
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    auto* ctrl = VATBakerController::instance();
+    QSignalSpy finishedSpy(ctrl, &VATBakerController::bakeFinished);
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 10.0, tmp.path(), QString(), {},
+                            QStringLiteral("bone-texture"), QStringLiteral("rgba32f"),
+                            QStringLiteral("gdoot")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.first().at(0).toBool());
+    EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files).isEmpty());
+}

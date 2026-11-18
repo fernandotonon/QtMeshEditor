@@ -49,7 +49,7 @@ func _ready() -> void:
 	# fail in web because the raw .gltf bytes aren't shipped.
 	var pack: PackedScene = load(source_gltf) as PackedScene
 	if pack == null:
-		push_error("PerfSpawnerSkeleton: load('%s') returned null" % source_gltf)
+		DemoConfig.setup_failed(self, "load('%s') returned null" % source_gltf)
 		return
 
 	var side := int(ceil(sqrt(instance_count)))

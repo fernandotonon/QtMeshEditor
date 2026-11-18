@@ -11172,10 +11172,14 @@ int CLIPipeline::cmdVatBoneTexture(int argc, char* argv[])
     for (int i = 1; i < argc; ++i) {
         const QString arg(argv[i]);
         if (arg == QLatin1String("vat") || arg == QLatin1String("--cli")) continue;
+        // Global flags `run` already handled.
+        if (arg == QLatin1String("--verbose") || arg == QLatin1String("--no-telemetry")) continue;
         if (arg == QLatin1String("--json")) { jsonOutput = true; continue; }
         if (arg == QLatin1String("--no-mesh")) { exportMesh = false; continue; }
+        // A value-taking option must not swallow the next option
+        // (`--include-shaders --no-mesh` would silently drop --no-mesh).
         auto needValue = [&](const char* what) {
-            if (i + 1 < argc) return true;
+            if (i + 1 < argc && !QString(argv[i + 1]).startsWith(QLatin1String("--"))) return true;
             err() << "Error: " << arg << " requires " << what << "." << Qt::endl;
             return false;
         };
@@ -11214,7 +11218,13 @@ int CLIPipeline::cmdVatBoneTexture(int argc, char* argv[])
         }
         if (arg == QLatin1String("--include-shaders")) {
             if (!needValue("a value (godot, all)")) return 2;
-            shaderEngines << VATShaderEmitter::parseEngineList(QString(argv[++i]));
+            QStringList rejected;
+            shaderEngines << VATShaderEmitter::parseEngineList(QString(argv[++i]), &rejected);
+            if (!rejected.isEmpty()) {
+                err() << "Error: --include-shaders: unknown engine(s) " << rejected.join(QLatin1Char(','))
+                      << " (accepted: godot, unity, unreal, all)." << Qt::endl;
+                return 2;
+            }
             continue;
         }
         if (arg == QLatin1String("--basename")) {

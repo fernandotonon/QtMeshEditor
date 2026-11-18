@@ -12,7 +12,8 @@ extends Label
 @export var bench_label: String = ""  ## Path id printed by the benchmark line.
 
 var _bench_seconds: float = 0.0
-var _bench_elapsed: float = 0.0
+var _bench_start_us: int = 0
+var _bench_last_us: int = 0
 var _bench_frames: Array[float] = []
 const BENCH_WARMUP := 2.0
 
@@ -38,12 +39,23 @@ static func _mb(bytes: int) -> String:
 	return "%.1f MB" % (float(bytes) / 1048576.0)
 
 
-func _bench_tick(delta: float) -> void:
-	_bench_elapsed += delta
-	if _bench_elapsed < BENCH_WARMUP:
+func _bench_tick() -> void:
+	# Wall-clock timestamps, not `delta`: Godot caps the process delta when
+	# frames get slow, which would overstate a heavy path's FPS.
+	if Engine.has_meta("demo_setup_failed"):
 		return
-	_bench_frames.append(delta)
-	if _bench_elapsed < BENCH_WARMUP + _bench_seconds:
+	var now := Time.get_ticks_usec()
+	if _bench_start_us == 0:
+		_bench_start_us = now
+		_bench_last_us = now
+		return
+	var elapsed := float(now - _bench_start_us) / 1e6
+	var frame := float(now - _bench_last_us) / 1e6
+	_bench_last_us = now
+	if elapsed < BENCH_WARMUP:
+		return
+	_bench_frames.append(frame)
+	if elapsed < BENCH_WARMUP + _bench_seconds:
 		return
 	var sorted := _bench_frames.duplicate()
 	sorted.sort()
@@ -71,7 +83,7 @@ func _bench_tick(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	if _bench_seconds > 0.0:
-		_bench_tick(delta)
+		_bench_tick()
 	_frames_seen += 1
 	_accum_time += delta
 	_rolling_window.append(delta)

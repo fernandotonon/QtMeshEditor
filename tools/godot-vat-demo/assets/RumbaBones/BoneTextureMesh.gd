@@ -5,8 +5,11 @@
 ## which writes <basename>.glb (bind pose + skin), <basename>_bones.exr and
 ## <basename>_bones.json.
 ##
-## Typical use (one shared mesh + material for a whole crowd):
+## Typical use (one shared mesh + material for a whole crowd). The script has
+## no `class_name` on purpose: every bake ships its own copy, and two copies
+## registering the same global class would collide, so load it by path:
 ##
+##   const BoneTextureMesh = preload("res://hero/BoneTextureMesh.gd")
 ##   var sidecar := BoneTextureMesh.load_sidecar("res://hero/hero_bones.json")
 ##   var scene := (load("res://hero/hero.glb") as PackedScene).instantiate()
 ##   var mesh := BoneTextureMesh.build_mesh(scene, sidecar)
@@ -22,11 +25,11 @@
 ## Why the mesh has to be rebuilt: a Godot spatial shader cannot read a
 ## skinned mesh's BONE_INDICES/BONE_WEIGHTS, and the imported skin numbers
 ## its joints in its own order. build_mesh() maps each skin joint to the
-## texture's bone index BY NAME (Godot sanitises names on import, so both
-## sides are normalised) and stores 4 indices/weights per vertex in
+## texture's bone index BY NAME (exact name first; Godot sanitises names
+## on import, so otherwise a normalised name, used only when it identifies
+## ONE texture bone) and stores 4 indices/weights per vertex in
 ## CUSTOM0/CUSTOM1 (RGBA float), dropping the engine skin so the mesh can be
 ## instanced.
-class_name BoneTextureMesh
 extends RefCounted
 
 
@@ -78,10 +81,18 @@ static func _find_skinned(root: Node, out: Array) -> void:
 ## Every skinned MeshInstance3D's surfaces are merged into one ArrayMesh
 ## (their materials kept). Returns null when nothing usable was found.
 static func build_mesh(scene_root: Node, sidecar: Dictionary) -> ArrayMesh:
-	var bone_of_key := {}
+	# Exact names first; a normalised key only when exactly one texture bone
+	# produces it ("Arm" and "arm" both normalise to "arm" - ambiguous).
+	var bone_of_name := {}
+	var bones_of_key := {}
 	var bones: Array = sidecar.get("bones", [])
 	for i in range(bones.size()):
-		bone_of_key[_name_key(str((bones[i] as Dictionary).get("name", "")))] = i
+		var bn := str((bones[i] as Dictionary).get("name", ""))
+		bone_of_name[bn] = i
+		var k := _name_key(bn)
+		if not bones_of_key.has(k):
+			bones_of_key[k] = []
+		(bones_of_key[k] as Array).append(i)
 
 	var skinned: Array = []
 	_find_skinned(scene_root, skinned)
@@ -91,6 +102,7 @@ static func build_mesh(scene_root: Node, sidecar: Dictionary) -> ArrayMesh:
 
 	var out := ArrayMesh.new()
 	var unmapped := {}
+	var ambiguous := {}
 	for mi_v in skinned:
 		var mi: MeshInstance3D = mi_v
 		var skin: Skin = mi.skin
@@ -102,11 +114,16 @@ static func build_mesh(scene_root: Node, sidecar: Dictionary) -> ArrayMesh:
 			var n := str(skin.get_bind_name(b))
 			if n.is_empty() and skeleton != null and skin.get_bind_bone(b) >= 0:
 				n = skeleton.get_bone_name(skin.get_bind_bone(b))
-			var k := _name_key(n)
-			if bone_of_key.has(k):
-				remap[b] = bone_of_key[k]
+			remap[b] = -1
+			if bone_of_name.has(n):
+				remap[b] = bone_of_name[n]
 			else:
-				remap[b] = -1
+				var cands: Array = bones_of_key.get(_name_key(n), [])
+				if cands.size() == 1:
+					remap[b] = cands[0]
+				elif cands.size() > 1:
+					ambiguous[n] = true
+			if remap[b] < 0 and not ambiguous.has(n):
 				unmapped[n] = true
 
 		var mesh: Mesh = mi.mesh
@@ -151,6 +168,9 @@ static func build_mesh(scene_root: Node, sidecar: Dictionary) -> ArrayMesh:
 			var m := mi.get_active_material(s)
 			if m != null:
 				out.surface_set_material(out.get_surface_count() - 1, m)
+	if not ambiguous.is_empty():
+		push_warning("BoneTextureMesh: %d skin joints match several texture bones once names are normalised (weights dropped): %s"
+			% [ambiguous.size(), ", ".join(PackedStringArray(ambiguous.keys()))])
 	if not unmapped.is_empty():
 		push_warning("BoneTextureMesh: %d skin joints have no bone in the texture (weights dropped): %s"
 			% [unmapped.size(), ", ".join(PackedStringArray(unmapped.keys()))])
@@ -178,9 +198,11 @@ static func make_material(shader: Shader, bone_tex: Texture2D, sidecar: Dictiona
 	if mesh != null:
 		for s in range(mesh.get_surface_count()):
 			var sm := mesh.surface_get_material(s)
-			if sm is BaseMaterial3D and (sm as BaseMaterial3D).albedo_texture != null:
-				mat.set_shader_parameter("albedo_tex", (sm as BaseMaterial3D).albedo_texture)
-				mat.set_shader_parameter("albedo_color", (sm as BaseMaterial3D).albedo_color)
+			if sm is BaseMaterial3D:
+				var bm := sm as BaseMaterial3D
+				mat.set_shader_parameter("albedo_color", bm.albedo_color)
+				if bm.albedo_texture != null:
+					mat.set_shader_parameter("albedo_tex", bm.albedo_texture)
 				break
 	return mat
 

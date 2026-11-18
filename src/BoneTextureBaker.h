@@ -49,7 +49,9 @@ namespace Ogre { class Entity; }
  *   - Row 0 is the first scanline (top of the image).
  *   - Each clip samples BOTH ends: frame 0 at t = 0 and frame N-1 at
  *     t = duration, so interpolation never reads the next clip's rows and
- *     a looping clip wraps seamlessly. `Clip::fps` is the EFFECTIVE rate
+ *     a looping clip wraps without blending into another clip (a SEAMLESS
+ *     loop still needs a clip whose last pose matches its first).
+ *     `Clip::fps` is the EFFECTIVE rate
  *     ((N-1)/duration) — use it, not the requested fps, to index frames.
  *
  * ## Space
@@ -107,6 +109,8 @@ struct BakedClips {
 constexpr int kTexelsPerBone = 3;
 constexpr int kMaxInfluences = 4;
 constexpr int kDefaultMaxTextureSize = 8192;
+/// Clip-table size of the bundled Godot template (`uniform vec4 clips[32]`).
+constexpr int kGodotTemplateMaxClips = 32;
 
 /// Frame count for a clip of `duration` seconds at `fps`: both ends
 /// sampled, at least 2 frames for a positive duration, 1 for a static
@@ -189,6 +193,8 @@ WriteResult write(const BakedClips& baked, const QString& outputDir,
 struct SampleOptions {
     QStringList clips;        ///< Skeletal animations to bake; empty = all (skeleton order).
     double      fps = 30.0;
+    /// Width / total-row limit checked BEFORE any pose is sampled.
+    int         maxTextureSize = kDefaultMaxTextureSize;
 };
 
 /**
@@ -196,8 +202,10 @@ struct SampleOptions {
  * per frame. The entity's animation states (enabled, time, weight, loop)
  * and its skeleton pose are restored afterwards. Fills `out` (clips laid
  * out) or returns false with `*error` set: no skeleton, unknown clip,
- * fps <= 0, invalid bind pose (non-finite / zero-scale inverse bind) or a
- * non-finite sampled matrix.
+ * fps <= 0, invalid bind pose (non-finite / zero-scale inverse bind), a
+ * texture over `maxTextureSize` (checked before sampling) or a non-finite
+ * sampled matrix. Blend masks are lifted while sampling (each clip is
+ * baked standalone at full weight) and restored with the enabled order.
  */
 bool sampleEntity(Ogre::Entity* entity, const SampleOptions& opts,
                   BakedClips* out, QString* error);
@@ -243,11 +251,12 @@ struct BakeReport {
 };
 
 /// Sample `entity`, write texture + sidecar (+ mesh, + shaders) into
-/// `req.outputDir`. The mesh is exported BEFORE sampling (the VAT
-/// lesson: exporting after touching animation state produced a broken
-/// glTF) and carries the skin, so an engine reads each vertex's bone
-/// indices/weights from it and maps the skin's joints to the texture's
-/// bone order BY NAME (`bones[].name` in the sidecar).
+/// `req.outputDir`. Nothing is written until sampling succeeded; the
+/// texture/sidecar pair is published together and the mesh last, so a
+/// failed request leaves an existing bake intact. The mesh carries the
+/// skin, so an engine reads each vertex's bone indices/weights from it and
+/// maps the skin's joints to the texture's bone order BY NAME
+/// (`bones[].name` in the sidecar).
 BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req);
 
 /// Machine-readable summary (CLI `--json`, MCP result).

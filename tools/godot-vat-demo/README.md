@@ -46,16 +46,18 @@ The web build is ~30 MB compressed; the dancer + bake is most of it.
 ## Perf comparison
 
 `./bench.sh` runs every path at 100 / 400 / 1000 / 5000 instances (2 s
-warm-up, 8 s measured, vsync off, 1280x720) and writes one JSON line per run
-to `bench_results.jsonl`. Measured 2026-11-18 on an Apple M5 (Godot 4.7.2,
-Forward+ / Metal), same Rumba dancer (5828 vertices, 70 bones, 72-frame clip):
+warm-up, 8 s measured with wall-clock timestamps, vsync off, 1280x720, the
+camera pulled back until the whole crowd is in view, path order rotated per
+count) and writes one JSON line per run to `bench_results.jsonl`. Measured
+2026-11-18 on an Apple M5 (Godot 4.7.2, Forward+ / Metal), same Rumba
+dancer (5828 vertices, 70 bones, 72-frame clip), one sample per cell:
 
 | Instances | Skeletal | VAT | Bone texture |
 |---:|---:|---:|---:|
-| 100  | 191 fps (5.2 ms), 1111 draws | 380 fps (2.6 ms), 22 draws | 397 fps (2.5 ms), 22 draws |
-| 400  | 55 fps (18.0 ms), 4411 draws | 201 fps (5.0 ms) | 289 fps (3.5 ms) |
-| 1000 | 22 fps (45.6 ms), 11011 draws | 156 fps (6.4 ms) | 158 fps (6.3 ms) |
-| 5000 | 7.5 fps (133 ms), 54967 draws | 45.8 fps (21.8 ms) | 39.5 fps (25.3 ms) |
+| 100  | 245 fps (4.1 ms), 1111 draws | 529 fps (1.9 ms), 22 draws | 563 fps (1.8 ms), 22 draws |
+| 400  | 61 fps (16.4 ms), 4411 draws | 385 fps (2.6 ms) | 384 fps (2.6 ms) |
+| 1000 | 22 fps (46.2 ms), 11011 draws | 206 fps (4.9 ms) | 188 fps (5.3 ms) |
+| 5000 | 3.4 fps (290 ms), 55011 draws | 51.8 fps (19.3 ms) | 42.4 fps (23.6 ms) |
 
 GPU memory as Godot reports it for the whole scene (all textures, all
 buffers):
@@ -70,16 +72,18 @@ What the animation data itself costs: the VAT texture is 5828 x 142
 texels (positions + normals, one column per vertex), the bone texture
 210 x 72 RGBA float = 0.24 MB (rgba16f would halve it). Both instanced
 paths add only the MultiMesh instance buffer per instance (~64 bytes),
-while the skeletal path grows by ~110 KB of buffers per instance plus a
+while the skeletal path grows by ~115 KB of buffers per instance plus a
 draw call per surface.
 
-Reading it: on this GPU the two baked paths are close. The bone texture
-was faster at 400 instances and slower at 5000, where its heavier vertex
-shader (up to 24 texel fetches per vertex vs VAT's 4) dominates; the VAT
-pays for its texture size instead, which grows with vertex count while
-the bone texture grows with bone count. Both are an order of magnitude
-ahead of per-instance skeletal skinning past a few hundred instances.
-These are one machine's numbers: measure on your target hardware.
+Reading it: on this GPU the two baked paths are close up to ~1000
+instances, and VAT pulls ahead at 5000 (19.3 vs 23.6 ms), where the bone
+texture's heavier vertex shader (up to 24 texel fetches per vertex vs
+VAT's 4) dominates. The bone texture's advantage is size and flexibility,
+not speed: its texture grows with bones x frames instead of vertices x
+frames, many clips fit in one texture, and each instance can pick and
+crossfade clips. Both baked paths are an order of magnitude ahead of
+per-instance skeletal skinning past a few hundred instances. One sample
+per cell; differences of a few percent are noise. These are one machine's numbers: measure on your target hardware.
 
 Both perf scenes spawn 1000 dancers in a grid with desynchronised
 starting frames so the GPU can't optimise away identical work. Run

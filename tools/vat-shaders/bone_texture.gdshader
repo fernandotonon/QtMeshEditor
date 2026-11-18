@@ -9,7 +9,7 @@
 // INSTANCE_CUSTOM (MultiMesh custom data), so nothing is ticked on the CPU
 // per instance.
 //
-// Build the mesh with BoneTextureMesh.gd (it remaps the imported skin's
+// Build the mesh with BoneTextureMesh.gd (preload it by path; it remaps the imported skin's
 // joints onto the texture's bone order BY NAME and writes CUSTOM0/1), then
 // use BoneTextureMesh.make_material() to fill the uniforms below.
 //

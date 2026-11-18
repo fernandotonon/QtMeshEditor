@@ -22,6 +22,7 @@ The MIT License
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QTemporaryFile>
 
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -76,8 +77,12 @@ Mat3x4 lerp(const Mat3x4& a, const Mat3x4& b, float t)
 int frameCountFor(double duration, double fps)
 {
     if (!(duration > 0.0) || !(fps > 0.0)) return 1;
-    const long intervals = std::lround(duration * fps);
-    return static_cast<int>(std::max(1L, intervals)) + 1;
+    // Saturate instead of overflowing: anything this large is rejected by
+    // the texture-size check long before it would be sampled.
+    const double intervals = std::round(duration * fps);
+    if (!(intervals < static_cast<double>(std::numeric_limits<int>::max() - 1)))
+        return std::numeric_limits<int>::max();
+    return std::max(1, static_cast<int>(intervals)) + 1;
 }
 
 int layoutClips(std::vector<Clip>& clips)
@@ -333,6 +338,16 @@ QString buildSidecarJson(const BakedClips& baked, const QString& textureFile,
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
+namespace {
+
+bool saveFileAtomically(const QString& path, const QByteArray& bytes)
+{
+    QSaveFile f(path);
+    return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size() && f.commit();
+}
+
+} // namespace
+
 WriteResult write(const BakedClips& baked, const QString& outputDir,
                   const QString& basename, const QString& encoding,
                   int maxTextureSize)
@@ -369,32 +384,68 @@ WriteResult write(const BakedClips& baked, const QString& outputDir,
         return res;
     }
 
+    if (enc == QStringLiteral("rgba16f")) {
+        // A finite float past the half range would be stored as infinity and
+        // the shader would read an infinite translation: refuse instead.
+        for (size_t i = 0; i < texels.size(); ++i) {
+            if (std::isinf(MinimalEXR::halfToFloat(MinimalEXR::floatToHalf(texels[i])))) {
+                const size_t texel = i / 4;
+                const int bone = static_cast<int>((texel % static_cast<size_t>(width)) / kTexelsPerBone);
+                res.error = QStringLiteral("bone '%1' has a matrix value (%2) outside the half-float "
+                                           "range (+/-65504) - use the rgba32f encoding")
+                                .arg(baked.bones[static_cast<size_t>(bone)].name).arg(texels[i]);
+                return res;
+            }
+        }
+    }
+
     const QDir dir(outputDir);
     const QString texName = basename + QStringLiteral("_bones.exr");
     const QString texPath = dir.filePath(texName);
     const QString jsonPath = dir.filePath(basename + QStringLiteral("_bones.json"));
 
-    // Texture: temp file + rename so an existing bake is never truncated.
-    const QString tmpTex = texPath + QStringLiteral(".qtmesh_tmp");
-    const bool wrote = (enc == QStringLiteral("rgba16f"))
-        ? MinimalEXR::writeRGBA16F(tmpTex, width, height, texels)
-        : MinimalEXR::writeRGBA32F(tmpTex, width, height, texels);
-    if (!wrote) {
-        QFile::remove(tmpTex);
+    // Stage the texture under a name unique to this bake (two bakes into the
+    // same folder must not share a staging file), then publish texture and
+    // sidecar as a PAIR: both through QSaveFile (an existing file is only
+    // replaced once its replacement is complete), and if the sidecar cannot
+    // be published the previous texture is put back, so an old sidecar never
+    // describes a new texture.
+    QByteArray texBytes;
+    {
+        QTemporaryFile staging(dir.filePath(basename + QStringLiteral("_bones.XXXXXX.exr.tmp")));
+        if (!staging.open()) {
+            res.error = QStringLiteral("cannot create a staging file in %1").arg(outputDir);
+            return res;
+        }
+        const QString stagingPath = staging.fileName();
+        staging.close();
+        const bool wrote = (enc == QStringLiteral("rgba16f"))
+            ? MinimalEXR::writeRGBA16F(stagingPath, width, height, texels)
+            : MinimalEXR::writeRGBA32F(stagingPath, width, height, texels);
+        QFile f(stagingPath);
+        if (!wrote || !f.open(QIODevice::ReadOnly)) {
+            res.error = QStringLiteral("failed to write the bone texture %1").arg(texPath);
+            return res;
+        }
+        texBytes = f.readAll();
+    }   // the staging file is removed here
+    const QByteArray jsonBytes = buildSidecarJson(baked, texName, enc, width, height).toUtf8();
+
+    QByteArray previousTexture;
+    bool hadPreviousTexture = false;
+    if (QFile old(texPath); old.exists() && old.open(QIODevice::ReadOnly)) {
+        previousTexture = old.readAll();
+        hadPreviousTexture = true;
+    }
+    if (!saveFileAtomically(texPath, texBytes)) {
         res.error = QStringLiteral("failed to write the bone texture %1").arg(texPath);
         return res;
     }
-    QFile::remove(texPath);
-    if (!QFile::rename(tmpTex, texPath)) {
-        QFile::remove(tmpTex);
-        res.error = QStringLiteral("failed to move the bone texture into place at %1").arg(texPath);
-        return res;
-    }
-
-    QSaveFile json(jsonPath);
-    const QByteArray bytes = buildSidecarJson(baked, texName, enc, width, height).toUtf8();
-    if (!json.open(QIODevice::WriteOnly) || json.write(bytes) != bytes.size() || !json.commit()) {
-        res.error = QStringLiteral("failed to write the bone texture sidecar %1").arg(jsonPath);
+    if (!saveFileAtomically(jsonPath, jsonBytes)) {
+        if (hadPreviousTexture) saveFileAtomically(texPath, previousTexture);
+        else QFile::remove(texPath);
+        res.error = QStringLiteral("failed to write the bone texture sidecar %1 (the previous "
+                                   "texture was restored)").arg(jsonPath);
         return res;
     }
 
@@ -451,6 +502,7 @@ struct StateSnapshot {
     bool loop;
     float time;
     float weight;
+    std::vector<float> blendMask;   ///< Empty = no mask.
 };
 
 } // namespace
@@ -509,27 +561,64 @@ bool sampleEntity(Ogre::Entity* entity, const SampleOptions& opts,
             return fail(QStringLiteral("skeletal animation '%1' not found").arg(name));
     }
 
-    // Snapshot every state so the caller's playback is untouched.
+    // Preflight the texture size BEFORE sampling anything: a huge fps would
+    // otherwise allocate gigabytes of matrices before write() refuses them.
+    {
+        const int width = textureWidth(boneCount);
+        if (width > opts.maxTextureSize)
+            return fail(QStringLiteral("%1 bones need a %2-texel-wide texture, over the %3 limit - "
+                                       "remove unused helper bones or raise the texture size limit")
+                            .arg(boneCount).arg(width).arg(opts.maxTextureSize));
+        double rows = 0.0;
+        for (const QString& name : clipNames) {
+            const double d = states->getAnimationState(name.toStdString())->getLength();
+            rows += (d > 0.0) ? std::max(1.0, std::round(d * opts.fps)) + 1.0 : 1.0;
+        }
+        if (rows > opts.maxTextureSize)
+            return fail(QStringLiteral("%1 frames in total exceed the %2-row texture limit - lower "
+                                       "the fps or bake fewer clips per texture")
+                            .arg(rows, 0, 'f', 0).arg(opts.maxTextureSize));
+    }
+
+    // Snapshot every state so the caller's playback is untouched: flags,
+    // time, weight, per-bone blend masks (a layered motion graph or a
+    // masked pose would otherwise attenuate bones in the bake) and the
+    // ORDER of the enabled list, which Ogre blends in.
     std::vector<StateSnapshot> snapshot;
     for (auto it = states->getAnimationStateIterator(); it.hasMoreElements();) {
         Ogre::AnimationState* s = it.getNext();
-        snapshot.push_back({ s, s->getEnabled(), s->getLoop(), s->getTimePosition(), s->getWeight() });
+        StateSnapshot snap{ s, s->getEnabled(), s->getLoop(), s->getTimePosition(), s->getWeight(), {} };
+        if (s->hasBlendMask()) snap.blendMask = *s->getBlendMask();
+        snapshot.push_back(std::move(snap));
     }
+    std::vector<Ogre::AnimationState*> enabledOrder;
+    for (auto it = states->getEnabledAnimationStateIterator(); it.hasMoreElements();)
+        enabledOrder.push_back(it.getNext());
     struct Restore {
         std::vector<StateSnapshot>& snap;
+        std::vector<Ogre::AnimationState*>& enabledOrder;
         Ogre::SkeletonInstance* skel;
         Ogre::AnimationStateSet* states;
         ~Restore() {
             for (const auto& s : snap) {
-                s.state->setEnabled(s.enabled);
+                s.state->setEnabled(false);
                 s.state->setLoop(s.loop);
                 s.state->setTimePosition(s.time);
                 s.state->setWeight(s.weight);
+                if (!s.blendMask.empty()) {
+                    s.state->createBlendMask(s.blendMask.size());
+                    s.state->_setBlendMask(&s.blendMask);
+                } else if (s.state->hasBlendMask()) {
+                    s.state->destroyBlendMask();
+                }
             }
+            for (Ogre::AnimationState* s : enabledOrder) s->setEnabled(true);
             skel->setAnimationState(*states);
             states->_notifyDirty();
         }
-    } restore{ snapshot, skel, states };
+    } restore{ snapshot, enabledOrder, skel, states };
+    for (const auto& s : snapshot)
+        if (s.state->hasBlendMask()) s.state->destroyBlendMask();
 
     countInfluences(entity->getMesh().get(), out);
 
@@ -652,22 +741,10 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
             .arg(req.clips.isEmpty() ? QStringLiteral("all") : req.clips.join(QLatin1Char(',')))
             .arg(req.fps).arg(rep.encoding, req.outputDir));
 
-    // Mesh first: exporting after the sampler has driven the animation
-    // states was what broke the VAT's glTF export.
-    if (req.exportMesh) {
-        const QString meshPath = QDir(req.outputDir).filePath(basename + QStringLiteral(".glb"));
-        const int rc = MeshImporterExporter::exporter(
-            entity->getParentSceneNode(), meshPath, QStringLiteral("glTF 2.0 Binary (*.glb)"));
-        if (rc == 0 && QFileInfo::exists(meshPath))
-            rep.meshPath = QFileInfo(meshPath).absoluteFilePath();
-        else
-            rep.warnings << QStringLiteral("mesh export to %1 failed (rc=%2) - the texture is still "
-                                           "valid; export the rigged mesh separately").arg(meshPath).arg(rc);
-    }
-
     SampleOptions so;
     so.clips = req.clips;
     so.fps = req.fps;
+    so.maxTextureSize = req.maxTextureSize;
     BakedClips baked;
     QString err;
     if (!sampleEntity(entity, so, &baked, &err)) {
@@ -690,6 +767,21 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
                             .arg(baked.verticesOverLimit).arg(kMaxInfluences)
                             .arg(baked.sourceMaxInfluences);
 
+    // The mesh is exported LAST: a request that fails (unknown clip, size
+    // limit, bad bind pose, write error) leaves an existing bake untouched.
+    // The sampler restores every animation state, so the export sees the
+    // entity exactly as the caller left it.
+    if (req.exportMesh) {
+        const QString meshPath = QDir(req.outputDir).filePath(basename + QStringLiteral(".glb"));
+        const int rc = MeshImporterExporter::exporter(
+            entity->getParentSceneNode(), meshPath, QStringLiteral("glTF 2.0 Binary (*.glb)"));
+        if (rc == 0 && QFileInfo::exists(meshPath))
+            rep.meshPath = QFileInfo(meshPath).absoluteFilePath();
+        else
+            rep.warnings << QStringLiteral("mesh export to %1 failed (rc=%2) - the texture is still "
+                                           "valid; export the rigged mesh separately").arg(meshPath).arg(rc);
+    }
+
     if (!req.shaderEngines.isEmpty()) {
         QStringList supported, skipped;
         const QStringList capable = VATShaderEmitter::boneTextureEngines();
@@ -698,8 +790,19 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
             if (k.isEmpty() || k == QLatin1String("agnostic")) continue;
             (capable.contains(k) ? supported : skipped) << k;
         }
-        if (!supported.isEmpty())
+        if (!supported.isEmpty()) {
             rep.shaders = VATShaderEmitter::writeBoneTextureShaders(req.outputDir, supported);
+            // Each engine ships a fixed set of files; name any that did not land.
+            for (const QString& file : VATShaderEmitter::boneTextureFiles(supported)) {
+                const QString dst = QFileInfo(QDir(req.outputDir).filePath(file)).absoluteFilePath();
+                if (!rep.shaders.contains(dst))
+                    rep.warnings << QStringLiteral("could not write the shader template %1").arg(dst);
+            }
+            if (supported.contains(QLatin1String("godot")) && rep.clips.size() > kGodotTemplateMaxClips)
+                rep.warnings << QStringLiteral("the Godot template addresses %1 clips, this bake has %2 - "
+                                               "split the clips into several bakes")
+                                    .arg(kGodotTemplateMaxClips).arg(rep.clips.size());
+        }
         if (!skipped.isEmpty())
             rep.warnings << QStringLiteral("no bone texture shader template for %1 yet - "
                                            "OpenVAT_README.md describes the texel layout and math")

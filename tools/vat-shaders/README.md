@@ -193,8 +193,9 @@ the bind-pose mesh itself.
 **Layout.** Texel `(bone*3 + r, row)` is row `r` of the bone's 3x4 matrix
 (`m[r][0..3]`); the 4th row is `(0,0,0,1)`. Clips are stacked by row, each
 sampling both ends (row `firstRow` = t 0, row `firstRow+frameCount-1` = clip
-end), so interpolating two adjacent rows never reads the next clip and loops
-wrap seamlessly. Row 0 is the first scanline. Skinned position:
+end), so interpolating two adjacent rows never reads the next clip. Looping
+wraps from the last row to the first; that is seamless only when the clip's
+last pose matches its first (true for authored loops). Row 0 is the first scanline. Skinned position:
 `p' = sum_i w_i * M_i * vec4(p, 1)` (4 influences, renormalised).
 
 **Space.** Mesh-local, Ogre / glTF convention (Y up, right-handed, source
@@ -219,13 +220,21 @@ CPU work.
 Uncompressed*, mipmaps off, filter nearest (the shader uses `texelFetch`).
 Unity: `RGBAFloat`/`RGBAHalf`, no compression, point filter, no mips.
 
-**Accuracy.** On baked frames the texture reproduces the source skinning
-exactly (QtMeshEditor parity test: 2.4e-7 vs Ogre's software skinning).
-Between frames (and in a crossfade) the shader blends matrices
-component-wise, which slightly shrinks large per-frame rotations (1.2 mm at
-20 fps on a fast test rig); bake at a higher fps if that matters. In the
-Godot demo the shader's silhouette matches Godot's own skeletal skinning of
-the same `.glb` to within the 1-pixel antialiased edge.
+**Accuracy.** With `rgba32f`, on baked frames the texture reproduces the
+source skinning to float precision for vertices with up to 4 influences
+(QtMeshEditor parity test against Ogre's software skinning: 2.4e-7).
+Vertices with more influences lose the weakest ones (the sidecar reports how
+many: `skinning.verticesOverLimit`), and `rgba16f` adds half-float rounding
+(about 1e-3 relative; values past +/-65504 are refused at bake time). Between
+frames (and in a crossfade) the shader blends matrices component-wise, which
+slightly shrinks large per-frame rotations (1.2 mm at 20 fps on a fast test
+rig); bake at a higher fps if that matters. In the Godot demo the shader's
+silhouette matches Godot's own skeletal skinning of the same `.glb` to within
+the 1-pixel antialiased edge.
+
+**Godot template limits.** The shader's clip table holds 32 clips (the bake
+warns past that); `BoneTextureMesh.gd` has no `class_name` (each bake ships a
+copy, two copies would collide) — `preload` it by path.
 
 Only a Godot template ships today; Unity/Unreal users can port
 `bone_texture.gdshader` directly (three `texelFetch`es per influence, the

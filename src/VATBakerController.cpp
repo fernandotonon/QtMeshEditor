@@ -261,9 +261,17 @@ bool VATBakerController::bake(const QString& animationName,
     }
     Ogre::Entity* entity = entities.first();
 
-    if (BoneTexture::isModeId(modeId))
+    if (BoneTexture::isModeId(modeId)) {
+        // Same contract as the VAT modes: an unknown target is refused.
+        if (!VATBaker::isValidTargetId(target)) {
+            emit bakeFinished(false, QString(),
+                QStringLiteral("unknown VAT target '%1' (accepted: %2)")
+                    .arg(target, VATBaker::targetIds().join(QStringLiteral(", "))));
+            return false;
+        }
         return bakeBoneTexture(entity, animationName, fps, outputDir, basename,
                                includeShadersFor, encodingId, target);
+    }
 
     VATBaker::Mode mode = VATBaker::Mode::Skeletal;
     if (!VATBaker::modeFromId(modeId.isEmpty() ? QStringLiteral("skeletal") : modeId, &mode)) {

@@ -82,6 +82,8 @@ public:
 
     /// Engines with a bone texture (#1166) template (today: godot).
     static QStringList boneTextureEngines();
+    /// File names the bone texture templates of `engines` write.
+    static QStringList boneTextureFiles(const QStringList& engines);
 
     /// Copy the bone texture templates of `engines` (godot: the vertex
     /// shader + `BoneTextureMesh.gd`, the mesh builder) and the README

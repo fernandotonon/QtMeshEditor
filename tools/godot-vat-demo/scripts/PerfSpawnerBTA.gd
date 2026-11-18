@@ -18,6 +18,8 @@
 
 extends Node3D
 
+const BoneTextureMesh = preload("res://assets/RumbaBones/BoneTextureMesh.gd")
+
 @export var instance_count: int = 1000
 @export var grid_spacing: float = 1.6
 @export_file("*.glb") var source_glb: String = "res://assets/RumbaBones/Rumba.glb"
@@ -43,19 +45,21 @@ func _ready() -> void:
 
 	var sidecar := BoneTextureMesh.load_sidecar(sidecar_path)
 	if sidecar.is_empty():
+		DemoConfig.setup_failed(self, "cannot read %s" % sidecar_path)
 		return
 	var pack := load(source_glb) as PackedScene
 	if pack == null:
-		push_error("PerfSpawnerBTA: load('%s') failed" % source_glb)
+		DemoConfig.setup_failed(self, "load('%s') failed" % source_glb)
 		return
 	var scene := pack.instantiate()
 	var mesh := BoneTextureMesh.build_mesh(scene, sidecar)
 	scene.free()
 	if mesh == null:
+		DemoConfig.setup_failed(self, "no skinned mesh in %s" % source_glb)
 		return
 	var tex := load(bone_texture) as Texture2D
 	if tex == null:
-		push_error("PerfSpawnerBTA: load('%s') failed" % bone_texture)
+		DemoConfig.setup_failed(self, "load('%s') failed" % bone_texture)
 		return
 	_material = BoneTextureMesh.make_material(load(shader_path) as Shader, tex, sidecar, mesh)
 	BoneTextureMesh.apply_material(mesh, _material)

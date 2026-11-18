@@ -294,3 +294,24 @@ TEST(CLIPipeline_cmdVatCoverageTest, BoneTextureMissingFileReturns1)
     VatArgv args({"qtmesh", "vat", "/definitely/not/here.fbx", "--mode", "bone-texture"});
     EXPECT_EQ(1, CLIPipeline::cmdVat(args.argc(), args.argv()));
 }
+
+TEST(CLIPipeline_cmdVatCoverageTest, BoneTextureValueOptionDoesNotSwallowNextFlag)
+{
+    VatArgv args({"qtmesh", "vat", "x.fbx", "--mode", "bone-texture", "--include-shaders", "--no-mesh"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdVatCoverageTest, BoneTextureRejectsUnknownShaderEngine)
+{
+    VatArgv args({"qtmesh", "vat", "x.fbx", "--mode", "bone-texture", "--include-shaders", "gdoot"});
+    EXPECT_EQ(2, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
+
+TEST(CLIPipeline_cmdVatCoverageTest, BoneTextureAcceptsGlobalFlags)
+{
+    // --verbose / --no-telemetry are handled by run(); reaching "file not
+    // found" (1) proves the parser accepted them instead of failing (2).
+    VatArgv args({"qtmesh", "vat", "/definitely/not/here.fbx", "--mode", "bone-texture",
+                  "--verbose", "--no-telemetry"});
+    EXPECT_EQ(1, CLIPipeline::cmdVat(args.argc(), args.argv()));
+}
