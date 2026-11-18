@@ -38,8 +38,10 @@ The MIT License
 
 #include <cmath>
 #include <cstring>
+#include <atomic>
 #include <limits>
 #include <random>
+#include <thread>
 
 using namespace BoneTexture;
 
@@ -818,30 +820,106 @@ TEST(BoneTextureWrite, HalfEncodingRefusesValuesPastTheHalfRange)
     EXPECT_TRUE(write(b, tmp.path(), QStringLiteral("far"), QStringLiteral("rgba32f")).ok);
 }
 
-TEST(BoneTextureWrite, FailedSidecarKeepsThePreviousBakeConsistent)
+namespace {
+QByteArray readAllOf(const QString& path)
+{
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+// width/height from the EXR dataWindow attribute (box2i: xMin yMin xMax yMax).
+QSize exrSize(const QByteArray& exr)
+{
+    const QByteArray tag("dataWindow\0box2i\0", 17);
+    const int at = exr.indexOf(tag);
+    if (at < 0) return {};
+    const char* p = exr.constData() + at + tag.size() + 4;
+    int32_t box[4];
+    std::memcpy(box, p, sizeof(box));
+    return QSize(box[2] - box[0] + 1, box[3] - box[1] + 1);
+}
+
+struct SidecarGuard {
+    ~SidecarGuard() { detail::setSidecarWriteFailureForTest(false); }
+};
+} // namespace
+
+TEST(BoneTextureWrite, FailedSidecarKeepsThePreviousPairIntact)
 {
     QTemporaryDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    const BakedClips first = taggedBake(2, 3, 2);
-    ASSERT_TRUE(write(first, tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
+    ASSERT_TRUE(write(taggedBake(2, 3, 2), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
     const QString texPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.exr"));
     const QString jsonPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json"));
-    QFile t(texPath);
-    ASSERT_TRUE(t.open(QIODevice::ReadOnly));
-    const QByteArray oldTexture = t.readAll();
-    t.close();
+    const QByteArray oldTexture = readAllOf(texPath);
+    const QByteArray oldSidecar = readAllOf(jsonPath);
 
-    // Make the sidecar unwritable: replace it with a directory.
-    ASSERT_TRUE(QFile::remove(jsonPath));
-    ASSERT_TRUE(QDir().mkdir(jsonPath));
-    const BakedClips second = taggedBake(4, 5, 5);   // different size
-    const WriteResult r = write(second, tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f"));
+    SidecarGuard guard;
+    detail::setSidecarWriteFailureForTest(true);
+    const WriteResult r = write(taggedBake(4, 5, 5), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f"));
     EXPECT_FALSE(r.ok);
-    ASSERT_TRUE(t.open(QIODevice::ReadOnly));
-    EXPECT_EQ(t.readAll(), oldTexture) << "the previous texture must be put back";
-    // No staging files left behind.
-    for (const QString& f : QDir(tmp.path()).entryList(QDir::Files))
-        EXPECT_FALSE(f.endsWith(QStringLiteral(".tmp"))) << f.toStdString();
+    EXPECT_EQ(readAllOf(texPath), oldTexture) << "the previous texture must be put back";
+    EXPECT_EQ(readAllOf(jsonPath), oldSidecar) << "the previous sidecar must be untouched";
+    for (const QString& f : QDir(tmp.path()).entryList(QDir::Files | QDir::Hidden))
+        EXPECT_FALSE(f.endsWith(QStringLiteral(".tmp")) || f.endsWith(QStringLiteral(".lock"))) << f.toStdString();
+}
+
+TEST(BoneTextureWrite, FailedSidecarOnAFirstBakeLeavesNothing)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    SidecarGuard guard;
+    detail::setSidecarWriteFailureForTest(true);
+    EXPECT_FALSE(write(taggedBake(2, 3, 2), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
+    EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files).isEmpty());
+}
+
+TEST(BoneTextureWrite, UnreadableExistingTextureIsNotReplaced)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ASSERT_TRUE(write(taggedBake(2, 3, 2), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
+    const QString texPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.exr"));
+    const QString jsonPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json"));
+    const QByteArray oldSidecar = readAllOf(jsonPath);
+    QFile::setPermissions(texPath, QFileDevice::Permissions());
+    QFile probe(texPath);
+    if (probe.open(QIODevice::ReadOnly)) {   // e.g. running as root
+        QFile::setPermissions(texPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        SUCCEED() << "permissions are not enforced for this user";
+        return;
+    }
+    const WriteResult r = write(taggedBake(4, 5, 5), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f"));
+    QFile::setPermissions(texPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("cannot read"))) << r.error.toStdString();
+    EXPECT_EQ(readAllOf(jsonPath), oldSidecar);
+    EXPECT_EQ(exrSize(readAllOf(texPath)), QSize(6, 5)) << "old 2-bone texture still in place";
+}
+
+TEST(BoneTextureWrite, ConcurrentBakesLeaveAMatchingPair)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    const BakedClips a = taggedBake(2, 3, 2);   // 6 x 5
+    const BakedClips b = taggedBake(5, 7, 4);   // 15 x 11
+    std::atomic<int> failures{0};
+    auto worker = [&](const BakedClips& bake) {
+        for (int i = 0; i < 15; ++i)
+            if (!write(bake, tmp.path(), QStringLiteral("crowd"), QStringLiteral("rgba32f")).ok)
+                ++failures;
+    };
+    std::thread t1(worker, std::cref(a));
+    std::thread t2(worker, std::cref(b));
+    t1.join();
+    t2.join();
+    EXPECT_EQ(failures.load(), 0);
+    const QJsonObject tex = QJsonDocument::fromJson(
+        readAllOf(QDir(tmp.path()).filePath(QStringLiteral("crowd_bones.json")))).object()
+        [QStringLiteral("texture")].toObject();
+    const QSize size = exrSize(readAllOf(QDir(tmp.path()).filePath(QStringLiteral("crowd_bones.exr"))));
+    EXPECT_EQ(size, QSize(tex[QStringLiteral("width")].toInt(), tex[QStringLiteral("height")].toInt()))
+        << "the sidecar must describe the texture next to it";
 }
 
 TEST(BoneTextureLayout, FrameCountSaturatesInsteadOfOverflowing)
@@ -916,4 +994,39 @@ TEST_F(BoneTextureOgreTest, RejectedRequestLeavesAnExistingBakeUntouched)
     EXPECT_EQ(QDir(tmp.path()).entryList(QDir::Files), before) << "no glb written for a rejected bake";
     ASSERT_TRUE(j.open(QIODevice::ReadOnly));
     EXPECT_EQ(j.readAll(), sidecar);
+}
+
+TEST_F(BoneTextureOgreTest, FailedMeshExportLeavesTheExistingBakeUntouched)
+{
+    auto* entity = createBlendedSkinEntity("BT_MeshFail");
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    // An existing bake: texture + sidecar + a .glb (stand-in bytes).
+    BakeRequest req;
+    req.outputDir = tmp.path();
+    req.basename = QStringLiteral("hero");
+    req.clips = { QStringLiteral("Idle") };
+    req.fps = 10.0;
+    req.exportMesh = false;
+    ASSERT_TRUE(bakeToDirectory(entity, req).ok);
+    const QString glbPath = QDir(tmp.path()).filePath(QStringLiteral("hero.glb"));
+    {
+        QFile f(glbPath);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("previous glb");
+    }
+    const QString texPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.exr"));
+    const QString jsonPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json"));
+    const QByteArray oldTex = readAllOf(texPath), oldJson = readAllOf(jsonPath);
+
+    struct Guard { ~Guard() { detail::setMeshExportFailureForTest(false); } } guard;
+    detail::setMeshExportFailureForTest(true);
+    req.clips = { QStringLiteral("Sway") };   // a different bake
+    req.exportMesh = true;
+    const BakeReport r = bakeToDirectory(entity, req);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("nothing was written"))) << r.error.toStdString();
+    EXPECT_EQ(readAllOf(glbPath), QByteArray("previous glb"));
+    EXPECT_EQ(readAllOf(texPath), oldTex);
+    EXPECT_EQ(readAllOf(jsonPath), oldJson);
 }

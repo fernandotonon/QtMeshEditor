@@ -21,7 +21,9 @@ The MIT License
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QSaveFile>
+#include <QTemporaryDir>
 #include <QTemporaryFile>
 
 #include <OgreAnimation.h>
@@ -338,6 +340,13 @@ QString buildSidecarJson(const BakedClips& baked, const QString& textureFile,
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
 }
 
+namespace detail {
+bool g_failSidecarForTest = false;
+bool g_failMeshExportForTest = false;
+void setSidecarWriteFailureForTest(bool fail) { g_failSidecarForTest = fail; }
+void setMeshExportFailureForTest(bool fail) { g_failMeshExportForTest = fail; }
+} // namespace detail
+
 namespace {
 
 bool saveFileAtomically(const QString& path, const QByteArray& bytes)
@@ -346,11 +355,52 @@ bool saveFileAtomically(const QString& path, const QByteArray& bytes)
     return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size() && f.commit();
 }
 
+/// One writer per (folder, basename) at a time, across processes: the
+/// texture, sidecar and mesh of a bake are published as one unit, and two
+/// bakes interleaving their commits would otherwise leave one bake's
+/// texture next to the other's sidecar.
+class PublishLock
+{
+public:
+    PublishLock(const QString& outputDir, const QString& basename)
+        : m_lock(QDir(outputDir).filePath(QStringLiteral(".") + basename + QStringLiteral("_bones.lock")))
+    {
+        m_lock.setStaleLockTime(5 * 60 * 1000);
+        m_locked = m_lock.tryLock(2 * 60 * 1000);
+    }
+    bool locked() const { return m_locked; }
+private:
+    QLockFile m_lock;
+    bool m_locked = false;
+};
+
+WriteResult writeUnlocked(const BakedClips& baked, const QString& outputDir,
+                          const QString& basename, const QString& encoding,
+                          int maxTextureSize);
+
 } // namespace
 
 WriteResult write(const BakedClips& baked, const QString& outputDir,
                   const QString& basename, const QString& encoding,
                   int maxTextureSize)
+{
+    if (!outputDir.isEmpty() && !basename.trimmed().isEmpty() && QDir().mkpath(outputDir)) {
+        PublishLock lock(outputDir, basename);
+        if (!lock.locked()) {
+            WriteResult res;
+            res.error = QStringLiteral("another bake is writing %1 in %2").arg(basename, outputDir);
+            return res;
+        }
+        return writeUnlocked(baked, outputDir, basename, encoding, maxTextureSize);
+    }
+    return writeUnlocked(baked, outputDir, basename, encoding, maxTextureSize);
+}
+
+namespace {
+
+WriteResult writeUnlocked(const BakedClips& baked, const QString& outputDir,
+                          const QString& basename, const QString& encoding,
+                          int maxTextureSize)
 {
     WriteResult res;
     const QString enc = encoding.trimmed().toLower().isEmpty()
@@ -431,21 +481,38 @@ WriteResult write(const BakedClips& baked, const QString& outputDir,
     }   // the staging file is removed here
     const QByteArray jsonBytes = buildSidecarJson(baked, texName, enc, width, height).toUtf8();
 
+    // Keep the previous texture so a failed sidecar can put it back. If it
+    // exists but cannot be read, stop BEFORE touching anything: without it
+    // a failure later could not be undone.
     QByteArray previousTexture;
-    bool hadPreviousTexture = false;
-    if (QFile old(texPath); old.exists() && old.open(QIODevice::ReadOnly)) {
+    const bool hadPreviousTexture = QFileInfo::exists(texPath);
+    if (hadPreviousTexture) {
+        QFile old(texPath);
+        if (!old.open(QIODevice::ReadOnly)) {
+            res.error = QStringLiteral("cannot read the existing %1 - refusing to replace it "
+                                       "(check its permissions)").arg(texPath);
+            return res;
+        }
         previousTexture = old.readAll();
-        hadPreviousTexture = true;
     }
     if (!saveFileAtomically(texPath, texBytes)) {
         res.error = QStringLiteral("failed to write the bone texture %1").arg(texPath);
         return res;
     }
-    if (!saveFileAtomically(jsonPath, jsonBytes)) {
-        if (hadPreviousTexture) saveFileAtomically(texPath, previousTexture);
-        else QFile::remove(texPath);
-        res.error = QStringLiteral("failed to write the bone texture sidecar %1 (the previous "
-                                   "texture was restored)").arg(jsonPath);
+    if (detail::g_failSidecarForTest || !saveFileAtomically(jsonPath, jsonBytes)) {
+        const bool restored = hadPreviousTexture ? saveFileAtomically(texPath, previousTexture)
+                                                 : QFile::remove(texPath);
+        if (restored) {
+            res.error = QStringLiteral("failed to write the bone texture sidecar %1 (the previous "
+                                       "bake was left as it was)").arg(jsonPath);
+        } else {
+            // The new texture could not be rolled back: drop the old sidecar
+            // so nothing describes a texture it does not match.
+            QFile::remove(jsonPath);
+            res.error = QStringLiteral("failed to write the bone texture sidecar %1 and to restore "
+                                       "the previous texture; the stale sidecar was removed - "
+                                       "re-run the bake").arg(jsonPath);
+        }
         return res;
     }
 
@@ -456,6 +523,8 @@ WriteResult write(const BakedClips& baked, const QString& outputDir,
     res.height = height;
     return res;
 }
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Ogre adapter
@@ -751,10 +820,51 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
         rep.error = err;
         return rep;
     }
-    rep.files = write(baked, req.outputDir, basename, rep.encoding, req.maxTextureSize);
+    PublishLock lock(req.outputDir, basename);
+    if (!lock.locked()) {
+        rep.error = QStringLiteral("another bake is writing %1 in %2").arg(basename, req.outputDir);
+        return rep;
+    }
+
+    // Stage the mesh first (the exporter also writes its material/texture
+    // companions next to it), so an export failure stops the bake before
+    // anything in the output folder changes; publish it after the pair.
+    QTemporaryDir meshStaging(QDir(req.outputDir).filePath(QStringLiteral(".") + basename
+                                                            + QStringLiteral("_mesh_XXXXXX")));
+    if (req.exportMesh) {
+        const QString staged = meshStaging.isValid()
+            ? QDir(meshStaging.path()).filePath(basename + QStringLiteral(".glb")) : QString();
+        const int rc = (staged.isEmpty() || detail::g_failMeshExportForTest) ? -1
+            : MeshImporterExporter::exporter(entity->getParentSceneNode(), staged,
+                                             QStringLiteral("glTF 2.0 Binary (*.glb)"));
+        if (rc != 0 || !QFileInfo::exists(staged)) {
+            rep.error = QStringLiteral("exporting the rigged mesh failed (rc=%1) - nothing was "
+                                       "written; retry, or bake with --no-mesh and export it "
+                                       "separately").arg(rc);
+            return rep;
+        }
+    }
+
+    rep.files = writeUnlocked(baked, req.outputDir, basename, rep.encoding, req.maxTextureSize);
     if (!rep.files.ok) {
         rep.error = rep.files.error;
         return rep;
+    }
+    if (req.exportMesh) {
+        // Publish the staged .glb and its companions; the .glb itself last.
+        const QDir staged(meshStaging.path());
+        const QString glbName = basename + QStringLiteral(".glb");
+        QStringList names = staged.entryList(QDir::Files);
+        names.removeAll(glbName);
+        names.append(glbName);
+        for (const QString& name : names) {
+            QFile f(staged.filePath(name));
+            if (!f.open(QIODevice::ReadOnly)
+                || !saveFileAtomically(QDir(req.outputDir).filePath(name), f.readAll()))
+                rep.warnings << QStringLiteral("could not publish %1 into %2").arg(name, req.outputDir);
+        }
+        const QString meshPath = QDir(req.outputDir).filePath(glbName);
+        if (QFileInfo::exists(meshPath)) rep.meshPath = QFileInfo(meshPath).absoluteFilePath();
     }
     rep.boneCount = static_cast<int>(baked.bones.size());
     rep.totalFrames = rep.files.height;
@@ -766,21 +876,6 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
                                        "the shader keeps the strongest %2, renormalised")
                             .arg(baked.verticesOverLimit).arg(kMaxInfluences)
                             .arg(baked.sourceMaxInfluences);
-
-    // The mesh is exported LAST: a request that fails (unknown clip, size
-    // limit, bad bind pose, write error) leaves an existing bake untouched.
-    // The sampler restores every animation state, so the export sees the
-    // entity exactly as the caller left it.
-    if (req.exportMesh) {
-        const QString meshPath = QDir(req.outputDir).filePath(basename + QStringLiteral(".glb"));
-        const int rc = MeshImporterExporter::exporter(
-            entity->getParentSceneNode(), meshPath, QStringLiteral("glTF 2.0 Binary (*.glb)"));
-        if (rc == 0 && QFileInfo::exists(meshPath))
-            rep.meshPath = QFileInfo(meshPath).absoluteFilePath();
-        else
-            rep.warnings << QStringLiteral("mesh export to %1 failed (rc=%2) - the texture is still "
-                                           "valid; export the rigged mesh separately").arg(meshPath).arg(rc);
-    }
 
     if (!req.shaderEngines.isEmpty()) {
         QStringList supported, skipped;

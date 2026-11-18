@@ -180,10 +180,11 @@ struct WriteResult {
     int     height = 0;
 };
 
-/// Validate, pack and write the texture + sidecar. Files are written
-/// through a temporary name and renamed, so a failure never leaves a
-/// half-written texture next to an existing bake. `baked.clips` must be
-/// laid out (`layoutClips`).
+/// Validate, pack and write the texture + sidecar as a pair: staged under a
+/// unique name, both published through QSaveFile while holding a per-
+/// (folder, basename) lock file (concurrent bakes into one folder are
+/// serialised), and the previous texture is put back if the sidecar cannot
+/// be written. `baked.clips` must be laid out (`layoutClips`).
 WriteResult write(const BakedClips& baked, const QString& outputDir,
                   const QString& basename, const QString& encoding,
                   int maxTextureSize = kDefaultMaxTextureSize);
@@ -251,13 +252,21 @@ struct BakeReport {
 };
 
 /// Sample `entity`, write texture + sidecar (+ mesh, + shaders) into
-/// `req.outputDir`. Nothing is written until sampling succeeded; the
-/// texture/sidecar pair is published together and the mesh last, so a
-/// failed request leaves an existing bake intact. The mesh carries the
+/// `req.outputDir`. Under one lock: sample, export the mesh into a staging
+/// folder, publish the texture/sidecar pair, then publish the mesh. Any
+/// failure before the pair is published (unknown clip, size limit, mesh
+/// export) leaves an existing bake untouched. The mesh carries the
 /// skin, so an engine reads each vertex's bone indices/weights from it and
 /// maps the skin's joints to the texture's bone order BY NAME
 /// (`bones[].name` in the sidecar).
 BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req);
+
+/// Test seams: force the sidecar write / the mesh export to fail so the
+/// rollback paths can be exercised.
+namespace detail {
+void setSidecarWriteFailureForTest(bool fail);
+void setMeshExportFailureForTest(bool fail);
+}
 
 /// Machine-readable summary (CLI `--json`, MCP result).
 QJsonObject reportToJson(const BakeReport& report);
