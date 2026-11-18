@@ -595,8 +595,8 @@ function App() {
           <Section
             id="vat-demo"
             eyebrow="Live demo"
-            title="VAT export, running in your browser"
-            subtitle="A skeletal animation baked to a vertex animation texture and played back in Godot via a shader — no skeleton at runtime. Drag to orbit, scroll to zoom. Switch tabs to compare perf against per-instance skeletal skinning."
+            title="VAT and bone texture export, running in your browser"
+            subtitle="A skeletal animation baked two ways — a vertex animation texture and a bone texture — and played back in Godot by a shader, no skeleton ticked per instance. Drag to orbit, scroll to zoom. Switch tabs and instance counts to compare them with per-instance skeletal skinning."
           >
             <VATDemo />
           </Section>

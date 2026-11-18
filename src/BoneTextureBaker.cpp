@@ -10,7 +10,10 @@ The MIT License
 
 #include "BoneTextureBaker.h"
 
+#include "MeshImporterExporter.h"
 #include "MinimalEXRWriter.h"
+#include "SentryReporter.h"
+#include "VATShaderEmitter.h"
 
 #include <QDir>
 #include <QFile>
@@ -25,6 +28,7 @@ The MIT License
 #include <OgreBone.h>
 #include <OgreEntity.h>
 #include <OgreMesh.h>
+#include <OgreSceneNode.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreSubMesh.h>
 
@@ -573,6 +577,176 @@ bool sampleEntity(Ogre::Entity* entity, const SampleOptions& opts,
     }
     layoutClips(out->clips);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Surface core
+// ---------------------------------------------------------------------------
+
+QString modeId()
+{
+    return QStringLiteral("bone-texture");
+}
+
+bool isModeId(const QString& id)
+{
+    const QString k = id.trimmed().toLower();
+    return k == QLatin1String("bone-texture") || k == QLatin1String("bone_texture")
+        || k == QLatin1String("bonetexture") || k == QLatin1String("bones")
+        || k == QLatin1String("bta");
+}
+
+bool normaliseEncoding(const QString& id, QString* out)
+{
+    const QString k = id.trimmed().toLower();
+    QString r;
+    if (k.isEmpty() || k == QLatin1String("rgba32f") || k == QLatin1String("exr")
+        || k == QLatin1String("float32") || k == QLatin1String("f32"))
+        r = QStringLiteral("rgba32f");
+    else if (k == QLatin1String("rgba16f") || k == QLatin1String("half")
+             || k == QLatin1String("float16") || k == QLatin1String("f16"))
+        r = QStringLiteral("rgba16f");
+    else
+        return false;
+    if (out) *out = r;
+    return true;
+}
+
+namespace {
+
+QString sanitisedBasename(const QString& name)
+{
+    QString b;
+    for (const QChar c : name)
+        b += (c.isLetterOrNumber() || c == QLatin1Char('-') || c == QLatin1Char('_'))
+            ? c : QLatin1Char('_');
+    return b.isEmpty() ? QStringLiteral("bones") : b;
+}
+
+} // namespace
+
+BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
+{
+    BakeReport rep;
+    if (!normaliseEncoding(req.encoding, &rep.encoding)) {
+        rep.error = QStringLiteral("unknown bone texture encoding '%1' (accepted: %2)")
+                        .arg(req.encoding, encodingIds().join(QStringLiteral(", ")));
+        return rep;
+    }
+    if (!entity) { rep.error = QStringLiteral("no entity"); return rep; }
+    if (req.outputDir.isEmpty()) { rep.error = QStringLiteral("output directory is required"); return rep; }
+    if (!entity->hasSkeleton()) {
+        rep.error = QStringLiteral("entity has no skeleton - bone texture baking needs a rigged "
+                                   "mesh (use the vertex VAT modes for unrigged animation)");
+        return rep;
+    }
+    if (!QDir().mkpath(req.outputDir)) {
+        rep.error = QStringLiteral("cannot create output directory %1").arg(req.outputDir);
+        return rep;
+    }
+    const QString basename = sanitisedBasename(
+        req.basename.isEmpty() ? QString::fromStdString(entity->getName()) : req.basename);
+
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("Bone texture bake start: clips=%1 fps=%2 encoding=%3 -> %4")
+            .arg(req.clips.isEmpty() ? QStringLiteral("all") : req.clips.join(QLatin1Char(',')))
+            .arg(req.fps).arg(rep.encoding, req.outputDir));
+
+    // Mesh first: exporting after the sampler has driven the animation
+    // states was what broke the VAT's glTF export.
+    if (req.exportMesh) {
+        const QString meshPath = QDir(req.outputDir).filePath(basename + QStringLiteral(".glb"));
+        const int rc = MeshImporterExporter::exporter(
+            entity->getParentSceneNode(), meshPath, QStringLiteral("glTF 2.0 Binary (*.glb)"));
+        if (rc == 0 && QFileInfo::exists(meshPath))
+            rep.meshPath = QFileInfo(meshPath).absoluteFilePath();
+        else
+            rep.warnings << QStringLiteral("mesh export to %1 failed (rc=%2) - the texture is still "
+                                           "valid; export the rigged mesh separately").arg(meshPath).arg(rc);
+    }
+
+    SampleOptions so;
+    so.clips = req.clips;
+    so.fps = req.fps;
+    BakedClips baked;
+    QString err;
+    if (!sampleEntity(entity, so, &baked, &err)) {
+        rep.error = err;
+        return rep;
+    }
+    rep.files = write(baked, req.outputDir, basename, rep.encoding, req.maxTextureSize);
+    if (!rep.files.ok) {
+        rep.error = rep.files.error;
+        return rep;
+    }
+    rep.boneCount = static_cast<int>(baked.bones.size());
+    rep.totalFrames = rep.files.height;
+    rep.clips = baked.clips;
+    rep.sourceMaxInfluences = baked.sourceMaxInfluences;
+    rep.verticesOverLimit = baked.verticesOverLimit;
+    if (baked.verticesOverLimit > 0)
+        rep.warnings << QStringLiteral("%1 vertices have more than %2 bone influences (up to %3); "
+                                       "the shader keeps the strongest %2, renormalised")
+                            .arg(baked.verticesOverLimit).arg(kMaxInfluences)
+                            .arg(baked.sourceMaxInfluences);
+
+    if (!req.shaderEngines.isEmpty()) {
+        QStringList supported, skipped;
+        const QStringList capable = VATShaderEmitter::boneTextureEngines();
+        for (const QString& e : req.shaderEngines) {
+            const QString k = e.trimmed().toLower();
+            if (k.isEmpty() || k == QLatin1String("agnostic")) continue;
+            (capable.contains(k) ? supported : skipped) << k;
+        }
+        if (!supported.isEmpty())
+            rep.shaders = VATShaderEmitter::writeBoneTextureShaders(req.outputDir, supported);
+        if (!skipped.isEmpty())
+            rep.warnings << QStringLiteral("no bone texture shader template for %1 yet - "
+                                           "OpenVAT_README.md describes the texel layout and math")
+                                .arg(skipped.join(QStringLiteral(", ")));
+    }
+
+    rep.ok = true;
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("Bone texture bake ok: %1 bones x %2 rows (%3 clips) -> %4")
+            .arg(rep.boneCount).arg(rep.totalFrames).arg(rep.clips.size())
+            .arg(rep.files.texturePath));
+    return rep;
+}
+
+QJsonObject reportToJson(const BakeReport& r)
+{
+    QJsonObject o;
+    o[QStringLiteral("ok")] = r.ok;
+    o[QStringLiteral("mode")] = modeId();
+    if (!r.ok) {
+        o[QStringLiteral("error")] = r.error;
+        return o;
+    }
+    o[QStringLiteral("encoding")] = r.encoding;
+    o[QStringLiteral("texture")] = r.files.texturePath;
+    o[QStringLiteral("sidecar")] = r.files.jsonPath;
+    if (!r.meshPath.isEmpty()) o[QStringLiteral("mesh")] = r.meshPath;
+    o[QStringLiteral("width")] = r.files.width;
+    o[QStringLiteral("height")] = r.files.height;
+    o[QStringLiteral("boneCount")] = r.boneCount;
+    o[QStringLiteral("totalFrames")] = r.totalFrames;
+    const qint64 bytesPerTexel = r.encoding == QLatin1String("rgba16f") ? 8 : 16;
+    o[QStringLiteral("textureBytes")] =
+        static_cast<double>(static_cast<qint64>(r.files.width) * r.files.height * bytesPerTexel);
+    QJsonArray clips;
+    for (const Clip& c : r.clips)
+        clips.append(QJsonObject{ { QStringLiteral("name"), c.name },
+                                  { QStringLiteral("firstRow"), c.firstRow },
+                                  { QStringLiteral("frameCount"), c.frameCount },
+                                  { QStringLiteral("duration"), c.duration },
+                                  { QStringLiteral("fps"), c.fps } });
+    o[QStringLiteral("clips")] = clips;
+    o[QStringLiteral("sourceMaxInfluences")] = r.sourceMaxInfluences;
+    o[QStringLiteral("verticesOverLimit")] = r.verticesOverLimit;
+    if (!r.shaders.isEmpty()) o[QStringLiteral("shaders")] = QJsonArray::fromStringList(r.shaders);
+    if (!r.warnings.isEmpty()) o[QStringLiteral("warnings")] = QJsonArray::fromStringList(r.warnings);
+    return o;
 }
 
 } // namespace BoneTexture

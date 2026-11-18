@@ -173,6 +173,64 @@ Unity/Unreal templates already carry the same swizzles for positions
 and normals — mirror them for the quaternion when you port the rigid
 shader.
 
+## Bone texture animation (#1166)
+
+`qtmesh vat <rigged file> --mode bone-texture -o <dir>` (MCP `bake_vat
+{mode: "bone-texture"}`, Inspector VAT mode "Bone texture (GPU skinning)") is
+the skeletal alternative to the per-vertex VAT. Instead of every vertex
+position per frame it stores every bone's **skinning matrix** per frame
+(animated global x inverse bind), so the texture grows with
+`bones x frames` instead of `vertices x frames`, and the vertex shader skins
+the bind-pose mesh itself.
+
+| File | Contents |
+|---|---|
+| `<name>_bones.exr` | RGBA float (`rgba32f`, default) or half (`rgba16f`). Width = bones x 3, height = total frames of all clips. |
+| `<name>_bones.json` | `qtmesh-bone-texture-v1`: bones (name, parent), clips (`firstRow`, `frameCount`, `duration`, effective `fps`, `loop`), layout and conventions. |
+| `<name>.glb` | The rigged mesh in bind pose (skip with `--no-mesh`). |
+| `bone_texture.gdshader`, `BoneTextureMesh.gd` | Godot template (with `--target godot` / `--include-shaders godot`). |
+
+**Layout.** Texel `(bone*3 + r, row)` is row `r` of the bone's 3x4 matrix
+(`m[r][0..3]`); the 4th row is `(0,0,0,1)`. Clips are stacked by row, each
+sampling both ends (row `firstRow` = t 0, row `firstRow+frameCount-1` = clip
+end), so interpolating two adjacent rows never reads the next clip and loops
+wrap seamlessly. Row 0 is the first scanline. Skinned position:
+`p' = sum_i w_i * M_i * vec4(p, 1)` (4 influences, renormalised).
+
+**Space.** Mesh-local, Ogre / glTF convention (Y up, right-handed, source
+units). The scene-node transform is not baked. For another convention apply
+`C * M * C^-1` on read.
+
+**Bone indices.** The texture uses the source skeleton's bone order (the
+sidecar's `bones[]`). An engine's imported skin numbers its joints in its own
+order, so map each joint to the texture **by name**. `BoneTextureMesh.gd`
+does this for Godot (names are normalised on both sides, since Godot
+sanitises `:` and friends on import), keeps the strongest 4 influences and
+writes them to `CUSTOM0` (indices) / `CUSTOM1` (weights) as RGBA float, which
+a spatial shader can read; it also drops the engine skin so the mesh can go
+in a `MultiMesh`.
+
+**Per instance** (`INSTANCE_CUSTOM`): `r` clip index, `g` time offset (s),
+`b` speed (0 = 1), `a` crossfade (integer part = second clip, fractional
+part = its weight). One shared `time_seconds` uniform is the only per-frame
+CPU work.
+
+**Import.** The EXR must stay a float texture: Godot *Compress Mode = VRAM
+Uncompressed*, mipmaps off, filter nearest (the shader uses `texelFetch`).
+Unity: `RGBAFloat`/`RGBAHalf`, no compression, point filter, no mips.
+
+**Accuracy.** On baked frames the texture reproduces the source skinning
+exactly (QtMeshEditor parity test: 2.4e-7 vs Ogre's software skinning).
+Between frames (and in a crossfade) the shader blends matrices
+component-wise, which slightly shrinks large per-frame rotations (1.2 mm at
+20 fps on a fast test rig); bake at a higher fps if that matters. In the
+Godot demo the shader's silhouette matches Godot's own skeletal skinning of
+the same `.glb` to within the 1-pixel antialiased edge.
+
+Only a Godot template ships today; Unity/Unreal users can port
+`bone_texture.gdshader` directly (three `texelFetch`es per influence, the
+matrix assembly is spelled out in it).
+
 ## Where this came from
 
 These templates are extracted verbatim from the test harnesses under

@@ -250,6 +250,9 @@ public:
     /// headless asset pipelines. Slice 1: engine-agnostic / RGBA8 /
     /// positions only.
     static int cmdVat(int argc, char* argv[]);
+    /// `qtmesh vat <file> --mode bone-texture …` (#1166): bone texture
+    /// animation bake (per-frame skinning matrices, see BoneTextureBaker).
+    static int cmdVatBoneTexture(int argc, char* argv[]);
 
     /// xatlas-backed automatic UV unwrap. `qtmesh uv mesh.fbx
     /// --unwrap [--resolution N] [--padding P] [--channel C] -o

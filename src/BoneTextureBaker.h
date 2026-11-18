@@ -11,6 +11,7 @@ The MIT License
 #ifndef BONETEXTUREBAKER_H
 #define BONETEXTUREBAKER_H
 
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
@@ -200,6 +201,57 @@ struct SampleOptions {
  */
 bool sampleEntity(Ogre::Entity* entity, const SampleOptions& opts,
                   BakedClips* out, QString* error);
+
+// ── Surface core (CLI `qtmesh vat --mode bone-texture`, MCP `bake_vat`,
+//    Inspector VAT section) — one function so the three cannot drift ──
+
+/// The mode id the VAT surfaces use for this bake (`bone-texture`).
+QString modeId();
+/// True for `bone-texture` and its aliases (`bones`, `bone_texture`,
+/// `bta`), case-insensitive.
+bool isModeId(const QString& id);
+/// Normalise an encoding id: empty -> `rgba32f`; `exr`/`float32`/`f32`
+/// -> `rgba32f`; `half`/`f16`/`float16` -> `rgba16f`. Returns false for
+/// anything else (the VAT PNG encodings included: a bone matrix does not
+/// survive 8/16-bit quantisation).
+bool normaliseEncoding(const QString& id, QString* out);
+
+struct BakeRequest {
+    QStringList clips;            ///< Empty = every skeletal clip.
+    double      fps = 30.0;
+    QString     encoding;         ///< See `normaliseEncoding`; empty = rgba32f.
+    QString     outputDir;
+    QString     basename;         ///< Empty = the entity name.
+    QStringList shaderEngines;    ///< Templates to copy next to the bake (godot).
+    bool        exportMesh = true; ///< Also write `<basename>.glb` (bind pose + skin).
+    int         maxTextureSize = kDefaultMaxTextureSize;
+};
+
+struct BakeReport {
+    bool        ok = false;
+    QString     error;
+    WriteResult files;
+    QString     meshPath;         ///< Empty when not exported / export failed (see warnings).
+    QStringList shaders;          ///< Written template paths.
+    QStringList warnings;
+    QString     encoding;
+    int         boneCount = 0;
+    int         totalFrames = 0;
+    std::vector<Clip> clips;
+    int         sourceMaxInfluences = 0;
+    int         verticesOverLimit = 0;
+};
+
+/// Sample `entity`, write texture + sidecar (+ mesh, + shaders) into
+/// `req.outputDir`. The mesh is exported BEFORE sampling (the VAT
+/// lesson: exporting after touching animation state produced a broken
+/// glTF) and carries the skin, so an engine reads each vertex's bone
+/// indices/weights from it and maps the skin's joints to the texture's
+/// bone order BY NAME (`bones[].name` in the sidecar).
+BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req);
+
+/// Machine-readable summary (CLI `--json`, MCP result).
+QJsonObject reportToJson(const BakeReport& report);
 
 } // namespace BoneTexture
 

@@ -1330,7 +1330,14 @@ Rectangle {
                 if (animList.indexOf(animName) < 0)
                     animName = animList.length > 0 ? animList[0] : ""
             }
-            onModeIdChanged: refreshAnimList()
+            onModeIdChanged: {
+                refreshAnimList()
+                // Each mode has its own encodings (#1166: the bone
+                // texture only takes float EXR); keep a valid one.
+                var encs = VATBakerController.encodingsForMode(modeId)
+                if (encs.indexOf(encoding) < 0)
+                    encoding = modeId === "bone-texture" ? "rgba32f" : "rgba16"
+            }
 
             Connections {
                 target: VATBakerController
@@ -1623,11 +1630,12 @@ Rectangle {
                     width: parent.width - animToolsCol.labelWidth - 6
                     height: 22
                     font.pixelSize: 11
-                    model: ["RGBA8 PNG (smallest)", "RGBA16 PNG (default)", "EXR float32 (lossless)"]
-                    currentIndex: Math.max(0, VATBakerController.encodingIds.indexOf(animToolsCol.encoding))
+                    property var encIds: VATBakerController.encodingsForMode(animToolsCol.modeId)
+                    model: VATBakerController.encodingLabelsForMode(animToolsCol.modeId)
+                    currentIndex: Math.max(0, encIds.indexOf(animToolsCol.encoding))
                     onActivated: function(index) {
-                        if (index >= 0 && index < VATBakerController.encodingIds.length)
-                            animToolsCol.encoding = VATBakerController.encodingIds[index]
+                        if (index >= 0 && index < encIds.length)
+                            animToolsCol.encoding = encIds[index]
                     }
                     enabled: !VATBakerController.isBaking
                 }

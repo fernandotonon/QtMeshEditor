@@ -7,8 +7,10 @@
 ;                                   FPS readout. Compare against the VAT
 ;                                   demo to see the cost of GPU skinning.
 ;   scenes/demo_perf_vat.tscn   1000 VAT dancers + FPS readout. Same
-;                               visual, different render path. Should
-;                               run dramatically faster.
+;                               visual, different render path.
+;   scenes/demo_perf_bta.tscn   1000 bone-texture (BTA) dancers + FPS
+;                               readout: GPU skinning from baked bone
+;                               matrices (QtMeshEditor #1166).
 
 config_version=5
 

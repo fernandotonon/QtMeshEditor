@@ -42,6 +42,15 @@ const EngineSpec kRigidSpecs[] = {
     { "godot",  ":/vat-shaders/openvat_rigid.gdshader", "openvat_rigid.gdshader" },
 };
 
+// Bone texture (#1166) templates: the vertex shader + the GDScript
+// that turns an imported skinned mesh into the instanced bone-texture
+// mesh (bone indices/weights remapped by name into CUSTOM0/CUSTOM1).
+// An engine absent here has no bone-texture template yet.
+const EngineSpec kBoneSpecs[] = {
+    { "godot",  ":/vat-shaders/bone_texture.gdshader", "bone_texture.gdshader" },
+    { "godot",  ":/vat-shaders/BoneTextureMesh.gd",    "BoneTextureMesh.gd" },
+};
+
 const EngineSpec* findSpec(const QString& engineLower)
 {
     for (const auto& s : kSpecs) {
@@ -115,6 +124,45 @@ QStringList VATShaderEmitter::rigidEngines()
     QStringList out;
     for (const auto& s : kRigidSpecs) out.append(QString::fromLatin1(s.engine));
     return out;
+}
+
+QStringList VATShaderEmitter::boneTextureEngines()
+{
+    QStringList out;
+    for (const auto& s : kBoneSpecs) {
+        const QString e = QString::fromLatin1(s.engine);
+        if (!out.contains(e)) out.append(e);
+    }
+    return out;
+}
+
+QStringList VATShaderEmitter::writeBoneTextureShaders(const QString& outputDir,
+                                                      const QStringList& engines)
+{
+    QStringList written;
+    if (outputDir.isEmpty() || engines.isEmpty())
+        return written;
+    QDir dir(outputDir);
+    if (!dir.exists() && !QDir().mkpath(outputDir))
+        return written;
+    QSet<QString> requested;
+    for (const QString& e : engines)
+        requested.insert(e.trimmed().toLower());
+    for (const auto& spec : kBoneSpecs) {
+        if (!requested.contains(QString::fromLatin1(spec.engine)))
+            continue;
+        const QString dst = QFileInfo(dir.filePath(QString::fromLatin1(
+            spec.outputName))).absoluteFilePath();
+        if (copyResource(QString::fromLatin1(spec.resourcePath), dst))
+            written.append(dst);
+    }
+    if (!written.isEmpty()) {
+        const QString readmePath = QFileInfo(dir.filePath(
+            QStringLiteral("OpenVAT_README.md"))).absoluteFilePath();
+        if (copyResource(QStringLiteral(":/vat-shaders/README.md"), readmePath))
+            written.append(readmePath);
+    }
+    return written;
 }
 
 QStringList VATShaderEmitter::writeShaders(const QString& outputDir,

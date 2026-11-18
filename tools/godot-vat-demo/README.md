@@ -1,12 +1,20 @@
 # Godot VAT Demo Project
 
-Three scenes showcasing QtMeshEditor's OpenVAT bake. Built on Godot 4.2+.
+Scenes showcasing QtMeshEditor's OpenVAT bake and its bone texture (BTA)
+bake (#1166), against Godot's stock skeletal path. Built on Godot 4.2+
+(re-exported with 4.7).
 
 | Scene | Purpose |
 |---|---|
 | `scenes/demo_web.tscn` | Single Rumba dancer + orbit camera. The one we embed in the website. |
 | `scenes/demo_perf_vat.tscn` | 1000 instances driven by VAT. FPS readout in the corner. |
 | `scenes/demo_perf_skeleton.tscn` | 1000 instances driven by Godot's `SkinnedMeshRenderer` + `AnimationPlayer`. Same FPS readout. |
+| `scenes/demo_perf_bta.tscn` | 1000 instances driven by a bone texture (`assets/RumbaBones`, `qtmesh vat --mode bone-texture --target godot`): one `MultiMeshInstance3D`, GPU skinning from per-frame bone matrices. Same FPS readout. |
+
+Every perf scene takes the instance count from `?n=` (web) or `-- --n=N`
+(native), clamped to 1..10000, and pulls the camera back so the whole crowd
+is in view. The overlay also shows draw calls and the GPU texture / buffer
+memory Godot reports for the whole scene.
 
 The two perf scenes are visually identical and use the same source mesh
 (`assets/Rumba/source.gltf`). Comparing FPS between them shows how much
@@ -37,6 +45,42 @@ The web build is ~30 MB compressed; the dancer + bake is most of it.
 
 ## Perf comparison
 
+`./bench.sh` runs every path at 100 / 400 / 1000 / 5000 instances (2 s
+warm-up, 8 s measured, vsync off, 1280x720) and writes one JSON line per run
+to `bench_results.jsonl`. Measured 2026-11-18 on an Apple M5 (Godot 4.7.2,
+Forward+ / Metal), same Rumba dancer (5828 vertices, 70 bones, 72-frame clip):
+
+| Instances | Skeletal | VAT | Bone texture |
+|---:|---:|---:|---:|
+| 100  | 191 fps (5.2 ms), 1111 draws | 380 fps (2.6 ms), 22 draws | 397 fps (2.5 ms), 22 draws |
+| 400  | 55 fps (18.0 ms), 4411 draws | 201 fps (5.0 ms) | 289 fps (3.5 ms) |
+| 1000 | 22 fps (45.6 ms), 11011 draws | 156 fps (6.4 ms) | 158 fps (6.3 ms) |
+| 5000 | 7.5 fps (133 ms), 54967 draws | 45.8 fps (21.8 ms) | 39.5 fps (25.3 ms) |
+
+GPU memory as Godot reports it for the whole scene (all textures, all
+buffers):
+
+| Instances | Skeletal (tex / buffers) | VAT | Bone texture |
+|---:|---:|---:|---:|
+| 100  | 65.5 / 27.3 MB | 69.8 / 15.9 MB | 61.8 / 15.9 MB |
+| 1000 | 65.5 / 131.6 MB | 69.8 / 16.0 MB | 61.8 / 16.0 MB |
+| 5000 | 65.5 / 594.6 MB | 69.8 / 16.2 MB | 61.8 / 16.2 MB |
+
+What the animation data itself costs: the VAT texture is 5828 x 142
+texels (positions + normals, one column per vertex), the bone texture
+210 x 72 RGBA float = 0.24 MB (rgba16f would halve it). Both instanced
+paths add only the MultiMesh instance buffer per instance (~64 bytes),
+while the skeletal path grows by ~110 KB of buffers per instance plus a
+draw call per surface.
+
+Reading it: on this GPU the two baked paths are close. The bone texture
+was faster at 400 instances and slower at 5000, where its heavier vertex
+shader (up to 24 texel fetches per vertex vs VAT's 4) dominates; the VAT
+pays for its texture size instead, which grows with vertex count while
+the bone texture grows with bone count. Both are an order of magnitude
+ahead of per-instance skeletal skinning past a few hundred instances.
+These are one machine's numbers: measure on your target hardware.
+
 Both perf scenes spawn 1000 dancers in a grid with desynchronised
 starting frames so the GPU can't optimise away identical work. Run
 them back-to-back and watch the FPS overlay:
@@ -44,6 +88,7 @@ them back-to-back and watch the FPS overlay:
 ```bash
 godot --path tools/godot-vat-demo scenes/demo_perf_skeleton.tscn  # heavier
 godot --path tools/godot-vat-demo scenes/demo_perf_vat.tscn       # lighter
+godot --path tools/godot-vat-demo scenes/demo_perf_bta.tscn -- --n=5000   # any count
 ```
 
 What to look for:
@@ -51,21 +96,38 @@ What to look for:
 - **`Min (1s window)`** is the most honest metric. Average FPS hides
   hitches; the rolling minimum surfaces them.
 - The skeletal path costs scale with **per-instance bone matrix
-  uploads**. The Rumba rig has ~50 bones, so ~50,000 matrices per
-  frame at 1000 instances. The VAT path is a single texture sample
-  per vertex per frame — no per-instance CPU work.
-- Both scenes leave shadows off so the difference is in the skinning
+  uploads**. The Rumba rig has 70 bones, so ~70,000 matrices per
+  frame at 1000 instances. The VAT path is a texture sample per vertex
+  per frame; the bone texture path fetches each vertex's 4 bone
+  matrices (3 texels each, twice when interpolating between frames).
+  Neither does per-instance CPU work.
+- All scenes leave shadows off so the difference is in the skinning
   step, not the shadow pass.
 
-Typical numbers on an Apple M-series laptop:
 
-| Path | FPS (1000 instances) |
-|---|---|
-| Skeleton | 45–60 |
-| VAT | 100+ (often hits the refresh cap) |
+## How the bone texture works (one paragraph)
 
-YMMV by GPU. On Steam Deck the gap is larger; on a desktop RTX both
-should comfortably hit refresh-rate.
+The bake stores every bone's skinning matrix (animated pose x inverse
+bind) for every frame: 3 RGBA float texels per bone per row, clips stacked
+by row. The mesh stays in bind pose and keeps 4 bone indices + weights per
+vertex (`BoneTextureMesh.gd` copies them from the imported skin into
+`CUSTOM0`/`CUSTOM1`, matching joints to the texture's bones by name), and
+`bone_texture.gdshader` blends the 4 matrices per vertex — ordinary linear
+blend skinning, just reading the pose from a texture. Each instance picks
+its clip, time offset, speed and crossfade through `INSTANCE_CUSTOM`. The
+texture grows with bones x frames, not vertices x frames, so it is the
+better fit for detailed characters with many clips; VAT stays the choice
+for non-skeletal deformation (cloth, sims, morphs). Re-bake with:
+
+```bash
+qtmesh vat "media/models/Rumba Dancing.fbx" --mode bone-texture --target godot \
+  --basename Rumba -o tools/godot-vat-demo/assets/RumbaBones
+```
+(then delete the copied `Boss_*.png` and `.material` sidecar: the `.glb`
+embeds its textures). The BTA asset faces +Z like every current export; the
+VAT/skeletal assets predate the importer change that stopped mirroring Z
+(#977) and face -Z, which is why their spawners turn the dancers by 180
+degrees and `PerfSpawnerBTA.gd` does not.
 
 ## How VAT works (one paragraph)
 

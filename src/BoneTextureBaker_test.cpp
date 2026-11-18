@@ -675,3 +675,116 @@ TEST_F(BoneTextureOgreTest, RestoresTheCallersAnimationState)
     EXPECT_FLOAT_EQ(idle->getWeight(), 0.5f);
     EXPECT_TRUE(out.clips[1].loop) << "the clip's loop flag is recorded, not the sampling clamp";
 }
+
+// ===========================================================================
+// Surface core (slice B): ids, encodings, report, refusals.
+// ===========================================================================
+
+#include "VATShaderEmitter.h"
+
+TEST(BoneTextureSurface, ModeIdAndAliases)
+{
+    EXPECT_EQ(modeId(), QStringLiteral("bone-texture"));
+    for (const char* id : { "bone-texture", "BONE_TEXTURE", "bones", "bta", " BoneTexture " })
+        EXPECT_TRUE(isModeId(QString::fromLatin1(id))) << id;
+    for (const char* id : { "skeletal", "rigid", "", "bone" })
+        EXPECT_FALSE(isModeId(QString::fromLatin1(id))) << id;
+}
+
+TEST(BoneTextureSurface, EncodingsAreFloatOnly)
+{
+    QString e;
+    ASSERT_TRUE(normaliseEncoding(QString(), &e));
+    EXPECT_EQ(e, QStringLiteral("rgba32f"));
+    ASSERT_TRUE(normaliseEncoding(QStringLiteral("exr"), &e));
+    EXPECT_EQ(e, QStringLiteral("rgba32f")) << "the VAT 'exr' id maps to float32";
+    ASSERT_TRUE(normaliseEncoding(QStringLiteral("Half"), &e));
+    EXPECT_EQ(e, QStringLiteral("rgba16f"));
+    EXPECT_FALSE(normaliseEncoding(QStringLiteral("rgba16"), &e))
+        << "a 16-bit PNG cannot hold skinning matrices";
+    EXPECT_FALSE(normaliseEncoding(QStringLiteral("rgba8"), &e));
+}
+
+TEST(BoneTextureSurface, RefusesBeforeTouchingAnything)
+{
+    BakeRequest req;
+    req.outputDir = QStringLiteral("/nonexistent/should/not/be/created");
+    req.encoding = QStringLiteral("rgba8");
+    BakeReport r = bakeToDirectory(nullptr, req);
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("encoding")));
+    req.encoding.clear();
+    r = bakeToDirectory(nullptr, req);
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(QDir(QStringLiteral("/nonexistent/should")).exists());
+}
+
+TEST(BoneTextureSurface, ReportJsonCarriesSizesAndClips)
+{
+    BakeReport r;
+    r.ok = true;
+    r.encoding = QStringLiteral("rgba16f");
+    r.files.ok = true;
+    r.files.width = 210;
+    r.files.height = 72;
+    r.files.texturePath = QStringLiteral("/x/Rumba_bones.exr");
+    r.boneCount = 70;
+    r.totalFrames = 72;
+    Clip c; c.name = QStringLiteral("mixamo.com"); c.frameCount = 72; c.duration = 2.37; c.fps = 30.0;
+    r.clips = { c };
+    r.warnings = { QStringLiteral("w") };
+    const QJsonObject o = reportToJson(r);
+    EXPECT_EQ(o[QStringLiteral("mode")].toString(), QStringLiteral("bone-texture"));
+    EXPECT_EQ(o[QStringLiteral("boneCount")].toInt(), 70);
+    EXPECT_DOUBLE_EQ(o[QStringLiteral("textureBytes")].toDouble(), 210.0 * 72 * 8) << "half = 8 bytes/texel";
+    EXPECT_EQ(o[QStringLiteral("clips")].toArray().size(), 1);
+    EXPECT_EQ(o[QStringLiteral("warnings")].toArray().size(), 1);
+
+    BakeReport failed;
+    failed.error = QStringLiteral("boom");
+    const QJsonObject f = reportToJson(failed);
+    EXPECT_FALSE(f[QStringLiteral("ok")].toBool());
+    EXPECT_EQ(f[QStringLiteral("error")].toString(), QStringLiteral("boom"));
+}
+
+TEST(BoneTextureSurface, ShaderTemplatesAreGodotOnly)
+{
+    EXPECT_EQ(VATShaderEmitter::boneTextureEngines(), QStringList{ QStringLiteral("godot") });
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    EXPECT_TRUE(VATShaderEmitter::writeBoneTextureShaders(tmp.path(), { QStringLiteral("unity") }).isEmpty());
+    EXPECT_TRUE(VATShaderEmitter::writeBoneTextureShaders(QString(), { QStringLiteral("godot") }).isEmpty());
+    QFile probe(QStringLiteral(":/vat-shaders/bone_texture.gdshader"));
+    if (!probe.exists()) {
+        SUCCEED() << "vat_shaders.qrc not linked into this test binary";
+        return;
+    }
+    const QStringList written = VATShaderEmitter::writeBoneTextureShaders(tmp.path(), { QStringLiteral("GODOT") });
+    ASSERT_EQ(written.size(), 3) << written.join(QLatin1Char(',')).toStdString();
+    EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("bone_texture.gdshader"))));
+    EXPECT_TRUE(QFileInfo::exists(QDir(tmp.path()).filePath(QStringLiteral("BoneTextureMesh.gd"))));
+}
+
+TEST_F(BoneTextureOgreTest, BakeToDirectoryWritesTextureSidecarAndWarnsOnUnknownEngine)
+{
+    auto* entity = createBlendedSkinEntity("BT_Surface");
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BakeRequest req;
+    req.clips = { QStringLiteral("Idle") };
+    req.fps = 10.0;
+    req.outputDir = tmp.path();
+    req.basename = QStringLiteral("hero char");   // sanitised to hero_char
+    req.shaderEngines = { QStringLiteral("unreal") };
+    req.exportMesh = false;
+    const BakeReport r = bakeToDirectory(entity, req);
+    ASSERT_TRUE(r.ok) << r.error.toStdString();
+    EXPECT_EQ(r.encoding, QStringLiteral("rgba32f"));
+    EXPECT_TRUE(r.files.texturePath.endsWith(QStringLiteral("hero_char_bones.exr")));
+    EXPECT_EQ(r.boneCount, 2);
+    ASSERT_EQ(r.clips.size(), 1u);
+    EXPECT_EQ(r.clips[0].frameCount, 6);
+    EXPECT_TRUE(r.meshPath.isEmpty());
+    ASSERT_FALSE(r.warnings.isEmpty());
+    EXPECT_TRUE(r.warnings.join(QLatin1Char(' ')).contains(QStringLiteral("unreal")));
+}

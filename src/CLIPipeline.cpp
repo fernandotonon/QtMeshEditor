@@ -98,6 +98,7 @@
 #include "EditableMesh.h"
 #include "TexturePaintBuffer.h"
 #include "VertexColorBaker.h"
+#include "BoneTextureBaker.h"
 #include "VATBaker.h"
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
@@ -897,6 +898,14 @@ void CLIPipeline::printUsage()
         "                                    reference shaders for Godot / Unity / Unreal / Blender\n"
         "                                    consume the output unmodified. Drop-in shader templates\n"
         "                                    for Godot/Unity/Unreal live at `tools/vat-shaders/`.\n"
+        "  vat <file> --mode bone-texture [--anim A[,B...]] [--fps N] [--encoding rgba32f|rgba16f]\n"
+        "      [--target agnostic|godot] [--include-shaders godot] [--basename NAME] [--no-mesh] [-o <dir>] [--json]\n"
+        "                                    Bone texture animation (#1166): bake every bone's skinning\n"
+        "                                    matrix per frame (all skeletal clips by default) into\n"
+        "                                    `<name>_bones.exr` (3 RGBA float texels per bone, clips\n"
+        "                                    stacked by row) + `<name>_bones.json`, plus the rigged\n"
+        "                                    mesh `<name>.glb`. The shader skins on the GPU, so one\n"
+        "                                    mesh + texture drive a whole instanced crowd.\n"
         "  uv <file> --unwrap [--resolution N] [--padding P] [--channel C] [--no-backup] -o <out>\n"
         "                                    Auto UV-unwrap via xatlas (used by Blender / Godot). Writes\n"
         "                                    non-overlapping UVs into the chosen channel (default 0) and\n"
@@ -11150,6 +11159,163 @@ bool emitGltfUv2(const QString& gltfPath,
 
 } // namespace
 
+int CLIPipeline::cmdVatBoneTexture(int argc, char* argv[])
+{
+    QString filePath, outDir, basename;
+    QString encoding = QStringLiteral("rgba32f");
+    QString target = QStringLiteral("agnostic");
+    QStringList clips, shaderEngines;
+    double fps = 30.0;
+    bool jsonOutput = false;
+    bool exportMesh = true;
+
+    for (int i = 1; i < argc; ++i) {
+        const QString arg(argv[i]);
+        if (arg == QLatin1String("vat") || arg == QLatin1String("--cli")) continue;
+        if (arg == QLatin1String("--json")) { jsonOutput = true; continue; }
+        if (arg == QLatin1String("--no-mesh")) { exportMesh = false; continue; }
+        auto needValue = [&](const char* what) {
+            if (i + 1 < argc) return true;
+            err() << "Error: " << arg << " requires " << what << "." << Qt::endl;
+            return false;
+        };
+        if (arg == QLatin1String("--mode")) { if (!needValue("a value")) return 2; ++i; continue; }
+        if (arg == QLatin1String("--anim") || arg == QLatin1String("--animation")) {
+            if (!needValue("a clip name")) return 2;
+            for (const QString& c : QString(argv[++i]).split(QLatin1Char(','), Qt::SkipEmptyParts))
+                if (!c.trimmed().isEmpty()) clips << c.trimmed();
+            continue;
+        }
+        if (arg == QLatin1String("--fps")) {
+            if (!needValue("a number")) return 2;
+            bool ok = false;
+            fps = QString(argv[++i]).toDouble(&ok);
+            if (!ok || fps <= 0.0) { err() << "Error: --fps must be a positive number" << Qt::endl; return 2; }
+            continue;
+        }
+        if (arg == QLatin1String("--encoding")) {
+            if (!needValue("a value (rgba32f, rgba16f)")) return 2;
+            if (!BoneTexture::normaliseEncoding(QString(argv[++i]), &encoding)) {
+                err() << "Error: --encoding \"" << argv[i]
+                      << "\" is not valid for bone-texture (rgba32f, rgba16f)." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == QLatin1String("--target")) {
+            if (!needValue("a value (agnostic, godot)")) return 2;
+            target = QString(argv[++i]).trimmed().toLower();
+            if (!VATBaker::isValidTargetId(target)) {
+                err() << "Error: --target \"" << argv[i]
+                      << "\" is not one of: agnostic, unity, unreal, godot." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == QLatin1String("--include-shaders")) {
+            if (!needValue("a value (godot, all)")) return 2;
+            shaderEngines << VATShaderEmitter::parseEngineList(QString(argv[++i]));
+            continue;
+        }
+        if (arg == QLatin1String("--basename")) {
+            if (!needValue("a name")) return 2;
+            basename = QString(argv[++i]);
+            continue;
+        }
+        if ((arg == QLatin1String("-o") || arg == QLatin1String("--output")) && i + 1 < argc) {
+            outDir = QString(argv[++i]);
+            continue;
+        }
+        if (arg == QLatin1String("--emit-uv2") || arg == QLatin1String("--bake-precision")) {
+            err() << "Error: " << arg << " applies to the vertex VAT modes, not bone-texture." << Qt::endl;
+            return 2;
+        }
+        if (!arg.startsWith(QLatin1Char('-')) && filePath.isEmpty()) { filePath = arg; continue; }
+        if (arg.startsWith(QLatin1Char('-'))) {
+            err() << "Error: unknown option " << arg << " for --mode bone-texture." << Qt::endl;
+            return 2;
+        }
+    }
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh vat <file> --mode bone-texture [--anim A[,B...]] [--fps N] "
+                 "[--encoding rgba32f|rgba16f] [--target agnostic|godot] [--include-shaders godot] "
+                 "[--basename NAME] [--no-mesh] [-o <dir>] [--json]" << Qt::endl;
+        return 2;
+    }
+    const QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+    if (outDir.isEmpty())
+        outDir = fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral("_bones"));
+    if (target != QLatin1String("agnostic") && !shaderEngines.contains(target))
+        shaderEngines << target;
+
+    if (!initOgreHeadless()) return 1;
+    SentryReporter::addBreadcrumb(QStringLiteral("cli.vat"),
+        QStringLiteral("Bone texture bake .%1 vat_mode=bone-texture fps=%2 encoding=%3 target=%4")
+            .arg(fi.suffix()).arg(fps).arg(encoding, target));
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("Importing %1").arg(fi.absoluteFilePath()));
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : Manager::getSingleton()->getEntities()) {
+        if (!obj || obj->getMovableType() != "Entity") continue;
+        auto* e = static_cast<Ogre::Entity*>(obj);
+        if (e->hasSkeleton()) { entity = e; break; }
+    }
+    if (!entity) {
+        err() << "Error: " << filePath << " has no skinned mesh - bone texture baking needs a "
+                 "rigged mesh (use the vertex VAT modes for unrigged animation)." << Qt::endl;
+        return 1;
+    }
+
+    BoneTexture::BakeRequest req;
+    req.clips = clips;
+    req.fps = fps;
+    req.encoding = encoding;
+    req.outputDir = outDir;
+    req.basename = basename.isEmpty() ? fi.completeBaseName() : basename;
+    req.shaderEngines = shaderEngines;
+    req.exportMesh = exportMesh;
+    const BoneTexture::BakeReport rep = BoneTexture::bakeToDirectory(entity, req);
+    if (!rep.ok) {
+        SentryReporter::captureMessage(
+            QStringLiteral("CLI vat: bone texture bake failed: %1").arg(rep.error), "error");
+        err() << "Error: bone texture bake failed: " << rep.error << Qt::endl;
+        return 1;
+    }
+    if (rep.files.ok)
+        GamificationManager::noteOperation(QStringLiteral("vat_bake"),
+            {{QStringLiteral("frames_baked"), rep.totalFrames},
+             {QStringLiteral("bones_baked"), rep.boneCount}}, GamificationManager::Surface::Cli);
+    for (const QString& w : rep.warnings) err() << "Warning: " << w << Qt::endl;
+
+    if (jsonOutput) {
+        writeOutput(QString::fromUtf8(
+            QJsonDocument(BoneTexture::reportToJson(rep)).toJson(QJsonDocument::Indented)));
+        return 0;
+    }
+    QString text;
+    QTextStream s(&text);
+    s << "Bone texture bake complete\n";
+    s << "  texture:  " << rep.files.texturePath << " (" << rep.files.width << "x"
+      << rep.files.height << " " << rep.encoding << ")\n";
+    s << "  sidecar:  " << rep.files.jsonPath << "\n";
+    if (!rep.meshPath.isEmpty()) s << "  mesh:     " << rep.meshPath << "\n";
+    s << "  bones:    " << rep.boneCount << "\n";
+    for (const auto& c : rep.clips)
+        s << "  clip:     " << c.name << "  " << c.frameCount << " frames, "
+          << QString::number(c.duration, 'f', 3) << " s, rows " << c.firstRow << ".."
+          << (c.firstRow + c.frameCount - 1) << "\n";
+    for (const QString& sh : rep.shaders) s << "  shader:   " << sh << "\n";
+    writeOutput(text);
+    return 0;
+}
+
 int CLIPipeline::cmdVat(int argc, char* argv[])
 {
     // Parse: vat <file> [--mode skeletal|rigid|mesh-anim|morph] --anim <name> [--fps N] [-o <dir>]
@@ -11163,6 +11329,15 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
     // `os-remap` schema and the #522 `_mode`/`_target` extension keys.
     // Consumed unmodified by the openvat reference shaders for Godot /
     // Unity / Unreal / Blender.
+    // --mode bone-texture (#1166) writes a different artefact (skinning
+    // matrices, not vertex positions) with its own options: route it
+    // before the OpenVAT parser rejects the mode id.
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (QString(argv[i]) == QLatin1String("--mode")
+            && BoneTexture::isModeId(QString(argv[i + 1])))
+            return cmdVatBoneTexture(argc, argv);
+    }
+
     QString filePath, animName, outDir;
     double fps = 30.0;
     bool jsonOutput = false;
@@ -11203,7 +11378,7 @@ int CLIPipeline::cmdVat(int argc, char* argv[])
             modeArg = QString(argv[++i]);
             if (!VATBaker::modeFromId(modeArg, &vatMode)) {
                 err() << "Error: --mode \"" << modeArg
-                      << "\" is not one of: skeletal, rigid, mesh-anim, morph." << Qt::endl;
+                      << "\" is not one of: skeletal, rigid, mesh-anim, morph, bone-texture." << Qt::endl;
                 return 2;
             }
             continue;

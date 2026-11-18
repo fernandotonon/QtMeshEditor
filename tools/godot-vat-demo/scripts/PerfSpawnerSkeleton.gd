@@ -37,6 +37,8 @@ func _ready() -> void:
 	# Uncap FPS for honest perf measurement (matches the VAT spawner).
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = 0
+	instance_count = DemoConfig.instance_count(instance_count)
+	DemoConfig.frame_crowd(self, instance_count, grid_spacing)
 
 	var start_ms := Time.get_ticks_msec()
 

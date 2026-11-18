@@ -487,3 +487,55 @@ TEST_F(MCPServerBakeVatCoverageTest, RigidModePayloadCarriesChunks)
     // target=godot ships the rigid Godot template next to the bake.
     EXPECT_TRUE(QFile::exists(QDir(tmp.path()).filePath("openvat_rigid.gdshader")));
 }
+
+// ---------------------------------------------------------------------------
+// bake_vat {mode: "bone-texture"} (#1166).
+// ---------------------------------------------------------------------------
+TEST_F(MCPServerBakeVatCoverageTest, BoneTextureRejectsPngEncodingBeforeImport)
+{
+    QJsonObject args;
+    args["file"]       = "/definitely/not/here.fbx";
+    args["output_dir"] = "/tmp/whatever";
+    args["mode"]       = "bone-texture";
+    args["encoding"]   = "rgba16";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("rgba32f")) << resultText(result).toStdString();
+}
+
+TEST_F(MCPServerBakeVatCoverageTest, BoneTextureMissingFileIsError)
+{
+    QJsonObject args;
+    args["file"]       = "/definitely/not/here.fbx";
+    args["output_dir"] = "/tmp/whatever";
+    args["mode"]       = "bones";
+    const QJsonObject result = server->toolBakeVat(args);
+    EXPECT_TRUE(resultIsError(result));
+    EXPECT_TRUE(resultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerBakeVatCoverageTest, BoneTextureBakesEveryRobotClip)
+{
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL context required to load skeletal mesh";
+    const QString robot = testRobotMeshPath();
+    ASSERT_FALSE(robot.isEmpty()) << "media/models/robot.mesh not found";
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    QJsonObject args;
+    args["file"]        = robot;
+    args["output_dir"]  = tmp.path();
+    args["mode"]        = "bone-texture";
+    args["fps"]         = 12.0;
+    args["export_mesh"] = false;
+    const QJsonObject result = server->toolBakeVat(args);
+    ASSERT_FALSE(resultIsError(result)) << resultText(result).toStdString();
+    const QJsonObject payload = parsePayload(result);
+    EXPECT_TRUE(payload["ok"].toBool());
+    EXPECT_EQ(payload["mode"].toString(), "bone-texture");
+    EXPECT_GE(payload["clips"].toArray().size(), 4) << "Idle/Shoot/Slump/Walk stacked";
+    EXPECT_GT(payload["boneCount"].toInt(), 0);
+    EXPECT_EQ(payload["width"].toInt(), payload["boneCount"].toInt() * 3);
+    EXPECT_TRUE(QFileInfo::exists(payload["texture"].toString()));
+    EXPECT_TRUE(QFileInfo::exists(payload["sidecar"].toString()));
+}

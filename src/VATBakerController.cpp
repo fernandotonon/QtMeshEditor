@@ -10,6 +10,8 @@ The MIT License
 
 #include "VATBakerController.h"
 
+#include "BoneTextureBaker.h"
+
 #include "GamificationManager.h"
 #include "MorphAnimationManager.h"
 #include "SelectionSet.h"
@@ -139,6 +141,8 @@ void VATBakerController::refreshAnimations()
             modes << VATBaker::modeId(VATBaker::Mode::Rigid);
         if (!vclips.isEmpty()) modes << VATBaker::modeId(VATBaker::Mode::MeshAnim);
         if (!vclips.isEmpty() && hasPoses) modes << VATBaker::modeId(VATBaker::Mode::Morph);
+        // #1166: bone texture needs a skeleton with at least one clip.
+        if (!fresh.isEmpty()) modes << BoneTexture::modeId();
     }
 
     const bool changed = (fresh != m_animations) || (modes != m_modes);
@@ -152,6 +156,13 @@ QStringList VATBakerController::targetIds() const   { return VATBaker::targetIds
 
 QStringList VATBakerController::animationsForMode(const QString& modeId) const
 {
+    if (BoneTexture::isModeId(modeId)) {
+        // Several clips stack into one bone texture: offer "all" first.
+        Ogre::Entity* entity = firstSelectedEntity();
+        const QStringList clips = skeletalClips(entity);
+        if (clips.isEmpty()) return {};
+        return QStringList{ allClipsLabel() } + clips;
+    }
     VATBaker::Mode mode;
     if (!VATBaker::modeFromId(modeId, &mode)) return {};
     Ogre::Entity* entity = firstSelectedEntity();
@@ -167,8 +178,28 @@ QStringList VATBakerController::animationsForMode(const QString& modeId) const
     return {};
 }
 
+QString VATBakerController::allClipsLabel()
+{
+    return QStringLiteral("All clips");
+}
+
+QStringList VATBakerController::encodingsForMode(const QString& modeId) const
+{
+    return BoneTexture::isModeId(modeId) ? BoneTexture::encodingIds() : VATBaker::encodingIds();
+}
+
+QStringList VATBakerController::encodingLabelsForMode(const QString& modeId) const
+{
+    if (BoneTexture::isModeId(modeId))
+        return { QStringLiteral("EXR float32 (exact)"), QStringLiteral("EXR float16 (half size)") };
+    return { QStringLiteral("RGBA8 PNG (smallest)"), QStringLiteral("RGBA16 PNG (default)"),
+             QStringLiteral("EXR float32 (lossless)") };
+}
+
 QString VATBakerController::modeLabel(const QString& modeId) const
 {
+    if (BoneTexture::isModeId(modeId))
+        return QStringLiteral("Bone texture (GPU skinning)");
     VATBaker::Mode mode;
     if (!VATBaker::modeFromId(modeId, &mode)) return modeId;
     switch (mode) {
@@ -229,6 +260,10 @@ bool VATBakerController::bake(const QString& animationName,
         return false;
     }
     Ogre::Entity* entity = entities.first();
+
+    if (BoneTexture::isModeId(modeId))
+        return bakeBoneTexture(entity, animationName, fps, outputDir, basename,
+                               includeShadersFor, encodingId, target);
 
     VATBaker::Mode mode = VATBaker::Mode::Skeletal;
     if (!VATBaker::modeFromId(modeId.isEmpty() ? QStringLiteral("skeletal") : modeId, &mode)) {
@@ -377,6 +412,66 @@ bool VATBakerController::bake(const QString& animationName,
              {QStringLiteral("vat_mode"), static_cast<int>(mode)}});
 
     emit bakeFinished(result.ok, result.posTexPath, result.error);
+    return true;
+}
+
+bool VATBakerController::bakeBoneTexture(Ogre::Entity* entity,
+                                         const QString& animationName,
+                                         double fps,
+                                         const QString& outputDir,
+                                         const QString& basename,
+                                         const QStringList& includeShadersFor,
+                                         const QString& encodingId,
+                                         const QString& target)
+{
+    QString encoding;
+    if (!BoneTexture::normaliseEncoding(encodingId, &encoding)) {
+        emit bakeFinished(false, QString(),
+            QStringLiteral("encoding '%1' is not valid for a bone texture (rgba32f, rgba16f)")
+                .arg(encodingId));
+        return false;
+    }
+    if (!entity->hasSkeleton()) {
+        emit bakeFinished(false, QString(), QStringLiteral("selected entity has no skeleton"));
+        return false;
+    }
+    BoneTexture::BakeRequest req;
+    if (animationName != allClipsLabel()) req.clips << animationName;
+    req.fps = fps;
+    req.encoding = encoding;
+    req.outputDir = outputDir;
+    req.basename = basename;
+    req.shaderEngines = includeShadersFor;
+    const QString t = target.trimmed().toLower();
+    if (!t.isEmpty() && t != QLatin1String("agnostic") && !req.shaderEngines.contains(t, Qt::CaseInsensitive))
+        req.shaderEngines << t;
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Bone texture bake requested: clips=%1 fps=%2 encoding=%3")
+            .arg(req.clips.isEmpty() ? QStringLiteral("all") : req.clips.join(QLatin1Char(',')))
+            .arg(fps).arg(encoding));
+    setIsBaking(true);
+    if (!m_lastWarning.isEmpty()) { m_lastWarning.clear(); emit lastWarningChanged(); }
+    m_progressDone = 0;
+    m_progressTotal = 0;
+    emit bakeProgress(0, 0);
+
+    const BoneTexture::BakeReport rep = BoneTexture::bakeToDirectory(entity, req);
+
+    m_progressDone = rep.totalFrames;
+    m_progressTotal = rep.totalFrames;
+    emit bakeProgress(m_progressDone, m_progressTotal);
+    setIsBaking(false);
+    if (!rep.warnings.isEmpty()) {
+        m_lastWarning = rep.warnings.join(QStringLiteral("\n"));
+        emit lastWarningChanged();
+    }
+    if (rep.ok)
+        GamificationManager::noteOperation(
+            QStringLiteral("vat_bake"),
+            {{QStringLiteral("frames_baked"), rep.totalFrames},
+             {QStringLiteral("bones_baked"), rep.boneCount}});
+    emit bakeFinished(rep.ok, rep.files.texturePath, rep.error);
     return true;
 }
 

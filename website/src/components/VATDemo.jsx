@@ -18,10 +18,11 @@ const TABS = [
     label: '1000× VAT',
     caption: (
       <>
-        1000 instances of the same dancer, all driven by VAT in a single{' '}
-        <code>MultiMeshInstance3D</code>. One batched draw call per
-        surface for the entire crowd. Compare against the "1000× skeletal"
-        tab to see the cost difference.
+        The same dancer instanced, all driven by a vertex animation texture
+        (VAT) in a single <code>MultiMeshInstance3D</code>: every vertex's
+        position for every frame is baked into a texture, so the GPU only
+        looks up positions. One batched draw call per surface for the whole
+        crowd. Best for non-skeletal deformation and the cheapest shader.
       </>
     ),
   },
@@ -30,21 +31,43 @@ const TABS = [
     label: '1000× skeletal',
     caption: (
       <>
-        Same 1000 dancers driven by Godot's stock <code>SkinnedMeshRenderer</code>{' '}
-        + per-instance <code>AnimationPlayer</code>. This is the typical
-        path a Godot game ships with for NPC crowds; per-instance bone
-        matrix uploads dominate. Compare FPS against the VAT tab — VAT
-        should be substantially faster on every GPU.
+        The same dancers driven by Godot's stock skinned <code>MeshInstance3D</code>{' '}
+        + a per-instance <code>AnimationPlayer</code> — the path a Godot game
+        usually ships for NPC crowds. Every instance is its own draw call
+        per surface and ticks its own skeleton on the CPU.
+      </>
+    ),
+  },
+  {
+    id: 'perf_bta',
+    label: '1000× bone texture',
+    caption: (
+      <>
+        Bone texture animation (BTA): the clip is baked as one skinning
+        matrix per bone per frame (70 bones × 72 frames ≈ 240 KB of float
+        texture instead of a 5828-vertex position texture), and the vertex
+        shader skins the shared bind-pose mesh on the GPU. Still one{' '}
+        <code>MultiMeshInstance3D</code>; each instance picks its own clip,
+        time offset, speed and crossfade through per-instance data. Bake it
+        with <code>qtmesh vat &lt;file&gt; --mode bone-texture --target godot</code>.
       </>
     ),
   },
 ];
+
+/* Instance counts offered on the perf tabs (forwarded as `&n=`). */
+const COUNTS = [100, 400, 1000, 5000];
+
+const BENCH_URL =
+  'https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/godot-vat-demo#perf-comparison';
 
 const QTMESH_REPO_URL =
   'https://github.com/fernandotonon/QtMeshEditor/tree/master/tools/vat-shaders';
 
 export default function VATDemo() {
   const [tab, setTab] = useState(TABS[0]);
+  const [count, setCount] = useState(1000);
+  const isPerf = tab.id.startsWith('perf_');
   const tabRefs = useRef([]);
 
   // Roving-focus arrow-key navigation per WAI-ARIA tab pattern:
@@ -92,11 +115,28 @@ export default function VATDemo() {
               onClick={() => setTab(t)}
               onKeyDown={(e) => onTabKeyDown(e, i)}
             >
-              {t.label}
+              {t.id.startsWith('perf_') ? t.label.replace('1000', count.toLocaleString('en-US')) : t.label}
             </button>
           );
         })}
       </div>
+
+      {isPerf && (
+        <div className={styles.counts} role="group" aria-label="Instance count">
+          <span className={styles.countsLabel}>Instances:</span>
+          {COUNTS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              aria-pressed={count === n}
+              className={`${styles.count} ${count === n ? styles.countActive : ''}`}
+              onClick={() => setCount(n)}
+            >
+              {n.toLocaleString('en-US')}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div
         role="tabpanel"
@@ -105,8 +145,8 @@ export default function VATDemo() {
         className={styles.wrapper}
       >
         <iframe
-          key={tab.id}
-          src={`demo/index.html?scene=${tab.id}`}
+          key={`${tab.id}-${isPerf ? count : ''}`}
+          src={`demo/index.html?scene=${tab.id}${isPerf ? `&n=${count}` : ''}`}
           title={`QtMeshEditor VAT demo — ${tab.label}`}
           className={styles.frame}
           loading="lazy"
@@ -116,6 +156,14 @@ export default function VATDemo() {
 
       <div className={styles.caption}>
         <p>{tab.caption}</p>
+        {isPerf && (
+          <p className={styles.cliHint}>
+            The overlay shows FPS, draw calls and the GPU texture / buffer memory Godot reports
+            for the whole scene. Browser numbers depend heavily on your GPU and on WebGL;
+            measured native numbers are in{' '}
+            <a href={BENCH_URL} target="_blank" rel="noreferrer">tools/godot-vat-demo/README.md</a>.
+          </p>
+        )}
         <p className={styles.cliHint}>
           Bake locally with <code>qtmesh vat &lt;file&gt; --anim &lt;name&gt; -o &lt;dir&gt;</code>{' '}
           — drop-in shader templates for Godot, Unity, and Unreal ship at{' '}

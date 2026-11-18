@@ -82,3 +82,39 @@
   padding: 0.1rem 0.4rem;
   border-radius: 0.35rem;
 }
+
+.counts {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  font-size: 0.86rem;
+  color: var(--text-2);
+}
+
+.countsLabel {
+  margin-right: 0.2rem;
+}
+
+.count {
+  appearance: none;
+  border: 1px solid var(--stroke);
+  background: transparent;
+  color: var(--text-2);
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.84rem;
+  cursor: pointer;
+}
+
+.count:hover {
+  color: var(--text-1);
+  border-color: var(--text-3, var(--stroke));
+}
+
+.countActive,
+.countActive:hover {
+  background: var(--surface-2);
+  color: var(--text-1);
+  border-color: var(--accent);
+}
