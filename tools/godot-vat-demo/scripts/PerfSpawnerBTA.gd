@@ -61,7 +61,11 @@ func _ready() -> void:
 	if tex == null:
 		DemoConfig.setup_failed(self, "load('%s') failed" % bone_texture)
 		return
-	_material = BoneTextureMesh.make_material(load(shader_path) as Shader, tex, sidecar, mesh)
+	var shader := load(shader_path) as Shader
+	if shader == null:
+		DemoConfig.setup_failed(self, "load('%s') failed" % shader_path)
+		return
+	_material = BoneTextureMesh.make_material(shader, tex, sidecar, mesh)
 	BoneTextureMesh.apply_material(mesh, _material)
 
 	var duration := BoneTextureMesh.clip_duration(sidecar, 0)

@@ -874,6 +874,26 @@ TEST(BoneTextureWrite, FailedSidecarOnAFirstBakeLeavesNothing)
     EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files).isEmpty());
 }
 
+TEST(BoneTextureWrite, FailedRollbackSaysThePairIsMismatched)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ASSERT_TRUE(write(taggedBake(2, 3, 2), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f")).ok);
+    struct Guard {
+        ~Guard() {
+            detail::setSidecarWriteFailureForTest(false);
+            detail::setRollbackFailureForTest(false);
+        }
+    } guard;
+    detail::setSidecarWriteFailureForTest(true);
+    detail::setRollbackFailureForTest(true);
+    const WriteResult r = write(taggedBake(4, 5, 5), tmp.path(), QStringLiteral("hero"), QStringLiteral("rgba32f"));
+    EXPECT_FALSE(r.ok);
+    // The error must not claim a restore or removal that did not happen.
+    EXPECT_TRUE(r.error.contains(QStringLiteral("does NOT match"))) << r.error.toStdString();
+    EXPECT_FALSE(r.error.contains(QStringLiteral("left as it was")));
+}
+
 TEST(BoneTextureWrite, UnreadableExistingTextureIsNotReplaced)
 {
     QTemporaryDir tmp;
@@ -1026,6 +1046,44 @@ TEST_F(BoneTextureOgreTest, FailedMeshExportLeavesTheExistingBakeUntouched)
     const BakeReport r = bakeToDirectory(entity, req);
     EXPECT_FALSE(r.ok);
     EXPECT_TRUE(r.error.contains(QStringLiteral("nothing was written"))) << r.error.toStdString();
+    EXPECT_EQ(readAllOf(glbPath), QByteArray("previous glb"));
+    EXPECT_EQ(readAllOf(texPath), oldTex);
+    EXPECT_EQ(readAllOf(jsonPath), oldJson);
+}
+
+TEST_F(BoneTextureOgreTest, FailedMeshPublicationRestoresThePreviousPair)
+{
+    auto* entity = createBlendedSkinEntity("BT_MeshPublish");
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    BakeRequest req;
+    req.outputDir = tmp.path();
+    req.basename = QStringLiteral("hero");
+    req.clips = { QStringLiteral("Idle") };
+    req.fps = 10.0;
+    req.exportMesh = false;
+    ASSERT_TRUE(bakeToDirectory(entity, req).ok);
+    const QString glbPath = QDir(tmp.path()).filePath(QStringLiteral("hero.glb"));
+    {
+        QFile f(glbPath);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("previous glb");
+    }
+    const QString texPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.exr"));
+    const QString jsonPath = QDir(tmp.path()).filePath(QStringLiteral("hero_bones.json"));
+    const QByteArray oldTex = readAllOf(texPath), oldJson = readAllOf(jsonPath);
+
+    struct Guard { ~Guard() { detail::setMeshPublishFailureForTest(false); } } guard;
+    detail::setMeshPublishFailureForTest(true);
+    req.clips = { QStringLiteral("Sway") };
+    req.exportMesh = true;
+    const BakeReport r = bakeToDirectory(entity, req);
+    if (r.error.contains(QStringLiteral("exporting the rigged mesh failed"))) {
+        SUCCEED() << "the exporter is unavailable here; the publication path is not reached";
+        return;
+    }
+    EXPECT_FALSE(r.ok);
+    EXPECT_TRUE(r.error.contains(QStringLiteral("could not publish"))) << r.error.toStdString();
     EXPECT_EQ(readAllOf(glbPath), QByteArray("previous glb"));
     EXPECT_EQ(readAllOf(texPath), oldTex);
     EXPECT_EQ(readAllOf(jsonPath), oldJson);

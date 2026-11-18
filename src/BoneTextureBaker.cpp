@@ -343,8 +343,12 @@ QString buildSidecarJson(const BakedClips& baked, const QString& textureFile,
 namespace detail {
 bool g_failSidecarForTest = false;
 bool g_failMeshExportForTest = false;
+bool g_failRollbackForTest = false;
+bool g_failMeshPublishForTest = false;
 void setSidecarWriteFailureForTest(bool fail) { g_failSidecarForTest = fail; }
 void setMeshExportFailureForTest(bool fail) { g_failMeshExportForTest = fail; }
+void setRollbackFailureForTest(bool fail) { g_failRollbackForTest = fail; }
+void setMeshPublishFailureForTest(bool fail) { g_failMeshPublishForTest = fail; }
 } // namespace detail
 
 namespace {
@@ -353,6 +357,29 @@ bool saveFileAtomically(const QString& path, const QByteArray& bytes)
 {
     QSaveFile f(path);
     return f.open(QIODevice::WriteOnly) && f.write(bytes) == bytes.size() && f.commit();
+}
+
+/// Put the previous texture back after a failed publication (or remove the
+/// new one when there was none). If that fails, the stale sidecar is
+/// removed so it cannot describe the new texture; if THAT fails too, the
+/// error says so plainly: the folder then holds a mismatched pair.
+QString rollbackPair(const QString& texPath, const QString& jsonPath,
+                     bool hadPreviousTexture, const QByteArray& previousTexture,
+                     const QString& cause)
+{
+    const bool restored = !detail::g_failRollbackForTest
+        && (hadPreviousTexture ? saveFileAtomically(texPath, previousTexture)
+                               : QFile::remove(texPath));
+    if (restored)
+        return cause + QStringLiteral(" (the previous bake was left as it was)");
+    const bool sidecarRemoved = !detail::g_failRollbackForTest
+        && (!QFileInfo::exists(jsonPath) || QFile::remove(jsonPath));
+    if (sidecarRemoved)
+        return cause + QStringLiteral("; the previous texture could not be restored, so its "
+                                      "sidecar %1 was removed - re-run the bake").arg(jsonPath);
+    return cause + QStringLiteral("; the previous texture could not be restored and the sidecar "
+                                  "%1 could not be removed - %1 does NOT match %2: delete both "
+                                  "and re-run the bake").arg(jsonPath, texPath);
 }
 
 /// One writer per (folder, basename) at a time, across processes: the
@@ -500,19 +527,8 @@ WriteResult writeUnlocked(const BakedClips& baked, const QString& outputDir,
         return res;
     }
     if (detail::g_failSidecarForTest || !saveFileAtomically(jsonPath, jsonBytes)) {
-        const bool restored = hadPreviousTexture ? saveFileAtomically(texPath, previousTexture)
-                                                 : QFile::remove(texPath);
-        if (restored) {
-            res.error = QStringLiteral("failed to write the bone texture sidecar %1 (the previous "
-                                       "bake was left as it was)").arg(jsonPath);
-        } else {
-            // The new texture could not be rolled back: drop the old sidecar
-            // so nothing describes a texture it does not match.
-            QFile::remove(jsonPath);
-            res.error = QStringLiteral("failed to write the bone texture sidecar %1 and to restore "
-                                       "the previous texture; the stale sidecar was removed - "
-                                       "re-run the bake").arg(jsonPath);
-        }
+        res.error = rollbackPair(texPath, jsonPath, hadPreviousTexture, previousTexture,
+                                 QStringLiteral("failed to write the bone texture sidecar %1").arg(jsonPath));
         return res;
     }
 
@@ -845,6 +861,23 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
         }
     }
 
+    // Keep the current pair so a failed mesh publication can restore it.
+    const QString texPath = QDir(req.outputDir).filePath(basename + QStringLiteral("_bones.exr"));
+    const QString jsonPath = QDir(req.outputDir).filePath(basename + QStringLiteral("_bones.json"));
+    const bool hadTexture = QFileInfo::exists(texPath);
+    const bool hadSidecar = QFileInfo::exists(jsonPath);
+    QByteArray oldTexture, oldSidecar;
+    if (req.exportMesh) {
+        QFile t(texPath), j(jsonPath);
+        if ((hadTexture && !t.open(QIODevice::ReadOnly)) || (hadSidecar && !j.open(QIODevice::ReadOnly))) {
+            rep.error = QStringLiteral("cannot read the existing %1 bake in %2 - refusing to replace it "
+                                       "(check its permissions)").arg(basename, req.outputDir);
+            return rep;
+        }
+        if (hadTexture) oldTexture = t.readAll();
+        if (hadSidecar) oldSidecar = j.readAll();
+    }
+
     rep.files = writeUnlocked(baked, req.outputDir, basename, rep.encoding, req.maxTextureSize);
     if (!rep.files.ok) {
         rep.error = rep.files.error;
@@ -859,9 +892,23 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req)
         names.append(glbName);
         for (const QString& name : names) {
             QFile f(staged.filePath(name));
-            if (!f.open(QIODevice::ReadOnly)
-                || !saveFileAtomically(QDir(req.outputDir).filePath(name), f.readAll()))
-                rep.warnings << QStringLiteral("could not publish %1 into %2").arg(name, req.outputDir);
+            const bool published = !(detail::g_failMeshPublishForTest && name == glbName)
+                && f.open(QIODevice::ReadOnly)
+                && saveFileAtomically(QDir(req.outputDir).filePath(name), f.readAll());
+            if (published) continue;
+            // The texture/sidecar pair is already published: put the previous
+            // pair back so the folder never mixes a new pair with an old mesh.
+            QString cause = QStringLiteral("could not publish %1 into %2").arg(name, req.outputDir);
+            if (hadSidecar && !detail::g_failRollbackForTest && saveFileAtomically(jsonPath, oldSidecar)) {
+                rep.error = rollbackPair(texPath, jsonPath, hadTexture, oldTexture, cause);
+            } else if (!hadSidecar && !detail::g_failRollbackForTest && QFile::remove(jsonPath)) {
+                rep.error = rollbackPair(texPath, jsonPath, hadTexture, oldTexture, cause);
+            } else {
+                rep.error = cause + QStringLiteral("; the previous sidecar could not be restored - "
+                                                  "%1 does NOT match the rest of the bake: delete "
+                                                  "%1 and %2 and re-run").arg(jsonPath, texPath);
+            }
+            return rep;
         }
         const QString meshPath = QDir(req.outputDir).filePath(glbName);
         if (QFileInfo::exists(meshPath)) rep.meshPath = QFileInfo(meshPath).absoluteFilePath();

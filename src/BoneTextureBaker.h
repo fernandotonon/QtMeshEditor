@@ -266,6 +266,8 @@ BakeReport bakeToDirectory(Ogre::Entity* entity, const BakeRequest& req);
 namespace detail {
 void setSidecarWriteFailureForTest(bool fail);
 void setMeshExportFailureForTest(bool fail);
+void setRollbackFailureForTest(bool fail);       ///< Restore AND sidecar removal fail.
+void setMeshPublishFailureForTest(bool fail);    ///< Publishing the staged .glb fails.
 }
 
 /// Machine-readable summary (CLI `--json`, MCP result).

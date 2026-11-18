@@ -31,7 +31,7 @@ for n in $COUNTS; do
     set -e
     line=$(grep '^BENCH ' "$log" | tail -1 || true)
     if [ $status -ne 0 ] || [ -z "$line" ]; then
-      reason=$(grep -E 'BENCH_SETUP_FAILED|ERROR' "$log" | head -3 | tr '"' "'" | tr '\n' ' ')
+      reason=$(grep -E 'BENCH_SETUP_FAILED|ERROR' "$log" | head -3 | tr '"' "'" | tr '\n' ' ' || true)
       echo "{\"path\":\"$path\",\"instances\":$n,\"order\":$k,\"error\":\"exit $status: $reason\"}" | tee -a "$OUT"
     else
       echo "${line#BENCH }" | sed "s/^{/{\"order\":$k,/" | tee -a "$OUT"
