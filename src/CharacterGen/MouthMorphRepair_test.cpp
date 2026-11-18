@@ -14,7 +14,7 @@ struct Grid {
     int n = 11;
     std::vector<float> positions;
     std::vector<int32_t> faces;
-    Grid()
+    explicit Grid(int size = 11) : n(size)
     {
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < n; ++i) positions.insert(positions.end(), {(i - n / 2) * 0.001f, (j - n / 2) * 0.001f, 0.0f});
@@ -65,7 +65,8 @@ TEST(MouthMorphRepair, FacesOutsideTheRadiusAreNotTouched)
 }
 
 namespace {
-// The grid with the quad at the centre cell removed (its two triangles), and a 4 x 4 cell block removed next to it (a long loop).
+// The grid with the quad at the centre cell removed (its two triangles), and optionally a 4 x 4 cell block starting at cell
+// (bigFirstCell, bigFirstCell) removed too (a long loop).
 std::vector<int32_t> gridWithHoles(const Grid& g, int bigFirstCell)
 {
     std::vector<int32_t> out;
@@ -73,7 +74,7 @@ std::vector<int32_t> gridWithHoles(const Grid& g, int bigFirstCell)
     for (int j = 0; j < cells; ++j)
         for (int i = 0; i < cells; ++i) {
             const bool small = (j == cells / 2 && i == cells / 2);
-            const bool big = bigFirstCell >= 0 && i >= bigFirstCell && i < bigFirstCell + 4 && j >= 0 && j < 4;
+            const bool big = bigFirstCell >= 0 && i >= bigFirstCell && i < bigFirstCell + 4 && j >= bigFirstCell && j < bigFirstCell + 4;
             if (small || big) continue;
             const size_t f = size_t(j * cells + i) * 6;
             out.insert(out.end(), g.faces.begin() + long(f), g.faces.begin() + long(f + 6));
@@ -103,8 +104,12 @@ TEST(MouthMorphRepair, ASmallHoleIsCappedWithTheSurroundingWinding)
 
 TEST(MouthMorphRepair, ALongLoopAndHolesOutsideTheRadiusStayOpen)
 {
-    Grid g;
-    const std::vector<int32_t> faces = gridWithHoles(g, 0);   // the small centre hole plus a 4 x 4 cell opening (16-vertex loop)
+    Grid g(13);   // 12 x 12 cells: the 4 x 4 block at cells 1..4 is enclosed and does not touch the centre hole (cell 6)
+    const std::vector<int32_t> faces = gridWithHoles(g, 1);
+    std::vector<size_t> sizes;
+    for (const auto& l : boundaryLoops(faces, g.vertices())) sizes.push_back(l.size());
+    std::sort(sizes.begin(), sizes.end());
+    ASSERT_EQ(sizes, (std::vector<size_t>{4, 16, 48}));   // the small hole, the enclosed block, the outer rim
     EXPECT_EQ(mouthHoleCaps(g.positions, g.vertices(), faces, kOrigin, 1.0).size(), 6u);
     const std::array<double, 3> far{1.0, 1.0, 1.0};
     EXPECT_TRUE(mouthHoleCaps(g.positions, g.vertices(), faces, far, 0.01).empty());

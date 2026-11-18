@@ -2288,20 +2288,20 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             rig.meshes.push_back(std::move(m));
         }
     }
-    {
-        Dna::Mesh outward = body;
-        outward.faces.resize(std::min(outward.faces.size(), outwardFaces));
-        addClothes(p, outward, rig, rep);
-    }
+    // Garments and hair are fitted to the outward skin only: the reversed copies (the seam's back, the mouth corners, the head
+    // lining) cancel the normals they are summed with, so clothes cut wrongly and hair roots / collisions point straight up.
+    Dna::Mesh outward = body;
+    outward.faces.resize(std::min(outward.faces.size(), outwardFaces));
+    addClothes(p, outward, rig, rep);
     if (!p.nativeHead && !p.hairStyle.isEmpty())
         rep.warnings << QStringLiteral("Hairstyle '%1' ignored: hair needs the native head.").arg(p.hairStyle);
     if (p.nativeHead && !p.hairStyle.isEmpty())   // the scalp is painted into the skin wherever the hair grows
-        rep.scalp = Hair::scalpWeights(body.positions, headMaskOf(body, rig), p.hairStyle.startsWith(QLatin1String("proc:")) ? Hair::effectiveHairlineOffset(p.hairProcedural) : 0.0f);
-    if (p.nativeHead && !p.hairStyle.isEmpty() && addHairStudioHair(p, body, rig, rep)) {
+        rep.scalp = Hair::scalpWeights(outward.positions, headMaskOf(outward, rig), p.hairStyle.startsWith(QLatin1String("proc:")) ? Hair::effectiveHairlineOffset(p.hairProcedural) : 0.0f);
+    if (p.nativeHead && !p.hairStyle.isEmpty() && addHairStudioHair(p, outward, rig, rep)) {
         // handled by the Hair Studio (procedural / library)
     } else if (p.nativeHead && !p.hairStyle.isEmpty()) {
         if (const HairStyle* hair = a.hairStyle(p.hairStyle)) {
-            Dna::Mesh m = buildHairMesh(*hair, body);
+            Dna::Mesh m = buildHairMesh(*hair, outward);
             rep.headVertices += int(m.positions.size() / 3);
             rep.headTriangles += int(m.faces.size());
             rep.meshNames << m.name;
