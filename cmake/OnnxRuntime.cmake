@@ -114,9 +114,12 @@ else()
                         "Disable with -DENABLE_ONNX=OFF or add the archive here.")
 endif()
 
+include(FetchContent)
+
 # Downloads `url` to `out` and checks its SHA-256. Sets `ok_var` to TRUE on success, FALSE
 # when the download failed; a file that arrives with the WRONG digest is a hard error (never
-# silently fall back past a tampered or changed archive).
+# silently fall back past a tampered or changed archive). Transfer errors other than an
+# HTTP error status (curl 22, e.g. the 404) are retried, and a stalled transfer times out.
 function(_qtmesh_ort_download url out sha256 ok_var)
     if(EXISTS "${out}")
         file(SHA256 "${out}" _have)
@@ -126,13 +129,21 @@ function(_qtmesh_ort_download url out sha256 ok_var)
         endif()
         file(REMOVE "${out}")
     endif()
-    message(STATUS "ONNX Runtime: downloading ${url}")
-    file(DOWNLOAD "${url}" "${out}.part" STATUS _status TLS_VERIFY ON)
-    list(GET _status 0 _code)
-    if(NOT _code EQUAL 0)
+    foreach(_attempt RANGE 1 3)
+        message(STATUS "ONNX Runtime: downloading ${url} (attempt ${_attempt})")
+        file(DOWNLOAD "${url}" "${out}.part" STATUS _status TLS_VERIFY ON INACTIVITY_TIMEOUT 60)
+        list(GET _status 0 _code)
+        if(_code EQUAL 0)
+            break()
+        endif()
         list(GET _status 1 _msg)
-        message(STATUS "ONNX Runtime: download failed (${_msg})")
+        message(STATUS "ONNX Runtime: download failed (${_code}: ${_msg})")
         file(REMOVE "${out}.part")
+        if(_code EQUAL 22)
+            break()
+        endif()
+    endforeach()
+    if(NOT _code EQUAL 0)
         set(${ok_var} FALSE PARENT_SCOPE)
         return()
     endif()
@@ -151,8 +162,18 @@ endfunction()
 # src/CMakeLists.txt work unchanged. The libraries in the package carry the same install
 # names as the archive's (@rpath/libonnxruntime.1.dylib, libonnxruntime.so.1).
 function(_qtmesh_ort_stage_nuget nupkg rid root)
-    set(_stamp "${root}/.qtmesh-ort-${QTMESH_ONNX_VERSION}-${rid}")
-    if(EXISTS "${_stamp}")
+    set(_v "${QTMESH_ONNX_VERSION}")
+    if(rid MATCHES "^osx")
+        set(_main "libonnxruntime.${_v}.dylib")
+    elseif(rid MATCHES "^linux")
+        set(_main "libonnxruntime.so.${_v}")
+    else()
+        set(_main "onnxruntime.dll")
+    endif()
+    # The stamp alone is not trusted: a partial cleanup can leave it behind.
+    set(_stamp "${root}/.qtmesh-ort-${_v}-${rid}")
+    if(EXISTS "${_stamp}" AND EXISTS "${root}/lib/${_main}"
+       AND EXISTS "${root}/include/onnxruntime_cxx_api.h")
         return()
     endif()
     file(REMOVE_RECURSE "${root}" "${root}-x")
@@ -161,14 +182,13 @@ function(_qtmesh_ort_stage_nuget nupkg rid root)
     file(MAKE_DIRECTORY "${root}/lib")
     file(COPY "${root}-x/build/native/include/" DESTINATION "${root}/include")
     set(_native "${root}-x/runtimes/${rid}/native")
-    set(_v "${QTMESH_ONNX_VERSION}")
     if(rid MATCHES "^osx")
-        file(COPY_FILE "${_native}/libonnxruntime.dylib" "${root}/lib/libonnxruntime.${_v}.dylib")
-        file(CREATE_LINK "libonnxruntime.${_v}.dylib" "${root}/lib/libonnxruntime.1.dylib" SYMBOLIC)
-        file(CREATE_LINK "libonnxruntime.${_v}.dylib" "${root}/lib/libonnxruntime.dylib" SYMBOLIC)
+        file(COPY_FILE "${_native}/libonnxruntime.dylib" "${root}/lib/${_main}")
+        file(CREATE_LINK "${_main}" "${root}/lib/libonnxruntime.1.dylib" SYMBOLIC)
+        file(CREATE_LINK "${_main}" "${root}/lib/libonnxruntime.dylib" SYMBOLIC)
     elseif(rid MATCHES "^linux")
-        file(COPY_FILE "${_native}/libonnxruntime.so" "${root}/lib/libonnxruntime.so.${_v}")
-        file(CREATE_LINK "libonnxruntime.so.${_v}" "${root}/lib/libonnxruntime.so.1" SYMBOLIC)
+        file(COPY_FILE "${_native}/libonnxruntime.so" "${root}/lib/${_main}")
+        file(CREATE_LINK "${_main}" "${root}/lib/libonnxruntime.so.1" SYMBOLIC)
         file(CREATE_LINK "libonnxruntime.so.1" "${root}/lib/libonnxruntime.so" SYMBOLIC)
         if(EXISTS "${_native}/libonnxruntime_providers_shared.so")
             file(COPY_FILE "${_native}/libonnxruntime_providers_shared.so"
@@ -195,48 +215,62 @@ if(NOT _ort_nuget_rid OR NOT QTMESH_ONNX_VERSION STREQUAL "1.31.1")
     set(_ort_nuget_rid "")
 endif()
 
-set(_ort_dl_dir "${CMAKE_BINARY_DIR}/_deps/qtmesh_onnxruntime_downloads")
-file(MAKE_DIRECTORY "${_ort_dl_dir}")
-set(_ort_local_archive "${_ort_dl_dir}/${_ort_archive}")
-# A build directory configured before this fallback existed already holds the archive
-# FetchContent downloaded: reuse it instead of going back to the network.
-set(_ort_old_copy
-    "${CMAKE_BINARY_DIR}/_deps/${_ort_fetch_name}-subbuild/${_ort_fetch_name}-populate-prefix/src/${_ort_archive}")
-if(NOT EXISTS "${_ort_local_archive}" AND EXISTS "${_ort_old_copy}")
-    file(COPY_FILE "${_ort_old_copy}" "${_ort_local_archive}")
+# A local source override (FETCHCONTENT_SOURCE_DIR_<NAME>) or a disconnected configure keeps
+# the plain FetchContent behaviour: no download here, FetchContent applies its own rules.
+string(TOUPPER "${_ort_fetch_name}" _ort_fetch_upper)
+set(_ort_fetch_local FALSE)
+if(DEFINED FETCHCONTENT_SOURCE_DIR_${_ort_fetch_upper} OR FETCHCONTENT_FULLY_DISCONNECTED)
+    set(_ort_fetch_local TRUE)
 endif()
 
+set(_ort_dl_dir "${FETCHCONTENT_BASE_DIR}/qtmesh_onnxruntime_downloads")
+set(_ort_local_archive "${_ort_dl_dir}/${_ort_archive}")
 set(_ort_have_archive FALSE)
-if(NOT _ort_source STREQUAL "NUGET")
+if(NOT _ort_fetch_local AND NOT _ort_source STREQUAL "NUGET")
+    file(MAKE_DIRECTORY "${_ort_dl_dir}")
+    # A build directory configured before this fallback existed already holds the archive
+    # FetchContent downloaded: reuse it instead of going back to the network.
+    set(_ort_old_copy
+        "${FETCHCONTENT_BASE_DIR}/${_ort_fetch_name}-subbuild/${_ort_fetch_name}-populate-prefix/src/${_ort_archive}")
+    if(NOT EXISTS "${_ort_local_archive}" AND EXISTS "${_ort_old_copy}")
+        file(COPY_FILE "${_ort_old_copy}" "${_ort_local_archive}")
+    endif()
     _qtmesh_ort_download("${QTMESH_ONNX_BASE_URL}/${_ort_archive}" "${_ort_local_archive}"
                          "${_ort_sha256}" _ort_have_archive)
 endif()
 
-if(_ort_have_archive)
-    include(FetchContent)
+if(_ort_fetch_local OR _ort_have_archive)
+    if(_ort_have_archive)
+        set(_ort_url "${_ort_local_archive}")
+    else()
+        set(_ort_url "${QTMESH_ONNX_BASE_URL}/${_ort_archive}")
+    endif()
     FetchContent_Declare(
         ${_ort_fetch_name}
-        URL "${_ort_local_archive}"
+        URL "${_ort_url}"
         URL_HASH SHA256=${_ort_sha256}
     )
     FetchContent_MakeAvailable(${_ort_fetch_name})
     # FetchContent sets <name>_SOURCE_DIR
     set(QTMESH_ONNX_ROOT "${${_ort_fetch_name}_SOURCE_DIR}")
-elseif(_ort_nuget_rid)
+elseif(_ort_nuget_rid AND NOT _ort_source STREQUAL "GITHUB")
+    file(MAKE_DIRECTORY "${_ort_dl_dir}")
     set(_ort_nupkg "${_ort_dl_dir}/microsoft.ml.onnxruntime.${QTMESH_ONNX_VERSION}.nupkg")
     _qtmesh_ort_download(
         "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${QTMESH_ONNX_VERSION}/microsoft.ml.onnxruntime.${QTMESH_ONNX_VERSION}.nupkg"
         "${_ort_nupkg}" "${_ort_nuget_sha256}" _ort_have_nupkg)
     if(NOT _ort_have_nupkg)
-        message(FATAL_ERROR "ONNX Runtime: neither the GitHub archive nor the NuGet package "
-                            "could be downloaded. Disable with -DENABLE_ONNX=OFF.")
+        message(FATAL_ERROR "ONNX Runtime: the NuGet package could not be downloaded"
+                            " (and the GitHub archive was not tried or failed)."
+                            " Disable with -DENABLE_ONNX=OFF.")
     endif()
-    set(QTMESH_ONNX_ROOT "${CMAKE_BINARY_DIR}/_deps/qtmesh_onnxruntime_nuget_${_ort_nuget_rid}")
+    set(QTMESH_ONNX_ROOT "${FETCHCONTENT_BASE_DIR}/qtmesh_onnxruntime_nuget_${_ort_nuget_rid}")
     _qtmesh_ort_stage_nuget("${_ort_nupkg}" "${_ort_nuget_rid}" "${QTMESH_ONNX_ROOT}")
     message(STATUS "ONNX Runtime: using the NuGet package (${_ort_nuget_rid})")
 else()
-    message(FATAL_ERROR "ONNX Runtime: could not download ${QTMESH_ONNX_BASE_URL}/${_ort_archive} "
-                        "and this configuration has no NuGet fallback. Disable with -DENABLE_ONNX=OFF.")
+    message(FATAL_ERROR "ONNX Runtime: could not download ${QTMESH_ONNX_BASE_URL}/${_ort_archive}"
+                        " and QTMESH_ONNX_SOURCE=${_ort_source} / this configuration allows no"
+                        " NuGet fallback. Disable with -DENABLE_ONNX=OFF.")
 endif()
 set(QTMESH_ONNX_INCLUDE_DIR "${QTMESH_ONNX_ROOT}/include")
 
