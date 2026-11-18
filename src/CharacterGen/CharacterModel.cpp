@@ -507,9 +507,10 @@ QStringList colourNames(ColourKind kind)
 }
 
 // The ICT mouth interior is a little large for the MHR head: at jawOpen 1 the back of the lower gums and teeth came out through the
-// underside of the jaw (~190 vertices on every seed measured). Scaled by 0.85 (its motion too) about its own centre and 5 mm
-// forward, nothing comes out and the teeth sit closer behind the lips (6 mm put its front rim through the closed lips).
-constexpr float kMouthScale = 0.85f;
+// underside of the jaw (~190 vertices on every seed measured). Scaled by 0.85 in height and depth (its motion too) about its own
+// centre and 5 mm forward, nothing comes out and the teeth sit closer behind the lips (6 mm put its front rim through the closed
+// lips). The width keeps ICT's size: narrowed too, the lining's sides stood inside the lip corners.
+constexpr std::array<float, 3> kMouthScale{1.0f, 0.85f, 0.85f};
 constexpr float kMouthForward = 0.005f;   // metres, towards the face
 constexpr float kMouthUp = 0.003f;        // metres: the teeth sat a little low behind the lips
 constexpr float kMouthJawFollow = 1.4f;   // MHR jaw travel / ICT jaw travel (see the mouth interior's morph targets)
@@ -1215,7 +1216,30 @@ static int bridgeMouthToLips(Dna::Mesh& m, const Dna::Mesh& body, const std::vec
             for (int k = 0; k < 3; ++k) bt->deltas.push_back(dv[k] * kCmToM);
         }
     }
-    m.normals = positionNormals(m.positions, m.faces, m.layouts);
+    // Normals: the lining keeps its own (the band's faces are crumpled at rest and would bend them), and each copy takes the lining
+    // normal at the nearest point of the rim, found in the jaw-open pose. The band then shades as more of the lining.
+    std::vector<float> normals = m.normals;
+    normals.resize(size_t(first) * 3, 0.0f);
+    for (size_t i = 0; i < A.size(); ++i) {
+        size_t seg = 0;
+        double segT = 0.0, bd = 1e30;
+        for (size_t j = 0; j < B.size(); ++j) {
+            const auto& p = openB[j];
+            const auto& q = openB[(j + 1) % B.size()];
+            double e[3], w[3], ee = 0.0, we = 0.0;
+            for (size_t k = 0; k < 3; ++k) { e[k] = q[k] - p[k]; w[k] = openA[i][k] - p[k]; ee += e[k] * e[k]; we += w[k] * e[k]; }
+            const double t = ee > 0.0 ? std::clamp(we / ee, 0.0, 1.0) : 0.0;
+            double d = 0.0;
+            for (size_t k = 0; k < 3; ++k) d += std::pow(w[k] - t * e[k], 2.0);
+            if (d < bd) { bd = d; seg = j; segT = t; }
+        }
+        const size_t r0 = size_t((*rim)[seg]), r1 = size_t((*rim)[(seg + 1) % B.size()]);
+        double n[3], l = 0.0;
+        for (size_t k = 0; k < 3; ++k) { n[k] = (1.0 - segT) * normals[r0 * 3 + k] + segT * normals[r1 * 3 + k]; l += n[k] * n[k]; }
+        l = std::sqrt(l);
+        for (size_t k = 0; k < 3; ++k) normals.push_back(l > 0.0 ? float(n[k] / l) : 0.0f);
+    }
+    m.normals = std::move(normals);
     return int(tris.size());
 }
 
@@ -2041,7 +2065,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
     // of the lip sheet's vertices (fitted by hand on one character).
     float mouthShift[3] = {0.0f, 0.008065f + 0.004f, 0.0436f};   // fallback for bundles without landmarks: ICT's own placement + a fixed offset
     float mouthCentre[3] = {0.0f, 0.0f, 0.0f};   // the interior is scaled about this point (after the shift)
-    float mouthScale = 1.0f;
+    std::array<float, 3> mouthScale{1.0f, 1.0f, 1.0f};
     if (p.nativeHead && !a.landmarkLip.empty()) {
         double M[3] = {0, 0, 0}, C[3] = {0, 0, 0};
         for (int32_t v : a.landmarkLip) for (int k = 0; k < 3; ++k) M[k] += body.positions[size_t(v) * 3 + size_t(k)];
@@ -2172,7 +2196,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                         for (int i = 0; i < 3; ++i) m.positions.push_back(headPos[size_t(gv) * 3 + i]);
                         if (p.nativeHead && (std::strcmp(g.mesh, "head_mouth") == 0 || std::strcmp(g.mesh, "head_teeth") == 0)) {
                             float* q = &m.positions[m.positions.size() - 3];
-                            for (size_t k = 0; k < 3; ++k) q[k] = mouthCentre[k] + mouthScale * (q[k] + mouthShift[k] - mouthCentre[k]);
+                            for (size_t k = 0; k < 3; ++k) q[k] = mouthCentre[k] + mouthScale[k] * (q[k] + mouthShift[k] - mouthCentre[k]);
                         }
                     }
                     const uint32_t li = uint32_t(local[size_t(gv)]), ti = uint32_t(a.polyTexcoord[b + k]);
@@ -2224,7 +2248,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
             const QString& shapeName = e < a.expressionNames.size() ? a.expressionNames[e] : QString();
             const bool jawShape = shapeName.startsWith(QLatin1String("jaw"));
             // the interior is scaled as a whole (see kMouthScale), its motion included
-            const float follow = ((mouthInterior && jawShape) ? kMouthJawFollow : 1.0f) * (mouthInterior ? mouthScale : 1.0f);
+            const float follow = (mouthInterior && jawShape) ? kMouthJawFollow : 1.0f;
             Dna::BlendShapeTarget bt;
             bt.channel = e;
             const float* d = a.ictExpression.data() + size_t(e) * a.ictNeutral.size();
@@ -2232,7 +2256,7 @@ Dna::Rig buildRig(const Assets& a, const Params& p, BuildReport* report, QString
                 const float* dv = d + size_t(globalOf[i]) * 3;
                 if (std::fabs(dv[0]) + std::fabs(dv[1]) + std::fabs(dv[2]) < 1e-3f) continue;   // < 10 micrometres
                 bt.vertexIndices.push_back(uint32_t(i));
-                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM * follow);
+                for (int k = 0; k < 3; ++k) bt.deltas.push_back(dv[k] * s * kCmToM * follow * (mouthInterior ? mouthScale[size_t(k)] : 1.0f));
             }
             if (!bt.vertexIndices.empty()) m.blendShapeTargets.push_back(std::move(bt));
         }
