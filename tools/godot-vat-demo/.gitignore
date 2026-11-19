@@ -3,3 +3,9 @@
 .godot/
 *.uid
 *.import
+bench_results.jsonl
+# The bone texture must import as an uncompressed float texture; a fresh
+# checkout would otherwise import it with the default (compressed) settings.
+!assets/RumbaBones/Rumba_bones.exr.import
+# Textures Godot extracts from Rumba.glb on import (regenerated).
+assets/RumbaBones/Rumba_*.png

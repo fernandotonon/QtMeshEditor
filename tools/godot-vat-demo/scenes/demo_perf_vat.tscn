@@ -59,5 +59,6 @@ offset_top = 16.0
 offset_right = 800.0
 offset_bottom = 120.0
 script = ExtResource("2_fps")
-caption = "VAT path — 1000 instances"
+caption = "VAT path — {n} instances"
+bench_label = "vat"
 instance_count = 1000

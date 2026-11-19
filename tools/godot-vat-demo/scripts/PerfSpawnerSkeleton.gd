@@ -37,6 +37,8 @@ func _ready() -> void:
 	# Uncap FPS for honest perf measurement (matches the VAT spawner).
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = 0
+	instance_count = DemoConfig.instance_count(instance_count)
+	DemoConfig.frame_crowd(self, instance_count, grid_spacing)
 
 	var start_ms := Time.get_ticks_msec()
 
@@ -47,7 +49,7 @@ func _ready() -> void:
 	# fail in web because the raw .gltf bytes aren't shipped.
 	var pack: PackedScene = load(source_gltf) as PackedScene
 	if pack == null:
-		push_error("PerfSpawnerSkeleton: load('%s') returned null" % source_gltf)
+		DemoConfig.setup_failed(self, "load('%s') returned null" % source_gltf)
 		return
 
 	var side := int(ceil(sqrt(instance_count)))

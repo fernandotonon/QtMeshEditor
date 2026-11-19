@@ -79,6 +79,18 @@ public:
     /// Godot template exists today; the README carries the Unity /
     /// Unreal math for the same texel layout.
     static QStringList rigidEngines();
+
+    /// Engines with a bone texture (#1166) template (today: godot).
+    static QStringList boneTextureEngines();
+    /// File names the bone texture templates of `engines` write.
+    static QStringList boneTextureFiles(const QStringList& engines);
+
+    /// Copy the bone texture templates of `engines` (godot: the vertex
+    /// shader + `BoneTextureMesh.gd`, the mesh builder) and the README
+    /// into `outputDir`. Engines without a template are skipped (see
+    /// `boneTextureEngines`). Returns the written absolute paths.
+    static QStringList writeBoneTextureShaders(const QString& outputDir,
+                                               const QStringList& engines);
 };
 
 #endif // VATSHADEREMITTER_H

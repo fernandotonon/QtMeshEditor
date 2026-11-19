@@ -173,6 +173,138 @@ Unity/Unreal templates already carry the same swizzles for positions
 and normals — mirror them for the quaternion when you port the rigid
 shader.
 
+## Bone texture animation (#1166)
+
+`qtmesh vat <rigged file> --mode bone-texture -o <dir>` (MCP `bake_vat
+{mode: "bone-texture"}`, Inspector VAT mode "Bone texture (GPU skinning)") is
+the skeletal alternative to the per-vertex VAT. Instead of every vertex
+position per frame it stores every bone's **skinning matrix** per frame
+(animated global x inverse bind), so the texture grows with
+`bones x frames` instead of `vertices x frames`, and the vertex shader skins
+the bind-pose mesh itself.
+
+| File | Contents |
+|---|---|
+| `<name>_bones.exr` | RGBA float (`rgba32f`, default) or half (`rgba16f`). Width = bones x 3, height = total frames of all clips. |
+| `<name>_bones.json` | `qtmesh-bone-texture-v1`: bones (name, parent), clips (`firstRow`, `frameCount`, `duration`, effective `fps`, `loop`), layout and conventions. |
+| `<name>.glb` | The rigged mesh in bind pose (skip with `--no-mesh`). |
+| `bone_texture.gdshader`, `BoneTextureMesh.gd` | Godot template (with `--target godot` / `--include-shaders godot`). |
+
+### What the two textures look like
+
+Both images come from the same bake source: the Rumba dancer of the Godot
+demo (5828 vertices, 70 bones, one 72-frame clip at 30 fps).
+
+**VAT.png** — the vertex animation texture (`mixamo.com_pos.png`, shown at a
+quarter of its width; the real file is 5828 x 142):
+
+![VAT texture of the Rumba dancer](https://raw.githubusercontent.com/fernandotonon/QtMeshEditor/master/tools/vat-shaders/images/VAT.png)
+
+One **column per vertex**, so the width is the vertex count. The top half
+(71 rows) holds each vertex's position in every frame, the bottom half its
+normal, both squeezed into 0..1 colours. The texture grows with
+`vertices x frames`: a denser mesh makes it wider, a longer clip taller.
+
+**BTA.png** — the bone texture (`Rumba_bones.exr`, 210 x 72, shown 6x
+enlarged and remapped from about -1..1 to visible colours; the real file is
+float and looks mostly dark in an image viewer):
+
+![Bone texture of the Rumba dancer](https://raw.githubusercontent.com/fernandotonon/QtMeshEditor/master/tools/vat-shaders/images/BTA.png)
+
+One **row per frame** and **three columns per bone** (70 bones x 3 = 210).
+Columns that change from top to bottom belong to bones that move a lot
+(hips, spine, arms); flat columns are bones that barely move (fingers,
+helpers). The texture grows with `bones x frames` and does not depend on
+the vertex count at all.
+
+### Why three columns per bone?
+
+Each bone stores ONE 3x4 matrix, and each of the three texels is one ROW of
+it (four numbers = one RGBA texel):
+
+```
+texel 0 (RGBA) = [ m00 m01 m02 | tx ]
+texel 1 (RGBA) = [ m10 m11 m12 | ty ]
+texel 2 (RGBA) = [ m20 m21 m22 | tz ]
+                  rotation x scale  translation
+```
+
+- Position is spread over the three texels, in their alpha channel
+  (A = tx, ty, tz).
+- Orientation and scale are not stored separately: they are multiplied
+  together into the 3x3 block in RGB.
+- The 4th row of the matrix is always `0 0 0 1` for this kind of
+  transform, so it is not stored.
+
+The matrix is not the bone's raw position/rotation/scale either: it is its
+**skinning matrix**, animated pose x inverse bind pose. That is why a
+matrix and not separate channels:
+
+- The shader just multiplies each vertex by it and blends the 4
+  influences. That is exactly linear blend skinning, with no per-vertex
+  conversion.
+- It is the same matrix Ogre computes for skinning, which is why the bake
+  matches Ogre's own skinning to float precision on baked frames.
+- Storing position + quaternion + scale would also take 3 texels, but the
+  shader would have to rebuild the matrix and fold in the inverse bind pose
+  for every influence of every vertex.
+
+A smaller alternative exists: a dual quaternion (or quaternion +
+translation) is 2 texels per bone. It would shrink the texture by a third
+and avoid the slight shrinking when blending large rotations between
+frames, but it cannot hold non-uniform scale and needs dual-quaternion
+skinning in the shader. It is listed as a follow-up in #1166.
+
+**Layout.** Texel `(bone*3 + r, row)` is row `r` of the bone's 3x4 matrix
+(`m[r][0..3]`); the 4th row is `(0,0,0,1)`. Clips are stacked by row, each
+sampling both ends (row `firstRow` = t 0, row `firstRow+frameCount-1` = clip
+end), so interpolating two adjacent rows never reads the next clip. Looping
+wraps from the last row to the first; that is seamless only when the clip's
+last pose matches its first (true for authored loops). Row 0 is the first scanline. Skinned position:
+`p' = sum_i w_i * M_i * vec4(p, 1)` (4 influences, renormalised).
+
+**Space.** Mesh-local, Ogre / glTF convention (Y up, right-handed, source
+units). The scene-node transform is not baked. For another convention apply
+`C * M * C^-1` on read.
+
+**Bone indices.** The texture uses the source skeleton's bone order (the
+sidecar's `bones[]`). An engine's imported skin numbers its joints in its own
+order, so map each joint to the texture **by name**. `BoneTextureMesh.gd`
+does this for Godot (names are normalised on both sides, since Godot
+sanitises `:` and friends on import), keeps the strongest 4 influences and
+writes them to `CUSTOM0` (indices) / `CUSTOM1` (weights) as RGBA float, which
+a spatial shader can read; it also drops the engine skin so the mesh can go
+in a `MultiMesh`.
+
+**Per instance** (`INSTANCE_CUSTOM`): `r` clip index, `g` time offset (s),
+`b` speed (0 = 1), `a` crossfade (integer part = second clip, fractional
+part = its weight). One shared `time_seconds` uniform is the only per-frame
+CPU work.
+
+**Import.** The EXR must stay a float texture: Godot *Compress Mode = VRAM
+Uncompressed*, mipmaps off, filter nearest (the shader uses `texelFetch`).
+Unity: `RGBAFloat`/`RGBAHalf`, no compression, point filter, no mips.
+
+**Accuracy.** With `rgba32f`, on baked frames the texture reproduces the
+source skinning to float precision for vertices with up to 4 influences
+(QtMeshEditor parity test against Ogre's software skinning: 2.4e-7).
+Vertices with more influences lose the weakest ones (the sidecar reports how
+many: `skinning.verticesOverLimit`), and `rgba16f` adds half-float rounding
+(about 1e-3 relative; values past +/-65504 are refused at bake time). Between
+frames (and in a crossfade) the shader blends matrices component-wise, which
+slightly shrinks large per-frame rotations (1.2 mm at 20 fps on a fast test
+rig); bake at a higher fps if that matters. In the Godot demo the shader's
+silhouette matches Godot's own skeletal skinning of the same `.glb` to within
+the 1-pixel antialiased edge.
+
+**Godot template limits.** The shader's clip table holds 32 clips (the bake
+warns past that); `BoneTextureMesh.gd` has no `class_name` (each bake ships a
+copy, two copies would collide) — `preload` it by path.
+
+Only a Godot template ships today; Unity/Unreal users can port
+`bone_texture.gdshader` directly (three `texelFetch`es per influence, the
+matrix assembly is spelled out in it).
+
 ## Where this came from
 
 These templates are extracted verbatim from the test harnesses under

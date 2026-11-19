@@ -243,3 +243,60 @@ TEST_F(VATBakerControllerSceneTest, ModesReflectSelectionAndBakeRefusesUnknownId
     EXPECT_TRUE(spy.last().at(0).toBool()) << spy.last().at(2).toString().toStdString();
     EXPECT_TRUE(QFile::exists(QDir(tmp.path()).filePath(QStringLiteral("openvat.gdshader"))));
 }
+
+// #1166: the bone texture mode has its own label, encodings and clip list.
+TEST(VATBakerControllerStandalone, BoneTextureModeListsFloatEncodingsOnly) {
+    auto* ctrl = VATBakerController::instance();
+    EXPECT_EQ(ctrl->encodingsForMode(QStringLiteral("bone-texture")),
+              (QStringList{ QStringLiteral("rgba32f"), QStringLiteral("rgba16f") }));
+    EXPECT_EQ(ctrl->encodingLabelsForMode(QStringLiteral("bone-texture")).size(), 2);
+    EXPECT_EQ(ctrl->encodingsForMode(QStringLiteral("skeletal")), VATBaker::encodingIds());
+    EXPECT_TRUE(ctrl->modeLabel(QStringLiteral("bone-texture")).contains(QStringLiteral("Bone texture")));
+}
+
+TEST_F(VATBakerControllerSceneTest, BoneTextureModeOffersAllClipsAndBakes) {
+    auto* entity = createAnimatedTestEntity("VAT_Ctrl_Bones");
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->append(entity);
+    auto* ctrl = VATBakerController::instance();
+    ctrl->refreshAnimations();
+    EXPECT_TRUE(ctrl->availableModes().contains(QStringLiteral("bone-texture")));
+    const QStringList clips = ctrl->animationsForMode(QStringLiteral("bone-texture"));
+    ASSERT_GE(clips.size(), 2);
+    EXPECT_EQ(clips.first(), VATBakerController::allClipsLabel());
+    EXPECT_TRUE(clips.contains(QStringLiteral("TestAnim")));
+
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    QSignalSpy finishedSpy(ctrl, &VATBakerController::bakeFinished);
+    EXPECT_TRUE(ctrl->bake(VATBakerController::allClipsLabel(), 10.0, tmp.path(),
+                           QStringLiteral("Bones"), {}, QStringLiteral("bone-texture"),
+                           QStringLiteral("rgba32f"), QStringLiteral("agnostic")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_TRUE(finishedSpy.first().at(0).toBool())
+        << finishedSpy.first().at(2).toString().toStdString();
+    EXPECT_TRUE(finishedSpy.first().at(1).toString().endsWith(QStringLiteral("Bones_bones.exr")));
+
+    // A PNG encoding is refused for this mode.
+    finishedSpy.clear();
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 10.0, tmp.path(), QString(), {},
+                            QStringLiteral("bone-texture"), QStringLiteral("rgba16")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.first().at(0).toBool());
+}
+
+TEST_F(VATBakerControllerSceneTest, BoneTextureRefusesUnknownTarget) {
+    auto* entity = createAnimatedTestEntity("VAT_Ctrl_BonesTarget");
+    ASSERT_NE(entity, nullptr);
+    SelectionSet::getSingleton()->append(entity);
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    auto* ctrl = VATBakerController::instance();
+    QSignalSpy finishedSpy(ctrl, &VATBakerController::bakeFinished);
+    EXPECT_FALSE(ctrl->bake(QStringLiteral("TestAnim"), 10.0, tmp.path(), QString(), {},
+                            QStringLiteral("bone-texture"), QStringLiteral("rgba32f"),
+                            QStringLiteral("gdoot")));
+    ASSERT_EQ(finishedSpy.count(), 1);
+    EXPECT_FALSE(finishedSpy.first().at(0).toBool());
+    EXPECT_TRUE(QDir(tmp.path()).entryList(QDir::Files).isEmpty());
+}

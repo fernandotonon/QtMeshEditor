@@ -5,6 +5,9 @@
 ##   web              — single VAT dancer + orbit camera (default)
 ##   perf_vat         — 1000 VAT instances + FPS overlay
 ##   perf_skeleton    — 1000 skeletal instances + FPS overlay
+##   perf_bta         — 1000 bone-texture (BTA) instances + FPS overlay
+##
+## `&n=<count>` (1..10000) overrides the perf scenes' instance count.
 ##
 ## Anything else falls back to `web`. Native desktop runs default to
 ## the same `web` route since they don't have URL params.
@@ -25,10 +28,14 @@ extends Node
 
 func _ready() -> void:
 	var scene_id := _scene_id_from_url()
+	var n := _url_param("n")
+	if not n.is_empty() and n.is_valid_int():
+		Engine.set_meta("demo_n", int(n))
 	var target_scene: String = {
 		"web":            "res://scenes/demo_web.tscn",
 		"perf_vat":       "res://scenes/demo_perf_vat.tscn",
 		"perf_skeleton":  "res://scenes/demo_perf_skeleton.tscn",
+		"perf_bta":       "res://scenes/demo_perf_bta.tscn",
 	}.get(scene_id, "res://scenes/demo_web.tscn")
 	# `call_deferred` so we don't change scene during _ready.
 	get_tree().call_deferred("change_scene_to_file", target_scene)
@@ -50,3 +57,11 @@ func _scene_id_from_url() -> String:
 	if s.is_empty():
 		return "web"
 	return s
+
+
+func _url_param(key: String) -> String:
+	if not OS.has_feature("web"):
+		return ""
+	var raw: Variant = JavaScriptBridge.eval(
+		"new URLSearchParams(window.location.search).get('%s') || ''" % key, true)
+	return "" if raw == null else str(raw).strip_edges()

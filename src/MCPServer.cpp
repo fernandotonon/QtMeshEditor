@@ -24,6 +24,7 @@
 #include "TextureAtlasPacker.h"
 #include "ApplyAtlas.h"
 #include "NormalMapGenerator.h"
+#include "BoneTextureBaker.h"
 #include "VATBaker.h"
 #include "VATShaderEmitter.h"
 #include "MorphAnimationManager.h"
@@ -9714,6 +9715,70 @@ QJsonObject MCPServer::toolGenerateIsometricSprites(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolBakeBoneTexture(const QJsonObject &args)
+{
+    // bake_vat {mode:"bone-texture"} (#1166). Validate everything before
+    // the import so a typo never costs a mesh load.
+    const QString filePath  = args.value("file").toString();
+    const QString outputDir = args.value("output_dir").toString();
+    if (filePath.isEmpty() || outputDir.isEmpty())
+        return makeErrorResult("Error: missing required 'file' or 'output_dir' arguments");
+    QString encoding;
+    if (!BoneTexture::normaliseEncoding(args.value("encoding").toString(), &encoding))
+        return makeErrorResult(QString("Error: encoding '%1' is not valid for bone-texture "
+                                       "(accepted: rgba32f, rgba16f)")
+                                   .arg(args.value("encoding").toString()));
+    QString target = args.value("target").toString(QStringLiteral("agnostic")).trimmed().toLower();
+    if (target.isEmpty()) target = QStringLiteral("agnostic");
+    if (!VATBaker::isValidTargetId(target))
+        return makeErrorResult(QString("Error: unknown target '%1' (accepted: %2)")
+                                   .arg(target, VATBaker::targetIds().join(", ")));
+    const double fps = args.contains("fps") ? args.value("fps").toDouble() : 30.0;
+    if (!(fps > 0.0))
+        return makeErrorResult("Error: fps must be > 0");
+    QStringList clips;
+    for (const QJsonValue& v : args.value("animations").toArray())
+        if (!v.toString().trimmed().isEmpty()) clips << v.toString().trimmed();
+    if (clips.isEmpty() && !args.value("anim").toString().trimmed().isEmpty())
+        clips << args.value("anim").toString().trimmed();
+    if (!QFileInfo::exists(filePath))
+        return makeErrorResult(QString("Error: file not found: %1").arg(filePath));
+
+    QStringList engines = VATShaderEmitter::parseEngineList(args.value("include_shaders").toString());
+    if (target != QLatin1String("agnostic") && !engines.contains(target)) engines << target;
+
+    auto* mgr = Manager::getSingleton();
+    SentryReporter::addBreadcrumb("file.import",
+        QString("Importing %1 for bone texture bake").arg(filePath));
+    TransientImportSession session(mgr);
+    if (QString err = session.runImporter(filePath); !err.isEmpty())
+        return makeErrorResult(err);
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* e : session.importedEntities())
+        if (e && e->hasSkeleton()) { entity = e; break; }
+    if (!entity)
+        return makeErrorResult("Error: mesh has no skeleton - bone texture baking needs a rigged "
+                               "mesh (use mode skeletal / mesh-anim / morph for vertex VATs)");
+
+    BoneTexture::BakeRequest req;
+    req.clips = clips;
+    req.fps = fps;
+    req.encoding = encoding;
+    req.outputDir = outputDir;
+    req.basename = args.value("basename").toString().isEmpty()
+        ? QFileInfo(filePath).completeBaseName() : args.value("basename").toString();
+    req.shaderEngines = engines;
+    req.exportMesh = args.value("export_mesh").toBool(true);
+    const BoneTexture::BakeReport rep = BoneTexture::bakeToDirectory(entity, req);
+    if (!rep.ok)
+        return makeErrorResult(QString("Bone texture bake failed: %1").arg(rep.error));
+    QJsonObject content = BoneTexture::reportToJson(rep);
+    content["target"] = target;
+    content["fps"] = fps;
+    return makeSuccessResult(
+        QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
+}
+
 QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
 {
     SentryReporter::addBreadcrumb("ai.tool_call", "bake_vat");
@@ -9725,10 +9790,12 @@ QJsonObject MCPServer::toolBakeVat(const QJsonObject &args)
     // #522: mode / encoding / target. Validate BEFORE the import so a
     // typo never costs a mesh load.
     const QString modeArg = args.value("mode").toString(QStringLiteral("skeletal"));
+    if (BoneTexture::isModeId(modeArg))
+        return toolBakeBoneTexture(args);
     VATBaker::Mode mode = VATBaker::Mode::Skeletal;
     if (!VATBaker::modeFromId(modeArg.isEmpty() ? QStringLiteral("skeletal") : modeArg, &mode))
-        return makeErrorResult(QString("Error: unknown mode '%1' (accepted: %2)")
-                                   .arg(modeArg, VATBaker::modeIds().join(", ")));
+        return makeErrorResult(QString("Error: unknown mode '%1' (accepted: %2, %3)")
+                                   .arg(modeArg, VATBaker::modeIds().join(", "), BoneTexture::modeId()));
     const QString encodingArg = args.value("encoding").toString(QStringLiteral("rgba16"));
     int bitDepth = 16;
     if (!VATBaker::bitDepthFromEncodingId(
@@ -16062,10 +16129,14 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject props;
         props["file"]       = QJsonObject{{"type", "string"}, {"description", "Path to the source mesh (any format the importer accepts: .mesh, .fbx, .gltf, .abc, etc.). Mesh must expose per-vertex normals."}};
         props["anim"]       = QJsonObject{{"type", "string"}, {"description", "Animation clip name to bake (skeletal: list_skeletal_animations; mesh-anim: the vertex clip; morph: the weight clip, defaults to \"MorphAnim\" when omitted)."}};
-        props["mode"]       = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"skeletal", "rigid", "mesh-anim", "morph"}},
-            {"description", "VAT variant (#522). skeletal (default): per-vertex post-skinning positions. rigid: one rotation+pivot per chunk (submesh) per frame, fitted to the animation - destruction / mechanical pieces. mesh-anim: a full-mesh vertex clip (Alembic cache / VAT_POSE stream). morph: a morph-weight clip resolved to vertex positions."}};
-        props["encoding"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"rgba8", "rgba16", "exr"}},
-            {"description", "Texture bit depth: rgba8 (8-bit PNG, smallest), rgba16 (16-bit PNG, default), exr (float32, lossless)."}};
+        props["mode"]       = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"skeletal", "rigid", "mesh-anim", "morph", "bone-texture"}},
+            {"description", "VAT variant (#522). skeletal (default): per-vertex post-skinning positions. rigid: one rotation+pivot per chunk (submesh) per frame, fitted to the animation - destruction / mechanical pieces. mesh-anim: a full-mesh vertex clip (Alembic cache / VAT_POSE stream). morph: a morph-weight clip resolved to vertex positions. bone-texture (#1166): per-frame bone SKINNING matrices instead of vertex positions (O(bones x frames)); bakes every skeletal clip (or `animations`) into `<basename>_bones.exr` + `<basename>_bones.json` and writes the rigged mesh `<basename>.glb`; the shader skins on the GPU so one mesh + texture drive an instanced crowd."}};
+        props["animations"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "string"}}},
+            {"description", "bone-texture only: clips to stack into the texture (default: every skeletal clip; `anim` alone bakes one)."}};
+        props["export_mesh"] = QJsonObject{{"type", "boolean"},
+            {"description", "bone-texture only: also write the rigged mesh `<basename>.glb` (default true)."}};
+        props["encoding"]   = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"rgba8", "rgba16", "exr", "rgba32f", "rgba16f"}},
+            {"description", "Texture encoding. Vertex modes: rgba8 (8-bit PNG, smallest), rgba16 (16-bit PNG, default), exr (float32, lossless). bone-texture: rgba32f (float EXR, default; `exr` is accepted) or rgba16f (half EXR)."}};
         props["target"]     = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"agnostic", "unity", "unreal", "godot"}},
             {"description", "Target engine recorded in the sidecar (`_target`); a non-agnostic target also copies that engine's shader template next to the bake. Default agnostic."}};
         props["include_shaders"] = QJsonObject{{"type", "string"}, {"description", "Comma-separated engine templates to copy next to the bake: godot, unity, unreal, or all."}};
@@ -16083,7 +16154,9 @@ QJsonArray MCPServer::buildToolsList()
             "(height = 2 × frames; top half positions, bottom half normals - rigid: pivots + quaternions) "
             "plus `<basename>-remap_info.json` with the canonical `os-remap` sidecar shape and a `_mode` key. "
             "Off-the-shelf openvat reference shaders for Godot / Unity / Unreal / Blender consume the "
-            "per-vertex output unmodified; rigid bakes ship openvat_rigid.gdshader.",
+            "per-vertex output unmodified; rigid bakes ship openvat_rigid.gdshader. "
+            "mode bone-texture is the skeletal alternative (#1166): per-frame bone skinning matrices "
+            "for GPU skinning of instanced crowds (Godot template: bone_texture.gdshader + BoneTextureMesh.gd).",
             props,
             required
         );

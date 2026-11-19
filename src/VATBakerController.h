@@ -84,6 +84,12 @@ public:
     Q_INVOKABLE QStringList animationsForMode(const QString& modeId) const;
     /// Human label for a mode id (picker text).
     Q_INVOKABLE QString modeLabel(const QString& modeId) const;
+    /// Encoding ids / picker labels valid for `modeId` (the bone texture
+    /// mode only takes float EXR: rgba32f | rgba16f).
+    Q_INVOKABLE QStringList encodingsForMode(const QString& modeId) const;
+    Q_INVOKABLE QStringList encodingLabelsForMode(const QString& modeId) const;
+    /// First entry of the bone-texture clip list: bake every skeletal clip.
+    static QString allClipsLabel();
     bool isBaking() const { return m_isBaking; }
     int progressDone()  const { return m_progressDone; }
     int progressTotal() const { return m_progressTotal; }
@@ -134,6 +140,10 @@ private:
     ~VATBakerController() override;
 
     void setIsBaking(bool b);
+    bool bakeBoneTexture(Ogre::Entity* entity, const QString& animationName, double fps,
+                         const QString& outputDir, const QString& basename,
+                         const QStringList& includeShadersFor, const QString& encodingId,
+                         const QString& target);
 
     QStringList m_animations;
     QStringList m_modes;

@@ -39,6 +39,8 @@ func _ready() -> void:
 	# FPS overlay flatlines at the cap and we can't see the headroom.
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 	Engine.max_fps = 0
+	instance_count = DemoConfig.instance_count(instance_count)
+	DemoConfig.frame_crowd(self, instance_count, grid_spacing)
 
 	_start_time = Time.get_ticks_msec()
 
@@ -47,21 +49,21 @@ func _ready() -> void:
 	# for the rationale).
 	var pack: Resource = load(source_gltf)
 	if pack == null:
-		push_error("PerfSpawnerVAT: load('%s') returned null" % source_gltf); return
+		DemoConfig.setup_failed(self, "load('%s') returned null" % source_gltf); return
 	var scene: Node = null
 	if pack is PackedScene:
 		scene = (pack as PackedScene).instantiate()
 	if scene == null:
-		push_error("PerfSpawnerVAT: failed to instantiate source"); return
+		DemoConfig.setup_failed(self, "failed to instantiate source"); return
 	var found_mesh: ArrayMesh = _first_mesh_in(scene)
 	scene.queue_free()
 	if found_mesh == null:
-		push_error("PerfSpawnerVAT: no mesh in source"); return
+		DemoConfig.setup_failed(self, "no mesh in source"); return
 
 	# Load the bake ONCE.
 	var dir := DirAccess.open(bake_dir)
 	if dir == null:
-		push_error("PerfSpawnerVAT: cannot open bake_dir"); return
+		DemoConfig.setup_failed(self, "cannot open bake_dir"); return
 	var json_path := ""; var basename := ""
 	for f in dir.get_files():
 		if f.ends_with("-remap_info.json"):
@@ -69,7 +71,7 @@ func _ready() -> void:
 			basename = f.substr(0, f.length() - "-remap_info.json".length())
 			break
 	if json_path.is_empty():
-		push_error("PerfSpawnerVAT: no sidecar"); return
+		DemoConfig.setup_failed(self, "no sidecar"); return
 	var pos_path: String = bake_dir.path_join(basename + "_pos.png")
 	var sidecar: Variant = JSON.parse_string(FileAccess.get_file_as_string(json_path))
 	var os: Dictionary = sidecar["os-remap"]
@@ -80,7 +82,7 @@ func _ready() -> void:
 
 	var pos_tex: Texture2D = load(pos_path) as Texture2D
 	if pos_tex == null:
-		push_error("PerfSpawnerVAT: load bake texture failed: %s" % pos_path); return
+		DemoConfig.setup_failed(self, "load bake texture failed: %s" % pos_path); return
 
 	# Load the Ogre bind-pose sidecar so we can remap each Godot vertex
 	# back to its baker-side column. Without this, Godot's importer
