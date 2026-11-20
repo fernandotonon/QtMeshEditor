@@ -2942,11 +2942,7 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh)
             return makeErrorResult("Error: the entity has no mesh.");
-        QHash<QString, unsigned short> poseIndexByName;
-        const auto& poseList = mesh->getPoseList();
-        for (unsigned short pi = 0; pi < poseList.size(); ++pi)
-            poseIndexByName.insert(
-                QString::fromStdString(poseList[pi]->getName()), pi);
+        const auto poseIndicesByName = LipsyncClipCommand::poseIndicesByName(*mesh);   // every part's pose
 
         for (size_t fi : AudioToFace::selectKeyFrames(pred, binding)) {
             const auto& f = pred.frames[fi];
@@ -2955,9 +2951,11 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
             for (size_t i = 0; i < binding.poseTarget.size()
                                && i < f.weights.size(); ++i) {
                 if (binding.poseTarget[i].isEmpty()) continue;
-                const auto it = poseIndexByName.constFind(binding.poseTarget[i]);
-                if (it == poseIndexByName.constEnd()) continue;
-                k.poseRefs.emplace_back(*it, std::clamp(f.weights[i], 0.0f, 1.0f));
+                const auto it = poseIndicesByName.constFind(binding.poseTarget[i]);
+                if (it == poseIndicesByName.constEnd()) continue;
+                const float w = std::clamp(f.weights[i], 0.0f, 1.0f);
+                for (unsigned short pi : *it)
+                    k.poseRefs.emplace_back(pi, w);
             }
             if (k.poseRefs.empty()) continue;
             keysWritten += int(k.poseRefs.size());

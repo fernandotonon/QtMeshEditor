@@ -296,11 +296,7 @@ bool LipsyncController::generateAsync(const QString& audioPath,
                     QStringLiteral("The mesh is no longer in the scene."));
                 return;
             }
-            QHash<QString, unsigned short> poseIndexByName;
-            const auto& poseList = mesh->getPoseList();
-            for (unsigned short pi = 0; pi < poseList.size(); ++pi)
-                poseIndexByName.insert(
-                    QString::fromStdString(poseList[pi]->getName()), pi);
+            const auto poseIndicesByName = LipsyncClipCommand::poseIndicesByName(*mesh);   // every part's pose
 
             std::vector<LipsyncClipCommand::Key> cmdKeys;
             cmdKeys.reserve(keyTimes.size());
@@ -312,10 +308,11 @@ bool LipsyncController::generateAsync(const QString& audioPath,
                 for (int i = 0; i < poses->size() && i < int(f.weights.size()); ++i) {
                     if (binding.poseTarget[size_t(i)].isEmpty()) continue;
                     const auto it =
-                        poseIndexByName.constFind(binding.poseTarget[size_t(i)]);
-                    if (it == poseIndexByName.constEnd()) continue;
-                    k.poseRefs.emplace_back(
-                        *it, std::clamp(f.weights[size_t(i)], 0.0f, 1.0f));
+                        poseIndicesByName.constFind(binding.poseTarget[size_t(i)]);
+                    if (it == poseIndicesByName.constEnd()) continue;
+                    const float w = std::clamp(f.weights[size_t(i)], 0.0f, 1.0f);
+                    for (unsigned short pi : *it)
+                        k.poseRefs.emplace_back(pi, w);
                 }
                 if (k.poseRefs.empty()) continue;
                 keys += int(k.poseRefs.size());

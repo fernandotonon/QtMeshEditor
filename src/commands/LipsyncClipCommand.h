@@ -18,12 +18,15 @@
 // restores the clip that was there before, keyframe for keyframe (which may
 // be no clip at all — the common case).
 
+#include <QHash>
 #include <QString>
 #include <QUndoCommand>
 
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace Ogre { class Mesh; }
 
 class LipsyncClipCommand : public QUndoCommand
 {
@@ -34,6 +37,11 @@ public:
         float time = 0.0f;
         std::vector<std::pair<unsigned short, float>> poseRefs;
     };
+
+    /// Every pose index of each pose name. A multi-part head (body, eyes, teeth, lashes...) carries one pose per part
+    /// under the same ARKit name, and ALL of them must be keyed: one index per name drove a single part and left the
+    /// face still. Shared by the Inspector and the MCP tool.
+    static QHash<QString, std::vector<unsigned short>> poseIndicesByName(const Ogre::Mesh& mesh);
 
     LipsyncClipCommand(std::string entityName,
                        QString clipName,
