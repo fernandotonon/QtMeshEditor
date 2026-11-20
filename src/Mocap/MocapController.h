@@ -246,12 +246,14 @@ private:
     // main thread as ONE undo step, head left to the body clip. The weights go INTO the body clip (same name, one
     // animation driving bones and morph targets; Ogre plays a same-named skeletal + vertex clip as one state, the glTF
     // export writes one animation). `bodyStart` = the body clip's t = 0 on the images' clock, so both line up.
+    // `mapping` = the face mapping snapshotted when the target was pinned (empty = Face off: nothing is recorded), so a
+    // selection change during the capture cannot skip or retarget the face.
     // `continuous` = video frames (tracking + smoothing carried over); false = unrelated pose photos. `done` receives a
     // fragment for the status line: "" when nothing was attempted, else what was written or why the face was skipped.
     // `done` always runs (synchronously when skipped).
     void recordFaceFromImages(const std::string& target, std::vector<QImage> images, std::vector<double> times,
                               bool continuous, const QString& bodyClip, double bodyStart,
-                              std::function<void(const QString&)> done);
+                              const FaceCapMapper::Mapping& mapping, std::function<void(const QString&)> done);
     void setProgress(double fraction, const QString& label);
     void finishVideoRead();
 #endif

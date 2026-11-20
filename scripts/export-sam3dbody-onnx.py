@@ -788,7 +788,9 @@ def export_hands(model, out, check, sess):
         fref = fg(*fin)
     sf = sess(out("sam3d_hand_fuse.onnx")); have = {i.name for i in sf.get_inputs()}
     got = sf.run(None, {n: x.numpy() for n, x in zip(fnames, fin) if n in have})
-    check("sam3d_hand_fuse", [r.numpy() for r in fref], got)
+    # ONNX Runtime vs the PyTorch HandFuseGraph only: the fusion logic itself (vs Meta's run_inference) is checked end to end
+    # on a real photo (docs/IMAGE_BODY_PREDICTION.md: hands 1.9 / 4.1 mm from Meta's full pipeline).
+    check("sam3d_hand_fuse (ORT vs torch)", [r.numpy() for r in fref], got)
     print("  angle_ok", fref[2].numpy())
 
 # --------------------------------------------------------------------------------------------------------------------
@@ -823,9 +825,13 @@ def main():
         # relative to each output's magnitude: 2D keypoints are in pixels (hundreds), parameters are O(1)
         worst, which = 0.0, 0
         for k, (r, g) in enumerate(zip(ref, got)):
-            r = np.asarray(r, dtype=np.float64); g = np.asarray(g, dtype=np.float64)
+            r = np.asarray(r, dtype=np.float64)
+            g = np.asarray(g, dtype=np.float64)
+            # a NaN difference compares False against `worst` and would pass silently; the predictor rejects such outputs
+            assert np.isfinite(r).all() and np.isfinite(g).all(), "%s output %d is not finite" % (name, k)
             d = float(np.abs(r - g).max()) / max(1.0, float(np.abs(r).max()))
-            if d > worst: worst, which = d, k
+            if d > worst:
+                worst, which = d, k
         print("  %-24s max rel |torch-ort| %.2e (output %d)" % (name, worst, which), flush=True)
         assert worst < 5e-3, "%s does not match PyTorch" % name
 
@@ -833,7 +839,16 @@ def main():
     sess = lambda p: ort.InferenceSession(p, providers=["CPUExecutionProvider"])
 
     if a.hands:
-        export_hands(model, out, check, sess)
+        # Export + validate in a staging folder and publish the three graphs together: the predictor enables hand refinement
+        # as soon as all three exist, so a half-exported or failed set must never land next to the other models.
+        import shutil, tempfile
+        stage = tempfile.mkdtemp(prefix=".hands-", dir=a.out_dir)
+        try:
+            export_hands(model, lambda n: os.path.join(stage, n), check, sess)
+            for n in ("sam3d_decoder_v2.onnx", "sam3d_hand_decoder.onnx", "sam3d_hand_fuse.onnx"):
+                os.replace(os.path.join(stage, n), out(n))
+        finally:
+            shutil.rmtree(stage, ignore_errors=True)
         print("done ->", a.out_dir)
         return
 

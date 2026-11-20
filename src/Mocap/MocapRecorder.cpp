@@ -459,6 +459,9 @@ BodyRecordReport recordBodyMhr(Ogre::Entity* entity, const SamBody::MhrSequence&
         SamBody::retargetSequenceToSkeleton(skel.get(), sequence, fps, options.clipName.toStdString(), options.replaceExisting,
                                             options.rootMotion);
     if (!o.ok) { report.error = o.error.isEmpty() ? QStringLiteral("retarget failed") : o.error; return report; }
+    // root travel can carry the character outside its bind bounds: cull from the skeleton (as recordBodyLive does)
+    if (options.rootMotion)
+        entity->setUpdateBoundingBoxFromSkeleton(true);
     report.rolesResolved = o.mappedBones;
     report.tracksWritten = o.mappedBones;
     report.clipLength = fps > 0 ? static_cast<double>(sequence.jointQuat.size() - 1) / fps

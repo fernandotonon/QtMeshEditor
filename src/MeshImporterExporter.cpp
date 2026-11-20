@@ -1168,15 +1168,25 @@ static Assimp::ExportProperties assimpExportProperties()
 // targets and the eyes 10; the eyes' targets were then named by index after the
 // body's (eyeLook* became browDown*), and every eyeLook*/pupil* channel was lost
 // on re-import. The morph WEIGHT animation indexes its columns by this order too.
+// The export name of pose `index`: its own name, or "pose_<index>" for an unnamed pose (Ogre allows them; a .mesh.xml
+// pose without a name attribute reads back unnamed). The index is mesh-global, so two unnamed poses never share a target.
+static std::string morphTargetName(const Ogre::Mesh* mesh, size_t index)
+{
+    const auto& poses = mesh->getPoseList();
+    if (index >= poses.size() || !poses[index]) return {};
+    const std::string& n = poses[index]->getName();
+    return n.empty() ? "pose_" + std::to_string(index) : n;
+}
+
 static std::vector<std::string> morphTargetOrder(const Ogre::Mesh* mesh)
 {
     std::vector<std::string> order;
     if (!mesh) return order;
     std::set<std::string> seen;
-    for (const Ogre::Pose* p : mesh->getPoseList()) {
-        if (!p || p->getName().empty()) continue;
-        if (seen.insert(p->getName()).second)
-            order.push_back(p->getName());
+    for (size_t i = 0; i < mesh->getPoseList().size(); ++i) {
+        const std::string n = morphTargetName(mesh, i);
+        if (!n.empty() && seen.insert(n).second)
+            order.push_back(n);
     }
     return order;
 }
@@ -1198,9 +1208,11 @@ static void attachMorphTargetsToAiMesh(aiMesh* aiM,
     // This submesh's pose for each target name (null = the submesh has no such
     // pose: it is written as a zero-delta target so the order stays aligned).
     std::map<std::string, const Ogre::Pose*> ownPoses;
-    for (const Ogre::Pose* p : poseList) {
-        if (p && p->getTarget() == targetHandle && !ownPoses.count(p->getName()))
-            ownPoses[p->getName()] = p;
+    for (size_t i = 0; i < poseList.size(); ++i) {
+        const Ogre::Pose* p = poseList[i];
+        const std::string n = morphTargetName(mesh.get(), i);
+        if (p && p->getTarget() == targetHandle && !ownPoses.count(n))
+            ownPoses[n] = p;
     }
 
     const unsigned int preCompactCount = aiM->mNumVertices;
@@ -4041,7 +4053,7 @@ std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
         const auto& poses = mesh->getPoseList();
         auto columnOf = [&](unsigned short poseIndex) {
             if (poseIndex >= poses.size() || !poses[poseIndex]) return -1;
-            const auto it = columnOfName.find(poses[poseIndex]->getName());
+            const auto it = columnOfName.find(morphTargetName(mesh.get(), poseIndex));
             return it == columnOfName.end() ? -1 : it->second;
         };
 

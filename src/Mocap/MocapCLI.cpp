@@ -692,14 +692,13 @@ int run(int argc, char* argv[])
         if (!report.ok())
             CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(report.error));
     };
-    const bool deferFace = face && !headInBodyOnly && body && samRunner;   // SAM: the body start is known after the solve
+    // With a body, the face waits for the body result: aligned on the body clip when one was written, else the face keeps
+    // its own origin (a body that failed must not take the face down with it).
+    const bool deferFace = face && !headInBodyOnly && body;
+    constexpr double kOwnOrigin = std::numeric_limits<double>::quiet_NaN();
     if (face && !headInBodyOnly && !deferFace) {
-        double origin = std::numeric_limits<double>::quiet_NaN();
-        if (body)                                    // landmarks body: recordBodyLive keys from the first valid frame
-            for (const auto& frame : poseSamples)
-                if (frame.valid) { origin = frame.timeSec; break; }
-        recordFaceInto(origin);
-        if (!report.ok() && !body)
+        recordFaceInto(kOwnOrigin);
+        if (!report.ok())
             return 1;
     }
 
@@ -740,7 +739,7 @@ int run(int argc, char* argv[])
             }
         }
         if (deferFace)
-            recordFaceInto(bodyReport.ok() ? seq.times.front() : std::numeric_limits<double>::quiet_NaN());
+            recordFaceInto(bodyReport.ok() ? seq.times.front() : kOwnOrigin);
         if (!bodyReport.ok()) {
             CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(bodyReport.error));
             if (!face || !report.ok()) return 1;
@@ -756,6 +755,8 @@ int run(int argc, char* argv[])
             CLIPipeline::writeCliError(QStringLiteral(
                 "Error: no person tracked in the source (%1 of %2 frames had "
                 "no pose).\n").arg(noPose).arg(poseSamples.size()));
+            if (deferFace)
+                recordFaceInto(kOwnOrigin);
             // Face succeeded → keep its take, but SKIP body recording entirely
             // (recordBody would reject <2 frames anyway; falling through fed it
             // the empty clip and overwrote this error). Fail only if face
@@ -772,9 +773,13 @@ int run(int argc, char* argv[])
             bodyReport = MocapRecorder::recordBodyLive(
                 entity, bodyFrames, static_cast<int>(fps), bodyOptions);
             bodyReport.framesProcessed = static_cast<int>(poseSamples.size());
+            if (bodyReport.ok() && deferFace)
+                recordFaceInto(bodyFrames.front().timeSec);   // recordBodyLive keys from the first valid frame
             if (!bodyReport.ok()) {
                 CLIPipeline::writeCliError(
                     QStringLiteral("Error: %1\n").arg(bodyReport.error));
+                if (deferFace && !combinedHead)
+                    recordFaceInto(kOwnOrigin);
                 if (face && combinedHead) {
                     // Keep face/head capture usable if body calibration fails.
                     MocapRecorder::FaceRecordOptions fallback;

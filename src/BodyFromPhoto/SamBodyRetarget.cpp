@@ -207,9 +207,10 @@ std::vector<Ogre::Vector3> rootTrajectory(const std::vector<std::array<float, 3>
     Ogre::Vector3 last = Ogre::Vector3::ZERO;
     for (const auto& c : camT)                                 // start from the first finite frame
         if (const Ogre::Vector3 v(c[0], -c[1], -c[2]); finite(v)) { last = v; break; }
+    std::vector<char> valid(n, 0);
     for (size_t i = 0; i < n; ++i) {
         const Ogre::Vector3 v(camT[i][0], -camT[i][1], -camT[i][2]);
-        if (finite(v)) last = v;
+        if (finite(v)) { last = v; valid[i] = 1; }
         raw[i] = last;
     }
     auto smooth = [&](int axis, int radius) {
@@ -226,6 +227,9 @@ std::vector<Ogre::Vector3> rootTrajectory(const std::vector<std::array<float, 3>
     const auto x = smooth(0, radiusXY), y = smooth(1, radiusXY), z = smooth(2, radiusZ);
     std::vector<Ogre::Vector3> traj(n);
     for (size_t i = 0; i < n; ++i) traj[i] = Ogre::Vector3(x[i] - x[0], y[i] - y[0], z[i] - z[0]);
+    // a non-finite frame holds the previous OUTPUT (holding only the input still let the averages move it)
+    for (size_t i = 1; i < n; ++i)
+        if (!valid[i]) traj[i] = traj[i - 1];
     return traj;
 }
 

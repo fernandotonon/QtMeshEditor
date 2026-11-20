@@ -538,12 +538,19 @@ struct Runner::Impl {
         }
 
         // 5. fuse
-        auto fused = run(fuse, fuseInputs(body, valid), {"fused_shape", "model_params"});
+        auto fused = run(fuse, fuseInputs(body, valid), {"fused_shape", "model_params", "angle_ok"});
         mark("refine: fuse");
-        if (!expect(fused, {kShapeComps, kModelParams}, "hand fusion")) return false;
+        if (!expect(fused, {kShapeComps, kModelParams, 2}, "hand fusion")) return false;
         r.body.shape = fused[0];
         r.body.modelParams = fused[1];
         r.body.camT = {body[5][0], body[5][1], body[5][2]};
+        // The graph re-tests the wrist angle against the PROMPTED body's forearm: a hand that passed the probe can still be
+        // rejected there, and the graph then keeps the body's hand. Report what was actually applied.
+        for (int side = 0; side < 2; ++side)
+            if (valid[size_t(side)] && !(fused[2][size_t(side)] > 0.5f)) {
+                valid[size_t(side)] = false;
+                hands[side].note = QStringLiteral("%1: hand wrist disagrees with the re-prompted arm").arg(QLatin1String(sideName[side]));
+            }
         r.handsRefined = valid;
         QStringList notes;
         for (int side = 0; side < 2; ++side)

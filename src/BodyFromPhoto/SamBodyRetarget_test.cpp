@@ -186,6 +186,12 @@ TEST(SamBodyRetarget, RootTrajectorySmoothsDepthHarderAndHoldsNonFiniteFrames)
     EXPECT_LT(std::fabs(t[10].z - t[12].z), 0.1f);       // raw frames differ by 0 or 0.6; smoothed far less
     // a NaN frame keeps the previous offset instead of poisoning the averages
     camT[5] = {NAN, NAN, NAN};
-    for (const auto& v : rootTrajectory(camT, 1, 4)) EXPECT_TRUE(std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z));
+    const auto held = rootTrajectory(camT, 1, 4);
+    for (const auto& v : held) EXPECT_TRUE(std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z));
+    EXPECT_EQ(held[5], held[4]);                          // the invalid frame holds the previous OUTPUT
+    // [0, 1, NaN, 3, 4] on x: the NaN frame must not move the root (it did, via the smoothing window)
+    const std::vector<std::array<float, 3>> gap = {{0, 0, 5}, {1, 0, 5}, {NAN, 0, 5}, {3, 0, 5}, {4, 0, 5}};
+    const auto g = rootTrajectory(gap);
+    EXPECT_FLOAT_EQ(g[2].x, g[1].x);
     EXPECT_TRUE(rootTrajectory({}).empty());
 }
