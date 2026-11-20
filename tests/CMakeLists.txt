@@ -117,6 +117,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/MocapCameraHints.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/OneEuroFilter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapMapper.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceExpressionCalibration.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPose.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapGeom.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Mocap/FaceCapPredictor.cpp
@@ -278,6 +279,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaScene.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyHands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/BodyFromPhotoCLI.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget.cpp
@@ -307,6 +309,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyRetarget_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyMotion_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyPredictor_test.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BodyFromPhoto/SamBodyHands_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaRigLogic.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaArkitMap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/DNA/DnaFaceBake.cpp

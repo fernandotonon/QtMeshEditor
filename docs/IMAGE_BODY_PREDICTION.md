@@ -85,8 +85,42 @@ parameters are within 0.015 of Meta's body-only reference (the remainder is bf16
 
 What the measurements showed, in order of impact: SAM's pose is camera-relative (a camera looking down read as a 24 deg forward lean; its joint directions were within 10 deg of truth after one global rotation), the first-frame calibration of the CMU path discards the starting pose, and rest-direction alignment must be limited to limbs (it bends the spine by the difference between two rigs' rest curvature).
 
+### Hand refinement (Meta's "full" inference)
+
+The body pass predicts the fingers from the 512 px body crop, where a hand is a few dozen pixels. Meta's full pipeline
+(`SAM3DBody.run_inference(..., inference_type="full")`) refines both hands, and the editor now does the same
+(`SamBodyHands.{h,cpp}` for the geometry, `Runner::Impl::refineWithHands` for the flow):
+
+1. the body decoder also predicts two **hand boxes** (hand-box tokens -> `bbox_embed`);
+2. each hand is cropped (padding 0.9) and run through the backbone + a dedicated **hand decoder**; the LEFT hand runs on
+   the mirrored photo (the hand decoder only knows right hands) and is un-mirrored afterwards;
+3. a hand is accepted when four tests pass: its wrist within 1.4 rad of the body's, crop > 64 px, every hand keypoint inside
+   its crop, its wrist within a quarter box of the body wrist (Meta divides each by the OTHER hand's box; kept for parity);
+4. the body decoder is re-run with the accepted wrists + the elbows as **keypoint prompts**;
+5. the hand poses, hand scales and wrist rotations are dropped into the body (`sam3d_hand_fuse.onnx`).
+
+Graphs (`scripts/export-sam3dbody-onnx.py --hands`): `sam3d_decoder_v2.onnx` (body decoder with prompts, hand boxes and
+`pose_raw` for the re-run), `sam3d_hand_decoder.onnx`, `sam3d_hand_fuse.onnx`. The prompt tokens sit at the END of the token
+list (attention is permutation-equivariant; verified) and there are always 4 of them, the unused ones masked out of the
+self-attention with Meta's own x_mask rule: **with a dynamic prompt count ONNX Runtime 1.31 took ~100 s to load the graph**
+(1.32: 20 s), with the fixed count 17 s.
+
+Parity: each graph vs Meta's module 1e-6..2e-5. End to end on Meta's `dancing.jpg` (vertices within 12 cm of each wrist,
+reference = Meta full): Meta body-only 32.6 / 27.2 mm mean (left / right), ours body-only 32.0 / 28.1, **ours refined
+1.9 / 4.1 mm** (whole body 5.2 mm, the rest is mostly the skipped pose correctives). Cost: ~45 s of one-time session loading
+per process, then ~4 s per frame (2 backbone runs). Hands under 64 px are skipped (as in Meta). Off with `refineHands=false` /
+`--no-hand-refine` / MCP `refine_hands:false` / the panel checkbox. The graphs are optional: without them the body-only
+estimate is used and the status line says so. `QTMESH_SAM_TIMING=1` prints per-stage timings.
+
+### Root motion
+
+The decoder's camera translation (`cam_t`, camera frame) gives where the body is relative to the camera. For a static camera
+its change is the person's travel: `rootTrajectory` maps it into the MHR frame (Y and Z negated), relative to the first frame,
+with a centred moving average (1 frame for x/y, 4 for the depth, which comes from the person's apparent size and is the noisy
+axis), and the retargeter's Root mode moves the target's hips by it (scaled by the rigs' height ratio). On by default for video
+and camera takes, off for pose photos and with `--in-place`. A moving camera adds its own motion.
+
 ### Next
-* **Root translation** (rotation-only today): from the decoder's camera translation, gravity-aligned, with the One-Euro stabiliser.
 * **Arms (18 deg):** clavicle/shoulder mapping and SAM's per-arm accuracy; try the MHR twist joints for the forearm roll.
 * **One person box per sequence** (matting each frame costs ~1 s), batching, CoreML/GPU provider.
 * **MCP / GUI:** `capture_body_from_video` and the live capture panel still use pose-ik.

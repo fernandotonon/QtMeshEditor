@@ -1160,6 +1160,27 @@ static Assimp::ExportProperties assimpExportProperties()
 // (aiScene's dtor frees mAnimMeshes), so smart pointers don't fit
 // here — same convention every other aiScene field uses in this
 // file.
+// The morph-target order of the WHOLE mesh: every distinct pose name, in
+// first-seen pose-list order. A glTF mesh requires every primitive to carry the
+// same targets in the same order, and it names them once per mesh
+// (extras.targetNames), so each submesh must emit this full list — not just the
+// poses it happens to own. Writing only a submesh's own poses gave the body 43
+// targets and the eyes 10; the eyes' targets were then named by index after the
+// body's (eyeLook* became browDown*), and every eyeLook*/pupil* channel was lost
+// on re-import. The morph WEIGHT animation indexes its columns by this order too.
+static std::vector<std::string> morphTargetOrder(const Ogre::Mesh* mesh)
+{
+    std::vector<std::string> order;
+    if (!mesh) return order;
+    std::set<std::string> seen;
+    for (const Ogre::Pose* p : mesh->getPoseList()) {
+        if (!p || p->getName().empty()) continue;
+        if (seen.insert(p->getName()).second)
+            order.push_back(p->getName());
+    }
+    return order;
+}
+
 static void attachMorphTargetsToAiMesh(aiMesh* aiM,
                                        const Ogre::MeshPtr& mesh,
                                        const Ogre::SubMesh* subMesh,
@@ -1168,31 +1189,40 @@ static void attachMorphTargetsToAiMesh(aiMesh* aiM,
     if (!aiM || aiM->mNumVertices == 0) return;
     const Ogre::PoseList& poseList = mesh->getPoseList();
     if (poseList.empty()) return;
+    const std::vector<std::string> order = morphTargetOrder(mesh.get());
+    if (order.empty()) return;
 
     const unsigned short targetHandle = subMesh->useSharedVertices
         ? 0
         : static_cast<unsigned short>(si + 1);
-    std::vector<Ogre::Pose*> submeshPoses;
-    for (Ogre::Pose* p : poseList) {
-        if (p && p->getTarget() == targetHandle)
-            submeshPoses.push_back(p);
+    // This submesh's pose for each target name (null = the submesh has no such
+    // pose: it is written as a zero-delta target so the order stays aligned).
+    std::map<std::string, const Ogre::Pose*> ownPoses;
+    for (const Ogre::Pose* p : poseList) {
+        if (p && p->getTarget() == targetHandle && !ownPoses.count(p->getName()))
+            ownPoses[p->getName()] = p;
     }
-    if (submeshPoses.empty()) return;
 
     const unsigned int preCompactCount = aiM->mNumVertices;
-    aiM->mNumAnimMeshes = static_cast<unsigned int>(submeshPoses.size());
+    aiM->mNumAnimMeshes = static_cast<unsigned int>(order.size());
     aiM->mAnimMeshes = new aiAnimMesh*[aiM->mNumAnimMeshes];  // NOSONAR — Assimp owns
-    for (size_t pi = 0; pi < submeshPoses.size(); ++pi) {
-        const Ogre::Pose* p = submeshPoses[pi];
+    for (size_t pi = 0; pi < order.size(); ++pi) {
+        const auto found = ownPoses.find(order[pi]);
+        const Ogre::Pose* p = found != ownPoses.end() ? found->second : nullptr;
         auto* am = new aiAnimMesh();  // NOSONAR — Assimp owns
         aiM->mAnimMeshes[pi] = am;
-        am->mName = aiString(p->getName());
+        am->mName = aiString(order[pi]);
         am->mNumVertices = preCompactCount;
         am->mVertices = new aiVector3D[preCompactCount];  // NOSONAR — Assimp owns
         // Seed with base positions (vertices the pose doesn't touch
         // keep their base location).
         for (unsigned int v = 0; v < preCompactCount; ++v)
             am->mVertices[v] = aiM->mVertices[v];
+        // Non-zero default weight so post-process steps that filter
+        // "inactive" anim meshes don't drop the entry. Runtime weight
+        // is driven by the consuming app.
+        am->mWeight = 1.0f;
+        if (!p) continue;
         // Apply per-vertex deltas. Pose offsets are keyed by vertex
         // index in submesh-local pre-compact space.
         for (const auto& [vi, delta] : p->getVertexOffsets()) {
@@ -1201,10 +1231,6 @@ static void attachMorphTargetsToAiMesh(aiMesh* aiM,
             am->mVertices[vi].y += delta.y;
             am->mVertices[vi].z += delta.z;
         }
-        // Non-zero default weight so post-process steps that filter
-        // "inactive" anim meshes don't drop the entry. Runtime weight
-        // is driven by the consuming app.
-        am->mWeight = 1.0f;
     }
 }
 
@@ -4004,6 +4030,21 @@ std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
 
         std::vector<float> times(timeSet.begin(), timeSet.end());
 
+        // Ogre pose index -> glTF target column. On a multi-submesh mesh every
+        // part has its own pose for a name (body jawOpen, teeth jawOpen, ...),
+        // so the pose index is NOT the target index: the column is the name's
+        // position in morphTargetOrder, the order every primitive was written in.
+        const std::vector<std::string> order = morphTargetOrder(mesh.get());
+        std::map<std::string, int> columnOfName;
+        for (size_t c = 0; c < order.size(); ++c)
+            columnOfName[order[c]] = static_cast<int>(c);
+        const auto& poses = mesh->getPoseList();
+        auto columnOf = [&](unsigned short poseIndex) {
+            if (poseIndex >= poses.size() || !poses[poseIndex]) return -1;
+            const auto it = columnOfName.find(poses[poseIndex]->getName());
+            return it == columnOfName.end() ? -1 : it->second;
+        };
+
         MorphWeightClip clip;
         clip.name = nm;
         clip.times = times;
@@ -4021,9 +4062,10 @@ std::vector<MorphWeightClip> collectMorphWeightClips(const Ogre::Entity* entity,
                 if (it == times.end()) continue;
                 const size_t row = static_cast<size_t>(it - times.begin());
                 for (const auto& ref : kf->getPoseReferences()) {
-                    if (ref.poseIndex >= static_cast<unsigned short>(numTargets))
+                    const int col = columnOf(ref.poseIndex);
+                    if (col < 0 || col >= numTargets)
                         continue;  // out of range for this glTF mesh — skip
-                    clip.weights[row * static_cast<size_t>(numTargets) + ref.poseIndex]
+                    clip.weights[row * static_cast<size_t>(numTargets) + col]
                         = ref.influence;
                 }
             }
@@ -4174,7 +4216,7 @@ void injectMorphWeightAnimations(const QString& filePath,
 
         // ── Locate the morph node + authoritative target count ──
         int numTargets = 0;
-        const int nodeIdx = findMorphNode(root, static_cast<int>(mesh->getPoseCount()),
+        const int nodeIdx = findMorphNode(root, static_cast<int>(morphTargetOrder(mesh.get()).size()),
                                           &numTargets);
         if (nodeIdx < 0 || numTargets <= 0) return;
 
@@ -4199,17 +4241,21 @@ void injectMorphWeightAnimations(const QString& filePath,
         // real weights animation under the same name, the file has two same-named
         // glTF animations — which Ogre refuses to re-import (it throws
         // "animation already exists" and aborts the whole load → 0 entities).
-        // Drop any existing animation whose name matches a weight clip we're
-        // about to inject, so ours is the only one. (issue #517)
+        // Drop such EMPTY animations (issue #517). A same-named animation WITH
+        // channels is a real skeletal clip (a body capture whose face weights were
+        // recorded under the same name, which Ogre plays as one combined state):
+        // keep it, the weights channel is merged into it below — one glTF
+        // animation driving bones and morph weights together.
         {
             QSet<QString> injectNames;
             for (const MorphWeightClip& clip : clips)
                 injectNames.insert(QString::fromStdString(clip.name));
             QJsonArray kept;
             for (const QJsonValue& av : animations) {
-                const QString nm = av.toObject().value("name").toString();
-                if (injectNames.contains(nm))
-                    continue;  // will be re-added below (deduped)
+                const QJsonObject ao = av.toObject();
+                if (injectNames.contains(ao.value("name").toString())
+                    && ao.value("channels").toArray().isEmpty())
+                    continue;  // empty leftover: re-added below with the weights
                 kept.append(av);
             }
             animations = kept;
@@ -4279,15 +4325,27 @@ void injectMorphWeightAnimations(const QString& filePath,
             targetObj["node"] = nodeIdx;
             targetObj["path"] = "weights";
 
-            QJsonObject channel;
-            channel["sampler"] = 0;   // first (only) sampler within this animation
-            channel["target"] = targetObj;
+            // Merge into a same-named skeletal animation when there is one (samplers
+            // are animation-local, so the weights sampler goes after its own).
+            const QString clipName = QString::fromStdString(clip.name);
+            int existing = -1;
+            for (int ai = 0; ai < animations.size(); ++ai)
+                if (animations[ai].toObject().value("name").toString() == clipName) { existing = ai; break; }
+            QJsonObject animObj = existing >= 0 ? animations[existing].toObject() : QJsonObject{};
+            QJsonArray samplers = animObj.value("samplers").toArray();
+            QJsonArray channels = animObj.value("channels").toArray();
 
-            QJsonObject animObj;
-            animObj["name"] = QString::fromStdString(clip.name);
-            animObj["samplers"] = QJsonArray{ sampler };
-            animObj["channels"] = QJsonArray{ channel };
-            animations.append(animObj);
+            QJsonObject channel;
+            channel["sampler"] = samplers.size();
+            channel["target"] = targetObj;
+            samplers.append(sampler);
+            channels.append(channel);
+
+            animObj["name"] = clipName;
+            animObj["samplers"] = samplers;
+            animObj["channels"] = channels;
+            if (existing >= 0) animations[existing] = animObj;
+            else animations.append(animObj);
         }
 
         if (extraBuf.isEmpty()) return;  // nothing to inject after all
@@ -4416,19 +4474,18 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, QWidget* pare
 // Morph-weight clips handed to the USD writer (#527): an aiScene has no slot
 // for morph-weight animation, so — like the glTF post-process — the clips are
 // decoded from the Ogre mesh and passed through UsdBridge::setWriteExtras.
-// Columns follow the mesh pose list, which is also the blend-shape order
+// Columns follow morphTargetOrder, which is also the blend-shape order
 // buildAiScene wrote into aiMesh::mAnimMeshes.
 static std::vector<UsdBridge::MorphWeightClip> usdMorphClips(const Ogre::Entity* entity)
 {
     std::vector<UsdBridge::MorphWeightClip> out;
     if (!entity || !entity->getMesh()) return out;
     const Ogre::MeshPtr mesh = entity->getMesh();
-    const int numTargets = static_cast<int>(mesh->getPoseCount());
+    // Columns follow morphTargetOrder: the one name order every submesh's
+    // blend shapes were written in (see attachMorphTargetsToAiMesh).
+    const std::vector<std::string> shapeNames = morphTargetOrder(mesh.get());
+    const int numTargets = static_cast<int>(shapeNames.size());
     if (numTargets <= 0) return out;
-
-    std::vector<std::string> shapeNames;
-    for (const Ogre::Pose* p : mesh->getPoseList())
-        shapeNames.push_back(p ? p->getName() : std::string());
 
     for (const MorphWeightClip& clip : collectMorphWeightClips(entity, numTargets)) {
         UsdBridge::MorphWeightClip c;

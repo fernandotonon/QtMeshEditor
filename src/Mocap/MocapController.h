@@ -78,6 +78,11 @@ class MocapController : public QObject
                NOTIFY clipNameChanged)
     Q_PROPERTY(double smoothingCutoff READ smoothingCutoff
                WRITE setSmoothingCutoff NOTIFY smoothingChanged)
+    // Face weight multiplier applied after the per-take calibration (0..3, 1 = as calibrated).
+    Q_PROPERTY(double expressionStrength READ expressionStrength
+               WRITE setExpressionStrength NOTIFY smoothingChanged)
+    // SAM 3D Body: Meta's hand refinement (hand crops + hand decoder). Persisted (mocap/refineHands).
+    Q_PROPERTY(bool refineHands READ refineHands WRITE setRefineHands NOTIFY smoothingChanged)
     // Body backend (#1100): 0 = landmarks (MediaPipe pose, fast, live), 1 = SAM 3D Body (accurate, fingers, slower: the camera and
     // video are recorded first and solved afterwards; pose photos are solved directly).
     Q_PROPERTY(int bodyBackend READ bodyBackend WRITE setBodyBackend NOTIFY bodyBackendChanged)
@@ -124,6 +129,10 @@ public:
     void setClipName(const QString& name);
     double smoothingCutoff() const;
     void setSmoothingCutoff(double hz);
+    double expressionStrength() const;
+    void setExpressionStrength(double strength);
+    bool refineHands() const;
+    void setRefineHands(bool on);
     int bodyBackend() const;
     void setBodyBackend(int backend);
     bool samAvailable() const;
@@ -227,7 +236,22 @@ private:
     // undo stack are main-thread only). Sets busy/progress for the duration. The caller has already validated everything.
     void runSamSolve(std::vector<QImage> frames, std::vector<double> times,
                      std::function<void(const SamBody::MhrSequence&)> onDone);
-    void finishSamSolve(const std::shared_ptr<SamBody::MhrSequence>& seq);
+    void finishWorker();
+    // Runs `job` on a worker thread, then `onDone` on the MAIN thread. `busy` stays set from the call until `onDone`
+    // returns (unless `onDone` starts another worker), so Record/Preview/another capture are refused meanwhile. Model
+    // downloads must be resolved BEFORE the call: the downloader lives on the main thread.
+    void runWorker(std::function<void()> job, std::function<void()> onDone);
+    // Face pass over the images a body capture read (video frames or pose photos), run when the Face channel is enabled
+    // and the target has mapped morph targets: the inference runs on a worker thread, then the weights are written on the
+    // main thread as ONE undo step, head left to the body clip. The weights go INTO the body clip (same name, one
+    // animation driving bones and morph targets; Ogre plays a same-named skeletal + vertex clip as one state, the glTF
+    // export writes one animation). `bodyStart` = the body clip's t = 0 on the images' clock, so both line up.
+    // `continuous` = video frames (tracking + smoothing carried over); false = unrelated pose photos. `done` receives a
+    // fragment for the status line: "" when nothing was attempted, else what was written or why the face was skipped.
+    // `done` always runs (synchronously when skipped).
+    void recordFaceFromImages(const std::string& target, std::vector<QImage> images, std::vector<double> times,
+                              bool continuous, const QString& bodyClip, double bodyStart,
+                              std::function<void(const QString&)> done);
     void setProgress(double fraction, const QString& label);
     void finishVideoRead();
 #endif

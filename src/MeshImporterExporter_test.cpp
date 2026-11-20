@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <cstring>
 #include <gmock/gmock.h>
 #include <OgreSceneNode.h>
 #include <OgreSkeleton.h>
@@ -2017,6 +2018,142 @@ TEST_F(SceneSaveLoadTest, Exporter_GltfWritesMorphTargetsIntoFile)
 
     Ogre::MeshManager::getSingleton().remove(mesh);
     mesh.reset();
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_GltfEveryPrimitiveCarriesEveryMorphTargetInOneOrder)
+{
+    // A glTF mesh requires every primitive to carry the same targets in the
+    // same order, named once per mesh. A generated character keeps its gaze
+    // shapes (eyeLook*) only on the eye submesh: writing each submesh's own
+    // poses gave the primitives different target lists, the eye targets were
+    // renamed by index after the body's and eyeLook* vanished on re-import.
+    auto mesh = createInMemoryMeshSharedVertsPlusLocalSubmesh("morph_order_mesh");
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_EQ(mesh->getNumSubMeshes(), 2u);
+    // submesh 0 uses the shared vertices (pose handle 0), submesh 1 its own (handle 2)
+    mesh->createPose(0, "JawOpen")->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    mesh->createPose(2, "JawOpen")->addVertex(1, Ogre::Vector3(0, -0.1f, 0));
+    mesh->createPose(2, "EyeLookIn")->addVertex(2, Ogre::Vector3(0.05f, 0, 0));
+    // weight clip keyed on the submesh-1 EyeLookIn pose (Ogre pose index 2,
+    // glTF target column 1)
+    {
+        Ogre::Animation* anim = mesh->createAnimation("MorphAnim", 1.0f);
+        auto* track = anim->createVertexTrack(2, Ogre::VAT_POSE);
+        track->createVertexPoseKeyFrame(0.0f)->addPoseReference(2, 0.0f);
+        track->createVertexPoseKeyFrame(1.0f)->addPoseReference(2, 0.7f);
+    }
+
+    auto* node = Manager::getSingleton()->addSceneNode("morph_order_ent");
+    auto* entity = Manager::getSingleton()->getSceneMgr()->createEntity(node->getName(), mesh->getName());
+    node->attachObject(entity);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outFile = tmpDir.path() + "/morph_order.gltf";
+    ASSERT_EQ(MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)"), 0);
+
+    QFile gltf(outFile);
+    ASSERT_TRUE(gltf.open(QIODevice::ReadOnly));
+    const QJsonObject root = QJsonDocument::fromJson(gltf.readAll()).object();
+    gltf.close();
+
+    int primitives = 0;
+    for (const QJsonValue& meshVal : root.value("meshes").toArray()) {
+        const QJsonObject m = meshVal.toObject();
+        const QJsonArray names = m.value("extras").toObject().value("targetNames").toArray();
+        ASSERT_EQ(names.size(), 2);
+        EXPECT_EQ(names.at(0).toString(), QStringLiteral("JawOpen"));
+        EXPECT_EQ(names.at(1).toString(), QStringLiteral("EyeLookIn"));
+        for (const QJsonValue& primVal : m.value("primitives").toArray()) {
+            EXPECT_EQ(primVal.toObject().value("targets").toArray().size(), 2)
+                << "every primitive must carry every target";
+            ++primitives;
+        }
+    }
+    EXPECT_EQ(primitives, 2);
+
+    // The weight animation keys column 1 (EyeLookIn), not Ogre's pose index 2.
+    const QJsonArray accessors = root.value("accessors").toArray();
+    const QJsonArray views = root.value("bufferViews").toArray();
+    const QJsonArray buffers = root.value("buffers").toArray();
+    bool foundWeights = false;
+    for (const QJsonValue& animVal : root.value("animations").toArray()) {
+        const QJsonObject anim = animVal.toObject();
+        for (const QJsonValue& chVal : anim.value("channels").toArray()) {
+            const QJsonObject ch = chVal.toObject();
+            if (ch.value("target").toObject().value("path").toString() != QLatin1String("weights"))
+                continue;
+            const int out = anim.value("samplers").toArray().at(ch.value("sampler").toInt())
+                                .toObject().value("output").toInt();
+            const QJsonObject acc = accessors.at(out).toObject();
+            const QJsonObject view = views.at(acc.value("bufferView").toInt()).toObject();
+            const QString uri = buffers.at(view.value("buffer").toInt()).toObject().value("uri").toString();
+            ASSERT_TRUE(uri.startsWith(QLatin1String("data:"))) << "weights live in the injected data-URI buffer";
+            const QByteArray bytes = QByteArray::fromBase64(uri.section(QLatin1Char(','), 1).toLatin1());
+            const int offset = view.value("byteOffset").toInt() + acc.value("byteOffset").toInt();
+            const int count = acc.value("count").toInt();
+            ASSERT_EQ(count, 4);   // 2 keys x 2 targets
+            std::vector<float> w(static_cast<size_t>(count));
+            ASSERT_GE(bytes.size(), offset + count * 4);
+            std::memcpy(w.data(), bytes.constData() + offset, size_t(count) * sizeof(float));
+            EXPECT_FLOAT_EQ(w[3], 0.7f) << "last key, EyeLookIn column";
+            EXPECT_FLOAT_EQ(w[2], 0.0f) << "last key, JawOpen column stays untouched";
+            foundWeights = true;
+        }
+    }
+    EXPECT_TRUE(foundWeights);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_GltfSameNamedSkeletalAndMorphClipsBecomeOneAnimation)
+{
+    // A capture writes body (skeleton) and face (morph weights) under ONE clip name; Ogre plays a same-named skeletal and
+    // vertex clip as one state. The weights injection used to DROP every glTF animation carrying the morph clip's name
+    // (meant for an empty leftover) and so deleted the whole body clip; it must merge the weights channel into it.
+    auto mesh = createInMemorySkeletonMesh("combined_clip_mesh");
+    ASSERT_NE(mesh, nullptr);
+    mesh->createPose(0, "jawOpen")->addVertex(0, Ogre::Vector3(0, -0.1f, 0));
+    {
+        Ogre::Animation* anim = mesh->createAnimation("Capture", 1.0f);
+        auto* track = anim->createVertexTrack(0, Ogre::VAT_POSE);
+        track->createVertexPoseKeyFrame(0.0f)->addPoseReference(0, 0.0f);
+        track->createVertexPoseKeyFrame(1.0f)->addPoseReference(0, 0.8f);
+    }
+    {
+        Ogre::SkeletonPtr skel = mesh->getSkeleton();
+        Ogre::Animation* anim = skel->createAnimation("Capture", 1.0f);
+        auto* track = anim->createNodeTrack(1, skel->getBone(1));
+        track->createNodeKeyFrame(0.0f)->setRotation(Ogre::Quaternion::IDENTITY);
+        track->createNodeKeyFrame(1.0f)->setRotation(Ogre::Quaternion(Ogre::Degree(40), Ogre::Vector3::UNIT_X));
+    }
+    auto* node = Manager::getSingleton()->addSceneNode("combined_clip_ent");
+    auto* entity = Manager::getSingleton()->getSceneMgr()->createEntity(node->getName(), mesh->getName());
+    node->attachObject(entity);
+    ASSERT_TRUE(entity->hasAnimationState("Capture"));   // one shared state, as Ogre documents
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outFile = tmpDir.path() + "/combined.gltf";
+    ASSERT_EQ(MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)"), 0);
+    QFile gltf(outFile);
+    ASSERT_TRUE(gltf.open(QIODevice::ReadOnly));
+    const QJsonObject root = QJsonDocument::fromJson(gltf.readAll()).object();
+
+    int named = 0, weightChannels = 0, boneChannels = 0;
+    for (const QJsonValue& animVal : root.value("animations").toArray()) {
+        const QJsonObject anim = animVal.toObject();
+        if (anim.value("name").toString() != QLatin1String("Capture")) continue;
+        ++named;
+        const int samplerCount = anim.value("samplers").toArray().size();
+        for (const QJsonValue& chVal : anim.value("channels").toArray()) {
+            const QJsonObject ch = chVal.toObject();
+            EXPECT_LT(ch.value("sampler").toInt(), samplerCount) << "every channel points at a sampler of its own animation";
+            if (ch.value("target").toObject().value("path").toString() == QLatin1String("weights")) ++weightChannels;
+            else ++boneChannels;
+        }
+    }
+    EXPECT_EQ(named, 1) << "one animation, not two same-named ones (Ogre refuses to re-import those)";
+    EXPECT_EQ(weightChannels, 1);
+    EXPECT_GT(boneChannels, 0) << "the skeletal clip must survive the weights injection";
 }
 
 // ─── gltf short-alias format tests ─────────────────────────────────

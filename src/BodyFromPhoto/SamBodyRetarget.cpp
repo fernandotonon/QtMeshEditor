@@ -9,6 +9,7 @@
 #include <QtGlobal>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace SamBody {
@@ -119,7 +120,7 @@ bool excludedFromMapping(const std::string& n)
 
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
                                    const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
-                                   const std::string& clip, bool replace)
+                                   const std::string& clip, bool replace, bool rootMotion)
 {
     RetargetOutcome out;
     if (!skeleton) { out.error = QStringLiteral("missing skeleton"); return out; }
@@ -147,7 +148,7 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
         for (const auto& p : mapped.map.pairs)
             fprintf(stderr, "[sam-map] %s -> %s\n", p.source.c_str(), p.target.c_str());
     Retarget::Options options;
-    options.translation = Retarget::TranslationMode::None;
+    options.translation = rootMotion ? Retarget::TranslationMode::Root : Retarget::TranslationMode::None;
     options.alignDirections = !qEnvironmentVariableIsSet("QTMESH_SAM_NO_ALIGN");
     // Spine, neck, head: orientation transport only (see Options::noAlignTargets). Role 0..5 = hips, abdomen, chest, neck, neck1, head.
     for (const std::string& name : target.names)
@@ -188,16 +189,48 @@ RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::Rig
 
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
                                    const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
-                                   bool replace)
+                                   bool replace, bool rootMotion)
 {
     std::vector<float> times(frames.size());
     for (size_t i = 0; i < times.size(); ++i) times[i] = fps > 0 ? static_cast<float>(i) / static_cast<float>(fps) : 0.0f;
     if (fps <= 0) { RetargetOutcome o; o.error = QStringLiteral("need at least 2 pose frames"); return o; }
-    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace, rootMotion);
+}
+
+std::vector<Ogre::Vector3> rootTrajectory(const std::vector<std::array<float, 3>>& camT, int radiusXY, int radiusZ)
+{
+    const size_t n = camT.size();
+    std::vector<Ogre::Vector3> raw(n, Ogre::Vector3::ZERO);
+    if (n == 0) return raw;
+    // MHR = camera with Y, Z negated; non-finite frames hold the previous value
+    auto finite = [](const Ogre::Vector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); };
+    Ogre::Vector3 last = Ogre::Vector3::ZERO;
+    for (const auto& c : camT)                                 // start from the first finite frame
+        if (const Ogre::Vector3 v(c[0], -c[1], -c[2]); finite(v)) { last = v; break; }
+    for (size_t i = 0; i < n; ++i) {
+        const Ogre::Vector3 v(camT[i][0], -camT[i][1], -camT[i][2]);
+        if (finite(v)) last = v;
+        raw[i] = last;
+    }
+    auto smooth = [&](int axis, int radius) {
+        std::vector<float> out(n);
+        for (size_t i = 0; i < n; ++i) {
+            // the window shrinks symmetrically at the ends, so the first and last frames are not pulled towards the middle
+            const int r = std::min<int>(std::max(radius, 0), static_cast<int>(std::min(i, n - 1 - i)));
+            double sum = 0.0;
+            for (int k = -r; k <= r; ++k) sum += raw[size_t(static_cast<int>(i) + k)][axis];
+            out[i] = static_cast<float>(sum / (2 * r + 1));
+        }
+        return out;
+    };
+    const auto x = smooth(0, radiusXY), y = smooth(1, radiusXY), z = smooth(2, radiusZ);
+    std::vector<Ogre::Vector3> traj(n);
+    for (size_t i = 0; i < n; ++i) traj[i] = Ogre::Vector3(x[i] - x[0], y[i] - y[0], z[i] - z[0]);
+    return traj;
 }
 
 RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
-                                           bool replace)
+                                           bool replace, bool rootMotion)
 {
     RetargetOutcome out;
     if (seq.jointQuat.size() < 2 || seq.jointQuat.size() != seq.jointPos.size() || seq.times.size() != seq.jointQuat.size()) {
@@ -231,11 +264,25 @@ RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSe
     std::vector<Retarget::LocalPose> frames;
     frames.reserve(seq.jointQuat.size());
     for (const auto& q : seq.jointQuat) frames.push_back(mhrLocalPose(mhr, q));
-    if (fps > 0) return retargetToSkeleton(skeleton, mhr, frames, fps, clip, replace);
+    // Root travel: the source root (the rig's parentless joint) carries the offset; the retargeter's Root mode moves the target's
+    // root-most mapped bone by it, scaled by the height ratio.
+    const bool travel = rootMotion && seq.camT.size() == frames.size();
+    if (travel) {
+        const std::vector<Ogre::Vector3> traj = rootTrajectory(seq.camT);
+        for (int b = 0; b < mhr.size(); ++b) {
+            if (mhr.parent[size_t(b)] >= 0) continue;
+            for (size_t f = 0; f < frames.size(); ++f) frames[f].pos[size_t(b)] = mhr.bindPos[size_t(b)] + traj[f];
+        }
+        if (qEnvironmentVariableIsSet("QTMESH_SAM_DUMP"))
+            for (size_t f = 0; f < traj.size(); ++f)
+                fprintf(stderr, "[sam-root] f%zu camT(%.3f %.3f %.3f) offset(%.3f %.3f %.3f)\n", f, seq.camT[f][0], seq.camT[f][1],
+                        seq.camT[f][2], traj[f].x, traj[f].y, traj[f].z);
+    }
+    if (fps > 0) return retargetToSkeleton(skeleton, mhr, frames, fps, clip, replace, travel);
     std::vector<float> times(seq.times.begin(), seq.times.end());
     const float t0 = times.front();
     for (float& t : times) t -= t0;                                   // the clip starts at 0
-    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace);
+    return retargetToSkeleton(skeleton, mhr, frames, times, clip, replace, travel);
 }
 
 } // namespace SamBody

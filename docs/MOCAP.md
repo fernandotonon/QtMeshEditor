@@ -84,9 +84,14 @@ take as a clip (status line shows the result; Ctrl+Z discards it).
 - `--smooth-cutoff HZ` (default 1.0) / `--no-smooth`: One-Euro filter
   minimum cutoff — lower is smoother at rest, `beta` tracks fast motion.
   The live panel exposes the same smoothing.
-- `--clip-name NAME`: default `FaceCap` / `BodyCap` (`<name>_Head` for a
-  face-only head track, `<name>_Body` including head compensation when
-  `--face --body` run together).
+- `--clip-name NAME`: default `FaceCap` / `BodyCap` / `Capture` (`--face --body`);
+  `<name>_Head` for a face-only head track. With `--face --body` the face
+  weights and the body go into ONE clip: Ogre plays a skeletal and a vertex
+  (morph) clip of the same name as one animation state, and the glTF export
+  writes them as one animation (bone channels + a `weights` channel). The face
+  keys are aligned on the body clip's start. The GUI does the same: a face
+  pass after a video / pose-photo / camera body capture writes into the body
+  clip.
 - `--frames-dir DIR`: use an image sequence instead of a video (headless
   debugging/CI; no video decode involved).
 - `--key-interval SEC` / `--key-times t0,t1,...` (with `--frames-dir` and

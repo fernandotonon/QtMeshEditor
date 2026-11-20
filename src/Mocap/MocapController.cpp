@@ -129,6 +129,10 @@ QString MocapController::clipName() const { return QStringLiteral("FaceCap"); }
 void MocapController::setClipName(const QString&) {}
 double MocapController::smoothingCutoff() const { return 1.0; }
 void MocapController::setSmoothingCutoff(double) {}
+double MocapController::expressionStrength() const { return 1.0; }
+void MocapController::setExpressionStrength(double) {}
+bool MocapController::refineHands() const { return true; }
+void MocapController::setRefineHands(bool) {}
 int MocapController::bodyBackend() const { return 0; }
 void MocapController::setBodyBackend(int) {}
 bool MocapController::samAvailable() const { return false; }
@@ -470,6 +474,16 @@ void smoothFingerLandmarkDirs(
 
 }  // namespace
 
+// Status fragment for a SAM take's hand refinement: "; hands refined in 12/12 (L) 9/12 (R) frames" or why none was.
+QString samHandsFragment(const SamBody::MhrSequence& seq, bool requested)
+{
+    if (!requested) return {};
+    if (seq.handsRefined[0] == 0 && seq.handsRefined[1] == 0)
+        return seq.handNote.isEmpty() ? QString() : QStringLiteral("; hands not refined (%1)").arg(seq.handNote);
+    return QStringLiteral("; hands refined in %1 (L) / %2 (R) of %3 frames").arg(seq.handsRefined[0]).arg(seq.handsRefined[1])
+        .arg(seq.solved);
+}
+
 OneEuroFilter::Params faceSmoothParams(double cutoffHz)
 {
     OneEuroFilter::Params p;
@@ -509,6 +523,8 @@ struct MocapController::Impl {
     QString status;
     QString clipName = QStringLiteral("FaceCap");
     double smoothingCutoff = 0.5;
+    double expressionStrength = 1.0;
+    bool refineHands = true;
     QVariantList cachedDevices;  // [{id, description}] — populated by refreshDevices()
 
     // The live source feeding the worker: a CameraFrameSource (webcam) OR a
@@ -549,7 +565,7 @@ struct MocapController::Impl {
     double progress = -1.0;
     QString progressLabel;
     QPointer<QThread> samThread;                                        // the SAM worker (deleted when it finishes)
-    std::function<void(const SamBody::MhrSequence&)> samDone;          // runs on the main thread
+    std::function<void()> workerDone;                                  // runs on the main thread
     // offline video read for SamBody (decode first, solve after: a slow model must not stall the player)
     std::unique_ptr<VideoFrameSource> videoSource;
     std::vector<QImage> videoFrames;
@@ -678,6 +694,9 @@ MocapController::MocapController(QObject* parent)
         settings.value(QStringLiteral("mocap/smoothingCutoff"), 0.5).toDouble();
     if (d->smoothingCutoff <= 0.0)
         d->smoothingCutoff = 0.5;
+    d->expressionStrength = std::clamp(
+        settings.value(QStringLiteral("mocap/expressionStrength"), 1.0).toDouble(), 0.0, 3.0);
+    d->refineHands = settings.value(QStringLiteral("mocap/refineHands"), true).toBool();
     d->bodyBackend = settings.value(QStringLiteral("mocap/bodyBackend"), 0).toInt() == 1 ? 1 : 0;
     // Keep the channel availability (Face/Head/Body checkboxes) in sync with
     // whatever is selected, WITHOUT running a preview — otherwise the boxes
@@ -785,6 +804,30 @@ void MocapController::setSmoothingCutoff(double hz)
     emit smoothingChanged();
 }
 
+double MocapController::expressionStrength() const { return d->expressionStrength; }
+void MocapController::setExpressionStrength(double strength)
+{
+    strength = std::clamp(strength, 0.0, 3.0);
+    if (strength == d->expressionStrength)
+        return;
+    d->expressionStrength = strength;
+    QSettings settings;
+    settings.setValue(QStringLiteral("mocap/expressionStrength"), strength);
+    emit smoothingChanged();
+}
+
+bool MocapController::refineHands() const { return d->refineHands; }
+void MocapController::setRefineHands(bool on)
+{
+    if (on == d->refineHands)
+        return;
+    d->refineHands = on;
+    QSettings settings;
+    settings.setValue(QStringLiteral("mocap/refineHands"), on);
+    SentryReporter::addBreadcrumb(QStringLiteral("ui.action"), QStringLiteral("mocap refine hands %1").arg(on ? "on" : "off"));
+    emit smoothingChanged();
+}
+
 int MocapController::bodyBackend() const { return d->bodyBackend; }
 void MocapController::setBodyBackend(int backend)
 {
@@ -824,11 +867,45 @@ void MocapController::setProgress(double fraction, const QString& label)
     setStatusMessage(label);
 }
 
-void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double> times,
-                                  std::function<void(const SamBody::MhrSequence&)> onDone)
+void MocapController::runWorker(std::function<void()> job, std::function<void()> onDone)
 {
     // Callers that prepare for a long time first (model download, reading photos) reserve `busy` themselves so a queued second
     // request cannot slip past their guard while events are pumped.
+    if (!d->busy) {
+        d->busy = true;
+        emit busyChanged();
+    }
+    // A chained step starts from the previous worker's completion callback, posted as that thread's LAST action: let it
+    // exit before the pointer is reused (the destructor only waits for the current one).
+    if (d->samThread)
+        d->samThread->wait();
+    d->workerDone = std::move(onDone);
+    d->samThread = QThread::create([this, job = std::move(job)]() {
+        job();
+        QMetaObject::invokeMethod(this, [this]() { finishWorker(); }, Qt::QueuedConnection);
+    });
+    connect(d->samThread.data(), &QThread::finished, d->samThread.data(), &QObject::deleteLater);
+    d->samThread->start();
+}
+
+void MocapController::finishWorker()
+{
+    d->busy = false;
+    d->progress = -1.0;
+    d->progressLabel.clear();
+    auto done = std::move(d->workerDone);
+    d->workerDone = nullptr;
+    if (done)
+        done();   // may start another worker (busy set again before the signal below is seen)
+    if (!d->busy) {
+        emit busyChanged();
+        emit progressChanged();
+    }
+}
+
+void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double> times,
+                                  std::function<void(const SamBody::MhrSequence&)> onDone)
+{
     if (!d->busy) {
         d->busy = true;
         emit busyChanged();
@@ -839,10 +916,11 @@ void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double
     const QString matte = BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast);
     auto fr = std::make_shared<std::vector<QImage>>(std::move(frames));
     auto tm = std::make_shared<std::vector<double>>(std::move(times));
-    d->samDone = std::move(onDone);
-    d->samThread = QThread::create([this, fr, tm, matte]() {
+    auto seq = std::make_shared<SamBody::MhrSequence>();
+    const bool hands = d->refineHands;
+    runWorker([this, fr, tm, matte, seq, hands]() {
         SamBody::Runner runner;
-        auto seq = std::make_shared<SamBody::MhrSequence>(SamBody::solveSequence(
+        *seq = SamBody::solveSequence(
             runner, *fr, *tm,
             [this](int done, int total, const QString&) {
                 QMetaObject::invokeMethod(this, [this, done, total]() {
@@ -851,24 +929,94 @@ void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double
                 }, Qt::QueuedConnection);
                 return !d->cancelCapture.load();
             },
-            QRectF(), matte));
-        QMetaObject::invokeMethod(this, [this, seq]() { finishSamSolve(seq); }, Qt::QueuedConnection);
+            QRectF(), matte, hands);
+    }, [seq, onDone = std::move(onDone)]() {
+        if (onDone)
+            onDone(*seq);
     });
-    connect(d->samThread.data(), &QThread::finished, d->samThread.data(), &QObject::deleteLater);
-    d->samThread->start();
 }
 
-void MocapController::finishSamSolve(const std::shared_ptr<SamBody::MhrSequence>& seq)
+void MocapController::recordFaceFromImages(const std::string& target, std::vector<QImage> images, std::vector<double> times,
+                                           bool continuous, const QString& bodyClip, double bodyStart,
+                                           std::function<void(const QString&)> done)
 {
-    d->busy = false;
-    d->progress = -1.0;
-    d->progressLabel.clear();
-    emit busyChanged();
-    emit progressChanged();
-    auto done = std::move(d->samDone);
-    d->samDone = nullptr;
-    if (done)
-        done(*seq);
+    if (!d->faceEnabled || d->mapping.channels.isEmpty() || images.size() < 2 || times.size() != images.size()) {
+        done(QString());
+        return;
+    }
+    if (!FaceCapPredictor::modelsPresent()) {
+        // the download needs the main thread (ModelDownloader); everything after it runs on the worker
+        setProgress(-1.0, tr("Downloading face capture models…"));
+        QCoreApplication::processEvents();
+        if (FaceCapPredictor::ensureModelsBlocking().isEmpty()) {
+            done(tr("face skipped: the face capture models are unavailable"));
+            return;
+        }
+    }
+    d->cancelCapture = false;
+    setProgress(0.0, tr("Reading the face…"));
+    struct FaceJob {
+        std::vector<QImage> images;
+        std::vector<double> times;
+        std::vector<FaceSample> take;
+        QString error;
+        bool cancelled = false;
+    };
+    auto job = std::make_shared<FaceJob>();
+    job->images = std::move(images);
+    job->times = std::move(times);
+    const OneEuroFilter::Params smooth = faceSmoothParams(d->smoothingCutoff);
+    runWorker([this, job, continuous, smooth]() {
+        FaceCapPredictor predictor;
+        if (!predictor.load()) {
+            job->error = predictor.lastError();
+            return;
+        }
+        std::array<OneEuroFilter, 52> filters;
+        for (auto& f : filters)
+            f = OneEuroFilter(smooth);
+        const size_t n = job->images.size();
+        job->take.reserve(n);
+        for (size_t i = 0; i < n; ++i) {
+            if (d->cancelCapture.load()) {
+                job->cancelled = true;
+                return;
+            }
+            if (!continuous)
+                predictor.resetTracking();   // unrelated photos: no ROI carried over
+            FaceSample s = predictor.predict(job->images[i], job->times[i]);
+            if (continuous && s.confidence > 0.f) {
+                for (int c = 0; c < 52; ++c)
+                    s.weights[size_t(c)] = static_cast<float>(filters[size_t(c)].filter(s.weights[size_t(c)], s.timeSec));
+            }
+            job->take.push_back(s);
+            QMetaObject::invokeMethod(this, [this, i, n]() {
+                setProgress(double(i + 1) / double(n), tr("Reading the face… %1 / %2").arg(i + 1).arg(n));
+            }, Qt::QueuedConnection);
+        }
+    }, [this, job, target, bodyClip, bodyStart, done = std::move(done)]() {
+        if (job->cancelled) { done(tr("face cancelled")); return; }
+        if (!job->error.isEmpty()) { done(tr("face skipped: %1").arg(job->error)); return; }
+        MocapRecorder::FaceRecordOptions options;
+        // Same name as the body clip: one animation (bones + morph weights), aligned on the body's start.
+        options.clipName = bodyClip;
+        options.timeOrigin = bodyStart;
+        options.head = false;
+        options.calibration.strength = d->expressionStrength;
+        auto* cmd = new RecordMocapClipCommand(target, job->take, d->mapping, options);
+        UndoManager::getSingleton()->push(cmd);
+        const auto& rep = cmd->report();
+        if (!rep.ok()) { done(tr("face skipped: %1").arg(rep.error)); return; }
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_face"),
+            QStringLiteral("gui face pass after body capture: %1 frames -> %2 keys").arg(rep.framesProcessed).arg(rep.keyframesWritten));
+        GamificationManager::noteOperation(QStringLiteral("mocap_face"),
+            {{QStringLiteral("frames"), static_cast<qint64>(rep.framesProcessed)},
+             {QStringLiteral("keyframes"), static_cast<qint64>(rep.keyframesWritten)}},
+            GamificationManager::Surface::Gui);
+        done(tr("face in '%1': %2 keys on %3 channels%4")
+                 .arg(rep.clipName).arg(rep.keyframesWritten).arg(rep.matchedChannels.size())
+                 .arg(rep.framesNoFace > 0 ? tr(", %1 frame(s) without a face").arg(rep.framesNoFace) : QString()));
+    });
 }
 
 bool MocapController::showPoseDebug() const
@@ -1822,12 +1970,25 @@ void MocapController::stopRecording()
             return f.valid && f.headWorldValid;
         }) >= 2;
 
+    // Face and body go into ONE clip (d->clipName): Ogre plays a same-named skeletal + vertex clip as one state and the
+    // glTF export writes one animation. The face is aligned on the body clip's start; with SAM the body is solved later,
+    // so its face weights are written after the solve (below), on the first SAM-solved frame.
+    std::vector<BodyLiveFrame> validBody;
+    if (d->bodyRetargeter)
+        for (const auto& bf : d->bodyTake)
+            if (bf.valid) validBody.push_back(bf);
+    const bool landmarkBody = validBody.size() >= 2;
+    const bool faceWanted = d->take.size() >= 2 && (!d->mapping.channels.isEmpty()
+        || (d->headEnabled && !d->headBone.isEmpty() && !combinedHead));
+
     // face + head clip (only when a face/head channel actually drove)
-    if (d->take.size() >= 2 && (!d->mapping.channels.isEmpty()
-        || (d->headEnabled && !d->headBone.isEmpty() && !combinedHead))) {
+    if (faceWanted && !samWanted) {
         MocapRecorder::FaceRecordOptions options;
         options.clipName = d->clipName;
+        if (landmarkBody)
+            options.timeOrigin = validBody.front().timeSec;   // recordBodyLive keys from the first valid frame
         options.head = d->headEnabled && !d->headBone.isEmpty() && !combinedHead;
+        options.calibration.strength = d->expressionStrength;
         auto* cmd = new RecordMocapClipCommand(d->entityName, d->take,
                                                d->mapping, options);
         UndoManager::getSingleton()->push(cmd);
@@ -1850,15 +2011,10 @@ void MocapController::stopRecording()
     // body clip: bake the buffered live frames with landmark-direction retarget
     // (same BodyRetargeter path as preview) into a separate undo command.
     if (d->bodyRetargeter && d->bodyTake.size() >= 2) {
-        std::vector<BodyLiveFrame> valid;
-        valid.reserve(d->bodyTake.size());
-        for (const auto& bf : d->bodyTake) {
-            if (bf.valid)
-                valid.push_back(bf);
-        }
+        std::vector<BodyLiveFrame> valid = std::move(validBody);
         if (valid.size() >= 2) {
             MocapRecorder::BodyRecordOptions bopts;
-            bopts.clipName = d->clipName + QStringLiteral("_Body");
+            bopts.clipName = d->clipName;
             bopts.algorithmUsed = QStringLiteral("pose-ik-landmarks");
             bopts.neutralFrame = d->bodyReferenceFrame;
             bopts.skipRolesMask = faceHeadChainSkipMask(
@@ -1888,6 +2044,7 @@ void MocapController::stopRecording()
                     MocapRecorder::FaceRecordOptions fallback;
                     fallback.clipName = d->clipName;
                     fallback.head = true;
+                    fallback.calibration.strength = d->expressionStrength;
                     auto* fcmd = new RecordMocapClipCommand(
                         d->entityName, d->take, d->mapping, fallback);
                     UndoManager::getSingleton()->push(fcmd);
@@ -1919,9 +2076,14 @@ void MocapController::stopRecording()
         d->samFrames.clear();
         d->samTimes.clear();
         const std::string entityName = d->entityName;
-        const QString bodyClip = d->clipName + QStringLiteral("_Body");
+        const QString bodyClip = d->clipName;
+        // the face take waits for the solve: it is aligned on the body clip's first solved frame
+        std::vector<FaceSample> faceTake = faceWanted ? d->take : std::vector<FaceSample>();
+        const FaceCapMapper::Mapping faceMapping = d->mapping;
+        const bool faceHead = d->headEnabled && !d->headBone.isEmpty() && !combinedHead;
         runSamSolve(std::move(frames), std::move(times),
-            [this, summary, bodyFailure, clipLen, entityName, bodyClip](const SamBody::MhrSequence& seq) mutable {
+            [this, summary, bodyFailure, clipLen, entityName, bodyClip, faceTake, faceMapping,
+             faceHead](const SamBody::MhrSequence& seq) mutable {
                 QStringList sum = summary;
                 QString failure = bodyFailure;
                 double len = clipLen;
@@ -1940,6 +2102,17 @@ void MocapController::stopRecording()
                         sum << tr("'%1' (%2 bones, SAM 3D Body)").arg(br.clipName).arg(br.tracksWritten);
                     } else {
                         failure = br.error;
+                    }
+                    if (faceTake.size() >= 2) {
+                        MocapRecorder::FaceRecordOptions fopts;
+                        fopts.clipName = bodyClip;
+                        if (br.ok()) fopts.timeOrigin = seq.times.front();
+                        fopts.head = faceHead;
+                        fopts.calibration.strength = d->expressionStrength;
+                        auto* fcmd = new RecordMocapClipCommand(entityName, faceTake, faceMapping, fopts);
+                        UndoManager::getSingleton()->push(fcmd);
+                        const auto& fr = fcmd->report();
+                        if (fr.ok()) sum << tr("face (%1 keys)").arg(fr.keyframesWritten + fr.headKeyframesWritten);
                     }
                     GamificationManager::noteOperation(
                         QStringLiteral("mocap_body"),
@@ -2193,7 +2366,11 @@ void MocapController::finishVideoRead()
     d->videoFrames.clear();
     d->videoTimes.clear();
     d->busy = false;       // runSamSolve sets it again; keep the flag consistent in between
-    runSamSolve(std::move(frames), std::move(times), [this, target, clip, truncated](const SamBody::MhrSequence& seq) {
+    // The face pass reads the same frames after the body solve (QImage copies share their pixels).
+    auto faceFrames = std::make_shared<std::vector<QImage>>(frames);
+    auto faceTimes = std::make_shared<std::vector<double>>(times);
+    runSamSolve(std::move(frames), std::move(times),
+                [this, target, clip, truncated, faceFrames, faceTimes](const SamBody::MhrSequence& seq) {
         if (!seq.ok()) {
             const QString msg = seq.error == QLatin1String("cancelled") ? tr("Cancelled.") : seq.error;
             setStatusMessage(msg);
@@ -2216,10 +2393,16 @@ void MocapController::finishVideoRead()
         GamificationManager::noteOperation(QStringLiteral("mocap_body"),
             {{QStringLiteral("frames"), static_cast<qint64>(seq.jointQuat.size())}, {QStringLiteral("tracks"), static_cast<qint64>(rep.tracksWritten)}},
             GamificationManager::Surface::Gui);
-        setStatusMessage(tr("Created '%1': %2 frames, %3 bones, %4 s (SAM 3D Body)%5 — Ctrl+Z to discard.")
-                             .arg(rep.clipName).arg(seq.jointQuat.size()).arg(rep.tracksWritten).arg(rep.clipLength, 0, 'f', 1)
-                             .arg((seq.dropouts > 0 ? tr(", %1 frame(s) without a person held").arg(seq.dropouts) : QString())
-                                  + (truncated ? tr(", video cut at %1 frames").arg(kMaxSamVideoFrames) : QString())));
+        const QString body = tr("Created '%1': %2 frames, %3 bones, %4 s (SAM 3D Body)%5")
+                                 .arg(rep.clipName).arg(seq.jointQuat.size()).arg(rep.tracksWritten).arg(rep.clipLength, 0, 'f', 1)
+                                 .arg((seq.dropouts > 0 ? tr(", %1 frame(s) without a person held").arg(seq.dropouts) : QString())
+                                      + (truncated ? tr(", video cut at %1 frames").arg(kMaxSamVideoFrames) : QString())
+                                      + samHandsFragment(seq, d->refineHands));
+        setStatusMessage(body);
+        recordFaceFromImages(target, std::move(*faceFrames), std::move(*faceTimes), true, rep.clipName, seq.times.front(),
+                             [this, body](const QString& face) {
+            setStatusMessage(body + (face.isEmpty() ? QString() : QStringLiteral("; ") + face) + tr(" — Ctrl+Z to discard."));
+        });
     });
 }
 
@@ -2341,8 +2524,10 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
         }
         const QString poseClip = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
         const int photoCount = imagePaths.size();
+        auto faceImages = std::make_shared<std::vector<QImage>>(images);
+        auto faceTimes = std::make_shared<std::vector<double>>(imageTimes);
         runSamSolve(std::move(images), std::move(imageTimes),
-            [this, targetEntity, poseClip, photoCount](const SamBody::MhrSequence& seq) {
+            [this, targetEntity, poseClip, photoCount, faceImages, faceTimes](const SamBody::MhrSequence& seq) {
                 if (!seq.ok()) {
                     const QString msg = seq.error == QLatin1String("cancelled") ? tr("Cancelled.") : seq.error;
                     setStatusMessage(msg);
@@ -2352,6 +2537,7 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
                 MocapRecorder::BodyRecordOptions sopts;
                 sopts.clipName = poseClip;
                 sopts.algorithmUsed = QStringLiteral("sam3dbody-keyframes");
+                sopts.rootMotion = false;  // framing differences between photos aren't travel
                 auto* scmd = new RecordBodyClipCommand(targetEntity, seq, 0, sopts);
                 UndoManager::getSingleton()->push(scmd);
                 const auto& srep = scmd->report();
@@ -2362,70 +2548,117 @@ QString MocapController::buildPoseKeyframes(const QStringList& imagePaths,
                 }
                 SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.mocap_body"),
                     QStringLiteral("gui pose keyframes (sam3dbody): %1 images -> %2 tracks").arg(photoCount).arg(srep.tracksWritten));
-                setStatusMessage(tr("Created '%1': %2 keys, %3 bones, %4s (SAM 3D Body) — Ctrl+Z to discard.")
-                                     .arg(srep.clipName).arg(srep.framesProcessed).arg(srep.tracksWritten).arg(srep.clipLength, 0, 'f', 2));
+                const QString body = tr("Created '%1': %2 keys, %3 bones, %4s (SAM 3D Body)")
+                                         .arg(srep.clipName).arg(srep.framesProcessed).arg(srep.tracksWritten).arg(srep.clipLength, 0, 'f', 2)
+                                     + samHandsFragment(seq, d->refineHands);
+                setStatusMessage(body);
+                recordFaceFromImages(targetEntity, std::move(*faceImages), std::move(*faceTimes), false, srep.clipName,
+                                     seq.times.front(), [this, body](const QString& face) {
+                    setStatusMessage(body + (face.isEmpty() ? QString() : QStringLiteral("; ") + face) + tr(" — Ctrl+Z to discard."));
+                });
             });
         return {};
     }
 
+    // Landmarks backend: read + infer on a worker thread, bake + undo on the main thread.
+    d->busy = true;   // reserve before the download below pumps events
+    emit busyChanged();
     if (!PoseCapPredictor::modelsPresent()) {
         setStatusMessage(tr("Downloading pose capture models…"));
         QCoreApplication::processEvents();
-        if (PoseCapPredictor::ensureModelsBlocking().isEmpty())
+        if (PoseCapPredictor::ensureModelsBlocking().isEmpty()) {
+            d->busy = false;
+            emit busyChanged();
             return fail(tr("Pose capture models are not available (offline, "
                            "or not hosted yet)."));
-    }
-    PoseCapPredictor predictor;
-    if (!predictor.load())
-        return fail(predictor.lastError());
-
-    BodyPoseStream stream;
-    stream.setSmoothing(1.0, false);  // independent poses: no temporal filter
-    std::vector<BodyLiveFrame> frames;
-    QStringList skipped;
-    for (int i = 0; i < imagePaths.size(); ++i) {
-        setStatusMessage(tr("Analysing pose %1 / %2…")
-                             .arg(i + 1).arg(imagePaths.size()));
-        QCoreApplication::processEvents();
-        const QImage img(imagePaths[i]);
-        if (img.isNull())
-            return fail(tr("Cannot read image %1").arg(imagePaths[i]));
-        predictor.resetTracking();
-        stream.reset();
-        BodyLiveFrame frame = stream.process(
-            predictor.predict(img, times[i]), img.width(), img.height());
-        if (!frame.valid) {
-            skipped << QFileInfo(imagePaths[i]).fileName();
-            continue;
         }
-        frames.push_back(frame);
     }
-    if (frames.size() < 2)
-        return fail(tr("A person was found in only %1 image(s); need at "
-                       "least 2.").arg(frames.size()));
-
-    MocapRecorder::BodyRecordOptions opts;
-    opts.clipName = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
-    opts.algorithmUsed = QStringLiteral("pose-ik-keyframes");
-    opts.rootMotion = false;  // framing differences between photos aren't travel
-    auto* cmd = new RecordBodyClipCommand(targetEntity, std::move(frames),
-                                          30, opts);
-    UndoManager::getSingleton()->push(cmd);
-    const auto& rep = cmd->report();
-    if (!rep.ok())
-        return fail(rep.error);
-
-    SentryReporter::addBreadcrumb(
-        QStringLiteral("ai.assist.mocap_body"),
-        QStringLiteral("gui pose keyframes: %1 images -> %2 tracks")
-            .arg(imagePaths.size()).arg(rep.tracksWritten));
-    QString msg = tr("Created '%1': %2 keys, %3 tracks, %4s.")
-                      .arg(rep.clipName).arg(rep.framesProcessed)
-                      .arg(rep.tracksWritten)
-                      .arg(rep.clipLength, 0, 'f', 2);
-    if (!skipped.isEmpty())
-        msg += tr(" No person in: %1.").arg(skipped.join(QStringLiteral(", ")));
-    setStatusMessage(msg);
+    struct PoseJob {
+        QStringList paths;
+        std::vector<double> times;
+        std::vector<BodyLiveFrame> frames;
+        QStringList skipped;
+        std::vector<QImage> faceImages;     // the face pass reads every photo, with or without a body
+        std::vector<double> faceTimes;
+        QString error;
+        bool cancelled = false;
+    };
+    auto job = std::make_shared<PoseJob>();
+    job->paths = imagePaths;
+    job->times = times;
+    d->cancelCapture = false;
+    setProgress(0.0, tr("Analysing poses…"));
+    const QString poseClip = clipName.isEmpty() ? QStringLiteral("PoseKeys") : clipName;
+    runWorker([this, job]() {
+        PoseCapPredictor predictor;
+        if (!predictor.load()) {
+            job->error = predictor.lastError();
+            return;
+        }
+        BodyPoseStream stream;
+        stream.setSmoothing(1.0, false);  // independent poses: no temporal filter
+        const int n = job->paths.size();
+        for (int i = 0; i < n; ++i) {
+            if (d->cancelCapture.load()) {
+                job->cancelled = true;
+                return;
+            }
+            QMetaObject::invokeMethod(this, [this, i, n]() {
+                setProgress(double(i) / double(n), tr("Analysing pose %1 / %2…").arg(i + 1).arg(n));
+            }, Qt::QueuedConnection);
+            const QImage img(job->paths[i]);
+            if (img.isNull()) {
+                job->error = tr("Cannot read image %1").arg(job->paths[i]);
+                return;
+            }
+            job->faceImages.push_back(img);
+            job->faceTimes.push_back(job->times[size_t(i)]);
+            predictor.resetTracking();
+            stream.reset();
+            BodyLiveFrame frame = stream.process(
+                predictor.predict(img, job->times[size_t(i)]), img.width(), img.height());
+            if (!frame.valid) {
+                job->skipped << QFileInfo(job->paths[i]).fileName();
+                continue;
+            }
+            job->frames.push_back(frame);
+        }
+    }, [this, job, targetEntity, poseClip]() {
+        auto failAsync = [this](const QString& msg) {
+            setStatusMessage(msg);
+            emit errorOccurred(msg);
+        };
+        if (job->cancelled) { failAsync(tr("Cancelled.")); return; }
+        if (!job->error.isEmpty()) { failAsync(job->error); return; }
+        if (job->frames.size() < 2) {
+            failAsync(tr("A person was found in only %1 image(s); need at least 2.").arg(job->frames.size()));
+            return;
+        }
+        MocapRecorder::BodyRecordOptions opts;
+        opts.clipName = poseClip;
+        opts.algorithmUsed = QStringLiteral("pose-ik-keyframes");
+        opts.rootMotion = false;  // framing differences between photos aren't travel
+        const int imageCount = job->paths.size();
+        const double bodyStart = job->frames.front().timeSec;   // recordBodyLive keys from the first frame with a person
+        auto* cmd = new RecordBodyClipCommand(targetEntity, std::move(job->frames), 30, opts);
+        UndoManager::getSingleton()->push(cmd);
+        const auto& rep = cmd->report();
+        if (!rep.ok()) { failAsync(rep.error); return; }
+        SentryReporter::addBreadcrumb(
+            QStringLiteral("ai.assist.mocap_body"),
+            QStringLiteral("gui pose keyframes: %1 images -> %2 tracks").arg(imageCount).arg(rep.tracksWritten));
+        QString msg = tr("Created '%1': %2 keys, %3 tracks, %4s.")
+                          .arg(rep.clipName).arg(rep.framesProcessed)
+                          .arg(rep.tracksWritten)
+                          .arg(rep.clipLength, 0, 'f', 2);
+        if (!job->skipped.isEmpty())
+            msg += tr(" No person in: %1.").arg(job->skipped.join(QStringLiteral(", ")));
+        setStatusMessage(msg);
+        recordFaceFromImages(targetEntity, std::move(job->faceImages), std::move(job->faceTimes), false, rep.clipName,
+                             bodyStart, [this, msg](const QString& face) {
+            setStatusMessage(face.isEmpty() ? msg : msg + QLatin1Char(' ') + face + QLatin1Char('.'));
+        });
+    });
     return {};
 }
 
