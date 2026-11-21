@@ -3576,6 +3576,17 @@ Rectangle {
                         onActivated: MocapController.bodyBackend = currentIndex
                     }
                 }
+                InspectorCheckBox {
+                    text: "Refine hands (slower, better fingers)"
+                    visible: MocapController.bodyBackend === 1
+                    enabled: MocapController.state === 0 && !MocapController.busy
+                    checked: MocapController.refineHands
+                    onToggled: MocapController.refineHands = checked
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Meta's hand pass: each hand is cropped and run through a dedicated hand decoder, then the "
+                                  + "wrists are fed back into the body. About 2 extra model runs per frame; hands smaller "
+                                  + "than 64 px in the image are skipped."
+                }
                 Text {
                     width: parent.width
                     wrapMode: Text.Wrap
@@ -3684,6 +3695,48 @@ Rectangle {
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 9
                     text: "Lower Hz = smoother (less shake). Raise if motion feels laggy."
+                }
+            }
+
+            // Face weight strength, applied after the per-take calibration.
+            Row {
+                width: parent.width - 16
+                spacing: 6
+                visible: mocapReady && MocapController.faceEnabled
+                Text {
+                    width: 72
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    verticalAlignment: Text.AlignVCenter
+                    text: "Expression"
+                }
+                Slider {
+                    id: mocapExprSlider
+                    width: parent.width - 72 - 44
+                    height: 22
+                    from: 0.0
+                    to: 2.0
+                    stepSize: 0.05
+                    enabled: MocapController.state === 0 && !MocapController.busy
+                    value: MocapController.expressionStrength
+                    onMoved: MocapController.expressionStrength = value
+                    ToolTip.visible: hovered
+                    ToolTip.text: "Scales every face channel after calibration (1 = as captured, >1 exaggerates)."
+                    Connections {
+                        target: MocapController
+                        function onSmoothingChanged() {
+                            if (!mocapExprSlider.pressed)
+                                mocapExprSlider.value = MocapController.expressionStrength
+                        }
+                    }
+                }
+                Text {
+                    width: 38
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 10
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: Text.AlignRight
+                    text: mocapExprSlider.value.toFixed(2) + "x"
                 }
             }
 

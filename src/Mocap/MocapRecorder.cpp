@@ -6,6 +6,7 @@
 #include "MocapPoseFix.h"
 
 #include "FaceCapCanonicalData.h"
+#include "FaceExpressionCalibration.h"
 #include "../AnimationMerger.h"
 #include "PoseIKSolver.h"
 #include "../Manager.h"
@@ -124,10 +125,12 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
     }
 
     report.framesProcessed = static_cast<int>(samples.size());
+    const bool fixedOrigin = std::isfinite(options.timeOrigin);
     std::vector<int> confident;
     confident.reserve(samples.size());
     for (size_t i = 0; i < samples.size(); ++i) {
-        if (samples[i].confidence > 0.f)
+        // with a fixed origin (combined body+face clip) frames before the clip start are not keyed
+        if (samples[i].confidence > 0.f && (!fixedOrigin || samples[i].timeSec >= options.timeOrigin - 1e-6))
             confident.push_back(static_cast<int>(i));
     }
     report.framesNoFace = report.framesProcessed
@@ -137,7 +140,7 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
         return report;
     }
 
-    const double t0 = samples[confident.front()].timeSec;
+    const double t0 = fixedOrigin ? options.timeOrigin : samples[confident.front()].timeSec;
     std::vector<double> times(samples.size(), 0.0);
     for (size_t i = 0; i < samples.size(); ++i)
         times[i] = samples[i].timeSec - t0;
@@ -150,11 +153,25 @@ FaceRecordReport recordFace(Ogre::Entity* entity,
             && mesh->hasAnimation(options.clipName.toStdString()))
             mesh->removeAnimation(options.clipName.toStdString());
 
+        // Per-take calibration (baseline on biased channels + gains on
+        // under-reported ones): see FaceExpressionCalibration.h.
+        std::vector<std::array<float, FaceCalibration::kChannels>> weights;
+        std::vector<bool> confidentMask;
+        weights.reserve(samples.size());
+        confidentMask.reserve(samples.size());
+        for (const FaceSample& s : samples) {
+            weights.push_back(s.weights);
+            confidentMask.push_back(s.confidence > 0.f);
+        }
+        const FaceCalibration::Report calib =
+            FaceCalibration::calibrate(weights, confidentMask, options.calibration);
+        report.calibrationBaselineApplied = calib.baselineApplied;
+
         const std::string clip = options.clipName.toStdString();
         for (const auto& ch : mapping.channels) {
             const int ci = ch.canonicalIndex;
             auto weightAt = [&](int i) {
-                return static_cast<double>(samples[i].weights[ci]);
+                return static_cast<double>(weights[static_cast<size_t>(i)][static_cast<size_t>(ci)]);
             };
             const std::vector<int> keys = selectKeyIndices(
                 confident, times, options.gapHoldSeconds, options.weightEpsilon,
@@ -439,8 +456,12 @@ BodyRecordReport recordBodyMhr(Ogre::Entity* entity, const SamBody::MhrSequence&
     }
     Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
     const SamBody::RetargetOutcome o =
-        SamBody::retargetSequenceToSkeleton(skel.get(), sequence, fps, options.clipName.toStdString(), options.replaceExisting);
+        SamBody::retargetSequenceToSkeleton(skel.get(), sequence, fps, options.clipName.toStdString(), options.replaceExisting,
+                                            options.rootMotion);
     if (!o.ok) { report.error = o.error.isEmpty() ? QStringLiteral("retarget failed") : o.error; return report; }
+    // root travel can carry the character outside its bind bounds: cull from the skeleton (as recordBodyLive does)
+    if (options.rootMotion)
+        entity->setUpdateBoundingBoxFromSkeleton(true);
     report.rolesResolved = o.mappedBones;
     report.tracksWritten = o.mappedBones;
     report.clipLength = fps > 0 ? static_cast<double>(sequence.jointQuat.size() - 1) / fps

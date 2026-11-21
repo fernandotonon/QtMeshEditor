@@ -31,6 +31,16 @@ struct LipsyncClipCommand::Snapshot {
     std::map<unsigned short, std::vector<Key>> tracks;   // vertex handle -> keys
 };
 
+QHash<QString, std::vector<unsigned short>> LipsyncClipCommand::poseIndicesByName(const Ogre::Mesh& mesh)
+{
+    QHash<QString, std::vector<unsigned short>> out;
+    const auto& poses = mesh.getPoseList();
+    for (unsigned short pi = 0; pi < poses.size(); ++pi)
+        if (poses[pi])
+            out[QString::fromStdString(poses[pi]->getName())].push_back(pi);
+    return out;
+}
+
 LipsyncClipCommand::LipsyncClipCommand(std::string entityName,
                                        QString clipName,
                                        std::vector<Key> keys,

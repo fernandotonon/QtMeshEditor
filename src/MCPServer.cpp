@@ -2942,11 +2942,7 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh)
             return makeErrorResult("Error: the entity has no mesh.");
-        QHash<QString, unsigned short> poseIndexByName;
-        const auto& poseList = mesh->getPoseList();
-        for (unsigned short pi = 0; pi < poseList.size(); ++pi)
-            poseIndexByName.insert(
-                QString::fromStdString(poseList[pi]->getName()), pi);
+        const auto poseIndicesByName = LipsyncClipCommand::poseIndicesByName(*mesh);   // every part's pose
 
         for (size_t fi : AudioToFace::selectKeyFrames(pred, binding)) {
             const auto& f = pred.frames[fi];
@@ -2955,9 +2951,11 @@ QJsonObject MCPServer::toolGenerateLipsync(const QJsonObject &args)
             for (size_t i = 0; i < binding.poseTarget.size()
                                && i < f.weights.size(); ++i) {
                 if (binding.poseTarget[i].isEmpty()) continue;
-                const auto it = poseIndexByName.constFind(binding.poseTarget[i]);
-                if (it == poseIndexByName.constEnd()) continue;
-                k.poseRefs.emplace_back(*it, std::clamp(f.weights[i], 0.0f, 1.0f));
+                const auto it = poseIndicesByName.constFind(binding.poseTarget[i]);
+                if (it == poseIndicesByName.constEnd()) continue;
+                const float w = std::clamp(f.weights[i], 0.0f, 1.0f);
+                for (unsigned short pi : *it)
+                    k.poseRefs.emplace_back(pi, w);
             }
             if (k.poseRefs.empty()) continue;
             keysWritten += int(k.poseRefs.size());
@@ -10620,12 +10618,13 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                         emit toolProgress(QStringLiteral("capture_body_from_video"), QStringLiteral("solving with SAM 3D Body"), done, total);
                         QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
                         return !m_toolCancelRequested;
-                    });
+                    }, QRectF(), QString(), args.value("refine_hands").toBool(true));
                 if (!seq.ok()) return makeErrorResult(QString("Error: %1").arg(seq.error));
 
                 MocapRecorder::BodyRecordOptions samOptions;
                 samOptions.clipName = args.value("clip_name").toString(QStringLiteral("BodyCap"));
                 samOptions.algorithmUsed = QStringLiteral("sam3dbody");
+                samOptions.rootMotion = args.value("root_motion").toBool(true);
                 return runOgreOp([&]() -> QJsonObject {
                     // re-resolve: solving pumps events for minutes, so the pointer taken before it may be dangling
                     Ogre::Entity* target = nullptr;
@@ -10661,7 +10660,10 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
                     content["dropouts"] = seq.dropouts;
                     content["bonesMapped"] = report.tracksWritten;
                     content["clipLength"] = report.clipLength;
-                    content["rootMotion"] = QStringLiteral("not estimated (rotation-only)");
+                    content["rootMotion"] = samOptions.rootMotion ? QStringLiteral("from the camera translation (static camera assumed)")
+                                                                  : QStringLiteral("off (rotation-only)");
+                    content["handsRefinedFrames"] = QJsonObject{{"left", seq.handsRefined[0]}, {"right", seq.handsRefined[1]}};
+                    if (!seq.handNote.isEmpty()) content["handNote"] = seq.handNote;
                     if (!outputPath.isEmpty()) content["output"] = outputPath;
                     return makeSuccessResult(QString::fromUtf8(QJsonDocument(content).toJson(QJsonDocument::Indented)));
                 });
@@ -15345,6 +15347,7 @@ QJsonArray MCPServer::buildToolsList()
         props["root_motion"] = QJsonObject{{"type", "boolean"}, {"description", "Estimate root movement from the camera projection (default true); false records in place."}};
         props["fps"] = QJsonObject{{"type", "number"}, {"description", "Capture rate (default 30)."}};
         props["smooth"] = QJsonObject{{"type", "boolean"}, {"description", "One-Euro smoothing (default true)."}};
+        props["refine_hands"] = QJsonObject{{"type", "boolean"}, {"description", "sam3dbody: Meta's hand refinement (hand crops + hand decoder, better fingers and wrists, ~2 extra backbone runs per frame; hands under 64 px are skipped). Default true; needs the hand graphs, otherwise body-only."}};
         props["algo"] = QJsonObject{{"type", "string"}, {"description", "sam3dbody (default): SAM 3D Body, accurate with fingers, seconds per frame (fps is capped at 30, default 10 for it; models ~3.6 GB on first use; falls back to pose-ik with the reason when unavailable) or pose-ik: MediaPipe landmarks, fast."}};
         QJsonArray required;
         required.append("video_path");

@@ -83,6 +83,10 @@ struct Result {
     CropGeometry geometry;
     QRectF bboxUsed;
     bool usedMatte = false;              ///< the person box came from background removal
+    /// Hand refinement outcome, {left, right}: true = that hand's pose and wrist come from the hand decoder.
+    std::array<bool, 2> handsRefined{false, false};
+    /// One line for logs/status: why a hand was not refined ("left: box 41 px < 64", "hand graphs not installed", ...).
+    QString handNote;
     /// false when no box was given and none could be found (the whole photo was used): a motion sequence treats that
     /// frame as a dropout instead of regressing a pose from arbitrary background
     bool personFound = true;
@@ -97,6 +101,10 @@ struct Options {
     /// Resolved background-removal model. A caller on a WORKER thread must pass it (resolving may download, which needs the main
     /// thread); empty = resolve here (main-thread callers).
     QString matteModel;
+    /// Meta's hand refinement (SamBodyHands.h): crop each hand, run the hand decoder, re-prompt the body with the wrists and
+    /// fuse. Better fingers and wrists, ~2 extra backbone runs per photo. Needs the hand graphs (handModelsPresent()); without
+    /// them, or with this off, the body-only estimate is used.
+    bool refineHands = true;
 };
 
 QString modelDir();
@@ -104,7 +112,12 @@ QString backbonePath();
 QString decoderPath();
 QString mhrPath();
 QString facesPath();
+QString decoderV2Path();       ///< body decoder with keypoint prompts + hand boxes (hand refinement)
+QString handDecoderPath();
+QString handFusePath();
 bool modelsPresent();
+/// The three hand-refinement graphs are on disk (optional: the body-only path works without them).
+bool handModelsPresent();
 bool isAvailable();                       ///< built with ENABLE_ONNX
 /// Fetch whatever is missing (blocks on the shared downloader). Empty `error` on success.
 bool ensureModelsBlocking(QString* error = nullptr);

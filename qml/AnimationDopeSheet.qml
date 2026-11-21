@@ -557,6 +557,7 @@ Rectangle {
         // rowsView.contentY directly.
         interactive: false
         boundsBehavior: Flickable.StopAtBounds
+        ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
         delegate: Item {
             id: rowDelegate
@@ -1046,9 +1047,13 @@ Rectangle {
         readonly property int fillHeight:
             (nodeBand.visible ? nodeBand.y : root.height)
             - (header.visible ? (header.y + header.height) : 0) - 2
+        // Filling: the band takes the space available and its rows SCROLL. It used to be
+        // max(content, space), which grew the band as tall as all its rows (a lipsync
+        // clip has ~50): the content never overflowed, so neither the wheel nor a
+        // scrollbar could reach the rows below the window.
         height: !visible ? 0
                 : boneRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
-                : Math.max(naturalContentHeight, fillHeight)
+                : Math.max(morphHeader.height + root.rowHeight + 6, fillHeight)
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1
@@ -1090,6 +1095,8 @@ Rectangle {
             // is routed through `scrollByPixels` rather than relying on
             // Flickable's own wheel handling.
             interactive: false
+            // Visible + draggable even with flicking off: shows that more rows exist.
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             Column {
                 id: morphCol
@@ -1260,9 +1267,10 @@ Rectangle {
         // node-only sheet: fill from just below the header to the bottom.
         readonly property int fillHeight:
             root.height - (header.visible ? (header.y + header.height) : 0) - 2
+        // Filling: take the available space and scroll (see the morph band).
         height: !visible ? 0
                 : otherRowsPresent ? Math.min(naturalContentHeight, maxBandHeight)
-                : Math.max(naturalContentHeight, fillHeight)
+                : Math.max(nodeHeader.height + root.rowHeight + 6, fillHeight)
         color: AnimationControlController.panelColor
         border.color: AnimationControlController.borderColor
         border.width: 1
@@ -1297,6 +1305,7 @@ Rectangle {
             contentHeight: nodeCol.height
             boundsBehavior: Flickable.StopAtBounds
             interactive: false
+            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
 
             Column {
                 id: nodeCol

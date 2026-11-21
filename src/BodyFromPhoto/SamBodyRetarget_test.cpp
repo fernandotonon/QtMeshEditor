@@ -163,3 +163,35 @@ TEST(SamBodySequence, ARetargetNeedsAConsistentSequence)
     EXPECT_FALSE(shortQuat.ok);
     EXPECT_NE(shortQuat.error.indexOf(QLatin1String("incomplete")), -1);
 }
+
+TEST(SamBodyRetarget, RootTrajectoryIsTheCameraTranslationInTheMhrFrameRelativeToFrameZero)
+{
+    // camera frame: x right, y down, z forward; MHR: y up, z towards the camera -> (dx, -dy, -dz)
+    const std::vector<std::array<float, 3>> camT = {{0.0f, 0.0f, 5.0f}, {0.1f, 0.2f, 5.3f}, {0.2f, 0.4f, 5.6f}};
+    const auto t = rootTrajectory(camT, 0, 0);
+    ASSERT_EQ(t.size(), 3u);
+    EXPECT_NEAR(t[0].length(), 0.0f, 1e-6f);
+    EXPECT_NEAR(t[2].x, 0.2f, 1e-6f);
+    EXPECT_NEAR(t[2].y, -0.4f, 1e-6f);
+    EXPECT_NEAR(t[2].z, -0.6f, 1e-5f);
+}
+
+TEST(SamBodyRetarget, RootTrajectorySmoothsDepthHarderAndHoldsNonFiniteFrames)
+{
+    // depth jitters +-0.3 around 5 while x drifts steadily: the z jitter is averaged away, the x ramp survives
+    std::vector<std::array<float, 3>> camT;
+    for (int i = 0; i < 21; ++i) camT.push_back({0.01f * i, 0.0f, 5.0f + ((i % 2) ? 0.3f : -0.3f)});
+    const auto t = rootTrajectory(camT, 1, 4);
+    EXPECT_NEAR(t[10].x, 0.10f, 1e-4f);                  // a straight line is unchanged by a centred average
+    EXPECT_LT(std::fabs(t[10].z - t[12].z), 0.1f);       // raw frames differ by 0 or 0.6; smoothed far less
+    // a NaN frame keeps the previous offset instead of poisoning the averages
+    camT[5] = {NAN, NAN, NAN};
+    const auto held = rootTrajectory(camT, 1, 4);
+    for (const auto& v : held) EXPECT_TRUE(std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z));
+    EXPECT_EQ(held[5], held[4]);                          // the invalid frame holds the previous OUTPUT
+    // [0, 1, NaN, 3, 4] on x: the NaN frame must not move the root (it did, via the smoothing window)
+    const std::vector<std::array<float, 3>> gap = {{0, 0, 5}, {1, 0, 5}, {NAN, 0, 5}, {3, 0, 5}, {4, 0, 5}};
+    const auto g = rootTrajectory(gap);
+    EXPECT_FLOAT_EQ(g[2].x, g[1].x);
+    EXPECT_TRUE(rootTrajectory({}).empty());
+}

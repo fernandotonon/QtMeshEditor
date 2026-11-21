@@ -74,6 +74,8 @@ const char* kUsage =
     "              [--algo sam3dbody|pose-ik] [--no-model] [--in-place]\n"
     "              [--frames-dir DIR] [--json]\n"
     "              [--key-interval SEC | --key-times t0,t1,...]\n"
+    "              [--expression-strength S] [--no-face-calibration]\n"
+    "              [--no-hand-refine]\n"
     "\n"
     "  --face: facial performance from a video (or an image sequence via\n"
     "  --frames-dir) onto the mesh's ARKit-style morph targets as a weight\n"
@@ -88,7 +90,17 @@ const char* kUsage =
     "  interpolated between the keys. Images sort naturally (pose2 < pose10).\n"
     "  --key-interval spaces them evenly (default 0.5s); --key-times gives one\n"
     "  time per image. The first image is the calibration pose, root motion is\n"
-    "  off unless --root-motion is passed.\n";
+    "  off unless --root-motion is passed.\n"
+    "  Face weights are calibrated per take before keying: the take's resting\n"
+    "  value is removed from channels the model biases (blink, squint, gaze,\n"
+    "  brow-down, press/roll/shrug) and under-reported channels (jaw, brows,\n"
+    "  funnel/pucker) get a gain. --expression-strength scales every channel\n"
+    "  (default 1, 0..3); --no-face-calibration keys the raw model output.\n"
+    "  --algo sam3dbody refines both hands like Meta's full pipeline (a hand\n"
+    "  crop through a dedicated hand decoder, the wrists re-prompted into the\n"
+    "  body); hands under 64 px are skipped. --no-hand-refine keeps the\n"
+    "  body-only fingers (~40% faster). Root movement comes from the camera\n"
+    "  translation the model predicts, assuming a static camera.\n";
 
 QJsonObject reportToJson(const MocapRecorder::FaceRecordReport& r)
 {
@@ -98,6 +110,7 @@ QJsonObject reportToJson(const MocapRecorder::FaceRecordReport& r)
     o.insert(QLatin1String("framesNoFace"), r.framesNoFace);
     o.insert(QLatin1String("keyframesWritten"), r.keyframesWritten);
     o.insert(QLatin1String("headKeyframesWritten"), r.headKeyframesWritten);
+    o.insert(QLatin1String("calibrationBaselineApplied"), r.calibrationBaselineApplied);
     o.insert(QLatin1String("headTarget"), r.headTarget);
     o.insert(QLatin1String("clipLength"), r.clipLength);
     o.insert(QLatin1String("matchedChannels"),
@@ -140,6 +153,7 @@ int run(int argc, char* argv[])
     double smoothCutoff = 1.0;
     bool smooth = true;
     bool rootMotion = true;
+    bool refineHands = true;
     bool face = false;
     bool body = false;
     bool noModel = false;
@@ -148,6 +162,7 @@ int run(int argc, char* argv[])
     bool rootMotionExplicit = false;
     double keyInterval = -1.0;
     QList<double> keyTimes;
+    FaceCalibration::Options faceCalibration;
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -180,6 +195,7 @@ int run(int argc, char* argv[])
         if (arg == QLatin1String("--no-head")) { head = false; continue; }
         if (arg == QLatin1String("--no-smooth")) { smooth = false; continue; }
         if (arg == QLatin1String("--in-place")) { rootMotion = false; continue; }
+        if (arg == QLatin1String("--no-hand-refine")) { refineHands = false; continue; }
         auto value = [&](const char* flag) -> QString {
             if (i + 1 >= argc) {
                 CLIPipeline::writeCliError(
@@ -221,6 +237,24 @@ int run(int argc, char* argv[])
             if (fps <= 0 || fps > 240) {
                 CLIPipeline::writeCliError(
                     QStringLiteral("Error: --fps out of range (1..240).\n"));
+                return 2;
+            }
+            continue;
+        }
+        if (arg == QLatin1String("--no-face-calibration")) {
+            faceCalibration.baseline = false;
+            faceCalibration.gains = false;
+            continue;
+        }
+        if (arg == QLatin1String("--expression-strength")) {
+            const QString v = value("--expression-strength");
+            if (v.isEmpty()) return 2;
+            bool ok = false;
+            faceCalibration.strength = v.toDouble(&ok);
+            if (!ok || !std::isfinite(faceCalibration.strength)
+                || faceCalibration.strength < 0.0 || faceCalibration.strength > 3.0) {
+                CLIPipeline::writeCliError(QStringLiteral(
+                    "Error: --expression-strength must be a number in [0, 3].\n"));
                 return 2;
             }
             continue;
@@ -293,7 +327,7 @@ int run(int argc, char* argv[])
             rootMotion = false;  // unrelated photos: framing shifts are not travel
     }
     if (clipName.isEmpty())
-        clipName = face ? QStringLiteral("FaceCap") : QStringLiteral("BodyCap");
+        clipName = face && body ? QStringLiteral("Capture") : face ? QStringLiteral("FaceCap") : QStringLiteral("BodyCap");
     if (meshPath.isEmpty()) {
         CLIPipeline::writeCliError(
             QStringLiteral("Error: --mesh <meshfile> is required.\n%1")
@@ -645,17 +679,27 @@ int run(int argc, char* argv[])
         // An ordinary humanoid can have a Head but no facial morphs. Its
         // requested head take is in the body clip, not a failed empty face clip.
         report.error = QStringLiteral("head recording pending body bake");
-    } else if (face) {
+    }
+    // --face --body: ONE clip. The face weights take the body clip's name (Ogre plays a same-named skeletal + vertex clip
+    // as one state, the glTF export writes one animation) and its start time, so both timelines line up.
+    auto recordFaceInto = [&](double origin) {
         MocapRecorder::FaceRecordOptions options;
         options.clipName = clipName;
         options.head = head && !combinedHead;
+        options.calibration = faceCalibration;
+        options.timeOrigin = origin;
         report = MocapRecorder::recordFace(entity, samples, mapping, options);
-        if (!report.ok()) {
-            CLIPipeline::writeCliError(
-                QStringLiteral("Error: %1\n").arg(report.error));
-            if (!body)
-                return 1;
-        }
+        if (!report.ok())
+            CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(report.error));
+    };
+    // With a body, the face waits for the body result: aligned on the body clip when one was written, else the face keeps
+    // its own origin (a body that failed must not take the face down with it).
+    const bool deferFace = face && !headInBodyOnly && body;
+    constexpr double kOwnOrigin = std::numeric_limits<double>::quiet_NaN();
+    if (face && !headInBodyOnly && !deferFace) {
+        recordFaceInto(kOwnOrigin);
+        if (!report.ok())
+            return 1;
     }
 
     // --- record: body ------------------------------------------------------------
@@ -663,7 +707,7 @@ int run(int argc, char* argv[])
     if (body && samRunner) {
         // Solve the collected frames with SAM 3D Body, then write the clip through the incompatible-skeleton retargeter (#523):
         // MHR rest pose = source rest, finger joints included.
-        bodyReport.clipName = face ? clipName + QStringLiteral("_Body") : clipName;
+        bodyReport.clipName = clipName;
         bodyReport.algorithmUsed = bodyAlgoUsed;
         bodyReport.framesProcessed = static_cast<int>(samFrames.size());
         const SamBody::MhrSequence seq = SamBody::solveSequence(*samRunner, samFrames, samTimes,
@@ -671,7 +715,7 @@ int run(int argc, char* argv[])
                 if (done % 5 == 0 || done == total)
                     CLIPipeline::writeCliError(QStringLiteral("SAM 3D Body: %1 (%2/%3)\n").arg(what).arg(done).arg(total));
                 return true;
-            });
+            }, QRectF(), QString(), refineHands);
         if (!seq.ok()) {
             bodyReport.error = seq.error;
         } else {
@@ -682,11 +726,20 @@ int run(int argc, char* argv[])
             bodyReport.framesProcessed = static_cast<int>(seq.jointQuat.size());
             if (seq.dropouts > 0)
                 CLIPipeline::writeCliError(QStringLiteral("Warning: %1 frame(s) had no person: the previous pose was held.\n").arg(seq.dropouts));
-            if (bodyReport.ok())
+            if (bodyReport.ok()) {
                 CLIPipeline::writeCliError(QStringLiteral(
-                    "Note: sam3dbody capture: %1 bones mapped, rotation-only (root translation is not estimated yet).\n")
-                                               .arg(bodyReport.tracksWritten));
+                    "Note: sam3dbody capture: %1 bones mapped, %2.\n")
+                                               .arg(bodyReport.tracksWritten)
+                                               .arg(rootMotion ? QStringLiteral("root movement from the camera translation (static camera assumed)")
+                                                               : QStringLiteral("in place (rotation-only)")));
+                if (refineHands)
+                    CLIPipeline::writeCliError(QStringLiteral("Note: hands refined in %1 (left) / %2 (right) of %3 frames%4.\n")
+                                                   .arg(seq.handsRefined[0]).arg(seq.handsRefined[1]).arg(seq.solved)
+                                                   .arg(seq.handNote.isEmpty() ? QString() : QStringLiteral(" (last reason: %1)").arg(seq.handNote)));
+            }
         }
+        if (deferFace)
+            recordFaceInto(bodyReport.ok() ? seq.times.front() : kOwnOrigin);
         if (!bodyReport.ok()) {
             CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(bodyReport.error));
             if (!face || !report.ok()) return 1;
@@ -702,6 +755,8 @@ int run(int argc, char* argv[])
             CLIPipeline::writeCliError(QStringLiteral(
                 "Error: no person tracked in the source (%1 of %2 frames had "
                 "no pose).\n").arg(noPose).arg(poseSamples.size()));
+            if (deferFace)
+                recordFaceInto(kOwnOrigin);
             // Face succeeded → keep its take, but SKIP body recording entirely
             // (recordBody would reject <2 frames anyway; falling through fed it
             // the empty clip and overwrote this error). Fail only if face
@@ -711,22 +766,26 @@ int run(int argc, char* argv[])
             bodyReport.error = QStringLiteral("no person tracked");
         } else {
             MocapRecorder::BodyRecordOptions bodyOptions;
-            bodyOptions.clipName = face ? clipName + QStringLiteral("_Body")
-                                        : clipName;
+            bodyOptions.clipName = clipName;
             bodyOptions.algorithmUsed = bodyAlgoUsed;
             bodyOptions.fallbackReason = bodyFallbackReason;
             bodyOptions.rootMotion = rootMotion;
             bodyReport = MocapRecorder::recordBodyLive(
                 entity, bodyFrames, static_cast<int>(fps), bodyOptions);
             bodyReport.framesProcessed = static_cast<int>(poseSamples.size());
+            if (bodyReport.ok() && deferFace)
+                recordFaceInto(bodyFrames.front().timeSec);   // recordBodyLive keys from the first valid frame
             if (!bodyReport.ok()) {
                 CLIPipeline::writeCliError(
                     QStringLiteral("Error: %1\n").arg(bodyReport.error));
+                if (deferFace && !combinedHead)
+                    recordFaceInto(kOwnOrigin);
                 if (face && combinedHead) {
                     // Keep face/head capture usable if body calibration fails.
                     MocapRecorder::FaceRecordOptions fallback;
                     fallback.clipName = clipName;
                     fallback.head = head;
+                    fallback.calibration = faceCalibration;
                     report = MocapRecorder::recordFace(entity, samples, mapping, fallback);
                 }
                 if (!face || !report.ok())

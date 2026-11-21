@@ -18,13 +18,15 @@
 //    named "<clipName>_Head", or as node-TRS deltas via NodeAnimationManager
 //    for a static mesh.
 //
-// Smoothing is the CALLER's job (One-Euro over the stream before recording);
-// the recorder stores what it is given. GUI/MCP wrap a take in ONE
+// Smoothing is the CALLER's job (One-Euro over the stream before recording).
+// The recorder calibrates the weights per take (FaceRecordOptions::calibration,
+// see FaceExpressionCalibration.h) and keys the result. GUI/MCP wrap a take in ONE
 // RecordMocapClipCommand (src/commands/) so Ctrl+Z removes the whole take.
 
 #ifdef ENABLE_MOCAP
 
 #include "FaceCapMapper.h"
+#include "FaceExpressionCalibration.h"
 #include "FaceCapPredictor.h"
 #include "MocapLiveTypes.h"
 #include "../BodyFromPhoto/SamBodySequence.h"
@@ -32,6 +34,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <limits>
 #include <vector>
 #include <optional>
 
@@ -48,6 +51,14 @@ struct FaceRecordOptions {
     double weightEpsilon = 0.01;     // suppress keys that don't change
     double headEpsilonRad = 0.006;   // ~0.35 deg — head key suppression
     double gapHoldSeconds = 0.5;     // face-lost gap that forces hold keys
+    // Per-take weight calibration applied before keying (baseline + gains +
+    // strength). Default on; `calibration.baseline = calibration.gains = false`
+    // with strength 1 keys the raw model output.
+    FaceCalibration::Options calibration;
+    // Time (seconds, the samples' clock) that becomes t = 0 of the clip. NaN (default) = the first confident face frame.
+    // Set it to the body clip's start when the weights share the body clip's name (one combined animation), so both
+    // timelines line up even when the take starts without a visible face; frames before it are not keyed.
+    double timeOrigin = std::numeric_limits<double>::quiet_NaN();
 };
 
 struct FaceRecordReport {
@@ -58,6 +69,7 @@ struct FaceRecordReport {
     QStringList matchedChannels;
     QStringList unmatchedCanonical;
     QStringList unmatchedMesh;
+    bool calibrationBaselineApplied = false;  // per-take baseline used (enough confident frames)
     QString headTarget;              // "bone:<name>" | "node" | "none"
     QString clipName;
     double clipLength = 0.0;         // seconds

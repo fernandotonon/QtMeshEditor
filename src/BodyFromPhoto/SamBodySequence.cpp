@@ -11,7 +11,7 @@ QImage downscaledForCapture(const QImage& image, int maxEdge)
 }
 
 MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, const std::vector<double>& times,
-                          const SequenceProgress& progress, const QRectF& box, const QString& matteModel)
+                          const SequenceProgress& progress, const QRectF& box, const QString& matteModel, bool refineHands)
 {
     MhrSequence seq;
     if (images.size() != times.size() || images.size() < 2) {
@@ -39,12 +39,17 @@ MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, con
         o.wantMesh = false;
         o.bbox = box;
         o.matteModel = matteModel;
+        o.refineHands = refineHands;
         const Result r = runner.predict(images[size_t(i)], o);
         if (r.ok && r.personFound) {
             seq.jointQuat.push_back(r.body.jointQuat);
             seq.jointPos.push_back(r.body.jointPos);
+            seq.camT.push_back(r.body.camT);
             seq.times.push_back(times[size_t(i)]);
             ++seq.solved;
+            for (int side = 0; side < 2; ++side)
+                if (r.handsRefined[size_t(side)]) ++seq.handsRefined[size_t(side)];
+            if (!r.handNote.isEmpty()) seq.handNote = r.handNote;
         } else {
             ++seq.dropouts;
             // A dropout holds the previous pose, so the frame keeps its slot and the take its duration and timing. Before the
@@ -52,6 +57,7 @@ MhrSequence solveSequence(Runner& runner, const std::vector<QImage>& images, con
             if (!seq.jointQuat.empty()) {
                 seq.jointQuat.push_back(seq.jointQuat.back());
                 seq.jointPos.push_back(seq.jointPos.back());
+                seq.camT.push_back(seq.camT.back());
                 seq.times.push_back(times[size_t(i)]);
             }
         }

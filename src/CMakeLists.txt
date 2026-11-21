@@ -256,6 +256,7 @@ CharacterGen/CharacterCLI.cpp
 DNA/DnaScene.cpp
 DNA/DnaCLI.cpp
 BodyFromPhoto/SamBodyPredictor.cpp
+BodyFromPhoto/SamBodyHands.cpp
 BodyFromPhoto/BodyFromPhotoCLI.cpp
 BodyFromPhoto/SamBodyMotion.cpp
 BodyFromPhoto/SamBodyRetarget.cpp
@@ -282,6 +283,7 @@ DNA/DnaCorrectiveManager.cpp
 Mocap/VideoFrameSource.cpp
 Mocap/OneEuroFilter.cpp
 Mocap/FaceCapMapper.cpp
+Mocap/FaceExpressionCalibration.cpp
 Mocap/FaceCapPose.cpp
 Mocap/FaceCapGeom.cpp
 Mocap/FaceCapPredictor.cpp

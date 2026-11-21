@@ -23,7 +23,7 @@ void usage()
 {
     CLIPipeline::writeCliError(QStringLiteral(
         "Usage: qtmesh body <photo> -o <body.obj> [--pose neutral|posed] [--bbox x1,y1,x2,y2] [--no-detect]\n"
-        "                  [--facing-z] [--json]\n"
+        "                  [--facing-z] [--no-hand-refine] [--json]\n"
         "       qtmesh body --download\n"
         "\n"
         "Predicts a human body (the MHR / Momentum Human Rig body, 18439 vertices) from ONE photo with\n"
@@ -32,6 +32,8 @@ void usage()
         "(pose correctives are not reproduced: posed vertices are within ~2 mm mean / 25 mm max of the\n"
         "full model). The person is found by background removal unless --bbox is given (pixels).\n"
         "The OBJ is in metres, Y up, facing -Z (the editor's convention); --facing-z keeps the model's own +Z.\n"
+        "Hands are refined like Meta's full pipeline (each hand crop through a dedicated hand decoder, then the\n"
+        "wrists fed back into the body); hands under 64 px are skipped. --no-hand-refine = body-only fingers.\n"
         "Models (~3.6 GB) download on first use; see THIRD_PARTY_AI_MODELS.md for the SAM License.\n"
         "Needs a build with -DENABLE_ONNX=ON.\n"));
 }
@@ -43,7 +45,7 @@ int run(int argc, char* argv[])
     QString photoPath, outPath;
     QString pose = QStringLiteral("neutral");
     QRectF bbox;
-    bool autoDetect = true, facingZ = false, json = false, download = false;
+    bool autoDetect = true, facingZ = false, json = false, download = false, refineHands = true;
 
     for (int i = 1; i < argc; ++i) {
         const QString a = QString::fromLocal8Bit(argv[i]);
@@ -70,6 +72,7 @@ int run(int argc, char* argv[])
         } else if (a == "--no-detect") autoDetect = false;
         else if (a == "--facing-z") facingZ = true;
         else if (a == "--json") json = true;
+        else if (a == "--no-hand-refine") refineHands = false;
         else if (a == "--download") download = true;
         else if (a.startsWith('-')) { CLIPipeline::writeCliError(QStringLiteral("Error: unknown option %1\n").arg(a)); usage(); return 2; }
         else if (photoPath.isEmpty()) photoPath = a;
@@ -114,6 +117,7 @@ int run(int argc, char* argv[])
     Options opts;
     opts.bbox = bbox;
     opts.autoDetect = autoDetect;
+    opts.refineHands = refineHands;
     const Result r = predict(photo, opts);
     if (!r.ok) {
         CLIPipeline::writeCliError(QStringLiteral("Error: %1\n").arg(r.error));
@@ -140,13 +144,17 @@ int run(int argc, char* argv[])
         o["heightMeters"] = ymax - ymin;
         o["bbox"] = QJsonArray{r.bboxUsed.left(), r.bboxUsed.top(), r.bboxUsed.right(), r.bboxUsed.bottom()};
         o["personFoundByMatte"] = r.usedMatte;
+        o["handsRefined"] = QJsonObject{{"left", r.handsRefined[0]}, {"right", r.handsRefined[1]}};
+        if (!r.handNote.isEmpty()) o["handNote"] = r.handNote;
         QJsonArray shape; for (float s : r.body.shape) shape.append(s);
         o["shape"] = shape;
         if (!r.warning.isEmpty()) o["warning"] = r.warning;
         CLIPipeline::writeOutput(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Indented)));
     } else {
-        CLIPipeline::writeOutput(QStringLiteral("Wrote %1 (%2 body, %3 vertices, %4 m tall)\n")
-                                     .arg(outPath, pose).arg(verts.size() / 3).arg(ymax - ymin, 0, 'f', 2));
+        CLIPipeline::writeOutput(QStringLiteral("Wrote %1 (%2 body, %3 vertices, %4 m tall; hands refined: left %5, right %6%7)\n")
+                                     .arg(outPath, pose).arg(verts.size() / 3).arg(ymax - ymin, 0, 'f', 2)
+                                     .arg(r.handsRefined[0] ? "yes" : "no", r.handsRefined[1] ? "yes" : "no")
+                                     .arg(r.handNote.isEmpty() ? QString() : QStringLiteral("; ") + r.handNote));
     }
     return 0;
 }

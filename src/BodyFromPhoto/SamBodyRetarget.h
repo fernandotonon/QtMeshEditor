@@ -51,19 +51,29 @@ std::string mhrAlias(const std::string& mhrJointName);
 bool excludedFromMapping(const std::string& mhrJointName);
 
 /// Same, but at explicit `times` (seconds, ascending, one per frame): pose keyframes from photos are not uniformly spaced.
+/// `rootMotion` = move the root by the SOURCE root's displacement (the frames' root `pos`), scaled by the rigs' height ratio;
+/// false = rotation-only.
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
                                    const std::vector<Retarget::LocalPose>& frames, const std::vector<float>& times,
-                                   const std::string& clip, bool replace);
+                                   const std::string& clip, bool replace, bool rootMotion = false);
+
+/// Root travel from the decoder's per-frame camera translation, in the MHR frame (Y up), relative to the first frame. The
+/// MHR frame is the camera frame with Y and Z negated, so a static camera's view of the person moving by d is (dx, -dy, -dz).
+/// Monocular depth is the noisy axis (it comes from the person's apparent size), so it is smoothed harder than x/y:
+/// centred moving averages of `radiusXY` / `radiusZ` frames. A frame with a non-finite value keeps the previous offset.
+std::vector<Ogre::Vector3> rootTrajectory(const std::vector<std::array<float, 3>>& camT, int radiusXY = 1, int radiusZ = 4);
 
 /// The whole pipeline for a solved sequence: MHR rest skeleton, local poses,
 /// retarget, write the clip. `fps` > 0 spaces the frames uniformly (video / camera takes); 0 uses `seq.times` (pose photos).
+/// `rootMotion` = translate the root from `seq.camT` (rootTrajectory): right for a static camera; pose photos should pass false
+/// (framing differences between photos are not travel).
 RetargetOutcome retargetSequenceToSkeleton(Ogre::Skeleton* skeleton, const MhrSequence& seq, int fps, const std::string& clip,
-                                           bool replace);
+                                           bool replace, bool rootMotion = false);
 
 /// Retarget `frames` (one LocalPose per sample on `mhr`, uniformly spaced at `fps`) onto `skeleton` as the skeletal animation
 /// `clip` (replaced when it exists and `replace` is set). Rotation-only: the target keeps its own bone lengths.
 RetargetOutcome retargetToSkeleton(Ogre::Skeleton* skeleton, const Retarget::RigDesc& mhr,
                                    const std::vector<Retarget::LocalPose>& frames, int fps, const std::string& clip,
-                                   bool replace);
+                                   bool replace, bool rootMotion = false);
 
 } // namespace SamBody
