@@ -176,6 +176,16 @@ protected:
     FaceCapMapper::Mapping m_mapping;
 };
 
+// The keying tests check times, holds and undo against the raw model output: per-take calibration (on by default, see
+// FaceExpressionCalibration) would rescale the values they compare (jawOpen gain).
+MocapRecorder::FaceRecordOptions rawFaceOptions()
+{
+    MocapRecorder::FaceRecordOptions o;
+    o.calibration.baseline = false;
+    o.calibration.gains = false;
+    return o;
+}
+
 }  // namespace
 
 TEST_F(MocapRecorderTest, KeyframesLandAtTimesAndValues)
@@ -185,7 +195,7 @@ TEST_F(MocapRecorderTest, KeyframesLandAtTimesAndValues)
         makeSample(10.5, 0.5f, 0.9f),
         makeSample(11.0, 0.9f, 0.9f),
     };
-    MocapRecorder::FaceRecordOptions options;
+    MocapRecorder::FaceRecordOptions options = rawFaceOptions();
     options.head = false;
     const auto report =
         MocapRecorder::recordFace(m_entity, samples, m_mapping, options);
@@ -207,7 +217,7 @@ TEST_F(MocapRecorderTest, EpsilonSuppressionKeepsConstantChannelsSparse)
     std::vector<FaceSample> samples;
     for (int i = 0; i < 60; ++i)
         samples.push_back(makeSample(i / 30.0, 0.5f, 0.5f));  // constant
-    MocapRecorder::FaceRecordOptions options;
+    MocapRecorder::FaceRecordOptions options = rawFaceOptions();
     options.head = false;
     const auto report =
         MocapRecorder::recordFace(m_entity, samples, m_mapping, options);
@@ -225,7 +235,7 @@ TEST_F(MocapRecorderTest, GapGetsHoldKeysAtEdges)
     samples.push_back(makeSample(0.2, 0.0f, 0.0f, /*confidence=*/0.f));
     samples.push_back(makeSample(1.6, 0.8f, 0.0f));
     samples.push_back(makeSample(1.7, 0.8f, 0.0f));
-    MocapRecorder::FaceRecordOptions options;
+    MocapRecorder::FaceRecordOptions options = rawFaceOptions();
     options.head = false;
     const auto report =
         MocapRecorder::recordFace(m_entity, samples, m_mapping, options);
@@ -252,7 +262,7 @@ TEST_F(MocapRecorderTest, UnmatchedChannelsAreReported)
                               QStringLiteral("SomethingCustom")});
     std::vector<FaceSample> samples = {makeSample(0.0, 0.3f, 0.f),
                                        makeSample(1.0, 0.6f, 0.f)};
-    MocapRecorder::FaceRecordOptions options;
+    MocapRecorder::FaceRecordOptions options = rawFaceOptions();
     options.head = false;
     const auto report =
         MocapRecorder::recordFace(m_entity, samples, mapping, options);
@@ -286,7 +296,7 @@ TEST_F(MocapRecorderTest, RecordCommandIsSingleUndoStep)
 {
     std::vector<FaceSample> take1 = {makeSample(0.0, 0.1f, 0.1f),
                                      makeSample(1.0, 0.9f, 0.9f)};
-    MocapRecorder::FaceRecordOptions options;
+    MocapRecorder::FaceRecordOptions options = rawFaceOptions();
     options.head = false;
 
     // pre-existing clip state to restore: record take 0 directly
@@ -312,3 +322,14 @@ TEST_F(MocapRecorderTest, RecordCommandIsSingleUndoStep)
 }
 
 #endif  // ENABLE_MOCAP
+
+TEST_F(MocapRecorderTest, CalibrationIsOnByDefaultAndScalesUnderReportedChannels)
+{
+    // jawOpen is under-reported by the face model: by default its keys carry the calibration gain (clamped to 1).
+    std::vector<FaceSample> samples = {makeSample(0.0, 0.1f, 0.0f), makeSample(0.5, 0.4f, 0.0f)};
+    MocapRecorder::FaceRecordOptions options;
+    options.head = false;
+    ASSERT_TRUE(MocapRecorder::recordFace(m_entity, samples, m_mapping, options).ok());
+    EXPECT_GT(weightAt(m_mesh, "FaceCap", "jawOpen", 0.5f), 0.4f + 1e-3f);   // raw 0.4, scaled up
+    EXPECT_LE(weightAt(m_mesh, "FaceCap", "jawOpen", 0.5f), 1.0f);
+}
