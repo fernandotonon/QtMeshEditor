@@ -10584,6 +10584,9 @@ QJsonObject MCPServer::toolCaptureBodyFromVideo(const QJsonObject &args)
             if (!SamBody::modelsPresent() && !SamBody::ensureModelsBlocking(&why)) {
                 samFallback = QStringLiteral("SAM 3D Body models unavailable: %1").arg(why);
             } else {
+                // optional hand graphs (an install from before they were hosted has none): one attempt, failure = body-only
+                if (args.value("refine_hands").toBool(true) && !SamBody::handModelsPresent())
+                    SamBody::ensureHandModelsBlocking();
                 double samFps = args.value("fps").toDouble(10.0);
                 if (samFps <= 0 || samFps > 30) samFps = 10.0;     // SAM needs seconds per frame: cap the decode rate
                 FileFrameSource samSource(videoPath, samFps);

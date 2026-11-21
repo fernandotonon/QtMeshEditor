@@ -920,6 +920,13 @@ void MocapController::runSamSolve(std::vector<QImage> frames, std::vector<double
     setProgress(0.0, tr("Preparing SAM 3D Body…"));
     // resolving the matting model may download it, which needs the main thread: do it here, hand the path to the worker
     const QString matte = BackgroundRemover::ensureModelBlocking(BackgroundRemover::Quality::Fast);
+    // Hand-refinement graphs are optional and added after the body models, so an existing install has to fetch them here
+    // (the callers only download when the BODY models are missing). One attempt per process; failure = body-only fingers.
+    if (d->refineHands && !SamBody::handModelsPresent()) {
+        setProgress(-1.0, tr("Downloading the hand refinement models…"));
+        SamBody::ensureHandModelsBlocking();
+        setProgress(0.0, tr("Preparing SAM 3D Body…"));
+    }
     auto fr = std::make_shared<std::vector<QImage>>(std::move(frames));
     auto tm = std::make_shared<std::vector<double>>(std::move(times));
     auto seq = std::make_shared<SamBody::MhrSequence>();

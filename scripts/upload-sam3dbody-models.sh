@@ -20,12 +20,18 @@ AGG="${AGG:-fernandotonon/QtMeshEditor-models}"
 DED="${DED:-fernandotonon/QtMeshEditor-sam3dbody-onnx}"
 OUT_DIR="${OUT_DIR:?set OUT_DIR to the export output dir}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_uv.bin mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data)
+# FILES="a b c" uploads only those (e.g. the hand graphs after `export-sam3dbody-onnx.py --hands`)
+if [ -n "${FILES:-}" ]; then read -r -a FILES <<< "$FILES"; else
+FILES=(LICENSE-SAM.txt LICENSE-MHR.txt mhr_faces.i32 mhr_uv.bin mhr_body.onnx sam3d_decoder.onnx sam3d_backbone.onnx sam3d_backbone.onnx.data
+       sam3d_decoder_v2.onnx sam3d_hand_decoder.onnx sam3d_hand_fuse.onnx)
+fi
 
 retry() { local n=0; until "$@"; do n=$((n+1)); [ $n -ge 8 ] && return 1; echo "retry $n..."; sleep 10; done; }
 
 # `hf repo create --exist-ok` succeeds when the repo exists and FAILS loudly on any real problem (auth, name)
-hf repo create "$DED" --repo-type model --exist-ok
+# (huggingface_hub >= 1.x renamed `hf repo` to `hf repos`)
+if hf repos --help >/dev/null 2>&1; then hf repos create "$DED" --repo-type model --exist-ok
+else hf repo create "$DED" --repo-type model --exist-ok; fi
 for f in "${FILES[@]}"; do
     [ -f "$OUT_DIR/$f" ] || { echo "missing $OUT_DIR/$f" >&2; exit 1; }
     echo ">> $f -> $AGG:sam3dbody/$f"
