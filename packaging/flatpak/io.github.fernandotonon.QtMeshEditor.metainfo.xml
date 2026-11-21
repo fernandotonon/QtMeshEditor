@@ -55,6 +55,6 @@
   <content_rating type="oars-1.1"/>
   <releases>
     <!-- CI / pack-flatpak-from-deb.sh rewrites the version + date before build. -->
-    <release version="3.71.0" date="2026-11-18"/>
+    <release version="3.72.0" date="2026-11-20"/>
   </releases>
 </component>
