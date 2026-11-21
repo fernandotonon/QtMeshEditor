@@ -1,5 +1,31 @@
 import { useRef, useState } from 'react';
 import styles from './VATDemo.module.css';
+import vatTexture from '../assets/vat/VAT.png';
+import btaTexture from '../assets/vat/BTA.png';
+
+const VAT_TEXTURE = {
+  src: vatTexture,
+  alt: 'Exported vertex animation texture: one column per vertex, positions on top and normals below',
+  caption: (
+    <>
+      The exported VAT texture (shown scaled down): one column per vertex (5828 for this dancer), one row per
+      frame. The top half holds positions, the bottom half normals, so the texture grows
+      with the vertex count.
+    </>
+  ),
+};
+
+const BTA_TEXTURE = {
+  src: btaTexture,
+  alt: 'Exported bone texture: three columns per bone holding the rows of its skinning matrix, one row per frame',
+  caption: (
+    <>
+      The exported bone texture: three columns per bone (the three rows of its 3×4 skinning
+      matrix: rotation and scale plus translation), one row per frame, every clip stacked
+      vertically. 70 bones give a 210 × 72 texture, whatever the vertex count.
+    </>
+  ),
+};
 
 const TABS = [
   {
@@ -12,6 +38,7 @@ const TABS = [
         orbit, scroll to zoom.
       </>
     ),
+    texture: VAT_TEXTURE,
   },
   {
     id: 'perf_vat',
@@ -25,6 +52,7 @@ const TABS = [
         crowd. Best for non-skeletal deformation and the cheapest shader.
       </>
     ),
+    texture: VAT_TEXTURE,
   },
   {
     id: 'perf_skeleton',
@@ -52,6 +80,7 @@ const TABS = [
         with <code>qtmesh vat &lt;file&gt; --mode bone-texture --target godot</code>.
       </>
     ),
+    texture: BTA_TEXTURE,
   },
 ];
 
@@ -173,6 +202,15 @@ export default function VATDemo() {
           .
         </p>
       </div>
+
+      {tab.texture && (
+        <figure className={styles.texture}>
+          <div className={styles.textureFrame}>
+            <img src={tab.texture.src} alt={tab.texture.alt} loading="lazy" />
+          </div>
+          <figcaption>{tab.texture.caption}</figcaption>
+        </figure>
+      )}
     </div>
   );
 }
