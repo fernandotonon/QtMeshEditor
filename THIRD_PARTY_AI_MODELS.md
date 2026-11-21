@@ -728,11 +728,13 @@ vertices) whose shape/proportions come from the person.
 - **What is hosted** (`fernandotonon/QtMeshEditor-models` under `sam3dbody/`, mirrored at
   `fernandotonon/QtMeshEditor-sam3dbody-onnx`): `sam3d_backbone.onnx` (+ `.data`, fp32, DINOv3-ViT-H+/16),
   `sam3d_decoder.onnx` (ray conditioning + promptable decoder + pose/camera heads), `mhr_body.onnx` (MHR forward, no
-  correctives, no face model), `mhr_faces.i32`, `mhr_uv.bin` (MHR UV layout), and **both licence texts**. Produced by
+  correctives, no face model), `mhr_faces.i32`, `mhr_uv.bin` (MHR UV layout), the three **hand-refinement** graphs
+  (`sam3d_decoder_v2.onnx`, `sam3d_hand_decoder.onnx`, `sam3d_hand_fuse.onnx`: Meta's "full" inference; optional downloads,
+  capture falls back to body-only fingers without them), and **both licence texts**. Produced by
   `scripts/export-sam3dbody-onnx.py` from the user's own copy of Meta's checkpoint (access to the gated HF repo
   `facebook/sam-3d-body-dinov3` is required to re-export); uploaded with `scripts/upload-sam3dbody-models.sh`. No Meta
   source file is redistributed — the script imports Meta's package from a local clone.
-- **Licences, per file.** The backbone and decoder graphs are derivative works of the SAM Materials and are under the
+- **Licences, per file.** The backbone, decoder and hand-refinement graphs are derivative works of the SAM Materials and are under the
   **SAM License** (2025-11-19). §1.b.i permits redistributing derivatives under that licence with a copy attached
   (`LICENSE-SAM.txt` is downloaded next to the graphs and sits in both repos). The MHR body graph, topology and UV layout derive from the
   **Apache-2.0** MHR release (`LICENSE-MHR.txt`). Accepted, recorded risks (same list as the #870 decision record above):

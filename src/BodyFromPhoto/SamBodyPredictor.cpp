@@ -27,7 +27,7 @@ namespace {
 // paths on main would otherwise make every released build fail its digest check. After re-exporting, upload, then update this
 // revision AND the digests together.
 constexpr const char* kDefaultBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/26daed748226af17fb8c402465cb79281f9a5ac1/sam3dbody/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/98f137577e13a2321a84db0a3a665bbe9142b562/sam3dbody/";
 constexpr const char* kBaseUrlSettingsKey = "ai/sam3dbodyModelBaseUrl";
 
 struct FileSpec { const char* name; const char* label; const char* sha256; };
@@ -41,6 +41,13 @@ constexpr FileSpec kFiles[] = {
     // The SAM License requires a copy of itself to accompany the SAM materials wherever they are distributed.
     {"LICENSE-SAM.txt",          "SAM License",                    "b3a5a0e2d973ab80e6610ccf1cffc40756050d0ace3cd4fec879b3ec290b2e9b"},
     {"LICENSE-MHR.txt",          "MHR (Apache-2.0) licence",       "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+};
+// Hand refinement (Meta's "full" inference, SamBodyHands.h). OPTIONAL: fetched after the files above, with the same digest
+// checks, but a failed download only means body-only fingers, never a failed body capture.
+constexpr FileSpec kHandFiles[] = {
+    {"sam3d_decoder_v2.onnx",    "SAM 3D Body decoder (hand refinement)", "17877852394fd5a933ac4b017baf609205af1764de4572cccdf21e522b17de3d"},
+    {"sam3d_hand_decoder.onnx",  "SAM 3D Body hand decoder",              "51687f413ef69f5026831b8b1cd61b2a308b2982cecbd8bd0b7ef59084923aed"},
+    {"sam3d_hand_fuse.onnx",     "SAM 3D Body hand fusion",               "9e8848827b90b13a3854f87ba0380a0ef3fd7cd6bc8c8c18df2bdfc0e37fc743"},
 };
 
 // The reference fixes aspect first to 0.75 (person-shaped), then to the 1:1 model input.
@@ -224,6 +231,11 @@ bool ensureModelsBlocking(QString* error)
     if (error) *error = QStringLiteral("photo to body needs an ONNX build (rebuild with -DENABLE_ONNX)");
     return false;
 }
+bool ensureHandModelsBlocking(QString* error)
+{
+    if (error) *error = QStringLiteral("photo to body needs an ONNX build (rebuild with -DENABLE_ONNX)");
+    return false;
+}
 struct Runner::Impl {};
 Runner::Runner() : d(std::make_unique<Impl>()) {}
 Runner::~Runner() = default;
@@ -250,46 +262,80 @@ Result predict(const QImage&, const Options&)
 
 bool isAvailable() { return true; }
 
+namespace {
+struct Hosting { QString base; bool defaultHosting = false; bool noDownload = false; };
+Hosting resolveHosting()
+{
+    Hosting h;
+    QSettings s;
+    h.base = s.value(QString::fromLatin1(kBaseUrlSettingsKey)).toString();
+    if (h.base.isEmpty()) {
+        const QByteArray env = qgetenv("QTMESH_SAM3DBODY_MODEL_BASE_URL");
+        h.base = env.isEmpty() ? QString::fromLatin1(kDefaultBaseUrl) : QString::fromUtf8(env);
+    }
+    h.defaultHosting = h.base == QString::fromLatin1(kDefaultBaseUrl);
+    if (!h.base.endsWith('/')) h.base += '/';
+    h.noDownload = !qEnvironmentVariableIsEmpty("QTMESH_SAM3DBODY_NO_DOWNLOAD");
+    return h;
+}
+
+// One file: verified (digest) when present, fetched when missing. Empty return = ok, else why not.
+QString ensureFile(const Hosting& h, const FileSpec& f)
+{
+    const QString dest = QDir(modelDir()).filePath(QString::fromLatin1(f.name));
+    if (QFileInfo::exists(dest) && !h.defaultHosting) return {};   // a mirror may serve a different export
+    if (h.noDownload && !QFileInfo::exists(dest))
+        return QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SAM3DBODY_NO_DOWNLOAD")
+            .arg(QString::fromLatin1(f.name));
+    ModelFetch::Request req;
+    // An empty URL = verify only: with downloads disabled an existing file is still checked against its digest
+    // (a truncated or tampered file must not reach ONNX Runtime); a mismatch deletes it and reports why.
+    req.url = h.noDownload ? QString() : h.base + QString::fromLatin1(f.name);
+    req.destination = dest;
+    req.label = QString::fromLatin1(f.label);
+    req.timeoutMs = 3600000;                       // the backbone weights are ~3.4 GB
+    if (h.defaultHosting) req.expectedSha256 = QString::fromLatin1(f.sha256);
+    const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+    return fo.ok ? QString() : fo.error;
+}
+} // namespace
+
+bool ensureHandModelsBlocking(QString* error)
+{
+    // At most one attempt per process: a failed (offline, rejected) download must not stall every later capture.
+    static bool attempted = false;
+    static QString lastError;
+    if (attempted) {
+        if (error) *error = lastError;
+        return lastError.isEmpty() && handModelsPresent();
+    }
+    attempted = true;
+    QDir().mkpath(modelDir());
+    const Hosting h = resolveHosting();
+    for (const FileSpec& f : kHandFiles) {
+        lastError = ensureFile(h, f);
+        if (!lastError.isEmpty()) {
+            qWarning("SAM 3D Body: hand refinement unavailable (%s): %s", f.name, qPrintable(lastError));
+            if (error) *error = lastError;
+            return false;
+        }
+    }
+    return true;
+}
+
 bool ensureModelsBlocking(QString* error)
 {
-    QString base;
-    {
-        QSettings s;
-        base = s.value(QString::fromLatin1(kBaseUrlSettingsKey)).toString();
-        const bool settingsOverride = !base.isEmpty();
-        if (base.isEmpty()) {
-            const QByteArray env = qgetenv("QTMESH_SAM3DBODY_MODEL_BASE_URL");
-            base = env.isEmpty() ? QString::fromLatin1(kDefaultBaseUrl) : QString::fromUtf8(env);
-        }
-        Q_UNUSED(settingsOverride);
-    }
-    const bool defaultHosting = base == QString::fromLatin1(kDefaultBaseUrl);
-    if (!base.endsWith('/')) base += '/';
-    const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_SAM3DBODY_NO_DOWNLOAD");
-
     QDir().mkpath(modelDir());
+    const Hosting h = resolveHosting();
     for (const FileSpec& f : kFiles) {
-        const QString dest = QDir(modelDir()).filePath(QString::fromLatin1(f.name));
-        if (QFileInfo::exists(dest) && !defaultHosting) continue;   // a mirror may serve a different export
-        if (noDownload && !QFileInfo::exists(dest)) {
-            if (error) *error = QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SAM3DBODY_NO_DOWNLOAD")
-                                    .arg(QString::fromLatin1(f.name));
-            return false;
-        }
-        ModelFetch::Request req;
-        // An empty URL = verify only: with downloads disabled an existing file is still checked against its digest
-        // (a truncated or tampered file must not reach ONNX Runtime); a mismatch deletes it and reports why.
-        req.url = noDownload ? QString() : base + QString::fromLatin1(f.name);
-        req.destination = dest;
-        req.label = QString::fromLatin1(f.label);
-        req.timeoutMs = 3600000;                       // the backbone weights are ~3.4 GB
-        if (defaultHosting) req.expectedSha256 = QString::fromLatin1(f.sha256);
-        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
-        if (!fo.ok) {
-            if (error) *error = fo.error;
+        const QString why = ensureFile(h, f);
+        if (!why.isEmpty()) {
+            if (error) *error = why;
             return false;
         }
     }
+    // Optional hand-refinement graphs: a failure is logged and capture keeps the body-only fingers.
+    ensureHandModelsBlocking();
     return true;
 }
 
@@ -309,6 +355,7 @@ struct Runner::Impl {
     Ort::Env env{ORT_LOGGING_LEVEL_WARNING, "qtmesh_sam3dbody"};
     std::unique_ptr<Ort::Session> backbone, decoder, mhr;
     std::unique_ptr<Ort::Session> decoderV2, handDecoder, handFuse;   // hand refinement (optional graphs)
+    bool handsBroken = false;            // a hand graph failed once: body-only for the rest of this Runner
     QElapsedTimer clock;                                              // QTMESH_SAM_TIMING=1: per-stage timings on stderr
     bool timing = qEnvironmentVariableIsSet("QTMESH_SAM_TIMING");
     void mark(const char* what)
@@ -625,10 +672,29 @@ Result Runner::predict(const QImage& photo, const Options& opts)
             in["crop_size"]   = {{static_cast<float>(kCropSize), static_cast<float>(kCropSize)}, {1, 2}};
             return in;
         };
-        const bool refine = opts.refineHands && handModelsPresent();
+        bool refine = opts.refineHands && handModelsPresent() && !d->handsBroken;
+        if (refine) {
+            // A hand graph that cannot be used (corrupt or partial set, failed session) must never fail the capture: fall
+            // back to the body-only estimate and stop trying for the rest of this Runner (a sequence would fail per frame).
+            QString why;
+            bool ok = false;
+            try {
+                ok = d->refineWithHands(photo, geo, feats[0], decoderInputs, r, why);
+            } catch (const std::exception& e) {
+                why = QString::fromUtf8(e.what());
+            }
+            if (!ok) {
+                d->handsBroken = true;
+                r.handsRefined = {false, false};
+                r.handNote = QStringLiteral("hand refinement failed (%1): body-only fingers").arg(why);
+                qWarning("SAM 3D Body: %s", qPrintable(r.handNote));
+                refine = false;
+            }
+        } else if (opts.refineHands) {
+            r.handNote = d->handsBroken ? QStringLiteral("hand refinement disabled after an error (body-only fingers)")
+                                        : QStringLiteral("hand refinement graphs not installed (body-only fingers)");
+        }
         if (!refine) {
-            if (opts.refineHands)
-                r.handNote = QStringLiteral("hand refinement graphs not installed (body-only fingers)");
             auto in = decoderInputs(geo, std::move(feats[0]));
             auto dec = Impl::run(*Impl::open(d->env, d->decoder, decoderPath()), in, {"shape", "model_params", "cam_t"});
             if (dec.size() != 3 || dec[0].size() != kShapeComps || dec[1].size() != kModelParams
@@ -639,12 +705,6 @@ Result Runner::predict(const QImage& photo, const Options& opts)
             r.body.shape = dec[0];
             r.body.modelParams = dec[1];
             if (dec[2].size() >= 3) r.body.camT = {dec[2][0], dec[2][1], dec[2][2]};
-        } else {
-            QString why;
-            if (!d->refineWithHands(photo, geo, std::move(feats[0]), decoderInputs, r, why)) {
-                r.error = why;
-                return r;
-            }
         }
         r.body.focalPx = geo.focal;
 

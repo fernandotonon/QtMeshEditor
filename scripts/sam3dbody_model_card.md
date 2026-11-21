@@ -30,6 +30,9 @@ This repository is the standalone model card + mirror. The application downloads
 |---|---|---|
 | `sam3d_backbone.onnx` + `.onnx.data` | DINOv3-ViT-H+/16 backbone, fp32, image `[1,3,512,512]` (RGB 0..1) → features `[1,1280,32,32]` | SAM License |
 | `sam3d_decoder.onnx` | camera-ray conditioning + promptable decoder (6 layers, intermediate pose feedback) + pose/camera heads | SAM License |
+| `sam3d_decoder_v2.onnx` | body decoder for the hand refinement: the decoder above + keypoint prompts (4 fixed slots + validity mask), the two hand boxes and the raw pose for the prompted re-run | SAM License |
+| `sam3d_hand_decoder.onnx` | hand decoder: a hand crop's backbone features → hand pose (PCA), hand scale/shape, wrist rotation, hand keypoints | SAM License |
+| `sam3d_hand_fuse.onnx` | drops both hand results into the body (wrist rotations, hand poses/scales, Meta's wrist-angle test) → MHR model params | SAM License |
 | `mhr_body.onnx` | MHR body forward (shape `[1,45]` + model params `[1,204]` → vertices in cm, joint translations/rotations), no pose correctives, no face model | Apache-2.0 (MHR data) |
 | `mhr_faces.i32` | MHR body topology, 36,874 triangles, int32 little-endian | Apache-2.0 (MHR data) |
 | `mhr_uv.bin` | MHR UV layout (int32 nt, nf; float32 texcoords[nt,2]; int32 texcoord_faces[nf,3]) for texturing | Apache-2.0 (MHR data) |
@@ -43,12 +46,19 @@ against Meta's PyTorch run on the same inputs: decoder outputs agree to ~1e-6, b
 in Meta's code), MHR to ~1e-4 cm. What is deliberately **not** reproduced: MHR pose correctives (a 664 MB network;
 a posed body moves by a mean 2 mm / max 25 mm without it) and the face-expression model (the body head zeroes it).
 
+**Hand refinement** (`sam3d_decoder_v2` / `sam3d_hand_decoder` / `sam3d_hand_fuse`, `--hands` in the export script)
+reproduces Meta's `run_inference(..., "full")`: hand boxes from the body decoder, each hand crop through the hand decoder
+(the left hand on the mirrored photo), Meta's four acceptance tests, a body re-run with wrist/elbow keypoint prompts,
+fusion. Each graph matches Meta's modules to 1e-6..2e-5; end to end on Meta's sample photo the refined hands are within
+1.9 / 4.1 mm (left / right, mean) of Meta's full pipeline, against ~30 mm for the body-only estimate.
+
 Pre-processing (person crop, affine warp, CLIFF condition, camera rays) lives in the application
 (`src/BodyFromPhoto/SamBodyPredictor.cpp`), not in the graphs.
 
 ## Licence — read before using
 
-* `sam3d_backbone.onnx*` and `sam3d_decoder.onnx` are derivative works of Meta's **SAM Materials** and are
+* `sam3d_backbone.onnx*`, `sam3d_decoder.onnx`, `sam3d_decoder_v2.onnx`, `sam3d_hand_decoder.onnx` and
+  `sam3d_hand_fuse.onnx` are derivative works of Meta's **SAM Materials** and are
   distributed under the **SAM License** (`LICENSE-SAM.txt`; Meta Platforms, Last Updated November 19, 2025).
   It is not an OSI open-source licence: it carries an indemnity clause, a litigation-termination clause, trade-control
   restrictions and Meta's right to update the terms. By using these files you accept it.

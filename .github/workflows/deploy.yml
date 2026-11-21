@@ -1773,14 +1773,25 @@ jobs:
                 grep '<testcase ' "$xml_file" | wc -l
             }
 
+            # Listing runs the test binary too, so it gets its own wall-clock cap: the binary intermittently hangs at
+            # startup on the software-GL runner, and an uncapped listing call (outside the per-suite timeout below)
+            # sat until the 2 h job timeout cancelled the whole run (twice on PR #1177, once on master). A stalled
+            # listing is retried once; if it still fails the count is 0, so the suite fails visibly on the
+            # "ran N/0 discovered" check instead of eating the job.
             count_listed_tests() {
                 local test_path=$1
                 local filter=${2:-}
-                if [ -n "$filter" ]; then
-                    $test_path --gtest_filter="$filter" --gtest_list_tests 2>/dev/null | grep -E '^  [^[:space:]]' | wc -l
-                else
-                    $test_path --gtest_list_tests 2>/dev/null | grep -E '^  [^[:space:]]' | wc -l
-                fi
+                local args=(--gtest_list_tests)
+                [ -n "$filter" ] && args=(--gtest_filter="$filter" --gtest_list_tests)
+                local listing attempt
+                for attempt in 1 2; do
+                    if listing=$(timeout --foreground --signal=KILL 180 $test_path "${args[@]}" 2>/dev/null); then
+                        printf '%s\n' "$listing" | grep -E '^  [^[:space:]]' | wc -l
+                        return
+                    fi
+                    echo "WARNING: listing tests (${filter:-all}) stalled or failed on attempt $attempt/2" >&2
+                done
+                echo 0
             }
 
             # === Run UnitTests: each test suite in its own process ===
