@@ -2095,6 +2095,7 @@ void MocapController::stopRecording()
                 QString failure = bodyFailure;
                 double len = clipLen;
                 bool bodyRecorded = false;
+                QString faceFailure;
                 if (!seq.ok()) {
                     failure = seq.error == QLatin1String("cancelled") ? tr("body solve cancelled") : seq.error;
                 } else {
@@ -2133,13 +2134,18 @@ void MocapController::stopRecording()
                     if (fr.ok()) {
                         len = std::max(len, fr.clipLength);
                         sum << tr("face (%1 keys)").arg(fr.keyframesWritten + fr.headKeyframesWritten);
+                    } else {
+                        faceFailure = fr.error;
                     }
                 }
+                const QString faceNote = faceFailure.isEmpty() ? QString() : tr("; face not recorded: %1").arg(faceFailure);
                 if (!failure.isEmpty())
-                    setStatusMessage(sum.isEmpty() ? failure
-                                                   : tr("Recorded %1; body recording failed: %2").arg(sum.join(QStringLiteral(" + ")), failure));
+                    setStatusMessage((sum.isEmpty() ? failure
+                                                    : tr("Recorded %1; body recording failed: %2").arg(sum.join(QStringLiteral(" + ")), failure))
+                                     + faceNote);
                 else
-                    setStatusMessage(tr("Recorded %1s → %2 — Ctrl+Z to discard.").arg(len, 0, 'f', 1).arg(sum.join(QStringLiteral(" + "))));
+                    setStatusMessage(tr("Recorded %1s → %2").arg(len, 0, 'f', 1).arg(sum.join(QStringLiteral(" + ")))
+                                     + faceNote + tr(" — Ctrl+Z to discard."));
             });
         return;   // the status message arrives with the result
     }
