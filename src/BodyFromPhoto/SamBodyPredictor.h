@@ -121,6 +121,9 @@ bool handModelsPresent();
 bool isAvailable();                       ///< built with ENABLE_ONNX
 /// Fetch whatever is missing (blocks on the shared downloader). Empty `error` on success.
 bool ensureModelsBlocking(QString* error = nullptr);
+/// Fetch the optional hand-refinement graphs (also called by ensureModelsBlocking). Main thread only (the downloader).
+/// At most ONE attempt per process; false = refinement stays off (body-only fingers), never a capture failure.
+bool ensureHandModelsBlocking(QString* error = nullptr);
 
 /// Holds the ONNX sessions between calls: a sequence loads the 3.4 GB backbone once instead of per frame.
 class Runner {
