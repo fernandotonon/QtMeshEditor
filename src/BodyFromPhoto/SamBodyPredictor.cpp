@@ -27,7 +27,7 @@ namespace {
 // paths on main would otherwise make every released build fail its digest check. After re-exporting, upload, then update this
 // revision AND the digests together.
 constexpr const char* kDefaultBaseUrl =
-    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/26daed748226af17fb8c402465cb79281f9a5ac1/sam3dbody/";
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/98f137577e13a2321a84db0a3a665bbe9142b562/sam3dbody/";
 constexpr const char* kBaseUrlSettingsKey = "ai/sam3dbodyModelBaseUrl";
 
 struct FileSpec { const char* name; const char* label; const char* sha256; };
@@ -41,6 +41,13 @@ constexpr FileSpec kFiles[] = {
     // The SAM License requires a copy of itself to accompany the SAM materials wherever they are distributed.
     {"LICENSE-SAM.txt",          "SAM License",                    "b3a5a0e2d973ab80e6610ccf1cffc40756050d0ace3cd4fec879b3ec290b2e9b"},
     {"LICENSE-MHR.txt",          "MHR (Apache-2.0) licence",       "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"},
+};
+// Hand refinement (Meta's "full" inference, SamBodyHands.h). OPTIONAL: fetched after the files above, with the same digest
+// checks, but a failed download only means body-only fingers, never a failed body capture.
+constexpr FileSpec kHandFiles[] = {
+    {"sam3d_decoder_v2.onnx",    "SAM 3D Body decoder (hand refinement)", "17877852394fd5a933ac4b017baf609205af1764de4572cccdf21e522b17de3d"},
+    {"sam3d_hand_decoder.onnx",  "SAM 3D Body hand decoder",              "51687f413ef69f5026831b8b1cd61b2a308b2982cecbd8bd0b7ef59084923aed"},
+    {"sam3d_hand_fuse.onnx",     "SAM 3D Body hand fusion",               "9e8848827b90b13a3854f87ba0380a0ef3fd7cd6bc8c8c18df2bdfc0e37fc743"},
 };
 
 // The reference fixes aspect first to 0.75 (person-shaped), then to the 1:1 model input.
@@ -268,14 +275,13 @@ bool ensureModelsBlocking(QString* error)
     const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_SAM3DBODY_NO_DOWNLOAD");
 
     QDir().mkpath(modelDir());
-    for (const FileSpec& f : kFiles) {
+    // One file: verified (digest) when present, fetched when missing. Empty return = ok, else why not.
+    auto ensure = [&](const FileSpec& f) -> QString {
         const QString dest = QDir(modelDir()).filePath(QString::fromLatin1(f.name));
-        if (QFileInfo::exists(dest) && !defaultHosting) continue;   // a mirror may serve a different export
-        if (noDownload && !QFileInfo::exists(dest)) {
-            if (error) *error = QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SAM3DBODY_NO_DOWNLOAD")
-                                    .arg(QString::fromLatin1(f.name));
-            return false;
-        }
+        if (QFileInfo::exists(dest) && !defaultHosting) return {};   // a mirror may serve a different export
+        if (noDownload && !QFileInfo::exists(dest))
+            return QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SAM3DBODY_NO_DOWNLOAD")
+                .arg(QString::fromLatin1(f.name));
         ModelFetch::Request req;
         // An empty URL = verify only: with downloads disabled an existing file is still checked against its digest
         // (a truncated or tampered file must not reach ONNX Runtime); a mismatch deletes it and reports why.
@@ -285,9 +291,21 @@ bool ensureModelsBlocking(QString* error)
         req.timeoutMs = 3600000;                       // the backbone weights are ~3.4 GB
         if (defaultHosting) req.expectedSha256 = QString::fromLatin1(f.sha256);
         const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
-        if (!fo.ok) {
-            if (error) *error = fo.error;
+        return fo.ok ? QString() : fo.error;
+    };
+    for (const FileSpec& f : kFiles) {
+        const QString why = ensure(f);
+        if (!why.isEmpty()) {
+            if (error) *error = why;
             return false;
+        }
+    }
+    // Optional hand-refinement graphs: a failure is logged and capture keeps the body-only fingers.
+    for (const FileSpec& f : kHandFiles) {
+        const QString why = ensure(f);
+        if (!why.isEmpty()) {
+            qWarning("SAM 3D Body: hand refinement unavailable (%s): %s", f.name, qPrintable(why));
+            break;
         }
     }
     return true;
