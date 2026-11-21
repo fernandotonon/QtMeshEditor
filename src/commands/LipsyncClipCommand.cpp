@@ -7,6 +7,7 @@
 #include <OgreEntity.h>
 #include <OgreKeyFrame.h>
 #include <OgreMesh.h>
+#include <OgreSubEntity.h>
 
 #include <map>
 
@@ -19,6 +20,25 @@ Ogre::Entity* findEntity(const std::string& name)
     for (Ogre::Entity* e : mgr->getEntities())
         if (e && e->getName() == name) return e;
     return nullptr;
+}
+
+// Make the entity's animation states reflect the mesh's clips. Ogre only creates an entity's AnimationStateSet when its
+// mesh had a skeleton or vertex animation at creation, so a static head whose morph targets had no clip yet has NONE, and
+// refreshAvailableAnimationState() dereferences it (crash). Re-initialising is the only way to create it; per-part
+// material overrides are put back afterwards (re-initialising restores the mesh's own materials).
+void refreshStates(Ogre::Entity* entity)
+{
+    if (entity->getAllAnimationStates()) {
+        entity->refreshAvailableAnimationState();
+        return;
+    }
+    std::vector<std::string> materials;
+    for (unsigned int i = 0; i < entity->getNumSubEntities(); ++i)
+        materials.push_back(entity->getSubEntity(i)->getMaterialName());
+    entity->_initialise(true);
+    for (unsigned int i = 0; i < entity->getNumSubEntities() && i < materials.size(); ++i)
+        if (!materials[i].empty())
+            entity->getSubEntity(i)->setMaterialName(materials[i]);
 }
 
 }  // namespace
@@ -116,7 +136,7 @@ void LipsyncClipCommand::redo()
             ++m_keysWritten;
         }
     }
-    entity->refreshAvailableAnimationState();
+    refreshStates(entity);
 }
 
 void LipsyncClipCommand::undo()
@@ -140,5 +160,5 @@ void LipsyncClipCommand::undo()
             }
         }
     }
-    entity->refreshAvailableAnimationState();
+    refreshStates(entity);
 }
