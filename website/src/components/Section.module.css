@@ -1,7 +1,7 @@
 .section {
-  width: min(1120px, 92vw);
+  width: min(1240px, 92vw);
   margin: 0 auto;
-  padding: 5.25rem 0 0;
+  padding: 6rem 0 0;
 }
 
 .header {
@@ -11,7 +11,7 @@
 .eyebrow {
   margin: 0 0 0.55rem;
   color: var(--accent-1);
-  font-size: 0.84rem;
+  font-size: 0.875rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   font-weight: 700;
@@ -20,7 +20,7 @@
 .title {
   margin: 0;
   font-size: clamp(1.7rem, 3vw, 2.45rem);
-  line-height: 1.1;
+  line-height: 1.15;
   color: var(--text-0);
 }
 
@@ -31,7 +31,9 @@
   text-decoration: none;
   font-weight: 400;
   font-size: 0.6em;
-  transition: opacity 140ms ease, color 140ms ease;
+  transition:
+    opacity 140ms ease,
+    color 140ms ease;
 }
 
 .section:hover .anchorLink,
@@ -45,4 +47,18 @@
   margin: 0.8rem 0 0;
   max-width: 68ch;
   color: var(--text-1);
+}
+
+.title {
+  font-weight: 500;
+  letter-spacing: -0.035em;
+}
+.subtitle {
+  font-size: 1.0625rem;
+  line-height: 1.7;
+}
+@media (max-width: 600px) {
+  .section {
+    padding-top: 4rem;
+  }
 }

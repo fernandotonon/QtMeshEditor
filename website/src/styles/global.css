@@ -1,17 +1,22 @@
+/* Shared neutral palette for the editor site and documentation. */
 :root {
-  --surface-0: #050a14;
-  --surface-1: #0b1322;
-  --surface-2: #101b2d;
-  --surface-3: #15243a;
-  --text-0: #e9f1ff;
-  --text-1: #afbdd3;
-  --text-muted: #8c9ab2;
-  --stroke: rgba(120, 141, 179, 0.24);
-  --stroke-strong: rgba(135, 166, 219, 0.38);
-  --accent-1: #67d3ff;
-  --accent-2: #5b8fff;
-  --font-ui: 'Sora', 'Segoe UI', 'Helvetica Neue', sans-serif;
-  --mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  --surface-0: #101210;
+  --surface-1: #181b18;
+  --surface-2: #222622;
+  --surface-3: #2e342e;
+  --text-0: #f2f4f0;
+  --text-1: #bec5ba;
+  --text-muted: #a0aa9b;
+  --text-2: var(--text-1);
+  --text-3: var(--text-muted);
+  --stroke: #30372e;
+  --stroke-strong: #4b5647;
+  --accent-1: #a5dc87;
+  --accent-2: #a5dc87;
+  --accent: var(--accent-1);
+  --accent-fg: #10200d;
+  --font-ui: "Inter", "Segoe UI", "Helvetica Neue", sans-serif;
+  --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
 }
 
 * {
@@ -38,7 +43,7 @@ html {
    section's first line flush with the viewport's top edge, which reads
    as "cut off." */
 section[id] {
-  scroll-margin-top: 1.5rem;
+  scroll-margin-top: 2rem;
 }
 
 body {
@@ -62,11 +67,11 @@ pre {
 }
 
 code {
-  color: #b8e5ff;
+  color: #c6e6b5;
 }
 
 :focus-visible {
-  outline: 3px solid rgba(103, 211, 255, 0.7);
+  outline: 3px solid var(--accent-1);
   outline-offset: 3px;
   border-radius: 0.35rem;
 }
@@ -93,5 +98,18 @@ code {
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+button {
+  font: inherit;
+}
+::selection {
+  background: #a5dc87;
+  color: #10200d;
+}
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
   }
 }

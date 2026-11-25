@@ -1,30 +1,40 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './App.module.css';
-import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
-import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
 import VATDemo from './components/VATDemo';
+import DemoVideo from './components/DemoVideo';
 import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 import {
-  audienceCards,
-  beforeAfter,
   cloudBadgeMarkdown,
   cloudBadgeSteps,
   cloudBadgeUploadExample,
   footerLinks,
   hero,
-  highlightFeatures,
   installOptions,
   links,
-  media,
-  mixamoSteps,
   pipelineExamples,
-  pipelineFlow,
-  proofPoints,
-  trustItems,
 } from './data/content';
+
+const showcases = [
+  {
+    title: 'Motion from a few words.',
+    src: './media/motion.mp4',
+    alt: 'QtMesh T2M text-to-motion generation demonstrated inside QtMesh Editor',
+    caption: 'QtMesh T2M · local text-to-motion',
+    body: 'Explore QtMesh T2M, an experimental lightweight motion model running locally. Generate a starting clip, then review the result in the editor.',
+    post: 'https://www.linkedin.com/posts/fernando-tonon_generativeai-texttomotion-qtmesheditor-activity-7522353979931115521-8XJu',
+  },
+  {
+    title: 'The details make the movement.',
+    src: './media/hands.mp4',
+    alt: 'Walk animation comparison with and without automatic hand pose handling',
+    caption: 'NVIDIA Kimodo · hand poses & loops',
+    body: 'Extend generated motion with prompt-aware hand presets and loop support. Small adjustments make animations easier to use in a game.',
+    post: 'https://www.linkedin.com/posts/fernando-tonon_qtmesheditor-nvidia-kimodo-activity-7527110854723579904-Zq-X',
+  },
+];
 
 const PLATFORM_BY_OS = {
   windows: 'Windows',
@@ -40,7 +50,11 @@ function detectVisitorOs() {
     return 'unknown';
   }
 
-  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const platform = (
+    navigator.userAgentData?.platform ||
+    navigator.platform ||
+    ''
+  ).toLowerCase();
   const userAgent = (navigator.userAgent || '').toLowerCase();
   const source = `${platform} ${userAgent}`;
 
@@ -71,13 +85,26 @@ function detectVisitorArch() {
   if (typeof navigator === 'undefined') {
     return 'unknown';
   }
-  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const platform = (
+    navigator.userAgentData?.platform ||
+    navigator.platform ||
+    ''
+  ).toLowerCase();
   const userAgent = (navigator.userAgent || '').toLowerCase();
   const source = `${platform} ${userAgent}`;
-  if (source.includes('aarch64') || source.includes('arm64') || /\barmv[678]\b/.test(source)) {
+  if (
+    source.includes('aarch64') ||
+    source.includes('arm64') ||
+    /\barmv[678]\b/.test(source)
+  ) {
     return 'arm64';
   }
-  if (source.includes('x86_64') || source.includes('amd64') || source.includes('x86-64') || source.includes('wow64')) {
+  if (
+    source.includes('x86_64') ||
+    source.includes('amd64') ||
+    source.includes('x86-64') ||
+    source.includes('wow64')
+  ) {
     return 'x86_64';
   }
   // Most desktop Linux UAs omit arch; default to x86_64 (matches Flatpak).
@@ -115,9 +142,11 @@ async function copyText(text) {
 }
 
 function App() {
+  const [demoEnabled, setDemoEnabled] = useState(false);
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
-  const { actionRef: qtmeshActionRef, imageTag: qtmeshImageTag } = useQtmeshActionRef();
+  const { actionRef: qtmeshActionRef, imageTag: qtmeshImageTag } =
+    useQtmeshActionRef();
   const [activeCliTab, setActiveCliTab] = useState('scan');
   const portalDialogRef = useRef(null);
   const portalTriggerRef = useRef(null);
@@ -134,7 +163,9 @@ function App() {
     if (detectedPlatform === 'Linux') {
       if (detectedArch === 'arm64') {
         return (
-          installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+          installOptions.find(
+            (item) => item.platform === 'Linux' && item.method === 'snap',
+          ) ||
           installOptions.find((item) => item.platform === 'Fedora / RHEL') ||
           installOptions.find((item) => item.platform === 'Debian / Ubuntu') ||
           installOptions.find((item) => item.platform === 'Linux') ||
@@ -143,21 +174,27 @@ function App() {
       }
       return (
         installOptions.find((item) => item.method === 'Flatpak') ||
-        installOptions.find((item) => item.platform === 'Linux' && item.method === 'snap') ||
+        installOptions.find(
+          (item) => item.platform === 'Linux' && item.method === 'snap',
+        ) ||
         installOptions.find((item) => item.platform === 'Linux') ||
         null
       );
     }
-    return installOptions.find((item) => item.platform === detectedPlatform) || null;
+    return (
+      installOptions.find((item) => item.platform === detectedPlatform) || null
+    );
   }, [detectedPlatform, detectedArch]);
-  const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
+  const recommendedStore = recommendedInstall
+    ? getStoreLabel(recommendedInstall.method)
+    : null;
   const portalInstallOptions = useMemo(() => {
     if (detectedPlatform === 'Linux') {
       return installOptions.filter(
         (item) =>
           item.platform === 'Linux' ||
           item.platform === 'Fedora / RHEL' ||
-          item.platform === 'Debian / Ubuntu'
+          item.platform === 'Debian / Ubuntu',
       );
     }
     if (recommendedInstall) {
@@ -166,27 +203,83 @@ function App() {
     return installOptions;
   }, [detectedPlatform, recommendedInstall]);
   const githubActionExample = useMemo(
-    () => pipelineExamples.githubAction
-      .replace('__QTMESH_ACTION_REF__', qtmeshActionRef)
-      .replace('__QTMESH_IMAGE_TAG__', qtmeshImageTag),
-    [qtmeshActionRef, qtmeshImageTag]
+    () =>
+      pipelineExamples.githubAction
+        .replace('__QTMESH_ACTION_REF__', qtmeshActionRef)
+        .replace('__QTMESH_IMAGE_TAG__', qtmeshImageTag),
+    [qtmeshActionRef, qtmeshImageTag],
   );
 
   const cliTabs = useMemo(
     () => [
-      { id: 'scan', label: 'Scan', title: 'Scan repo assets', code: pipelineExamples.scan, language: 'scan' },
-      { id: 'fix', label: 'Fix', title: 'Fix and optimize', code: pipelineExamples.fix, language: 'fix' },
-      { id: 'convert', label: 'Convert', title: 'Convert formats', code: pipelineExamples.convert, language: 'convert' },
-      { id: 'merge', label: 'Merge', title: 'Merge animation clips', code: pipelineExamples.merge, language: 'anim' },
-      { id: 'turntable', label: 'Turntable', title: 'Render turntable PNG', code: pipelineExamples.turntable, language: 'turntable' },
-      { id: 'isometric', label: 'Isometric', title: '8-direction sprite atlas', code: pipelineExamples.isometric, language: 'isometric' },
-      { id: 'vat', label: 'VAT', title: 'Bake to vertex animation texture', code: pipelineExamples.vat, language: 'bash' },
-      { id: 'docker', label: 'Docker', title: 'Docker workflow', code: pipelineExamples.docker, language: 'docker' },
-      { id: 'gha', label: 'GitHub Actions', title: 'GitHub Actions workflow', code: githubActionExample, language: 'yaml' },
+      {
+        id: 'scan',
+        label: 'Scan',
+        title: 'Scan repo assets',
+        code: pipelineExamples.scan,
+        language: 'scan',
+      },
+      {
+        id: 'fix',
+        label: 'Fix',
+        title: 'Fix and optimize',
+        code: pipelineExamples.fix,
+        language: 'fix',
+      },
+      {
+        id: 'convert',
+        label: 'Convert',
+        title: 'Convert formats',
+        code: pipelineExamples.convert,
+        language: 'convert',
+      },
+      {
+        id: 'merge',
+        label: 'Merge',
+        title: 'Merge animation clips',
+        code: pipelineExamples.merge,
+        language: 'anim',
+      },
+      {
+        id: 'turntable',
+        label: 'Turntable',
+        title: 'Render turntable PNG',
+        code: pipelineExamples.turntable,
+        language: 'turntable',
+      },
+      {
+        id: 'isometric',
+        label: 'Isometric',
+        title: '8-direction sprite atlas',
+        code: pipelineExamples.isometric,
+        language: 'isometric',
+      },
+      {
+        id: 'vat',
+        label: 'VAT',
+        title: 'Bake to vertex animation texture',
+        code: pipelineExamples.vat,
+        language: 'bash',
+      },
+      {
+        id: 'docker',
+        label: 'Docker',
+        title: 'Docker workflow',
+        code: pipelineExamples.docker,
+        language: 'docker',
+      },
+      {
+        id: 'gha',
+        label: 'GitHub Actions',
+        title: 'GitHub Actions workflow',
+        code: githubActionExample,
+        language: 'yaml',
+      },
     ],
-    [githubActionExample]
+    [githubActionExample],
   );
-  const activeCliExample = cliTabs.find((tab) => tab.id === activeCliTab) || cliTabs[0];
+  const activeCliExample =
+    cliTabs.find((tab) => tab.id === activeCliTab) || cliTabs[0];
   const cliTabPanelId = 'cli-tab-panel';
 
   const cloudBadgePreview = useMemo(
@@ -212,7 +305,7 @@ function App() {
         src: `${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg`,
       },
     ],
-    []
+    [],
   );
 
   useEffect(() => {
@@ -231,7 +324,7 @@ function App() {
           element instanceof HTMLElement &&
           element.getAttribute('aria-hidden') !== 'true' &&
           element.tabIndex !== -1 &&
-          element.getClientRects().length > 0
+          element.getClientRects().length > 0,
       );
 
     const focusableElements = collectFocusableElements();
@@ -265,7 +358,10 @@ function App() {
         return;
       }
 
-      if (event.shiftKey && (activeElement === first || activeElement === dialog)) {
+      if (
+        event.shiftKey &&
+        (activeElement === first || activeElement === dialog)
+      ) {
         event.preventDefault();
         last.focus();
         return;
@@ -387,252 +483,382 @@ function App() {
   return (
     <>
       <div className={styles.page}>
-        <div className={styles.backdrop} aria-hidden="true" />
-
-        <main className={styles.main}>
-          <header className={`${styles.hero} reveal`}>
+        <a className={styles.skipLink} href="#editor">
+          Skip to content
+        </a>
+        <header className={styles.siteHeader}>
+          <a
+            className={styles.brand}
+            href="#editor"
+            aria-label="QtMesh Editor home"
+          >
+            <svg width="30" height="34" viewBox="0 0 30 34" aria-hidden="true">
+              <path
+                d="M15 1 29 9v16l-14 8L1 25V9Z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="m1 9 14 8 14-8M15 17v16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+            </svg>
+            <span>
+              QtMesh <strong>Editor</strong>
+            </span>
+          </a>
+          <nav className={styles.navigation} aria-label="Main navigation">
+            <a href="#workflows">Workflows</a>
+            <a href="#ecosystem">Ecosystem</a>
+            <a href={links.docs}>Docs</a>
+            <a href={links.github} target="_blank" rel="noreferrer">
+              GitHub
+            </a>
+          </nav>
+          <button
+            className={styles.headerDownload}
+            onClick={handleOpenInstallPortal}
+          >
+            Download
+          </button>
+        </header>
+        <main id="editor" className={styles.main}>
+          <header className={styles.hero}>
             <div className={styles.heroCopy}>
-              <p className={styles.kicker}>QtMesh Editor | CI/CD for 3D Assets</p>
-              <h1 className={styles.heroTitle}>{hero.title}</h1>
-              <p className={styles.heroSubtitle}>{hero.subtitle}</p>
-
-              <div className={styles.heroCtaPanel}>
-                <div className={styles.ctaRow}>
-                  <button
-                    type="button"
-                    className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
-                    onClick={handleOpenInstallPortal}
-                  >
-                    {hero.ctaPrimary}
-                  </button>
-                  <ButtonLink href={links.github} variant="secondary">
-                    {hero.ctaSecondary}
-                  </ButtonLink>
-                </div>
-                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries.</p>
+              <p className={styles.kicker}>Open-source 3D creation</p>
+              <h1 className={styles.heroTitle}>
+                Make it yours.
+                <br />
+                <span>Bring it to life.</span>
+              </h1>
+              <p className={styles.heroSubtitle}>
+                Create, refine, and animate 3D assets. Hands-on editing,
+                specialized AI models, and production tools in one open-source
+                editor.
+              </p>
+              <div className={styles.ctaRow}>
+                <button
+                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                  onClick={handleOpenInstallPortal}
+                >
+                  Download QtMesh Editor
+                </button>
+                <a className={styles.textLink} href="#workflows">
+                  Explore the workflows
+                </a>
               </div>
-
-              <ul className={styles.proofRow} aria-label="Product proof points">
-                {proofPoints.map((item) => (
-                  <li key={item} className={styles.proofPill}>
-                    {item}
-                  </li>
-                ))}
-              </ul>
+              <p className={styles.platformLine}>
+                Windows · macOS · Linux <span>MIT licensed</span>
+              </p>
             </div>
-
-            <figure className={styles.heroMediaCard}>
-              <img className={styles.heroImage} src={media.pipelineCiCd.src} alt={media.pipelineCiCd.alt} />
-              <figcaption className={styles.mediaCaption}>Scan → Validate → Upload → Badges</figcaption>
-              <div className={styles.heroWorkflowBar} aria-label="Pipeline workflow overview">
-                <span>Scan</span>
-                <span>Validate</span>
-                <span>Upload</span>
-                <span>Badges</span>
+            <figure className={styles.heroMedia}>
+              <div className={styles.mediaToolbar}>
+                <span>QTMESH EDITOR</span>
+                <span>Performance capture</span>
               </div>
-              <div className={styles.heroBadgeStrip}>
-                {cloudBadgePreview.slice(0, 3).map((badge) => (
-                  <img key={badge.key} src={badge.src} alt={badge.alt} loading="lazy" />
-                ))}
-              </div>
+              <DemoVideo
+                src="./media/capture.mp4"
+                poster="./media/capture.webp"
+                label="Face and body captured from one video, playing together inside QtMesh Editor"
+              />
+              <figcaption>
+                <span>Face, hands, and body. One performance.</span>
+                <a href="#mixamo">Explore animation</a>
+              </figcaption>
             </figure>
           </header>
+          <div
+            className={styles.capabilityStrip}
+            aria-label="Editor capabilities"
+          >
+            <span>Mesh & material editing</span>
+            <span>Local AI workflows</span>
+            <span>Rigging & animation</span>
+            <span>CLI & automation</span>
+          </div>
 
           <Section
-            id="quick-workflow"
-            eyebrow="Quick Workflow"
-            title="Understand the pipeline in one glance"
-            subtitle="One strong flow: catch issues early, keep imports predictable, and publish visible quality signals."
+            id="workflows"
+            eyebrow="Inside the editor"
+            title="Your asset. Every stage of the way."
+            subtitle="Generate a starting point, work on the details, and take an animated asset into your game."
           >
-            <div className={styles.quickWorkflowLayout}>
-              <figure className={`${styles.demoMain} reveal`}>
-                <img className={styles.demoImage} src={media.skeletonPreview.src} alt={media.skeletonPreview.alt} loading="lazy" />
-              </figure>
-
-              <article className={styles.quickWorkflowPanel}>
-                <h3>Commit-to-report workflow</h3>
-                <ul className={styles.workflowList}>
-                  {pipelineFlow.map((item) => (
-                    <li key={item.title} className={styles.workflowListItem}>
-                      <strong>{item.title}</strong>
-                      <p>{item.body}</p>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
-          </Section>
-
-          <Section
-            id="qtmesh-cloud-badges"
-            eyebrow="QtMesh Cloud"
-            title="Track 3D asset quality in CI"
-            subtitle="Get visibility, quality gates, and historical tracking for your 3D asset pipeline."
-          >
-            <p className={styles.sectionLeadCompact}>
-              QtMesh Cloud turns each scan into a shareable quality signal for developers, technical artists, and production leads.
-            </p>
-
-            <div className={styles.badgeShowcase}>
-              {cloudBadgePreview.map((badge) => (
-                <article key={badge.key} className={styles.badgeShowcaseCard}>
-                  <img src={badge.src} alt={badge.alt} loading="lazy" />
-                </article>
-              ))}
-            </div>
-
-            <div className={styles.cloudStepGrid}>
-              {cloudBadgeSteps.map((item, index) => (
-                <article key={item.title} className={styles.cloudStepCard}>
-                  <span className={styles.cloudStepIndex}>{index + 1}</span>
-                  <h3>{item.title}</h3>
-                  <p>{item.body}</p>
-                </article>
-              ))}
-            </div>
-
-            <details className={styles.expandable}>
-              <summary>Show full GitHub upload example</summary>
-              <div className={styles.expandableBody}>
-                <CodePanel title="GitHub Actions: upload scan report" code={cloudBadgeUploadExample} label="yaml" />
-              </div>
-            </details>
-
-            <details className={styles.expandable}>
-              <summary>Show README badge snippet</summary>
-              <pre className={styles.inlineCodeBlock}>
-                <code>{cloudBadgeMarkdown}</code>
-              </pre>
-            </details>
-
-            <div className={styles.cliLinks}>
-              <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
-                Open QtMesh Cloud
+            <div className={styles.workflowGrid}>
+              <a href="#create" className={styles.workflowLink}>
+                <span>Create & refine</span>
+                <p>Shape, texture, and make it your own.</p>
               </a>
-              <a href={`${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
-                View live badge example
+              <a href="#mixamo" className={styles.workflowLink}>
+                <span>Rig & animate</span>
+                <p>Build movement into your characters.</p>
+              </a>
+              <a href="#vat-demo" className={styles.workflowLink}>
+                <span>Optimize & ship</span>
+                <p>Prepare animation for your runtime.</p>
               </a>
             </div>
           </Section>
 
           <Section
-            id="before-after"
-            eyebrow="Before vs After"
-            title="From asset pipeline surprises to predictable delivery"
-            subtitle="A small change in process creates a big difference in production reliability."
+            id="create"
+            eyebrow="Create & refine"
+            title="A starting point is just the beginning."
+            subtitle="Combine AI-assisted generation with mesh editing, materials, and painting tools. Inspect the result and keep control of the details."
           >
-            <div className={styles.beforeAfterGrid}>
-              <article className={`${styles.outcomeCard} ${styles.outcomeBefore}`}>
-                <h3>Before</h3>
-                <ul>
-                  {beforeAfter.before.map((item) => (
-                    <li key={item}>
-                      <span aria-hidden="true">✕</span>
-                      <p>{item}</p>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-
-              <article className={`${styles.outcomeCard} ${styles.outcomeAfter}`}>
-                <h3>After</h3>
-                <ul>
-                  {beforeAfter.after.map((item) => (
-                    <li key={item}>
-                      <span aria-hidden="true">✓</span>
-                      <p>{item}</p>
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            </div>
-          </Section>
-
-          <Section
-            id="who-for"
-            eyebrow="Who It's For"
-            title="Built for teams shipping 3D content continuously"
-            subtitle="Focused workflows for game developers, technical artists, and studio CI/CD teams."
-          >
-            <div className={styles.audienceGrid}>
-              {audienceCards.map((item) => (
-                <FeatureCard key={item.title} title={item.title} body={item.body} tag={item.tag} />
-              ))}
+            <figure className={styles.wideMedia}>
+              <img
+                src="./media/shape-guides.webp"
+                alt="A knight reference image alongside 3D characters generated with different body shape guides and guide strengths"
+                loading="lazy"
+                width="2990"
+                height="1672"
+              />
+              <figcaption>
+                TRELLIS.2 shape guidance · steer the build and pose with your
+                own base mesh ·{' '}
+                <a
+                  href="https://github.com/fernandotonon/QtMeshEditor/releases/tag/3.68.0"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Workflow details
+                </a>
+              </figcaption>
+            </figure>
+            <div className={styles.featureNotes}>
+              <p>
+                <strong>Generate locally</strong>Explore specialized models for
+                3D creation and animation on supported hardware.
+              </p>
+              <p>
+                <strong>Keep editing</strong>Adjust meshes, paint surfaces, and
+                refine materials in the same workspace.
+              </p>
+              <p>
+                <strong>Take it with you</strong>Convert assets for the next
+                step in your pipeline.
+              </p>
             </div>
           </Section>
 
           <Section
             id="mixamo"
-            eyebrow="Animation Merge Workflow"
-            title="Merge animation clips into one predictable output"
-            subtitle="Combine Mixamo, Unreal, and DCC clips, then export a clean asset ready for engine import and CI."
+            eyebrow="Rig & animate"
+            title="Give your characters a little character."
+            subtitle="Capture face and body from video, work with skeletons and skin weights, or explore motion generated from text."
           >
-            <div className={styles.demoLayout}>
-              <figure className={`${styles.demoMain} reveal`}>
-                <img className={styles.demoImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} loading="lazy" />
+            <div className={styles.animationLayout}>
+              <figure className={styles.wideMedia}>
+                <DemoVideo
+                  src="./media/skeleton.mp4"
+                  poster="./media/skeleton.webp"
+                  label="Bone weight and skeleton editing in QtMesh Editor"
+                />
+                <figcaption>Inspect skeletons and skin weights</figcaption>
               </figure>
-
-              <ol className={styles.steps}>
-                {mixamoSteps.map((step, index) => (
-                  <li key={step.title} className={styles.stepItem}>
-                    <span className={styles.stepIndex}>{index + 1}</span>
-                    <div>
-                      <h3 className={styles.stepTitle}>{step.title}</h3>
-                      <p className={styles.stepBody}>{step.body}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
+              <div className={styles.editorialCopy}>
+                <h3>From a shared rig to a full animation set.</h3>
+                <p>
+                  Bring together clips from Mixamo, Unreal, and other DCC tools.
+                  Performance Capture can combine body movement and facial
+                  expressions from one video into a single animation.
+                </p>
+                <a className={styles.textLink} href={`${links.docs}#cmd-anim`}>
+                  Read the animation guide
+                </a>
+              </div>
             </div>
-
-            <div className={styles.mixamoActions}>
-              <ButtonLink href={`${links.docs}#cmd-anim`} variant="secondary">
-                See animation workflow
-              </ButtonLink>
+            <div className={styles.motionGrid}>
+              {showcases.map((item) => (
+                <article className={styles.motionStory} key={item.title}>
+                  <figure className={styles.wideMedia}>
+                    <DemoVideo
+                      src={item.src}
+                      poster={item.src.replace('.mp4', '.webp')}
+                      label={item.alt}
+                    />
+                    <figcaption>{item.caption}</figcaption>
+                  </figure>
+                  <h3>{item.title}</h3>
+                  <p>{item.body}</p>
+                  <a
+                    className={styles.textLink}
+                    href={item.post}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    See the original demo
+                  </a>
+                </article>
+              ))}
             </div>
           </Section>
 
           <Section
             id="vat-demo"
-            eyebrow="Live demo"
-            title="VAT and bone texture export, running in your browser"
-            subtitle="A skeletal animation baked two ways — a vertex animation texture and a bone texture — and played back in Godot by a shader, no skeleton ticked per instance. Drag to orbit, scroll to zoom. Switch tabs and instance counts to compare them with per-instance skeletal skinning."
+            eyebrow="Optimize & ship"
+            title="Small animation data. Big crowds."
+            subtitle="Bake motion into vertex or bone textures and play it back on the GPU. Compare the techniques with your own browser and hardware."
           >
-            <VATDemo />
+            <figure className={styles.crowdMedia}>
+              <DemoVideo
+                src="./media/crowd.mp4"
+                poster="./media/crowd.webp"
+                label="Side-by-side VAT and bone texture animation of a 5,000-character crowd in Godot"
+              />
+              <figcaption>
+                VAT and BTA · the same 5,000-character crowd ·{' '}
+                <a
+                  href="https://www.linkedin.com/posts/fernando-tonon_qtmesheditor-gamedevelopment-gpu-activity-7529748521894424576-AByI"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Demo details
+                </a>
+              </figcaption>
+            </figure>
+            <div className={styles.demoIntro}>
+              <div>
+                <h3>Try the live comparison</h3>
+                <p>
+                  Switch between VAT, skeletal animation, and BTA. Up to 5,000
+                  instances, running in Godot.
+                </p>
+              </div>
+              <button
+                className={styles.ctaButton}
+                onClick={() => setDemoEnabled(!demoEnabled)}
+                aria-expanded={demoEnabled}
+                aria-controls="live-demo"
+              >
+                {demoEnabled ? 'Close live demo' : 'Launch live demo'}
+              </button>
+            </div>
+            <div id="live-demo">{demoEnabled && <VATDemo />}</div>
+            <p className={styles.technicalNote}>
+              BTA stores three RGBA texels per bone per frame. VAT stores
+              animation per vertex. Performance depends on the mesh, scene, GPU,
+              and runtime.
+            </p>
           </Section>
 
           <Section
-            id="pipeline"
-            eyebrow="Pipeline Overview"
-            title="CI/CD pipeline flow for 3D assets"
-            subtitle="Use one deterministic flow for local checks and CI runs."
+            id="ecosystem"
+            eyebrow="The QtMesh ecosystem"
+            title="Made here. Connected beyond the editor."
+            subtitle="The editor, connected services, and games built with the tools share the same foundation."
           >
-            <div className={styles.pipelineFlow}>
-              {pipelineFlow.map((item, index) => (
-                <article key={item.title} className={styles.pipelineNode}>
-                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
-                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
-                  <p className={styles.pipelineNodeBody}>{item.body}</p>
-                </article>
-              ))}
+            <div className={styles.ecosystemGrid}>
+              <article className={styles.ecosystemEditor}>
+                <p className={styles.productLabel}>CREATE</p>
+                <h3>QtMesh Editor</h3>
+                <p>
+                  Your desktop workspace for 3D assets, animation, and
+                  automation.
+                </p>
+                <a className={styles.textLink} href="#install">
+                  Get the editor
+                </a>
+              </article>
+              <article>
+                <p className={styles.productLabel}>CONNECT</p>
+                <h3>QtMesh Cloud</h3>
+                <p>
+                  Keep asset quality reports, project history, and CI results
+                  connected to your workflow.
+                </p>
+                <a
+                  className={styles.textLink}
+                  href={links.qtmeshCloud}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Explore QtMesh Cloud
+                </a>
+              </article>
+              <article>
+                <p className={styles.productLabel}>PLAY</p>
+                <h3>QtMesh Games</h3>
+                <p>
+                  See assets created with QtMesh Editor in action, in playable
+                  games.
+                </p>
+                <a
+                  className={styles.textLink}
+                  href="https://games.qtmesh.dev"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Discover the games
+                </a>
+              </article>
             </div>
-
-            <article className={styles.pipelinePanel}>
-              <h3>Pipeline run in three commands</h3>
-              <p>Keep asset handling deterministic from workstation to CI.</p>
-              <pre className={styles.pipelineSnippet}>
-                <code>{pipelineExamples.scanFixConvert}</code>
-              </pre>
-            </article>
+            <div className={styles.gameShowcase}>
+              <div>
+                <p className={styles.kicker}>Made with QtMesh Editor</p>
+                <h3>From the workspace to the game.</h3>
+                <p>Explore the worlds and characters built using the editor.</p>
+              </div>
+              <a
+                href="https://games.qtmesh.dev"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <img
+                  src="./media/scrapfall.jpg"
+                  alt="Scrapfall game artwork"
+                  loading="lazy"
+                />
+                <span>Scrapfall</span>
+              </a>
+              <a
+                href="https://games.qtmesh.dev"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <img
+                  src="./media/ironfang.jpg"
+                  alt="Ironfang game artwork"
+                  loading="lazy"
+                />
+                <span>Ironfang</span>
+              </a>
+              <a
+                href="https://games.qtmesh.dev"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <img
+                  src="./media/data-core-clash.jpg"
+                  alt="Data Core Clash game artwork"
+                  loading="lazy"
+                />
+                <span>Data Core Clash</span>
+              </a>
+            </div>
+            <p className={styles.identityNote}>
+              <strong>QtMesh ID</strong> Your account for connected QtMesh
+              services.{' '}
+              <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
+                Access QtMesh Cloud
+              </a>
+            </p>
           </Section>
 
           <Section
             id="cli"
-            eyebrow="CLI + CI"
-            title="Use real commands, not toy snippets"
-            subtitle="Switch between scan, fix, convert, merge, Docker, and GitHub Actions examples."
+            eyebrow="Automate the repetitive work"
+            title="The same tools, beyond the interface."
+            subtitle="Scan, fix, convert, and merge with the CLI. Bring asset checks into Docker and GitHub Actions, or connect external tools through REST and MCP."
           >
-            <div className={styles.cliTabs} role="tablist" aria-label="CLI and CI examples">
+            <div
+              className={styles.cliTabs}
+              role="tablist"
+              aria-label="CLI and CI examples"
+            >
               {cliTabs.map((tab, index) => {
                 const isActive = activeCliExample.id === tab.id;
                 const tabId = `cli-tab-${tab.id}`;
@@ -664,7 +890,11 @@ function App() {
               role="tabpanel"
               aria-labelledby={`cli-tab-${activeCliExample.id}`}
             >
-              <CodePanel title={activeCliExample.title} code={activeCliExample.code} label={activeCliExample.language} />
+              <CodePanel
+                title={activeCliExample.title}
+                code={activeCliExample.code}
+                label={activeCliExample.language}
+              />
             </div>
 
             <div className={styles.cliLinks}>
@@ -679,41 +909,74 @@ function App() {
               </a>
             </div>
           </Section>
-
           <Section
-            id="features"
-            eyebrow="Advanced Features"
-            title="Deeper capabilities for specialized workflows"
-            subtitle="Keep advanced tooling available without hiding the core CI/CD path."
+            id="qtmesh-cloud-badges"
+            eyebrow="Connected quality reports"
+            title="Keep an eye on what ships."
+            subtitle="Send scan results to QtMesh Cloud and track asset quality across branches and commits."
           >
-            <div className={styles.highlightGrid}>
-              {highlightFeatures.map((feature) => (
-                <FeatureCard
-                  key={feature.title}
-                  title={feature.title}
-                  body={feature.body}
-                  tag={feature.title.includes('AI') || feature.title.includes('MCP') ? 'Advanced' : 'Feature'}
-                />
-              ))}
-            </div>
+            <details className={styles.expandable}>
+              <summary>Explore Cloud reporting and CI setup</summary>
+              <div className={styles.expandableBody}>
+                <div className={styles.badgeShowcase}>
+                  {cloudBadgePreview.map((badge) => (
+                    <article
+                      key={badge.key}
+                      className={styles.badgeShowcaseCard}
+                    >
+                      <img src={badge.src} alt={badge.alt} loading="lazy" />
+                    </article>
+                  ))}
+                </div>
 
-            <div className={styles.previewStrip}>
-              <figure className={styles.previewCard}>
-                <img src={media.aiMaterials.src} alt={media.aiMaterials.alt} loading="lazy" />
-                <figcaption>Material editing workflows for look-dev and technical review.</figcaption>
-              </figure>
-              <figure className={styles.previewCard}>
-                <img src={media.mcpPreview.src} alt={media.mcpPreview.alt} loading="lazy" />
-                <figcaption>MCP integration for agent-driven pipeline automation.</figcaption>
-              </figure>
-            </div>
+                <div className={styles.cloudStepGrid}>
+                  {cloudBadgeSteps.map((item, index) => (
+                    <article key={item.title} className={styles.cloudStepCard}>
+                      <span className={styles.cloudStepIndex}>{index + 1}</span>
+                      <h3>{item.title}</h3>
+                      <p>{item.body}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <details className={styles.expandable}>
+                  <summary>Show full GitHub upload example</summary>
+                  <div className={styles.expandableBody}>
+                    <CodePanel
+                      title="GitHub Actions: upload scan report"
+                      code={cloudBadgeUploadExample}
+                      label="yaml"
+                    />
+                  </div>
+                </details>
+
+                <details className={styles.expandable}>
+                  <summary>Show README badge snippet</summary>
+                  <pre className={styles.inlineCodeBlock}>
+                    <code>{cloudBadgeMarkdown}</code>
+                  </pre>
+                </details>
+
+                <div className={styles.cliLinks}>
+                  <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
+                    Open QtMesh Cloud
+                  </a>
+                  <a
+                    href={`${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    View live badge example
+                  </a>
+                </div>
+              </div>
+            </details>
           </Section>
-
           <Section
             id="install"
-            eyebrow="Install"
-            title="Install QtMesh Editor and start scanning"
-            subtitle="Choose your platform path: winget, Homebrew, snap, Flatpak, RPM, Docker, or release binaries."
+            eyebrow="Start creating"
+            title="Your next asset starts here."
+            subtitle="Download QtMesh Editor for Windows, macOS, or Linux. Choose a release binary or your preferred package manager."
           >
             <div className={styles.installPortalEntryActions}>
               <button
@@ -730,7 +993,10 @@ function App() {
 
             <div className={styles.installGrid}>
               {installOptions.map((option) => (
-                <article key={`${option.platform}-${option.method}`} className={styles.installMethodCard}>
+                <article
+                  key={`${option.platform}-${option.method}`}
+                  className={styles.installMethodCard}
+                >
                   <div className={styles.installMethodHeader}>
                     <h3>{option.platform}</h3>
                     <span>{option.method}</span>
@@ -742,45 +1008,25 @@ function App() {
               ))}
             </div>
           </Section>
-
           <Section
             id="trust"
-            eyebrow="Open Source Trust"
-            title="Credible, technical, and built in public"
-            subtitle="Community-driven since 2012 with practical tooling for production asset pipelines."
+            eyebrow="Open source since 2012"
+            title="Built in the open. Yours to explore."
+            subtitle="Read the code, try the tools, report an issue, or help shape what comes next."
           >
-            <div className={styles.trustMetrics}>
-              <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
-                <img
-                  src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor?style=for-the-badge&label=GitHub%20stars"
-                  alt="QtMesh Editor GitHub stars"
-                  loading="lazy"
-                />
+            <div className={styles.openSourceLinks}>
+              <a href={links.github} target="_blank" rel="noreferrer">
+                Source code
               </a>
-              <a href={links.releases} target="_blank" rel="noreferrer">
-                <img
-                  src="https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?style=for-the-badge&label=Latest%20release"
-                  alt="QtMesh Editor latest release"
-                  loading="lazy"
-                />
+              <a href={links.allReleases} target="_blank" rel="noreferrer">
+                Release history
+              </a>
+              <a href={links.issues} target="_blank" rel="noreferrer">
+                Contribute & report issues
               </a>
               <a href={links.license} target="_blank" rel="noreferrer">
-                <img
-                  src="https://img.shields.io/github/license/fernandotonon/QtMeshEditor?style=for-the-badge&label=License"
-                  alt="QtMesh Editor license badge"
-                  loading="lazy"
-                />
+                MIT license
               </a>
-            </div>
-
-            <div className={styles.trustLead}>
-              <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
-            </div>
-
-            <div className={styles.trustGrid}>
-              {trustItems.map((item) => (
-                <FeatureCard key={item.title} title={item.title} body={item.body} />
-              ))}
             </div>
           </Section>
         </main>
@@ -790,7 +1036,12 @@ function App() {
             <p>QtMesh Editor</p>
             <div className={styles.footerLinks}>
               {footerLinks.map((item) => (
-                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
+                <a
+                  key={item.label}
+                  href={item.href}
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   {item.label}
                 </a>
               ))}
@@ -819,7 +1070,10 @@ function App() {
               <div className={styles.installPortalHeader}>
                 <div>
                   <p className={styles.installPortalEyebrow}>Install Portal</p>
-                  <h2 id="install-portal-title" className={styles.installPortalTitle}>
+                  <h2
+                    id="install-portal-title"
+                    className={styles.installPortalTitle}
+                  >
                     {recommendedInstall
                       ? `Detected ${recommendedInstall.platform}: install via ${recommendedStore}`
                       : 'Could not detect your OS automatically'}
@@ -846,7 +1100,9 @@ function App() {
                       <article
                         key={`${option.platform}-${option.method}`}
                         className={`${styles.installPortalCard}${
-                          isRecommended ? ` ${styles.installPortalCardRecommended}` : ''
+                          isRecommended
+                            ? ` ${styles.installPortalCardRecommended}`
+                            : ''
                         }`}
                       >
                         <div className={styles.installPortalCardTop}>
@@ -859,7 +1115,11 @@ function App() {
                                 className={styles.installPortalCopyButton}
                                 onClick={handleCopyInstallCommand}
                               >
-                                {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
+                                {copyState === 'copied'
+                                  ? 'Copied'
+                                  : copyState === 'error'
+                                    ? 'Retry'
+                                    : 'Copy'}
                               </button>
                             ) : null}
                           </div>
@@ -872,7 +1132,8 @@ function App() {
                   })
                 ) : (
                   <p className={styles.installPortalFallback}>
-                    OS detection is unavailable in this browser. Use the latest release download links below.
+                    OS detection is unavailable in this browser. Use the latest
+                    release download links below.
                   </p>
                 )}
               </div>
@@ -887,7 +1148,7 @@ function App() {
               </div>
             </div>
           </div>,
-          document.body
+          document.body,
         )}
     </>
   );
