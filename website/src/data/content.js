@@ -35,9 +35,9 @@ export const media = {
 };
 
 export const hero = {
-  title: 'Catch 3D asset issues before they break your game.',
+  title: 'Create, refine, and animate 3D assets.',
   subtitle:
-    'QtMesh Editor helps developers and technical artists lint, validate, fix, and track 3D asset pipelines across GUI, CLI, Docker, GitHub Actions, and QtMesh Cloud reporting.',
+    'Hands-on editing, specialized AI models, and production tools in one open-source editor.',
   ctaPrimary: 'Download QtMesh Editor',
   ctaSecondary: 'View on GitHub',
   ctaDocs: 'Documentation'
@@ -253,6 +253,7 @@ export const trustItems = [
 export const footerLinks = [
   { label: 'Documentation', href: links.docs },
   { label: 'QtMesh Cloud', href: links.qtmeshCloud },
+  { label: 'QtMesh Games', href: 'https://games.qtmesh.dev' },
   { label: 'GitHub', href: links.github },
   { label: 'Releases', href: links.allReleases },
   { label: 'Issues', href: links.issues },

@@ -1,7 +1,7 @@
 .panel {
-  border-radius: 0.9rem;
+  border-radius: 4px;
   border: 1px solid var(--stroke);
-  background: #0a1220;
+  background: var(--surface-1);
   overflow: hidden;
   min-height: 180px;
 }
@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  background: #0f182a;
+  background: var(--surface-2);
   border-bottom: 1px solid var(--stroke);
   padding: 0.56rem 0.72rem;
 }
@@ -38,7 +38,7 @@
   margin-left: auto;
   font-family: var(--mono);
   color: var(--text-muted);
-  font-size: 0.74rem;
+  font-size: 0.875rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -54,8 +54,8 @@
   margin: 0;
   padding: 0.75rem 0.9rem 0.92rem;
   font-family: var(--mono);
-  color: #dce8ff;
-  font-size: 0.84rem;
+  color: var(--text-0);
+  font-size: 0.875rem;
   line-height: 1.5;
   overflow: auto;
 }
