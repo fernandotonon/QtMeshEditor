@@ -221,6 +221,19 @@ TEST(GenericSegSdf, NormalizeKeepsOrderInUnitRange)
     EXPECT_EQ(normalizeSdf({0.5f, 0.5f}), (std::vector<float>{0.0f, 0.0f}));
 }
 
+TEST(GenericSegSdf, NormalizeIgnoresAFewOutliers)
+{
+    // 1000 faces spread over 0.1..0.2 plus 3 huge ones: the spread must still
+    // use most of the range (min..max scaling squashed it into ~0.02).
+    std::vector<float> raw;
+    for (int i = 0; i < 1000; ++i) raw.push_back(0.1f + 0.1f * float(i) / 999.0f);
+    raw.insert(raw.end(), {50.0f, 60.0f, 70.0f});
+    const auto n = normalizeSdf(raw);
+    EXPECT_LT(n[10], 0.1f);
+    EXPECT_GT(n[985], 0.9f);
+    EXPECT_FLOAT_EQ(n[1002], 1.0f);   // outliers clamp to the top
+}
+
 // ---------------------------------------------------------------- Leiden
 
 namespace {

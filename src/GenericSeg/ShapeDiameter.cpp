@@ -130,12 +130,22 @@ std::vector<float> normalizeSdf(const std::vector<float>& raw)
 {
     std::vector<float> out(raw.size(), 0.0f);
     if (raw.empty()) return out;
-    const auto [mn, mx] = std::minmax_element(raw.begin(), raw.end());
-    const float lo = *mn, range = *mx - *mn;
+    // Range from the 1st..99th percentile, not min..max: a few faces with an
+    // extreme diameter (a closed pocket, a long ray through a car body) would
+    // otherwise squash everything else into one colour.
+    std::vector<float> sorted(raw);
+    const size_t n = sorted.size();
+    const size_t iLo = size_t(std::floor(0.01 * double(n - 1)));
+    const size_t iHi = size_t(std::ceil(0.99 * double(n - 1)));
+    std::nth_element(sorted.begin(), sorted.begin() + iLo, sorted.end());
+    const float lo = sorted[iLo];
+    std::nth_element(sorted.begin(), sorted.begin() + iHi, sorted.end());
+    const float hi = sorted[iHi];
+    const float range = hi - lo;
     if (!(range > 0)) return out;
     const float a = 4.0f;
-    for (size_t i = 0; i < raw.size(); ++i) {
-        const float v = (raw[i] - lo) / range;
+    for (size_t i = 0; i < n; ++i) {
+        const float v = std::clamp((raw[i] - lo) / range, 0.0f, 1.0f);
         out[i] = std::log(1.0f + a * v) / std::log(1.0f + a);
     }
     return out;

@@ -4,10 +4,14 @@
 
 #include "GenericSeg/GenericSegmenter.h"
 #include "GenericSeg/GenericSegTestMeshes.h"
+#include "GenericSeg/TriangleBvh.h"
 
 #include <gtest/gtest.h>
 
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QFileInfo>
 
 #include <cstdio>
 
@@ -276,4 +280,139 @@ TEST(GenericSegmenter, DISABLED_DenseMeshTiming)
             qPrintable(lastStage), t.elapsed() - stageStart, t.elapsed(), bar.faceCount(),
             r.stats.patches, r.stats.nodes, r.stats.edges);
     expectMatchesTruth(bar, r, 3);
+}
+
+// Opt-in visual dump (no model). QTMESH_GENSEG_DUMP=<dir> writes:
+//  - <name>_result.png: synthetic meshes segmented with noisy ground-truth
+//    masks, one colour per predicted part, from 4 views;
+//  - <obj>_views.png (with QTMESH_GENSEG_DUMP_OBJ=<a.obj;b.obj>): the normal
+//    and shape-diameter images the 2D segmenter will be shown, 6 views.
+// Run with --gtest_also_run_disabled_tests --gtest_filter='*VisualDump*'.
+namespace {
+
+QImage contactSheet(const std::vector<QImage>& tiles, int cols)
+{
+    if (tiles.empty()) return {};
+    const int w = tiles[0].width(), h = tiles[0].height();
+    const int rows = (int(tiles.size()) + cols - 1) / cols;
+    QImage sheet(w * cols, h * rows, QImage::Format_RGB32);
+    sheet.fill(Qt::black);
+    for (size_t i = 0; i < tiles.size(); ++i)
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+                sheet.setPixel(int(i % cols) * w + x, int(i / cols) * h + y, tiles[i].pixel(x, y));
+    return sheet;
+}
+
+QImage shadeLabels(const Raster& r, const SegMesh& mesh, const OrthoCamera& cam,
+                   const std::vector<int>& faceLabels)
+{
+    static const QRgb palette[] = {0x808080, 0xe6194b, 0x3cb44b, 0xffe119, 0x4363d8, 0xf58231,
+                                   0x911eb4, 0x46f0f0, 0xf032e6, 0xbcf60c, 0xfabebe, 0x008080};
+    const QImage matte = shadeMatte(r, mesh, cam);
+    QImage img(r.size, r.size, QImage::Format_RGB32);
+    img.fill(Qt::black);
+    for (int y = 0; y < r.size; ++y)
+        for (int x = 0; x < r.size; ++x) {
+            const int f = r.at(x, y);
+            if (f < 0) continue;
+            const QRgb c = palette[faceLabels[f] % 12];
+            const float s = 0.35f + 0.65f * qGray(matte.pixel(x, y)) / 255.0f;
+            img.setPixel(x, y, qRgb(int(qRed(c) * s), int(qGreen(c) * s), int(qBlue(c) * s)));
+        }
+    return img;
+}
+
+bool loadObj(const QString& path, std::vector<float>& pos, std::vector<uint32_t>& idx)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return false;
+    while (!f.atEnd()) {
+        const QByteArray line = f.readLine().trimmed();
+        if (line.startsWith("v ")) {
+            const auto p = line.mid(2).simplified().split(' ');
+            for (int k = 0; k < 3; ++k) pos.push_back(p.value(k).toFloat());
+        } else if (line.startsWith("f ")) {
+            const auto p = line.mid(2).simplified().split(' ');
+            std::vector<uint32_t> poly;
+            for (const auto& t : p) {
+                const int v = t.split('/').value(0).toInt();
+                poly.push_back(uint32_t(v > 0 ? v - 1 : int(pos.size() / 3) + v));
+            }
+            for (size_t k = 1; k + 1 < poly.size(); ++k)
+                idx.insert(idx.end(), {poly[0], poly[k], poly[k + 1]});
+        }
+    }
+    return !idx.empty();
+}
+
+} // namespace
+
+TEST(GenericSegmenter, DISABLED_VisualDump)
+{
+    const QString dir = qEnvironmentVariable("QTMESH_GENSEG_DUMP");
+    if (dir.isEmpty()) GTEST_SKIP() << "set QTMESH_GENSEG_DUMP=<dir>";
+    QDir().mkpath(dir);
+    const std::vector<Vec3> dirs = {normalized(Vec3(0.5f, 0.4f, 1)), normalized(Vec3(-1, 0.3f, 0.4f)),
+                                    normalized(Vec3(0.2f, 1, 0.3f)), normalized(Vec3(0.6f, -0.5f, -1))};
+
+    struct Case { const char* name; TestMesh mesh; int merge, split; };
+    std::vector<Case> cases;
+    cases.push_back({"table", GenericSegTest::makeTable(), 6, 0});
+    cases.push_back({"bar_noisy", GenericSegTest::makeBar(), 4, 5});
+    {
+        TestMesh m;
+        GenericSegTest::addBox(m, {-1.0f, -0.25f, -0.25f}, {1.0f, 0.25f, 0.25f}, 40,
+                               [](float x, float, float) { return x < -0.3f ? 0 : (x < 0.4f ? 1 : 2); });
+        cases.push_back({"dense_bar_3parts", m, 5, 7});
+    }
+    for (Case& c : cases) {
+        TruthMaskProvider provider(c.mesh);
+        provider.mergeEvery = c.merge;
+        provider.splitEvery = c.split;
+        Options o;
+        o.views = 20;
+        o.resolution = 256;
+        const Result r = segment(c.mesh.positions.data(), c.mesh.vertexCount(),
+                                 c.mesh.indices.data(), c.mesh.indexCount(), provider, o);
+        ASSERT_TRUE(r.ok) << c.name;
+        const SegMesh sm = SegMesh::build(c.mesh.positions.data(), c.mesh.vertexCount(),
+                                          c.mesh.indices.data(), c.mesh.indexCount());
+        std::vector<int> truthLabels(c.mesh.truth.size());
+        for (size_t i = 0; i < truthLabels.size(); ++i) truthLabels[i] = c.mesh.truth[i] + 1;
+        std::vector<QImage> tiles;
+        for (const auto& labels : {truthLabels, r.faceLabels})
+            for (const Vec3& d : dirs) {
+                const OrthoCamera cam = OrthoCamera::lookingFrom(d);
+                const Raster ras = rasterize(sm, cam, 256);
+                tiles.push_back(shadeLabels(ras, sm, cam, labels));
+            }
+        contactSheet(tiles, 4).save(dir + "/" + c.name + "_result.png");
+        fprintf(stderr, "  %s: %d parts, %d masks, %d nodes, %d edges\n", c.name, r.parts,
+                r.stats.masks, r.stats.nodes, r.stats.edges);
+    }
+
+    for (const QString& path : qEnvironmentVariable("QTMESH_GENSEG_DUMP_OBJ").split(';', Qt::SkipEmptyParts)) {
+        std::vector<float> pos;
+        std::vector<uint32_t> idx;
+        ASSERT_TRUE(loadObj(path, pos, idx)) << qPrintable(path);
+        const SegMesh sm = SegMesh::build(pos.data(), int(pos.size() / 3), idx.data(), int(idx.size()));
+        std::vector<float> flat;
+        for (const Vec3& p : sm.positions) flat.insert(flat.end(), {p.x, p.y, p.z});
+        TriangleBvh bvh;
+        bvh.build(flat.data(), int(sm.positions.size()), sm.indices.data(), int(sm.indices.size()));
+        const std::vector<float> sdf = normalizeSdf(shapeDiameter(sm, bvh));
+        std::vector<QImage> normals, sdfs;
+        const std::vector<Vec3> all = viewDirections(20);
+        for (int v : {0, 3, 6, 9, 12, 15}) {
+            const OrthoCamera cam = OrthoCamera::lookingFrom(all[v]);
+            const Raster ras = rasterize(sm, cam, 384);
+            normals.push_back(shadeNormals(ras, sm));
+            sdfs.push_back(shadeFaceScalar(ras, sdf));
+        }
+        normals.insert(normals.end(), sdfs.begin(), sdfs.end());
+        const QString stem = QFileInfo(path).completeBaseName().replace(' ', '_');
+        contactSheet(normals, 6).save(dir + "/" + stem + "_views.png");
+        fprintf(stderr, "  %s: %d faces\n", qPrintable(stem), sm.faceCount());
+    }
 }
