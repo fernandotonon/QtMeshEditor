@@ -74,6 +74,9 @@ struct Options {
     // too little of each other to say anything).
     float overlapThreshold = 0.6f;
     float minCommonFraction = 0.1f;
+    // Per image, a pixel belongs only to the smallest mask covering it
+    // (SAMesh). Off only for providers that return disjoint masks anyway.
+    bool smallestMaskWins = true;
     bool cleanup = true;            // boundary smoothing + small-island cleanup
     int smoothIterations = 3;
     SdfOptions sdf;

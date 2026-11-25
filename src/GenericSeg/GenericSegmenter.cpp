@@ -71,6 +71,30 @@ float minPartFractionFor(Granularity g)
 
 namespace {
 
+// SAMesh's per-view painting: masks are drawn largest first, so each pixel
+// keeps only the SMALLEST mask covering it. SAM returns nested masks (the
+// whole object, a limb, a finger); without this the whole-object mask, which
+// every view produces, outvotes every part on every patch.
+void paintSmallestFirst(std::vector<Mask>& masks, size_t pixelCount)
+{
+    std::vector<int> order;
+    std::vector<size_t> area(masks.size(), 0);
+    for (size_t i = 0; i < masks.size(); ++i) {
+        if (masks[i].pixels.size() != pixelCount) continue;
+        for (uint8_t v : masks[i].pixels) area[i] += v != 0;
+        order.push_back(int(i));
+    }
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return area[a] > area[b]; });
+    std::vector<int> owner(pixelCount, -1);
+    for (int i : order)
+        for (size_t p = 0; p < pixelCount; ++p)
+            if (masks[i].pixels[p]) owner[p] = i;
+    for (int i : order)
+        for (size_t p = 0; p < pixelCount; ++p)
+            masks[i].pixels[p] = owner[p] == i;
+}
+
+
 // One lifted mask: the surface patches it covers and how much of each.
 struct Node {
     int image = 0;                 // (view, kind) id: masks of one image never connect
@@ -276,10 +300,11 @@ Result segment(const float* positions, int vertexCount,
             case ImageKind::Sdf: vi.image = shadeFaceScalar(raster, sdf01); break;
             case ImageKind::Matte: vi.image = shadeMatte(raster, mesh, cam); break;
             }
-            const std::vector<Mask> masks = provider.masksFor(vi);
+            std::vector<Mask> masks = provider.masksFor(vi);
             ++res.stats.images;
             res.stats.masks += int(masks.size());
             const size_t pixelCount = size_t(raster.size) * raster.size;
+            if (opts.smallestMaskWins) paintSmallestFirst(masks, pixelCount);
             for (const Mask& m : masks) {
                 if (m.pixels.size() != pixelCount) continue;
                 touched.clear();

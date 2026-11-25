@@ -4,6 +4,7 @@
 
 #include "GenericSeg/GenericSegmenter.h"
 #include "GenericSeg/GenericSegTestMeshes.h"
+#include "GenericSeg/SamMaskProvider.h"
 #include "GenericSeg/TriangleBvh.h"
 
 #include <gtest/gtest.h>
@@ -56,6 +57,13 @@ public:
                 out.push_back(m);
             }
         }
+        if (wholeObject && !byPart.empty()) {
+            Mask all = byPart.begin()->second;
+            for (const auto& [p, m] : byPart)
+                for (size_t i = 0; i < all.pixels.size(); ++i) all.pixels[i] |= m.pixels[i];
+            all.score = 1.0f;
+            out.push_back(all);
+        }
         if (mergeEvery > 0 && calls % mergeEvery == 0 && byPart.size() >= 2) {
             Mask merged = byPart.begin()->second;
             const Mask& second = std::next(byPart.begin())->second;
@@ -69,6 +77,7 @@ public:
     int calls = 0;
     int mergeEvery = 0;
     int splitEvery = 0;
+    bool wholeObject = false;   // also return one mask of everything (SAM does)
     std::function<bool(int face)> hide;   // faces never put in a mask
 };
 
@@ -160,6 +169,27 @@ TEST(GenericSegmenter, FacesNoMaskCoversTakeTheirNeighboursPart)
     for (int f = 0; f < bar.faceCount(); ++f)
         EXPECT_GT(r.faceLabels[f], 0) << "face " << f;
     expectMatchesTruth(bar, r, 2);
+}
+
+TEST(GenericSegmenter, AWholeObjectMaskInEveryViewDoesNotSwallowTheParts)
+{
+    // SAM returns the whole object as one of its masks in every image; those
+    // masks form one big community covering every patch. Painting the masks
+    // smallest-wins keeps them from outvoting the parts.
+    const TestMesh table = GenericSegTest::makeTable();
+    TruthMaskProvider provider(table);
+    provider.wholeObject = true;
+    const Result r = segment(table.positions.data(), table.vertexCount(),
+                             table.indices.data(), table.indexCount(), provider, fastOptions());
+    expectMatchesTruth(table, r, 5);
+
+    Options off = fastOptions();
+    off.smallestMaskWins = false;
+    TruthMaskProvider again(table);
+    again.wholeObject = true;
+    const Result collapsed = segment(table.positions.data(), table.vertexCount(),
+                                     table.indices.data(), table.indexCount(), again, off);
+    EXPECT_NE(collapsed.parts, 5);   // without it the parts come out wrong
 }
 
 TEST(GenericSegmenter, ShapeDiameterImagesPathRuns)
@@ -323,6 +353,35 @@ QImage shadeLabels(const Raster& r, const SegMesh& mesh, const OrthoCamera& cam,
     return img;
 }
 
+class CachedProvider : public MaskProvider {
+public:
+    CachedProvider(MaskProvider& p, std::map<std::pair<int, int>, std::vector<Mask>>& c) : inner(p), cache(c) {}
+    std::vector<Mask> masksFor(const ViewImage& v) override
+    {
+        const auto key = std::make_pair(v.view, int(v.kind));
+        auto it = cache.find(key);
+        if (it == cache.end()) {
+            it = cache.emplace(key, inner.masksFor(v)).first;
+            const QString dumpDir = qEnvironmentVariable("QTMESH_GENSEG_MASKDUMP");
+            if (!dumpDir.isEmpty() && v.view < 3) {   // the image + one tile per mask
+                std::vector<QImage> tiles{v.image.scaled(256, 256)};
+                for (const Mask& m : it->second) {
+                    QImage t = v.image.convertToFormat(QImage::Format_RGB32);
+                    for (int y = 0; y < t.height(); ++y)
+                        for (int x = 0; x < t.width(); ++x)
+                            if (m.pixels[size_t(y) * t.width() + x]) t.setPixel(x, y, qRgb(255, 40, 40));
+                    tiles.push_back(t.scaled(256, 256));
+                }
+                contactSheet(tiles, 8).save(QStringLiteral("%1/masks_v%2_%3.png").arg(dumpDir)
+                                                .arg(v.view).arg(imageKindName(v.kind)));
+            }
+        }
+        return it->second;
+    }
+    MaskProvider& inner;
+    std::map<std::pair<int, int>, std::vector<Mask>>& cache;
+};
+
 bool loadObj(const QString& path, std::vector<float>& pos, std::vector<uint32_t>& idx)
 {
     QFile f(path);
@@ -414,5 +473,38 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
         const QString stem = QFileInfo(path).completeBaseName().replace(' ', '_');
         contactSheet(normals, 6).save(dir + "/" + stem + "_views.png");
         fprintf(stderr, "  %s: %d faces\n", qPrintable(stem), sm.faceCount());
+
+        // With the exported SAM 2.1 graphs: the real pipeline, per granularity.
+        const QString samDir = qEnvironmentVariable("QTMESH_SAM2_DIR");
+        if (samDir.isEmpty()) continue;
+        SamMaskProvider::Options so;
+        so.pointsPerSide = qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS") > 0
+                               ? qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS") : so.pointsPerSide;
+        SamMaskProvider sam(samDir + "/" + SamMaskProvider::encoderFileName(),
+                            samDir + "/" + SamMaskProvider::decoderFileName(), so);
+        ASSERT_TRUE(sam.ok()) << sam.error().toStdString();
+        std::map<std::pair<int, int>, std::vector<Mask>> cache;   // same renders per granularity
+        std::vector<QImage> tiles;
+        for (Granularity g : {Granularity::Coarse, Granularity::Medium, Granularity::Fine}) {
+            CachedProvider cached(sam, cache);
+            Options o;
+            o.granularity = g;
+            QElapsedTimer t;
+            t.start();
+            const Result r = segment(pos.data(), int(pos.size() / 3), idx.data(), int(idx.size()), cached, o);
+            ASSERT_TRUE(r.ok) << r.error.toStdString();
+            fprintf(stderr, "    %s: %d parts, %d masks, %d nodes, %d edges, %lld ms\n",
+                    qPrintable(granularityName(g)), r.parts, r.stats.masks, r.stats.nodes,
+                    r.stats.edges, t.elapsed());
+            for (int v : {0, 6, 12, 15}) {
+                const OrthoCamera cam = OrthoCamera::lookingFrom(all[v]);
+                tiles.push_back(shadeLabels(rasterize(sm, cam, 384), sm, cam, r.faceLabels));
+            }
+        }
+        const auto tm = sam.timing();
+        fprintf(stderr, "    SAM: %d images, encode %.0f ms, decode %.0f ms, post %.0f ms, "
+                "%d prompts, %d candidates, %d kept\n", tm.images, tm.encodeMs, tm.decodeMs,
+                tm.postMs, tm.prompts, tm.candidates, tm.kept);
+        contactSheet(tiles, 4).save(dir + "/" + stem + "_sam_segments_p" + QString::number(so.pointsPerSide) + ".png");
     }
 }

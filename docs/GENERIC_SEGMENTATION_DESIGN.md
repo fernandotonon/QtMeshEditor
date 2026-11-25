@@ -1,6 +1,6 @@
 # Generic part segmentation (design)
 
-Status: **slice 1 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider); SAM 2.1 provider and integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
+Status: **slices 1-2 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider; SAM 2.1 export + C++ mask provider, measured on real meshes); hosting and integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
 
 ## Problem
 
@@ -115,11 +115,27 @@ not shipped):
 Small vs tiny: start with **small** (better masks), measure tiny; the tier is an
 option like TripoSR's.
 
-Automatic mask generation, reimplemented in C++ (`GenericSeg::MaskGenerator`):
-32×32 point grid restricted to foreground pixels (faceId ≥ 0), decoder in
-batches of 64, keep the best of the 3 multimask outputs per point, filter by
-predicted IoU ≥ 0.7 (SAMesh lowers SAM's default; tune) and stability score,
-mask NMS (IoU 0.7), then drop masks smaller than 0.1 % of the foreground.
+Automatic mask generation, reimplemented in C++ (`GenericSeg::SamMaskProvider`
++ the pure `Sam::` helpers in `SamMasks.{h,cpp}`): 16×16 point grid restricted
+to foreground cells (32×32 found the same parts on the test meshes at 2.5× the
+time), decoder in batches of 64, all 3 multimask outputs per point kept when
+predicted IoU ≥ 0.7 and stability ≥ 0.85 (offset 1.0), mask NMS at IoU 0.7 on
+the 256² masks (box pre-check), upsample bilinearly (align_corners = false) to
+the raster, drop masks below 0.1 % of the foreground.
+
+**Measured export** (`scripts/export-sam2-onnx.py`, opset 17, TorchScript
+exporter): encoder 138 MB, decoder 21 MB (dynamic batch and point count);
+parity vs the upstream predictor on three mesh renders: encoder max diff
+1.5e-5, mask IoU ≥ 0.9995, IoU-score diff < 2e-5. The prompt encoder's
+indexed assignments are rewritten functionally in the wrapper (the empty-Add
+trap).
+
+**Smallest mask wins** (`Options::smallestMaskWins`, default on): SAM returns
+the whole object as one of its masks in every view. Those 40 masks form one
+community covering every patch and outvoted every part: the car, a horse and a
+rat came out as ONE part. As in SAMesh, each image's masks are painted largest
+first so a pixel keeps only the smallest mask covering it; after that the car's
+four wheels, the rat's ears, paws and tail and the horse's tail separate.
 
 Hosting: HF `QtMeshEditor-models/segment/` with SHA-256 pinned in code and
 verified on disk (the `ModelFetch` `expectedSha256` path), licence text beside
@@ -221,43 +237,17 @@ later decision, measured on the benchmark.
 - Sentry: `ai.assist.segment` with `category=generic`, view count, mask count, part count, time.
 - AI agent: `segmentation` capability doc lists the generic category ("any object, unnamed parts").
 
-## Performance budget (estimates, to be measured)
+## Performance (measured, M-series CPU, 10-12k faces, 20 views × normal + SDF, 512 px)
 
-| Stage | 20 views, 100k faces, M-series CPU |
+| Stage | Time |
 |---|---|
-| SDF | 2–4 s |
-| Raster (2 kinds × 20) | < 1 s |
-| SAM encoder (40 images, small) | ~40–80 s ← dominant |
-| SAM decoder (grid points × 40) | ~10–20 s |
-| Lift + merge + cleanup | < 2 s |
+| SDF + raster + lift + merge + cleanup | < 0.5 s |
+| SAM encoder (40 images, small) | ~24 s ← dominant |
+| SAM decoder (16×16 grid, ~1,700-3,600 prompts) | 20-48 s |
+| Total | 44-74 s |
 
-If the encoder dominates as expected: default to 12 views × 2 kinds, or
-normals-only for Coarse, and try the tiny tier. Target: under a minute for
-Medium.
-
-## Testing
-
-Pure data, no ONNX, no GL:
-
-- `GenericSegRaster_test`: face ids on a known mesh at known pixels; depth
-  ordering; background = -1.
-- `GenericSegSdf_test`: SDF of a capsule ≈ its diameter; thin plate < thick
-  block.
-- `GenericSegLeiden_test`: planted-partition graphs recovered; determinism.
-- `GenericSegLift_test`: synthetic "table" (top + 4 legs) with a **fake mask
-  provider** (masks = the rendered faces of each true part, plus noise and
-  split/merged masks) → 5 parts recovered. The mask generator is an interface,
-  so the whole pipeline after SAM is testable without the model.
-
-ONNX-gated: encoder/decoder contract and a fixed-image parity check
-(`QTMESH_SEGMENT_NO_DOWNLOAD` keeps CI offline; skip with `SUCCEED()` + note,
-not `GTEST_SKIP`).
-
-Benchmark (not CI): class-agnostic mIoU on a fixed set. PartObjaverse-Tiny
-(200 objects, instance labels) if its licence and the underlying Objaverse
-asset licences allow it; otherwise a CC0 set we label ourselves. Compare
-against the current geometric fallback and, on body/vehicle meshes, against the
-named category models (generic should not be the default where those win).
+Ideas, untested: 12 views, normals-only for Coarse, the tiny tier, CoreML
+for the encoder, fewer prompts on views that add nothing new.
 
 ## Slices
 
@@ -274,8 +264,11 @@ named category models (generic should not be the default where those win).
 
 ## Open questions
 
-- Is SAM 2.1 *small* good enough on untextured normal/SDF renders, or do we
-  need *base+*? (SAMesh used SAM2; it does not say which size.)
+- SAM 2.1 *small* on untextured normal/SDF renders (first look): a cartoon
+  character splits into head, ears, arms, body, feet, tail, eyes; a car into
+  body + 4 wheels; a rat into body, ears, paws, tail; a horse only into body +
+  tail (legs and head stay merged). Whether *base+* or more prompts fixes the
+  horse is slice 4.
 - Can the encoder run on CoreML for these shapes? (Several of our ONNX graphs
   fall back to CPU; measure before promising speed.)
 - Textured assets: should a textured render be a third image kind? Texture

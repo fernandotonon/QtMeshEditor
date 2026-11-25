@@ -195,6 +195,8 @@ GenericSeg/MeshRaster.cpp
 GenericSeg/ShapeDiameter.cpp
 GenericSeg/Leiden.cpp
 GenericSeg/GenericSegmenter.cpp
+GenericSeg/SamMasks.cpp
+GenericSeg/SamMaskProvider.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 ProjectionPainter.cpp
@@ -533,6 +535,8 @@ GenericSeg/MeshRaster.h
 GenericSeg/ShapeDiameter.h
 GenericSeg/Leiden.h
 GenericSeg/GenericSegmenter.h
+GenericSeg/SamMasks.h
+GenericSeg/SamMaskProvider.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 ProjectionPainter.h

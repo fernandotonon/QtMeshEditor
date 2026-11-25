@@ -410,6 +410,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/ShapeDiameter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/Leiden.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/GenericSegmenter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/SamMasks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/SamMaskProvider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
