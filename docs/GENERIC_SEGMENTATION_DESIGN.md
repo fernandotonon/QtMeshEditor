@@ -1,6 +1,6 @@
 # Generic part segmentation (design)
 
-Status: **design, not implemented.** Proposed new `MeshSegmenter::Category::Generic`.
+Status: **slice 1 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider); SAM 2.1 provider and integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
 
 ## Problem
 
@@ -130,33 +130,58 @@ Export must pass the usual gate before hosting: loads in onnxruntime, finite
 outputs, parity with PyTorch on fixed images (mask IoU ≥ 0.99, IoU-score diff
 < 1e-3), and a fixed-shape check (the UniRig lesson: frozen traced constants).
 
-### 4. Lifting and merging
+### 4. Lifting and merging (as implemented)
 
-For each mask m in view v: `F(m)` = faces whose pixels fall inside the mask,
-with per-face pixel counts; drop faces with < 2 pixels or < 30 % of their
-visible pixels in the mask (mask edges straddle faces).
+**Surface patches, not faces.** Masks are lifted onto patches: faces grouped
+by a 3D grid of their centroids, about 2 pixels wide (`Options::patchPixels`).
+Lifting onto single faces failed in the first tests: on a dense mesh many
+triangles are smaller than a pixel, so each view keeps a different random
+subset of them, and masks of the same part from neighbouring views barely
+share faces (thin table legs split in two). Boundary precision is therefore
+about one patch (~0.4 % of the object's size at 512 px) before the boundary
+smoothing pass.
 
-Graph nodes = masks. Edge between masks a, b (different views) when
-`|F(a) ∩ F(b)| / min(|F(a)|, |F(b)|) ≥ τ` (default 0.5), weight = that ratio
-(pixel-count weighted). Masks from the same view never connect directly (they
-are already SAM's decision about that view).
+A patch counts as seen from a view with >= 2 pixels; a mask covers it when it
+holds >= 30 % of those pixels.
 
-Community detection: own **Leiden** implementation (`GenericSeg::Leiden`,
-pure, modularity with a resolution parameter; Louvain + Leiden's refinement
-step, deterministic seed). igraph is GPL, so it is not used. Resolution is the
-granularity knob.
+**Edges compare masks only where both views look, by IoU.** For masks a, b
+from different images: `IoU = shared / (area(a seen from b's view) + area(b
+seen from a's view) - shared)`, edge when IoU >= 0.6 and the common region is
+>= 10 % of the smaller mask (nearly opposite views carry no evidence). Two
+earlier measures failed the tests:
+
+- `shared / min(area)` over all faces: masks of one part from different
+  views cover different faces, so true pairs scored low (graph too sparse).
+- containment on the common region: a mask spanning two parts scores 1
+  against each, gluing them together. With IoU it scores about the share of
+  the part it shares (~0.5 for two equal halves) and stays out.
+
+Edge weight = IoU x the lower mask score.
+
+**Community detection: Leiden with the Constant Potts Model** (own
+implementation, `GenericSeg/Leiden.*`; modularity also available). Modularity
+has a resolution limit: on the table test it cut each leg's ring of masks in
+half. CPM keeps a group when its edge density beats gamma, independent of the
+graph size; gamma is the granularity knob (0.02 / 0.05 / 0.15).
 
 ### 5. Face labels
 
-Each community c → part instance. Face score `s(f, c) = Σ` over masks in c that
-contain f of `mask_score × pixel_fraction`. Label = argmax; faces never seen
-from any view (cavities, interiors) get the label of the nearest labelled face
-by face-graph BFS (geodesic). Then split each label into connected components
-(two disconnected wheels are two parts), then the existing cleanup:
-`smoothLabelBoundaries`, `cleanupLabelIslands`, `vertexLabelsFromFaces`.
-`levelLimbCuts` / `planarRecut` do not apply (body-specific).
+Each patch votes `score x coverage` for the community of every mask covering
+it; faces take their patch's label. Faces no view saw take the label of the
+nearest labelled face by face-graph BFS. Then: split each label into connected
+components (two wheels = two parts), merge parts below `minPartFraction` of
+the surface into the neighbour with the longest shared border, boundary
+smoothing + island cleanup (`MeshSegmenter`), split/merge again, renumber by
+area (`part_01` = largest).
 
-Finally renumber parts by descending surface area: `part_01` is the largest.
+**Shape diameter note:** Shapira's estimator averages slanted rays in a 120°
+cone, so a flat slab reads about 1/mean(cos θ) ≈ 1.33x its thickness. It is
+only used relatively (normalised for the SDF image), so the paper's estimator
+is kept; the test pins proportionality and the bias band.
+
+**Measured (slice 1, no model):** 97,200-triangle mesh, 20 views x 2 image
+kinds at 512 px: 0.42 s total (SDF 0.28 s, raster + lifting 0.08 s, graph
+0.02 s, labels 0.03 s). Debug trace: `QTMESH_GENSEG_DEBUG=1`.
 
 ### 6. Granularity
 

@@ -189,6 +189,12 @@ CreatureMotionRetarget.cpp
 MotionComposer.cpp
 MotionGenerator.cpp
 MeshSegmenter.cpp
+GenericSeg/TriangleBvh.cpp
+GenericSeg/SegMesh.cpp
+GenericSeg/MeshRaster.cpp
+GenericSeg/ShapeDiameter.cpp
+GenericSeg/Leiden.cpp
+GenericSeg/GenericSegmenter.cpp
 MeshDepthRenderer.cpp
 MultiViewTextureBaker.cpp
 ProjectionPainter.cpp
@@ -521,6 +527,12 @@ PhotoDepth.h
 TextureInpaint.h
 MotionGenerator.h
 MeshSegmenter.h
+GenericSeg/TriangleBvh.h
+GenericSeg/SegMesh.h
+GenericSeg/MeshRaster.h
+GenericSeg/ShapeDiameter.h
+GenericSeg/Leiden.h
+GenericSeg/GenericSegmenter.h
 MeshDepthRenderer.h
 MultiViewTextureBaker.h
 ProjectionPainter.h
