@@ -144,7 +144,6 @@ async function copyText(text) {
 
 function App() {
   const [siteHeaderRef, siteHeaderHeight] = useMeasuredHeight();
-  const [heroRef, heroHeight] = useMeasuredHeight();
   const [demoEnabled, setDemoEnabled] = useState(false);
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
@@ -537,11 +536,7 @@ function App() {
         </header>
         <main id="editor" className={styles.main}>
           <header
-            ref={heroRef}
             className={styles.hero}
-            style={{
-              '--panel-height': heroHeight ? `${heroHeight}px` : '100dvh',
-            }}
           >
             <div className={styles.heroCopy}>
               <p className={styles.kicker}>Open-source 3D creation</p>
