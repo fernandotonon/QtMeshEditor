@@ -1,6 +1,6 @@
 # Generic part segmentation (design)
 
-Status: **slices 1-2 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider; SAM 2.1 export + C++ mask provider, measured on real meshes; graphs hosted and fetched on first use); integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
+Status: **slices 1-3 implemented** (pure-data core in `src/GenericSeg/`; SAM 2.1 export + C++ mask provider, hosted and fetched on first use; `Category::Generic` wired into CLI, MCP and both Inspector sections). Slice 4 (tuning) pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
 
 ## Problem
 
@@ -313,3 +313,23 @@ for the encoder, fewer prompts on views that add nothing new.
 - Textured assets: should a textured render be a third image kind? Texture
   boundaries often are part boundaries (and sometimes are not: decals, seams).
   Off by default; measure on the benchmark.
+
+## Slice 3 as implemented
+
+- `MeshSegmenter::Category::Generic` dispatches inside `MeshSegmenter::predict`,
+  so every caller (CLI, MCP, Edit Mode, `SplitMeshCommand`) gets it. `modelPath`
+  / `modelPresent` / `ensureModelBlocking(Generic)` point at the SAM 2.1 files;
+  `genericModelError()` says why a fetch failed. No geometric fallback: a
+  missing model is an error.
+- `Result::labelNames` + `labelName(int)`; `SubMeshOps::groupFacesByLabel`
+  takes the names, so split submeshes are `part_01`…; Edit Mode keeps them for
+  its part groups.
+- The Auto classifier's class count is pinned to 4 (it was derived from
+  `CategoryCount`, which Generic would have broken silently).
+- GUI: Edit Mode fetches the model on the main thread before its worker
+  (ModelFetch is main-thread only); the Split section segments generic on a
+  worker with progress + Cancel and then pushes `SplitMeshCommand` with the
+  precomputed labels (`setPrecomputedLabels`), refusing if the mesh changed
+  meanwhile. MCP pumps events at ~20 Hz with `toolProgress` + Stop.
+- Measured (M-series CPU): cleaning cart 22k faces 58 s (54 s SAM), school
+  desk 12 views 35-37 s via CLI and MCP.

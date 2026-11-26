@@ -42,6 +42,15 @@ constexpr FileSpec kFiles[] = {
 
 } // namespace
 
+bool SamMaskProvider::isAvailable()
+{
+#ifdef ENABLE_ONNX
+    return true;
+#else
+    return false;
+#endif
+}
+
 QString SamMaskProvider::modelDir()
 {
     return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("segment/"));

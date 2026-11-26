@@ -12,6 +12,30 @@ file, so it produces the same geometry with no editor undo step.
 > documented in [MESH_SEGMENTATION_STRATEGY.md](MESH_SEGMENTATION_STRATEGY.md).
 > PartOps is the *authoring* layer on top of it.
 
+## Generic category — any object (#1179)
+
+The named categories only know their own parts (a body's head and limbs, a
+car's wheels, …). **Generic** splits *any* object — props, furniture,
+vehicles, creatures — into **unnamed parts**: `part_01` (the largest),
+`part_02`, … It renders the mesh from 20 directions, asks Meta's SAM 2.1 for
+2D masks on each render, and merges them on the mesh
+([design](GENERIC_SEGMENTATION_DESIGN.md)).
+
+- **Detail** (`--granularity` / `granularity`): `coarse` (a few big parts),
+  `medium` (default) or `fine` (small parts such as bottles, wheels, desk bars).
+- **Cost**: about a minute per mesh on a CPU (10–25k faces); the SAM 2.1 model
+  (~160 MB, Apache-2.0) downloads on first use. `--views 12` is faster.
+- **No offline mode**: part instances need the model, so `--no-model` /
+  `no_model` is refused for it. Auto never picks Generic; choose it explicitly.
+- Every PartOps operation works with it: the split names its submeshes
+  `part_01`…, and explode / join behave as with named parts.
+
+```bash
+qtmesh segment desk.glb --category generic                         # per-part counts
+qtmesh segment desk.glb --category generic --granularity fine --split-parts -o parts.glb
+qtmesh segment desk.glb --category generic --write-labels labels.json   # + labelNames array
+```
+
 ## The operations
 
 | Op | What it does |
@@ -26,9 +50,14 @@ file, so it produces the same geometry with no editor undo step.
 Object mode → Inspector:
 
 - **Split into Parts (AI)** section: pick a *Category* (auto / body / vegetation /
-  vehicle / building), tick **AI assisted** (uncheck for the offline
+  vehicle / building / generic), tick **AI assisted** (uncheck for the offline
   geometric / rig-prior path), optionally tick **Solidify thin shells**, then
-  **Split into Parts**.
+  **Split into Parts**. With **generic**, a *Detail* picker appears; the split
+  runs in the background with a progress bar and **Cancel**, and is still a
+  single undo step when it finishes.
+- **Edit mode → Select by Part (AI)**: the *Category* list also has
+  **Generic (any object)** with the same *Detail* picker; the part groups it
+  lists are `part_01`, `part_02`, ….
 - **Explode / Join Parts** section: set the **Explode distance** and click
   **Explode Parts** (needs one multi-part mesh selected), or select 2+ part nodes
   and click **Join Parts**.
@@ -61,13 +90,15 @@ part entities at once, which doesn't fit the single-input `segment` CLI).
 
 | Tool | Args | Returns |
 |---|---|---|
-| `segment_mesh` | `entity_name?`, `no_model?`, `category?`, `up_axis?` | per-part counts + `face_labels` (always) |
-| `split_mesh_by_segments` | `entity_name?`, `no_model?`, `category?`, `up_axis?`, `solidify?` | created submesh count + part names |
+| `segment_mesh` | `entity_name?`, `no_model?`, `category?`, `up_axis?`, `granularity?`, `views?` | per-part counts + `face_labels` (always); generic adds `label_names` |
+| `split_mesh_by_segments` | `entity_name?`, `no_model?`, `category?`, `up_axis?`, `solidify?`, `granularity?`, `views?` | created submesh count + part names |
 | `explode_mesh_parts` | `entity_name?`, `distance?` | exploded part count |
 | `join_mesh_parts` | `entity_names?` (omit → all mesh entities) | joined part count + created submesh count |
 
 All operate on the live editor scene through the same undoable commands as the
 GUI buttons, so `Ctrl+Z` in the editor undoes an MCP-driven split/explode/join.
+`granularity` / `views` apply to `category: "generic"` only; a generic run
+reports progress through the agent's progress bar and stops on Stop.
 
 ## Limitations
 

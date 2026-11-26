@@ -8,7 +8,8 @@
 #include <unordered_map>
 
 std::vector<SubMeshOps::FaceGroup>
-SubMeshOps::groupFacesByLabel(const std::vector<int>& faceLabels)
+SubMeshOps::groupFacesByLabel(const std::vector<int>& faceLabels,
+                              const std::vector<QString>& labelNames)
 {
     std::map<int, FaceGroup> byLabel; // ordered by label so Unknown(0) is first
     for (uint32_t tri = 0; tri < faceLabels.size(); ++tri) {
@@ -17,7 +18,9 @@ SubMeshOps::groupFacesByLabel(const std::vector<int>& faceLabels)
         if (it == byLabel.end()) {
             FaceGroup g;
             g.label = label;
-            g.name = MeshSegmenter::partName(label);
+            g.name = labelNames.empty() ? MeshSegmenter::partName(label)
+                     : (label >= 0 && label < int(labelNames.size()) ? labelNames[size_t(label)]
+                                                                     : QStringLiteral("unknown"));
             it = byLabel.emplace(label, std::move(g)).first;
         }
         it->second.triangles.push_back(tri);

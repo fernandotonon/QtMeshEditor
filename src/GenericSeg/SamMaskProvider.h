@@ -44,6 +44,7 @@ public:
 
     // Where the app keeps them: <AppData>/ai_models/segment/ (next to the
     // other segmentation models), with Meta's Apache-2.0 text beside them.
+    static bool isAvailable();   // false in a build without ENABLE_ONNX
     static QString modelDir();
     static bool modelsPresent();
     // First use: downloads the graphs + licence (~160 MB) from the

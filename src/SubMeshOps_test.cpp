@@ -71,6 +71,24 @@ TEST(SubMeshOpsTest, GroupFacesByLabelStableOrder)
     EXPECT_EQ(groups[2].triangles[0], 2u);
 }
 
+TEST(SubMeshOpsTest, GroupFacesByLabelUsesTheResultsLabelNames)
+{
+    // Generic segmentation (#1179): labels are instances named by the result,
+    // and the names flow into the split's submesh names.
+    const std::vector<int> labels = {2, 1, 1, 0, 9};
+    const std::vector<QString> names = {QStringLiteral("unknown"), QStringLiteral("part_01"),
+                                        QStringLiteral("part_02")};
+    const auto groups = SubMeshOps::groupFacesByLabel(labels, names);
+    ASSERT_EQ(groups.size(), 4u);
+    EXPECT_EQ(groups[0].name, QStringLiteral("unknown"));
+    EXPECT_EQ(groups[1].name, QStringLiteral("part_01"));
+    EXPECT_EQ(groups[2].name, QStringLiteral("part_02"));
+    EXPECT_EQ(groups[3].label, 9);
+    EXPECT_EQ(groups[3].name, QStringLiteral("unknown"));   // no name for it
+    // Without names, label 1 is still the body part "head".
+    EXPECT_EQ(SubMeshOps::groupFacesByLabel(labels)[1].name, MeshSegmenter::partName(1));
+}
+
 TEST(SubMeshOpsTest, SplitByFaceGroupsCreatesOneSubmeshPerLabel)
 {
     std::vector<EditableSubMesh> in = {twoQuadSubmesh()};

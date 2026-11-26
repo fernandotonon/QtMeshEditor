@@ -89,6 +89,7 @@
 #include "ImageTo3D/Trellis2Predictor.h"
 #include "ImageTo3D/MeshGenBuilder.h"
 #include "MeshSegmenter.h"
+#include "GenericSeg/GenericSegmenter.h"
 #include "LatticeDeformer.h"
 #include "LatticeController.h"
 #include "SubMeshOps.h"
@@ -14306,7 +14307,8 @@ int CLIPipeline::cmdGenerate3d(int argc, char* argv[])
 int CLIPipeline::cmdSegment(int argc, char* argv[])
 {
     // Parse: segment <file> [--json] [--no-model] [--up-axis x|y|z]
-    //                        [--category auto|body|vegetation|vehicle|building]
+    //                        [--category auto|body|vegetation|vehicle|building|generic]
+    //                        [--granularity coarse|medium|fine] [--views N]   (generic only)
     //                        [--dump-training-data <out.json>]
     QString inputPath;
     QString dumpPath;
@@ -14321,6 +14323,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     bool noIslandCleanup = false;  // #863: raw labels, skip the split-cleanup pass
     int upAxis = 1;   // +Y default
     MeshSegmenter::Category category = MeshSegmenter::Category::Auto;
+    QString granularity;       // generic only (#1179)
+    int genericViews = 0;      // generic only; 0 = default
 
     for (int i = 1; i < argc; ++i) {
         const QString arg = QString::fromLocal8Bit(argv[i]);
@@ -14363,7 +14367,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         if (arg == "--category") {
             if (i + 1 >= argc) {
                 err() << "Error: --category requires a value (auto, body, "
-                         "vegetation, vehicle, or building)." << Qt::endl;
+                         "vegetation, vehicle, building, or generic)." << Qt::endl;
                 return 2;
             }
             bool ok = false;
@@ -14371,7 +14375,30 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
                 QString::fromLocal8Bit(argv[++i]), &ok);
             if (!ok) {
                 err() << "Error: --category must be auto, body, vegetation, "
-                         "vehicle, or building." << Qt::endl;
+                         "vehicle, building, or generic." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--granularity") {
+            if (i + 1 >= argc) {
+                err() << "Error: --granularity requires a value (coarse, medium, or fine)." << Qt::endl;
+                return 2;
+            }
+            granularity = QString::fromLocal8Bit(argv[++i]).trimmed().toLower();
+            bool okg = false;
+            GenericSeg::granularityFromName(granularity, &okg);
+            if (!okg) {
+                err() << "Error: --granularity must be coarse, medium, or fine." << Qt::endl;
+                return 2;
+            }
+            continue;
+        }
+        if (arg == "--views") {
+            bool okv = false;
+            genericViews = (i + 1 < argc) ? QString::fromLocal8Bit(argv[++i]).toInt(&okv) : 0;
+            if (!okv || genericViews < 4 || genericViews > 64) {
+                err() << "Error: --views must be a number from 4 to 64." << Qt::endl;
                 return 2;
             }
             continue;
@@ -14402,7 +14429,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (inputPath.isEmpty()) {
         err() << "Error: No input file specified." << Qt::endl;
         err() << "Usage: qtmesh segment <file> [--json] [--no-model] [--up-axis x|y|z] "
-                 "[--category auto|body|vegetation|vehicle|building] "
+                 "[--category auto|body|vegetation|vehicle|building|generic] "
+                 "[--granularity coarse|medium|fine] [--views N] "
                  "[--no-island-cleanup] "
                  "[--dump-training-data <out.json>] [--write-labels <out.json>] "
                  "[--split-parts [--solidify] -o <out.glb>] "
@@ -14419,6 +14447,21 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     // --split-parts above (CodeRabbit).
     if (explodeParts && outputPath.isEmpty()) {
         err() << "Error: --explode-parts requires -o <output scene>." << Qt::endl;
+        return 2;
+    }
+    const bool generic = category == MeshSegmenter::Category::Generic;
+    if (!generic && (!granularity.isEmpty() || genericViews > 0)) {
+        err() << "Error: --granularity and --views apply to --category generic only." << Qt::endl;
+        return 2;
+    }
+    if (generic && noModel) {
+        err() << "Error: --category generic needs the SAM 2.1 model; it has no --no-model fallback."
+              << Qt::endl;
+        return 2;
+    }
+    if (generic && !dumpPath.isEmpty()) {
+        err() << "Error: --dump-training-data mines body labels from a rig; it does not apply to "
+                 "--category generic." << Qt::endl;
         return 2;
     }
     if (!initOgreHeadless()) return 1;
@@ -14524,6 +14567,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     opts.forceFallback = noModel;
     opts.category = category;
     opts.cleanupIslands = !noIslandCleanup;   // #863 opt-out
+    if (!granularity.isEmpty()) opts.granularity = granularity;
+    if (genericViews > 0) opts.genericViews = genericViews;
     // Auto → run the category classifier (first-use download); an explicit
     // --category skips it. --no-model keeps everything offline (Auto → body).
     if (!noModel)
@@ -14535,9 +14580,21 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     QString modelPath;
     if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
 
+    // Generic runs SAM on ~40 renders (about a minute): report progress on
+    // stderr, at most once per 10 %.
+    int lastPct = -1;
+    const MeshSegmenter::ProgressFn progress = [&](int done, int total) {
+        if (!generic || total <= 0) return true;
+        const int pct = std::clamp(100 * done / total, 0, 100);
+        if (pct / 10 != lastPct / 10) {
+            lastPct = pct;
+            err() << "Segmenting: " << pct << "%" << Qt::endl;
+        }
+        return true;
+    };
     const MeshSegmenter::Result r = MeshSegmenter::predict(
         verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
-        modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
+        modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data(), progress);
     if (!r.ok) {
         SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
             QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
@@ -14557,8 +14614,9 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         return 1;
     }
 
-    // Per-part counts.
-    const int P = MeshSegmenter::partCount();
+    // Per-part counts. Generic labels are instances named by the result.
+    const int P = r.labelNames.empty() ? MeshSegmenter::partCount()
+                                       : static_cast<int>(r.labelNames.size());
     std::vector<int> vCount(P, 0), fCount(P, 0);
     for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
     for (int l : r.faceLabels)   if (l >= 0 && l < P) ++fCount[l];
@@ -14567,6 +14625,11 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     for (int p = 0; p < P; ++p)
         if (vCount[p] > 0 || fCount[p] > 0)
             ++resultPartCount;
+    if (generic)
+        SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+            QStringLiteral("generic parts=%1 granularity=%2 views=%3 ms=%4")
+                .arg(resultPartCount).arg(opts.granularity).arg(opts.genericViews)
+                .arg(segmentTimer.elapsed()));
     SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
         QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},
                     {QStringLiteral("requested_category"), requestedCategory},
@@ -14596,8 +14659,13 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         QJsonObject names;
         for (int p = 0; p < P; ++p)
             if (vCount[p] > 0 || fCount[p] > 0)
-                names[QString::number(p)] = MeshSegmenter::partName(p);
+                names[QString::number(p)] = r.labelName(p);
         root["partNames"] = names;
+        if (!r.labelNames.empty()) {   // generic: index = label value
+            QJsonArray ln;
+            for (const QString& n : r.labelNames) ln.append(n);
+            root["labelNames"] = ln;
+        }
         QFile lf(writeLabelsPath);
         if (!lf.open(QIODevice::WriteOnly)) {
             err() << "Error: cannot write labels to " << writeLabelsPath << Qt::endl;
@@ -14616,7 +14684,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
 
     // --- PartOps: split into per-part submeshes (#861/#864) ----------------
     if (splitParts) {
-        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
+        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels, r.labelNames);
         SubMeshOps::SplitOptions sopts; // default "Body" prefix, preserve material
         sopts.solidifyParts = solidify; // --solidify: wall volume for thin shells
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
@@ -14668,7 +14736,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (explodeParts) {
         // (-o was validated up-front, before segmentation.)
         // 1) Split the source mesh into per-part submeshes (one fused entity).
-        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
+        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels, r.labelNames);
         SubMeshOps::SplitOptions sopts;
         sopts.solidifyParts = solidify;
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
@@ -14784,9 +14852,15 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
             QJsonObject pc;
             pc["vertices"] = vCount[p];
             pc["faces"] = fCount[p];
-            parts[MeshSegmenter::partName(p)] = pc;
+            parts[r.labelName(p)] = pc;
         }
         root["parts"] = parts;
+        if (!r.labelNames.empty()) {
+            QJsonArray ln;
+            for (const QString& n : r.labelNames) ln.append(n);
+            root["labelNames"] = ln;
+            root["granularity"] = opts.granularity;
+        }
         QJsonArray vl, fl;
         for (int l : r.vertexLabels) vl.append(l);
         for (int l : r.faceLabels)   fl.append(l);
@@ -14801,7 +14875,7 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
         for (int p = 0; p < P; ++p) {
             if (vCount[p] == 0 && fCount[p] == 0) continue;
             cliWrite(QString("  %1: %2 verts, %3 faces\n")
-                         .arg(MeshSegmenter::partName(p), -10).arg(vCount[p]).arg(fCount[p]));
+                         .arg(r.labelName(p), -10).arg(vCount[p]).arg(fCount[p]));
         }
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             cliWrite(QString("Note: %1\n").arg(r.fallbackReason));

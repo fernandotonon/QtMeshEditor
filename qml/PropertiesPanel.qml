@@ -6283,8 +6283,12 @@ Rectangle {
             // Manual category override (#818): the escape hatch for meshes
             // the Auto classifier gets wrong (e.g. a car with detached
             // wheels). Lowercase ids match the CLI --category values.
-            property var sbpCategoryIds: ["auto", "body", "vegetation", "vehicle", "building"]
+            property var sbpCategoryIds: ["auto", "body", "vegetation", "vehicle", "building", "generic"]
             property int sbpCategoryIndex: 0
+            // Generic (#1179): any object, unnamed parts, SAM 2.1 (about a minute).
+            readonly property bool sbpGeneric: sbpCategoryIds[sbpCategoryIndex] === "generic"
+            property var sbpGranularityIds: ["coarse", "medium", "fine"]
+            property int sbpGranularityIndex: 1
 
             Row {
                 spacing: 6; width: parent.width - 16
@@ -6297,11 +6301,37 @@ Rectangle {
                     width: parent.width - 66
                     height: 22
                     font.pixelSize: 11
-                    model: ["Auto (AI)", "Body", "Vegetation", "Vehicle", "Building"]
+                    model: ["Auto (AI)", "Body", "Vegetation", "Vehicle", "Building", "Generic (any object)"]
                     currentIndex: editToolsCol.sbpCategoryIndex
                     onCurrentIndexChanged: editToolsCol.sbpCategoryIndex = currentIndex
                     enabled: !EditModeController.segmentBusy
                 }
+            }
+            Row {
+                visible: editToolsCol.sbpGeneric
+                spacing: 6; width: parent.width - 16
+                Text {
+                    text: "Detail:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    width: parent.width - 66
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["Coarse (few big parts)", "Medium", "Fine (small parts)"]
+                    currentIndex: editToolsCol.sbpGranularityIndex
+                    onCurrentIndexChanged: editToolsCol.sbpGranularityIndex = currentIndex
+                    enabled: !EditModeController.segmentBusy
+                }
+            }
+            Text {
+                visible: editToolsCol.sbpGeneric
+                width: parent.width - 16; wrapMode: Text.Wrap
+                font.pixelSize: 9; opacity: 0.75
+                color: PropertiesPanelController.textColor
+                text: "Splits any object into unnamed parts (part_01 = largest) with SAM 2.1. "
+                    + "About a minute; the model (~160 MB) downloads on first use."
             }
 
             Connections {
@@ -6335,7 +6365,8 @@ Rectangle {
                         return
                     editToolsCol.selectByPartStatus = ""
                     EditModeController.selectByPart(
-                        "y", editToolsCol.sbpCategoryIds[editToolsCol.sbpCategoryIndex])
+                        "y", editToolsCol.sbpCategoryIds[editToolsCol.sbpCategoryIndex],
+                        editToolsCol.sbpGranularityIds[editToolsCol.sbpGranularityIndex])
                 }
                 Keys.onPressed: function(event) {
                     if (event.key === Qt.Key_Space || event.key === Qt.Key_Return
@@ -9737,15 +9768,23 @@ Rectangle {
 
             // Category id list, index-aligned with partOpsCategoryCombo.
             readonly property var partOpsCategories:
-                ["auto", "body", "vegetation", "vehicle", "building"]
+                ["auto", "body", "vegetation", "vehicle", "building", "generic"]
+            // Generic (#1179): any object, unnamed parts, SAM 2.1 on a worker.
+            readonly property bool partOpsGeneric:
+                partOpsCategories[partOpsCategoryCombo.currentIndex] === "generic"
+            readonly property var partOpsGranularities: ["coarse", "medium", "fine"]
 
             Text {
                 width: parent.width - 16
                 wrapMode: Text.WordWrap
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 11
-                text: "Split the selected mesh into named part submeshes "
-                    + "(head, torso, arms, legs). Undoable."
+                text: partOpsSplitContent.partOpsGeneric
+                    ? "Split the selected mesh (any object) into unnamed part submeshes "
+                      + "(part_01 = largest) with SAM 2.1. About a minute; the model "
+                      + "(~160 MB) downloads on first use. Undoable."
+                    : "Split the selected mesh into named part submeshes "
+                      + "(head, torso, arms, legs). Undoable."
             }
 
             Row {
@@ -9763,6 +9802,27 @@ Rectangle {
                     font.pixelSize: 11
                     model: partOpsSplitContent.partOpsCategories
                     currentIndex: 0
+                    enabled: !PartOpsController.splitBusy
+                }
+            }
+
+            Row {
+                spacing: 6
+                visible: partOpsSplitContent.partOpsGeneric
+                Text {
+                    text: "Detail:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                ThemedComboBox {
+                    id: partOpsGranularityCombo
+                    width: 140
+                    height: 22
+                    font.pixelSize: 11
+                    model: ["coarse", "medium", "fine"]
+                    currentIndex: 1
+                    enabled: !PartOpsController.splitBusy
                 }
             }
 
@@ -9776,6 +9836,7 @@ Rectangle {
                 id: partOpsAiCheck
                 text: "AI assisted"
                 checked: true
+                visible: !partOpsSplitContent.partOpsGeneric   // generic is AI only
             }
 
             // Thin-shell game assets are single-sided surfaces with no wall
@@ -9793,7 +9854,7 @@ Rectangle {
             // to another section's tree, not this top-level Component).
             Rectangle {
                 id: partOpsSplitBtn
-                property bool clickEnabled: PartOpsController.hasSelection
+                property bool clickEnabled: PartOpsController.hasSelection && !PartOpsController.splitBusy
                 width: Math.min(parent ? parent.width - 16 : 200,
                                 partOpsSplitBtnLabel.implicitWidth + 20)
                 height: 26
@@ -9821,12 +9882,58 @@ Rectangle {
                     onClicked: {
                         partOpsSplitFeedback.color = PropertiesPanelController.textColor
                         partOpsSplitFeedback.text = "Splitting…"
-                        // noModel is the inverse of "AI assisted".
+                        // noModel is the inverse of "AI assisted" (generic is AI only).
                         PartOpsController.splitSelectedIntoParts(
                             "y",
                             partOpsSplitContent.partOpsCategories[partOpsCategoryCombo.currentIndex],
-                            !partOpsAiCheck.checked,
-                            partOpsSolidifyCheck.checked)
+                            !partOpsSplitContent.partOpsGeneric && !partOpsAiCheck.checked,
+                            partOpsSolidifyCheck.checked,
+                            partOpsSplitContent.partOpsGranularities[partOpsGranularityCombo.currentIndex])
+                    }
+                }
+            }
+
+            // Generic split progress (worker thread) + Cancel.
+            Column {
+                width: parent.width - 16
+                spacing: 4
+                visible: PartOpsController.splitBusy
+                Text {
+                    width: parent.width; wrapMode: Text.Wrap; font.pixelSize: 9
+                    color: PropertiesPanelController.textColor
+                    text: PartOpsController.splitDownloading
+                        ? "Downloading the SAM 2.1 model (first use only, ~160 MB)…"
+                        : (PartOpsController.splitTotal > 0
+                            ? ("Segmenting… view " + PartOpsController.splitProgress
+                               + " / " + PartOpsController.splitTotal)
+                            : "Preparing…")
+                }
+                Rectangle {
+                    width: parent.width; height: 6; radius: 3
+                    color: PropertiesPanelController.inputColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Rectangle {
+                        height: parent.height - 2; y: 1; x: 1; radius: 2
+                        color: PropertiesPanelController.highlightColor
+                        readonly property real frac: PartOpsController.splitTotal > 0
+                            ? Math.max(0, Math.min(1, PartOpsController.splitProgress
+                                                      / PartOpsController.splitTotal))
+                            : 0
+                        width: (parent.width - 2) * frac
+                        Behavior on width { NumberAnimation { duration: 120 } }
+                    }
+                }
+                Rectangle {
+                    width: partOpsCancelTxt.implicitWidth + 16; height: 18; radius: 3
+                    color: partOpsCancelMa.containsMouse ? PropertiesPanelController.highlightColor
+                                                         : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    Text { id: partOpsCancelTxt; anchors.centerIn: parent; text: "Cancel"
+                           font.pixelSize: 10; color: PropertiesPanelController.textColor }
+                    MouseArea {
+                        id: partOpsCancelMa; anchors.fill: parent; hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: PartOpsController.cancelSplit()
                     }
                 }
             }

@@ -5,6 +5,9 @@
 #include <QQmlEngine>
 #include <QString>
 
+#include <atomic>
+#include <memory>
+
 /**
  * PartOps GUI controller (#859/#861): the Object-mode "Split into Parts"
  * action. QML_SINGLETON, mirroring MeshDecimatorController.
@@ -30,6 +33,11 @@ class PartOpsController : public QObject
     Q_PROPERTY(bool hasSelection READ hasSelection NOTIFY selectionChanged)
     Q_PROPERTY(bool canExplode READ canExplode NOTIFY selectionChanged)
     Q_PROPERTY(bool canJoin READ canJoin NOTIFY selectionChanged)
+    // Generic split (#1179) runs on a worker: busy / progress for the panel.
+    Q_PROPERTY(bool splitBusy READ splitBusy NOTIFY splitProgressChanged)
+    Q_PROPERTY(bool splitDownloading READ splitDownloading NOTIFY splitProgressChanged)
+    Q_PROPERTY(int splitProgress READ splitProgress NOTIFY splitProgressChanged)
+    Q_PROPERTY(int splitTotal READ splitTotal NOTIFY splitProgressChanged)
 
 public:
     static PartOpsController* instance();
@@ -52,10 +60,21 @@ public:
      *  @param noModel   force the offline geometric/rig-prior path.
      *  Emits splitFinished(status, isError). No-op (error) without a single
      *  selected mesh. */
+    /**  "generic" (#1179): any object, unnamed parts part_01… via SAM 2.1.
+     *  It takes about a minute, so it segments on a worker thread (progress
+     *  via splitBusy/splitProgress, cancelSplit()) and then pushes the same
+     *  undoable SplitMeshCommand with the computed labels. `granularity`
+     *  ("coarse"|"medium"|"fine") applies to it. */
     Q_INVOKABLE void splitSelectedIntoParts(const QString& upAxis = QStringLiteral("y"),
                                             const QString& category = QStringLiteral("auto"),
                                             bool noModel = false,
-                                            bool solidify = false);
+                                            bool solidify = false,
+                                            const QString& granularity = QStringLiteral("medium"));
+    Q_INVOKABLE void cancelSplit();
+    bool splitBusy() const { return m_splitBusy; }
+    bool splitDownloading() const { return m_splitDownloading; }
+    int splitProgress() const { return m_splitProgress; }
+    int splitTotal() const { return m_splitTotal; }
 
     /** Explode the selected multi-submesh mesh into one scene node per part
      *  (undoable). Each part is pushed outward by `distance` × the assembly
@@ -73,10 +92,19 @@ signals:
     void splitFinished(const QString& status, bool isError);
     void explodeFinished(const QString& status, bool isError);
     void joinFinished(const QString& status, bool isError);
+    void splitProgressChanged();
 
 private:
     PartOpsController();
+    void splitGeneric(const std::string& entityName, int axis, bool solidify,
+                      const QString& granularity);
+    void setSplitState(bool busy, bool downloading, int progress, int total);
     static PartOpsController* m_pSingleton;
+    bool m_splitBusy = false;
+    bool m_splitDownloading = false;
+    int m_splitProgress = 0;
+    int m_splitTotal = 0;
+    std::shared_ptr<std::atomic_bool> m_splitCancel;
 };
 
 #endif // PARTOPSCONTROLLER_H

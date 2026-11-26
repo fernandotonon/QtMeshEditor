@@ -245,6 +245,10 @@ TEST(MeshSegmenter, CategoryChannelMapsAreValid)
 {
     for (int c = 0; c < static_cast<int>(MS::Category::CategoryCount); ++c) {
         const auto cat = static_cast<MS::Category>(c);
+        if (cat == MS::Category::Generic) {   // no per-point model, no channel map
+            EXPECT_EQ(MS::categoryChannelCount(cat), 0);
+            continue;
+        }
         const auto map = MS::categoryChannelMap(cat);
         ASSERT_EQ(static_cast<int>(map.size()), MS::categoryChannelCount(cat));
         ASSERT_GE(map.size(), 2u);
@@ -610,4 +614,54 @@ TEST(MeshSegmenter, LevelLimbCutNoOpWhenPartMissing)
                                          idx.data(), (int)idx.size(), 5, 6, 2, 1);
     EXPECT_EQ(changed, 0);
     EXPECT_EQ(faces, before);
+}
+
+// ---- generic category (#1179) -----------------------------------------------
+
+TEST(MeshSegmenter, GenericCategoryNameAndLabelNames)
+{
+    bool ok = false;
+    EXPECT_EQ(MS::categoryFromName("generic", &ok), MS::Category::Generic);
+    EXPECT_TRUE(ok);
+    EXPECT_EQ(MS::categoryName(MS::Category::Generic), QStringLiteral("generic"));
+
+    // Named categories: labels are Part values.
+    MS::Result named;
+    EXPECT_EQ(named.labelName(int(MS::Part::Head)), QStringLiteral("head"));
+    // Generic: the result names its own labels; out of range reads "unknown".
+    MS::Result g;
+    g.labelNames = {QStringLiteral("unknown"), QStringLiteral("part_01"), QStringLiteral("part_02")};
+    EXPECT_EQ(g.labelName(1), QStringLiteral("part_01"));
+    EXPECT_EQ(g.labelName(2), QStringLiteral("part_02"));
+    EXPECT_EQ(g.labelName(7), QStringLiteral("unknown"));
+    EXPECT_EQ(g.labelName(-1), QStringLiteral("unknown"));
+}
+
+TEST(MeshSegmenter, GenericWithoutTheModelFailsWithAReasonNotAFallback)
+{
+    // Part instances cannot come from the geometric heuristic: a missing model
+    // is an error with the reason, never body labels in disguise.
+    const float pos[] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const uint32_t idx[] = {0, 1, 2, 0, 1, 3, 0, 2, 3, 1, 2, 3};
+    MS::Options o;
+    o.category = MS::Category::Generic;
+    const MS::Result r = MS::predict(pos, 4, idx, 12, QStringLiteral("/nonexistent/sam2.onnx"), o);
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(r.error.isEmpty());
+    EXPECT_TRUE(r.faceLabels.empty());
+#ifdef ENABLE_ONNX
+    EXPECT_TRUE(r.error.contains(QLatin1String("SAM 2.1"))) << r.error.toStdString();
+#else
+    EXPECT_TRUE(r.error.contains(QLatin1String("ENABLE_ONNX"))) << r.error.toStdString();
+#endif
+}
+
+TEST(MeshSegmenter, AutoNeverResolvesToGeneric)
+{
+    // The classifier knows Body..Building only; Generic is opt-in.
+    const float pos[] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1};
+    MS::Options o;   // Auto
+    EXPECT_NE(MS::classifyCategory(pos, 4, QString(), o), MS::Category::Generic);
+    o.category = MS::Category::Generic;   // an explicit choice is kept
+    EXPECT_EQ(MS::resolveCategoryBlocking(pos, 4, o), MS::Category::Generic);
 }

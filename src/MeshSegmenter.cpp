@@ -1,4 +1,6 @@
 #include "MeshSegmenter.h"
+#include "GenericSeg/GenericSegmenter.h"
+#include "GenericSeg/SamMaskProvider.h"
 
 #include "ModelDownloader.h"
 #include "ModelFetch.h"
@@ -6,6 +8,7 @@
 
 #include <QByteArray>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFileInfo>
 #include <QSettings>
@@ -13,6 +16,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cstdio>
 #include <array>
 #include <cmath>
 #include <map>
@@ -71,6 +75,9 @@ const CategoryInfo kCategories[] = {
     { "building", "meshseg_building.onnx",
       { int(P::Unknown), int(P::Wall), int(P::Roof), int(P::Window),
         int(P::Door), int(P::Chimney), int(P::Foundation) } },
+    // Generic (#1179): no per-point model; modelFile is the SAM 2.1 encoder
+    // (its decoder + licence sit next to it), labels are instances.
+    { "generic", "sam2.1_hiera_small_encoder.onnx", {} },
 };
 static_assert(sizeof(kCategories) / sizeof(kCategories[0])
                   == static_cast<size_t>(MeshSegmenter::Category::CategoryCount),
@@ -226,6 +233,14 @@ QString MeshSegmenter::partName(int p)
 }
 QString MeshSegmenter::partName(Part p) { return partName(static_cast<int>(p)); }
 
+QString MeshSegmenter::Result::labelName(int label) const
+{
+    if (!labelNames.empty())
+        return (label >= 0 && label < int(labelNames.size())) ? labelNames[size_t(label)]
+                                                              : QStringLiteral("unknown");
+    return partName(label);
+}
+
 QString MeshSegmenter::categoryName(Category c)
 {
     return QString::fromLatin1(categoryInfo(c).name);
@@ -326,7 +341,11 @@ QString MeshSegmenter::modelPath(Category c)
                                    + modelFileName(c));
 }
 
-bool MeshSegmenter::modelPresent(Category c) { return QFileInfo::exists(modelPath(c)); }
+bool MeshSegmenter::modelPresent(Category c)
+{
+    if (c == Category::Generic) return GenericSeg::SamMaskProvider::modelsPresent();
+    return QFileInfo::exists(modelPath(c));
+}
 
 QString MeshSegmenter::classifierModelPath()
 {
@@ -1152,8 +1171,23 @@ QString ensureSegmentFileBlocking(const QString& dest, const QString& fileName,
 }
 } // namespace
 
+namespace {
+QString& genericModelErrorRef() { static QString e; return e; }
+} // namespace
+
+QString MeshSegmenter::genericModelError() { return genericModelErrorRef(); }
+
 QString MeshSegmenter::ensureModelBlocking(Category c)
 {
+    if (c == Category::Generic) {
+        QString why;
+        if (!GenericSeg::SamMaskProvider::ensureModelsBlocking(&why)) {
+            genericModelErrorRef() = why;
+            return {};
+        }
+        genericModelErrorRef().clear();
+        return modelPath(c);
+    }
     return ensureSegmentFileBlocking(
         modelPath(c), modelFileName(c),
         QStringLiteral("Mesh segmentation model (%1)").arg(categoryName(c)));
@@ -1186,6 +1220,81 @@ MeshSegmenter::Category MeshSegmenter::resolveCategoryBlocking(const float* posi
 #endif
 }
 
+namespace {
+
+// Generic (#1179): SAM 2.1 on multi-view renders. No geometric fallback: the
+// labels are part instances, which a heuristic cannot produce, so a missing
+// model or a non-ONNX build is an error with the reason.
+MeshSegmenter::Result predictGeneric(const float* positions, int vertexCount,
+                                     const uint32_t* indices, int indexCount,
+                                     const QString& encoderPath, const MeshSegmenter::Options& opts,
+                                     const MeshSegmenter::ProgressFn& progress)
+{
+    MeshSegmenter::Result r;
+    r.category = MeshSegmenter::Category::Generic;
+    if (!GenericSeg::SamMaskProvider::isAvailable()) {
+        r.error = QStringLiteral("Generic segmentation needs an ONNX-enabled build (rebuild with -DENABLE_ONNX).");
+        return r;
+    }
+    if (encoderPath.isEmpty() || !QFileInfo::exists(encoderPath)) {
+        const QString why = MeshSegmenter::genericModelError();
+        r.error = why.isEmpty()
+            ? QStringLiteral("The SAM 2.1 model for generic segmentation is not available.")
+            : QStringLiteral("The SAM 2.1 model for generic segmentation is not available: %1").arg(why);
+        return r;
+    }
+    const QString dir = QFileInfo(encoderPath).absolutePath();
+    GenericSeg::SamMaskProvider sam(encoderPath,
+                                    QDir(dir).filePath(GenericSeg::SamMaskProvider::decoderFileName()));
+    if (!sam.ok()) {
+        r.error = sam.error();
+        return r;
+    }
+    GenericSeg::Options go;
+    bool okGran = true;
+    go.granularity = GenericSeg::granularityFromName(opts.granularity, &okGran);
+    go.views = std::clamp(opts.genericViews, 4, 64);
+    bool cancelled = false;
+    // Progress in one range: one step per rendered image, plus a final step
+    // for the merge / labels / refinement (each well under a second).
+    const int imagesPerView = 2;   // normal + SDF (matte meshes use one: the bar just jumps)
+    const int total = go.views * imagesPerView + 1;
+    go.progress = [&](const QString& stage, int done, int) {
+        if (!progress) return true;
+        const int step = stage == QLatin1String("views") ? done
+                       : (stage == QLatin1String("shape diameter") ? 0 : total - 1);
+        if (!progress(step, total)) { cancelled = true; return false; }
+        return true;
+    };
+    QElapsedTimer clock;
+    clock.start();
+    const GenericSeg::Result g = GenericSeg::segment(positions, vertexCount, indices, indexCount, sam, go);
+    if (qEnvironmentVariableIsSet("QTMESH_GENSEG_DEBUG")) {
+        const auto t = sam.timing();
+        fprintf(stderr, "[genseg] total %lld ms; SAM %d images, encode %.0f ms, decode %.0f ms, post %.0f ms, "
+                        "%d prompts, %d candidates, %d kept\n", (long long)clock.elapsed(), t.images,
+                t.encodeMs, t.decodeMs, t.postMs, t.prompts, t.candidates, t.kept);
+    }
+    if (cancelled || g.cancelled) {
+        r.error = QStringLiteral("cancelled");
+        r.fallbackReason = QStringLiteral("cancelled");
+        return r;
+    }
+    if (!g.ok) {
+        r.error = g.error;
+        return r;
+    }
+    if (progress) progress(total, total);
+    r.ok = true;
+    r.usedModel = true;
+    r.faceLabels = g.faceLabels;
+    r.vertexLabels = g.vertexLabels;
+    for (const QString& n : g.labelNames) r.labelNames.push_back(n);
+    return r;
+}
+
+} // namespace
+
 #ifndef ENABLE_ONNX
 
 MeshSegmenter::Category MeshSegmenter::classifyCategory(const float*, int,
@@ -1196,9 +1305,11 @@ MeshSegmenter::Category MeshSegmenter::classifyCategory(const float*, int,
 
 MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexCount,
                                              const uint32_t* indices, int indexCount,
-                                             const QString& /*modelPath*/, const Options& opts,
-                                             const int* boneProximity, const ProgressFn&)
+                                             const QString& modelPath, const Options& opts,
+                                             const int* boneProximity, const ProgressFn& progress)
 {
+    if (opts.category == Category::Generic)
+        return predictGeneric(positions, vertexCount, indices, indexCount, modelPath, opts, progress);
     Result r = segmentGeometric(positions, vertexCount, indices, indexCount, opts, boneProximity);
     if (r.ok)
         r.fallbackReason = QStringLiteral(
@@ -1280,6 +1391,8 @@ MeshSegmenter::Result MeshSegmenter::predict(const float* positions, int vertexC
                                              const QString& modelPath, const Options& opts,
                                              const int* boneProximity, const ProgressFn& progress)
 {
+    if (opts.category == Category::Generic)
+        return predictGeneric(positions, vertexCount, indices, indexCount, modelPath, opts, progress);
     // Auto is resolved by the CALLER (resolveCategoryBlocking) — a still-Auto
     // value here means "no classifier available", which degrades to Body.
     const Category cat = (opts.category == Category::Auto) ? Category::Body
@@ -1486,8 +1599,9 @@ MeshSegmenter::Category MeshSegmenter::classifyCategory(const float* positions,
         // Category::Body..Building.
         auto ti = outputs[0].GetTensorTypeAndShapeInfo();
         const size_t elems = ti.GetElementCount();
-        constexpr size_t kClasses =
-            static_cast<size_t>(Category::CategoryCount) - 1;   // minus Auto
+        // Body, Vegetation, Vehicle, Building: what the classifier was
+        // trained on (NOT CategoryCount - 1: Generic is never classified).
+        constexpr size_t kClasses = 4;
         if (elems < kClasses) return Category::Body;
         const float* d = outputs[0].GetTensorData<float>();
         size_t best = 0;

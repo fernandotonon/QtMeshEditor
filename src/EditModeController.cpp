@@ -931,7 +931,8 @@ void EditModeController::clearSeamOnSelection()
         uv->syncWorkingMeshFromEditable(*m_editableMesh);
 }
 
-QString EditModeController::selectByPart(const QString& upAxis, const QString& category)
+QString EditModeController::selectByPart(const QString& upAxis, const QString& category,
+                                        const QString& granularity)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return tr("Enter Edit Mode on a mesh first.");
@@ -993,6 +994,29 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
         }
     }
 
+    // Generic (#1179): fetch the SAM 2.1 graphs HERE, on the main thread
+    // (ModelDownloader lives there; the nested loop keeps the UI painting),
+    // so the worker below never downloads.
+    QString genericModelPath;
+    const bool generic = cat == MeshSegmenter::Category::Generic;
+    if (generic) {
+        if (!MeshSegmenter::modelPresent(cat)) {
+            m_segmentBusy = true;
+            m_segmentDownloading = true;
+            emit segmentProgressChanged();
+        }
+        genericModelPath = MeshSegmenter::ensureModelBlocking(cat);
+        m_segmentBusy = false;
+        m_segmentDownloading = false;
+        emit segmentProgressChanged();
+        if (genericModelPath.isEmpty()) {
+            const QString msg = tr("Generic segmentation is unavailable: %1")
+                                    .arg(MeshSegmenter::genericModelError());
+            emit segmentFinished(msg, true);
+            return msg;
+        }
+    }
+
     // Spin up the worker: ensureModelBlocking() (first-use download) + predict()
     // are Ogre-free and run off the UI thread so the app stays responsive and
     // the progress bar animates. The result is applied back on the main thread.
@@ -1006,7 +1030,8 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
     auto cancel = m_segmentCancel;
     QPointer<EditModeController> self(this);
 
-    std::thread([self, verts, indices, rigLabels, vertexCount, cancel, upAxisIdx, cat]() {
+    std::thread([self, verts, indices, rigLabels, vertexCount, cancel, upAxisIdx, cat,
+                 generic, genericModelPath, granularity]() {
         // Progress callback (inference): marshal to the UI thread, honour cancel.
         auto progress = [self, cancel](int done, int total) -> bool {
             if (cancel->load()) return false;
@@ -1028,9 +1053,11 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
         MeshSegmenter::Options opts;
         opts.upAxis = upAxisIdx;
         opts.category = cat;
+        if (generic && !granularity.isEmpty()) opts.granularity = granularity;
         opts.category = MeshSegmenter::resolveCategoryBlocking(
             verts.data(), vertexCount, opts);
-        const QString modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+        const QString modelPath = generic ? genericModelPath
+                                          : MeshSegmenter::ensureModelBlocking(opts.category);
         if (cancel->load()) {
             QMetaObject::invokeMethod(qApp, [self]() {
                 if (!self) return;
@@ -1063,15 +1090,23 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
                 emit self->segmentFinished(tr("Segmentation failed: %1").arg(r.error), true);
                 return;
             }
-            self->finishSegmentOnMain(r.faceLabels, r.usedModel, QString());
+            self->finishSegmentOnMain(r.faceLabels, r.usedModel, QString(), r.labelNames);
         }, Qt::QueuedConnection);
     }).detach();
 
     return tr("Segmenting…");
 }
 
+QString EditModeController::segLabelName(int label) const
+{
+    if (m_segLabelNames.empty()) return MeshSegmenter::partName(label);
+    return (label >= 0 && label < int(m_segLabelNames.size())) ? m_segLabelNames[size_t(label)]
+                                                              : QStringLiteral("unknown");
+}
+
 void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
-                                             bool usedModel, const QString& predictError)
+                                             bool usedModel, const QString& predictError,
+                                             const std::vector<QString>& labelNames)
 {
     m_segmentBusy = false;
     m_segmentDownloading = false;
@@ -1094,6 +1129,7 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
     // hide state (they were keyed to the previous label set).
     m_segLabels.assign(faceLabels.begin(),
                        faceLabels.begin() + totalTris);
+    m_segLabelNames = labelNames;
     m_partExcluded.clear();
     m_partHidden.clear();
     m_partDisplayName.clear();
@@ -1107,7 +1143,8 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
             if (tri >= 0 && tri < static_cast<int>(faceLabels.size()))
                 wantLabels.insert(faceLabels[tri]);
     } else {
-        const int P = MeshSegmenter::partCount();
+        const int P = labelNames.empty() ? MeshSegmenter::partCount()
+                                         : static_cast<int>(labelNames.size());
         std::vector<int> count(P, 0);
         for (int t = 0; t < totalTris; ++t) {
             const int l = faceLabels[t];
@@ -1156,7 +1193,7 @@ void EditModeController::finishSegmentOnMain(const std::vector<int>& faceLabels,
     const int selectedCount = selectedPolygons;
 
     QStringList names;
-    for (int l : wantLabels) names << MeshSegmenter::partName(l);
+    for (int l : wantLabels) names << segLabelName(l);
     // `predictError` doubles as a source note for the success line: the rig
     // fast-path passes "rig"; an empty string + model = no suffix; else fallback.
     const QString note = (predictError == QLatin1String("rig"))
@@ -1202,6 +1239,7 @@ void EditModeController::clearSegmentationCache()
     if (m_segLabels.empty() && m_partGroups.empty())
         return;
     m_segLabels.clear();
+    m_segLabelNames.clear();
     m_partGroups.clear();
     m_partExcluded.clear();
     m_partHidden.clear();
@@ -1215,7 +1253,7 @@ QVariantList EditModeController::partGroups() const
     for (const PartGroupState& g : m_partGroups) {
         QVariantMap m;
         m[QStringLiteral("label")] = g.label;
-        const QString defName = MeshSegmenter::partName(g.label);
+        const QString defName = segLabelName(g.label);
         m[QStringLiteral("name")] = defName;
         const auto dn = m_partDisplayName.find(g.label);
         m[QStringLiteral("displayName")] = dn != m_partDisplayName.end() ? dn->second : defName;
@@ -1266,7 +1304,7 @@ int EditModeController::selectPartGroup(int label, bool addToSelection)
     // Breadcrumb the part id (a stable enum name), never a user string.
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("part_group_select %1")
-                                      .arg(MeshSegmenter::partName(label)));
+                                      .arg(segLabelName(label)));
     return selectedPolygons;
 }
 
@@ -1279,7 +1317,7 @@ void EditModeController::setPartGroupHidden(int label, bool hidden)
                                       QStringLiteral("part_group_%1 %2")
                                           .arg(hidden ? QStringLiteral("hide")
                                                       : QStringLiteral("show"))
-                                          .arg(MeshSegmenter::partName(label)));
+                                          .arg(segLabelName(label)));
         emit partGroupsChanged();
     }
 }
@@ -1293,7 +1331,7 @@ void EditModeController::setPartGroupExcluded(int label, bool excluded)
                                       QStringLiteral("part_group_%1 %2")
                                           .arg(excluded ? QStringLiteral("exclude")
                                                         : QStringLiteral("include"))
-                                          .arg(MeshSegmenter::partName(label)));
+                                          .arg(segLabelName(label)));
         emit partGroupsChanged();
     }
 }
@@ -1307,7 +1345,7 @@ void EditModeController::setPartGroupDisplayName(int label, const QString& name)
     // NB: only the part id, NOT the user-provided display name (no content leak).
     SentryReporter::addBreadcrumb(QStringLiteral("ui.action"),
                                   QStringLiteral("part_group_rename %1")
-                                      .arg(MeshSegmenter::partName(label)));
+                                      .arg(segLabelName(label)));
     emit partGroupsChanged();
 }
 

@@ -90,6 +90,11 @@ public:
         Vegetation,
         Vehicle,
         Building,
+        // Any object (#1179): SAM 2.1 masks on multi-view renders, merged on
+        // the mesh. Parts are unnamed instances (part_01 = largest), so its
+        // labels are NOT Part values: use Result::labelName(). Not picked by
+        // Auto; the Auto classifier only knows Body..Building.
+        Generic,
         CategoryCount
     };
     static QString categoryName(Category c);             // "auto", "body", …
@@ -163,6 +168,10 @@ public:
         // purpose — they attach along a VERTICAL seam where a horizontal level
         // is meaningless. Default ON; gated by `cleanupIslands` (same switch).
         bool levelLimbCuts = true;
+        // Generic category only: "coarse" | "medium" | "fine" and the number
+        // of rendered views (12 is faster, 20 the default).
+        QString granularity = QStringLiteral("medium");
+        int genericViews = 20;
     };
 
     struct Result {
@@ -177,6 +186,10 @@ public:
         QString fallbackReason;          // why the fallback ran (if it did)
         // The category the labels belong to (opts.category, Auto resolved).
         Category category = Category::Body;
+        // Name per label value when the labels are not Part values (Generic:
+        // "unknown", "part_01", ...); empty for the named categories.
+        std::vector<QString> labelNames;
+        QString labelName(int label) const;
     };
 
     using ProgressFn = std::function<bool(int stepsDone, int maxSteps)>;
@@ -208,6 +221,9 @@ public:
     // QTMESH_SEGMENT_MODEL_BASE_URL / QSettings ai/segmentModelBaseUrl.
     // Call on a thread with an event loop.
     static QString ensureModelBlocking(Category c = Category::Body);
+    // Generic: ensureModelBlocking fetches the SAM 2.1 graphs (main thread
+    // only) and returns the encoder path; when it returns empty, this says why.
+    static QString genericModelError();
 
     // ---- Auto-dispatch category classifier (meshseg_category.onnx) ----------
     static QString classifierModelPath();
