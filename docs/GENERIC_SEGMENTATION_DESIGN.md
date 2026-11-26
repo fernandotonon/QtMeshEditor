@@ -1,6 +1,6 @@
 # Generic part segmentation (design)
 
-Status: **slices 1-2 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider; SAM 2.1 export + C++ mask provider, measured on real meshes); hosting and integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
+Status: **slices 1-2 implemented** (pure-data core in `src/GenericSeg/`, tested with a fake mask provider; SAM 2.1 export + C++ mask provider, measured on real meshes; graphs hosted and fetched on first use); integration pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
 
 ## Problem
 
@@ -137,10 +137,15 @@ rat came out as ONE part. As in SAMesh, each image's masks are painted largest
 first so a pixel keeps only the smallest mask covering it; after that the car's
 four wheels, the rat's ears, paws and tail and the horse's tail separate.
 
-Hosting: HF `QtMeshEditor-models/segment/` with SHA-256 pinned in code and
-verified on disk (the `ModelFetch` `expectedSha256` path), licence text beside
-the graphs. Overrides: the existing `QTMESH_SEGMENT_MODEL_BASE_URL` /
-`ai/segmentModelBaseUrl`, guard `QTMESH_SEGMENT_NO_DOWNLOAD`.
+Hosting (done): HF `QtMeshEditor-models/segment/` (mirror + model card:
+`QtMeshEditor-sam2-onnx`), uploaded with `scripts/upload-sam2-models.sh`.
+`SamMaskProvider::ensureModelsBlocking` downloads the two graphs and
+`LICENSE-SAM2.txt` (~160 MB, ~75 s here) to `ai_models/segment/` from a URL
+pinned to the upload commit, every file checked against its SHA-256 (an
+existing file too: a corrupt copy is replaced). Overrides: the existing
+`QTMESH_SEGMENT_MODEL_BASE_URL` / `ai/segmentModelBaseUrl` (a mirror is not
+digest-checked), guard `QTMESH_SEGMENT_NO_DOWNLOAD` (verify only). Main thread
+only (ModelDownloader); the GUI must fetch before starting its worker.
 
 Export must pass the usual gate before hosting: loads in onnxruntime, finite
 outputs, parity with PyTorch on fixed images (mask IoU ≥ 0.99, IoU-score diff

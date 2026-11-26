@@ -42,6 +42,20 @@ public:
     static QString encoderFileName();
     static QString decoderFileName();
 
+    // Where the app keeps them: <AppData>/ai_models/segment/ (next to the
+    // other segmentation models), with Meta's Apache-2.0 text beside them.
+    static QString modelDir();
+    static bool modelsPresent();
+    // First use: downloads the graphs + licence (~160 MB) from the
+    // QtMeshEditor-models HF repo, pinned to a commit and checked against
+    // SHA-256 (also an existing file, so a corrupt copy is replaced).
+    // Overrides: QSettings ai/segmentModelBaseUrl, QTMESH_SEGMENT_MODEL_BASE_URL
+    // (a mirror: no digest check), QTMESH_SEGMENT_NO_DOWNLOAD (verify only).
+    // Main thread only (ModelDownloader). `cancelled` is polled during the
+    // transfer. Returns false with the reason in `error`.
+    static bool ensureModelsBlocking(QString* error = nullptr,
+                                     const std::function<bool()>& cancelled = {});
+
 private:
     struct Impl;
     std::unique_ptr<Impl> d;

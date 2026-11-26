@@ -1,6 +1,12 @@
 #include "SamMaskProvider.h"
 
+#include "AppStorage.h"
+#include "ModelFetch.h"
+
+#include <QDir>
 #include <QElapsedTimer>
+#include <QFileInfo>
+#include <QSettings>
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +20,83 @@ namespace GenericSeg {
 
 QString SamMaskProvider::encoderFileName() { return QStringLiteral("sam2.1_hiera_small_encoder.onnx"); }
 QString SamMaskProvider::decoderFileName() { return QStringLiteral("sam2.1_hiera_small_decoder.onnx"); }
+
+namespace {
+
+// Pinned to a COMMIT, not `main`: the digests below describe exactly these
+// files. After re-exporting (scripts/export-sam2-onnx.py) and uploading
+// (scripts/upload-sam2-models.sh), update the revision AND the digests together.
+constexpr const char* kDefaultBaseUrl =
+    "https://huggingface.co/fernandotonon/QtMeshEditor-models/resolve/9650df88f6341bf66d489512dc88bdcbb42c29ac/segment/";
+constexpr const char* kBaseUrlSettingsKey = "ai/segmentModelBaseUrl";   // shared with MeshSegmenter
+
+struct FileSpec { const char* name; const char* label; const char* sha256; };
+constexpr FileSpec kFiles[] = {
+    {"LICENSE-SAM2.txt", "SAM 2.1 licence (Apache-2.0)",
+     "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"},
+    {"sam2.1_hiera_small_decoder.onnx", "SAM 2.1 mask decoder",
+     "ad1e4f9c547b27eeec396d2bd8e3ca94a60eb6692666b20a088ebe74c7a62295"},
+    {"sam2.1_hiera_small_encoder.onnx", "SAM 2.1 image encoder",
+     "78145ad60deed0a7587fff296d8e29bbec458e2a0b5dc65a9a7b31e3f5af3c9b"},
+};
+
+} // namespace
+
+QString SamMaskProvider::modelDir()
+{
+    return QDir(AppStorage::aiModelsRoot()).filePath(QStringLiteral("segment/"));
+}
+
+bool SamMaskProvider::modelsPresent()
+{
+    for (const FileSpec& f : kFiles)
+        if (!QFileInfo::exists(QDir(modelDir()).filePath(QString::fromLatin1(f.name)))) return false;
+    return true;
+}
+
+bool SamMaskProvider::ensureModelsBlocking(QString* error, const std::function<bool()>& cancelled)
+{
+#ifndef ENABLE_ONNX
+    Q_UNUSED(cancelled);
+    if (error) *error = QStringLiteral("Generic segmentation needs ONNX Runtime (rebuild with -DENABLE_ONNX)");
+    return false;
+#else
+    QString base = QSettings().value(QString::fromLatin1(kBaseUrlSettingsKey)).toString();
+    if (base.isEmpty()) {
+        const QByteArray env = qgetenv("QTMESH_SEGMENT_MODEL_BASE_URL");
+        base = env.isEmpty() ? QString::fromLatin1(kDefaultBaseUrl) : QString::fromUtf8(env);
+    }
+    // A mirror may serve a different export: only the default hosting is digest-checked.
+    const bool defaultHosting = base == QString::fromLatin1(kDefaultBaseUrl);
+    if (!base.endsWith('/')) base += '/';
+    const bool noDownload = !qEnvironmentVariableIsEmpty("QTMESH_SEGMENT_NO_DOWNLOAD");
+    QDir().mkpath(modelDir());
+    for (const FileSpec& f : kFiles) {
+        const QString dest = QDir(modelDir()).filePath(QString::fromLatin1(f.name));
+        if (QFileInfo::exists(dest) && !defaultHosting) continue;
+        if (noDownload && !QFileInfo::exists(dest)) {
+            if (error)
+                *error = QStringLiteral("%1 is missing and downloads are disabled by QTMESH_SEGMENT_NO_DOWNLOAD")
+                             .arg(QString::fromLatin1(f.name));
+            return false;
+        }
+        ModelFetch::Request req;
+        // Empty URL = verify only (downloads disabled, file present).
+        req.url = noDownload ? QString() : base + QString::fromLatin1(f.name);
+        req.destination = dest;
+        req.label = QString::fromLatin1(f.label);
+        req.timeoutMs = 1800000;
+        req.cancelled = cancelled;
+        if (defaultHosting) req.expectedSha256 = QString::fromLatin1(f.sha256);
+        const ModelFetch::Outcome fo = ModelFetch::ensureBlocking(req);
+        if (!fo.ok) {
+            if (error) *error = fo.error.isEmpty() ? QStringLiteral("could not fetch %1").arg(QString::fromLatin1(f.name)) : fo.error;
+            return false;
+        }
+    }
+    return true;
+#endif
+}
 
 #ifndef ENABLE_ONNX
 

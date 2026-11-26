@@ -497,6 +497,28 @@ bool loadObj(const QString& path, std::vector<float>& pos, std::vector<uint32_t>
 
 } // namespace
 
+TEST(GenericSegmenter, SamModelsHonourTheNoDownloadSwitch)
+{
+    // The suite runs with QTMESH_SEGMENT_NO_DOWNLOAD set: missing graphs are
+    // reported with the reason, never fetched. Present graphs (a developer
+    // machine) are only verified against their pinned digests.
+    ASSERT_FALSE(qEnvironmentVariableIsEmpty("QTMESH_SEGMENT_NO_DOWNLOAD"));
+    QString why;
+    const bool ok = SamMaskProvider::ensureModelsBlocking(&why);
+#ifdef ENABLE_ONNX
+    if (SamMaskProvider::modelsPresent()) {
+        SUCCEED() << "graphs present; verified: " << ok << " " << why.toStdString();
+    } else {
+        EXPECT_FALSE(ok);
+        EXPECT_TRUE(why.contains(QLatin1String("QTMESH_SEGMENT_NO_DOWNLOAD"))) << why.toStdString();
+    }
+#else
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(why.contains(QLatin1String("ENABLE_ONNX"))) << why.toStdString();
+#endif
+    EXPECT_TRUE(SamMaskProvider::modelDir().endsWith(QLatin1String("segment/")));
+}
+
 TEST(GenericSegmenter, DISABLED_VisualDump)
 {
     const QString dir = qEnvironmentVariable("QTMESH_GENSEG_DUMP");
@@ -565,8 +587,15 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
         fprintf(stderr, "  %s: %d faces\n", qPrintable(stem), sm.faceCount());
 
         // With the exported SAM 2.1 graphs: the real pipeline, per granularity.
-        const QString samDir = qEnvironmentVariable("QTMESH_SAM2_DIR");
+        // QTMESH_SAM2_DIR=<dir with the graphs>, or "download" for the app's own
+        // first-use path (run with QTMESH_SEGMENT_NO_DOWNLOAD= to allow it).
+        QString samDir = qEnvironmentVariable("QTMESH_SAM2_DIR");
         if (samDir.isEmpty()) continue;
+        if (samDir == QLatin1String("download")) {
+            QString why;
+            ASSERT_TRUE(SamMaskProvider::ensureModelsBlocking(&why)) << why.toStdString();
+            samDir = SamMaskProvider::modelDir();
+        }
         SamMaskProvider::Options so;
         so.pointsPerSide = qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS") > 0
                                ? qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS") : so.pointsPerSide;

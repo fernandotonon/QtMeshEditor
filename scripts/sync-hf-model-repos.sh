@@ -34,6 +34,8 @@
 #   segveh     → QtMeshEditor-mesh-segmentation-vehicle    (CC-BY-4.0, in-house #818 B2)
 #   segbld     → QtMeshEditor-mesh-segmentation-building   (CC-BY-4.0, in-house #818 B2)
 #   segcls     → QtMeshEditor-mesh-segmentation-category   (CC-BY-4.0, in-house #818 B2 Auto dispatcher)
+#   sam2       → QtMeshEditor-sam2-onnx        (Apache, Meta SAM 2.1 Hiera-Small; generic segmentation #1179 —
+#                                               upload with upload-sam2-models.sh, which also writes the card)
 #   sam3dbody  → QtMeshEditor-sam3dbody-onnx   (SAM License + Apache-2.0 MHR data; #1100 — upload with
 #                                               upload-sam3dbody-models.sh, which also writes the card)
 #   mocap-* (5, #869; Apache, converted Google MediaPipe graphs):
@@ -74,6 +76,7 @@ declare -A REPOS=(
   [lama]=QtMeshEditor-lama-onnx
   [ssencoder]=QtMeshEditor-trellis-ss-encoder-onnx
   [sam3dbody]=QtMeshEditor-sam3dbody-onnx
+  [sam2]=QtMeshEditor-sam2-onnx
 )
 declare -A FILES=(
   [pbrify]="1x-PBRify_NormalV3.onnx 1x-PBRify_RoughnessV2.onnx 1x-PBRify_Height.onnx"
@@ -99,6 +102,7 @@ declare -A FILES=(
   [birefnet]="rembg/birefnet.onnx"
   [lama]="pbr/lama.onnx"
   [ssencoder]="trellis2/ss_encoder.onnx trellis2/LICENSE-TRELLIS.txt"
+  [sam2]="segment/sam2.1_hiera_small_encoder.onnx segment/sam2.1_hiera_small_decoder.onnx segment/LICENSE-SAM2.txt"
   [sam3dbody]="sam3dbody/sam3d_backbone.onnx sam3dbody/sam3d_backbone.onnx.data sam3dbody/sam3d_decoder.onnx sam3dbody/mhr_body.onnx sam3dbody/mhr_faces.i32 sam3dbody/mhr_uv.bin sam3dbody/LICENSE-SAM.txt sam3dbody/LICENSE-MHR.txt"
 )
 
