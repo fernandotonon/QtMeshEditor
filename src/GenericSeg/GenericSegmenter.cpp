@@ -215,7 +215,8 @@ int renumberByArea(const SegMesh& mesh, std::vector<int>& labels)
 
 // Graph-cut refinement (see Options::graphCut). `labels` are community + 1
 // from the vote, every face labelled (after the flood).
-void refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::vector<int>& patchOf,
+// Returns false when skipped (over the memory budget).
+bool refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::vector<int>& patchOf,
                         const std::vector<std::vector<std::pair<int, float>>>& patchVotes,
                         const Options& opts, std::vector<int>& labels)
 {
@@ -226,7 +227,8 @@ void refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::
     for (int l : labels)
         if (l > 0 && index.emplace(l, int(labelOf.size())).second) labelOf.push_back(l);
     const int K = int(labelOf.size());
-    if (K < 2) return;
+    if (K < 2) return true;
+    if (static_cast<long long>(faceCount) * K > opts.graphCutMaxEntries) return false;
 
     // Unary: -log of the smoothed vote share, per unit area. Unvoted faces
     // cost the same for every label (the neighbours decide).
@@ -310,6 +312,7 @@ void refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::
     // Faces no view saw and the flood could not reach (floating pieces) stay unknown.
     for (int f = 0; f < faceCount; ++f)
         if (labels[f] > 0) labels[f] = labelOf[out[f]];
+    return true;
 }
 
 } // namespace
@@ -563,7 +566,7 @@ Result segment(const float* positions, int vertexCount,
     floodUnlabelled(mesh, labels);
     if (opts.graphCut) {
         if (!progress(QStringLiteral("refine"), 0, 1)) return res;
-        refineWithGraphCut(mesh, bvh, patchOf, patchVotes, opts, labels);
+        res.stats.graphCutSkipped = !refineWithGraphCut(mesh, bvh, patchOf, patchVotes, opts, labels);
     }
 
     // ---- Cleanup -----------------------------------------------------------

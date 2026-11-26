@@ -6669,6 +6669,9 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 
         std::vector<float> verts;
         std::vector<uint32_t> indices;
+        // Prediction pumps events (model download, progress): a queued
+        // delete_entity can free `entity`, so later code uses only this name.
+        const QString segmentedName = segmentedName;
         if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
             return makeErrorResult("Error: no readable geometry");
         const int vertexCount = static_cast<int>(verts.size() / 3);
@@ -6724,6 +6727,14 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             static_cast<int>(indices.size()), modelPath, opts,
             rigLabels.empty() ? nullptr : rigLabels.data(),
             segmentProgressPump(QStringLiteral("segment_mesh")));
+        {
+            bool stillThere = false;
+            for (auto* ent : mgr->getEntities())
+                if (ent && ent->getMovableType() == "Entity"
+                    && QString::fromStdString(ent->getName()) == segmentedName) { stillThere = true; break; }
+            if (!stillThere)
+                return makeErrorResult(QStringLiteral("Error: entity '%1' was removed during segmentation").arg(segmentedName));
+        }
         if (!r.ok) {
             SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
                 QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
@@ -6768,7 +6779,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                         {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
         QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
-            .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
+            .arg(segmentedName).arg(vertexCount)
             .arg(MeshSegmenter::categoryName(r.category))
             .arg(r.usedModel ? "model" : "geometric fallback");
         for (int p = 0; p < P; ++p)
@@ -6781,7 +6792,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         // material to a part, drive a selection, etc.) rather than parse prose.
         QJsonObject content;
         content["ok"]              = true;
-        content["entity"]          = QString::fromStdString(entity->getName());
+        content["entity"]          = segmentedName;
         content["vertex_count"]    = vertexCount;
         content["face_count"]      = static_cast<int>(r.faceLabels.size());
         content["used_model"]      = r.usedModel;

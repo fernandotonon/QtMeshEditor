@@ -200,6 +200,29 @@ TEST(GenericSegmenter, AWholeObjectMaskInEveryViewDoesNotSwallowTheParts)
     EXPECT_NE(collapsed.parts, 5);   // without it the parts come out wrong
 }
 
+TEST(GenericSegmenter, GraphCutOverTheMemoryBudgetIsSkipped)
+{
+    // Over the (face x part) budget the refinement is skipped: same labels as
+    // with the graph cut off, and the stats say so.
+    const TestMesh table = GenericSegTest::makeTable();
+    Options tiny = fastOptions();
+    tiny.graphCutMaxEntries = 10;
+    TruthMaskProvider a(table);
+    const Result skipped = segment(table.positions.data(), table.vertexCount(),
+                                   table.indices.data(), table.indexCount(), a, tiny);
+    ASSERT_TRUE(skipped.ok);
+    EXPECT_TRUE(skipped.stats.graphCutSkipped);
+    Options off = fastOptions();
+    off.graphCut = false;
+    TruthMaskProvider b(table);
+    const Result noCut = segment(table.positions.data(), table.vertexCount(),
+                                 table.indices.data(), table.indexCount(), b, off);
+    EXPECT_EQ(skipped.faceLabels, noCut.faceLabels);
+    TruthMaskProvider c(table);
+    EXPECT_FALSE(segment(table.positions.data(), table.vertexCount(), table.indices.data(),
+                         table.indexCount(), c, fastOptions()).stats.graphCutSkipped);
+}
+
 TEST(GenericSegmenter, BothSidesOfAThinPartStayTogether)
 {
     // A thin slab: left half part 0, right half part 1. Every view puts the
@@ -407,6 +430,20 @@ QImage shadeLabels(const Raster& r, const SegMesh& mesh, const OrthoCamera& cam,
             img.setPixel(x, y, qRgb(int(qRed(c) * s), int(qGreen(c) * s), int(qBlue(c) * s)));
         }
     return img;
+}
+
+// Disk mask-cache key part identifying the mesh by content (two different
+// "chair.obj" files must not share masks): FNV-1a over positions + indices.
+QString meshKey(const std::vector<float>& pos, const std::vector<uint32_t>& idx)
+{
+    uint64_t h = 1469598103934665603ULL;
+    auto mix = [&h](const void* data, size_t bytes) {
+        const auto* p = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < bytes; ++i) { h ^= p[i]; h *= 1099511628211ULL; }
+    };
+    mix(pos.data(), pos.size() * sizeof(float));
+    mix(idx.data(), idx.size() * sizeof(uint32_t));
+    return QString::number(h, 16).left(12);
 }
 
 class CachedProvider : public MaskProvider {
@@ -630,10 +667,13 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
             grans = {granularityFromName(qEnvironmentVariable("QTMESH_GENSEG_GRAN"))};
         for (Granularity g : grans) {
             CachedProvider cached(sam, cache);
-            if (!cacheDir.isEmpty())
-                cached.diskPrefix = cacheDir + "/" + QFileInfo(path).completeBaseName().replace(' ', '_');
             Options o;
             o.granularity = g;
+            if (!cacheDir.isEmpty())
+                cached.diskPrefix = QStringLiteral("%1/%2_%3_v%4_r%5_p%6")
+                                        .arg(cacheDir, QFileInfo(path).completeBaseName().replace(' ', '_'),
+                                             meshKey(pos, idx))
+                                        .arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution).arg(so.pointsPerSide);
             // Tuning knobs: QTMESH_GENSEG_GC="smoothness,through,thickness,voteSmoothing", or "off".
             const QStringList gc = qEnvironmentVariable("QTMESH_GENSEG_GC").split(',', Qt::SkipEmptyParts);
             if (gc.value(0) == QLatin1String("off")) o.graphCut = false;
@@ -754,8 +794,9 @@ TEST(GenericSegmenter, DISABLED_Benchmark)
                 GenericSegBench::applyOverrides(o, optSpec);
                 CachedProvider cached(sam, cache);
                 if (!cacheDir.isEmpty())
-                    cached.diskPrefix = QStringLiteral("%1/%2_%3_v%4_r%5_p%6_%7")
-                                            .arg(cacheDir, stem, variant).arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution)
+                    cached.diskPrefix = QStringLiteral("%1/%2_%3_%4_v%5_r%6_p%7_%8")
+                                            .arg(cacheDir, stem, variant, meshKey(pos, idx))
+                                            .arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution)
                                             .arg(so.pointsPerSide)
                                             .arg(sm.faceCount() < o.matteBelowFaces ? "matte" : "ns");
                 QElapsedTimer t;

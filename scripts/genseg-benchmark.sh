@@ -24,20 +24,32 @@ APP="${APP:-$BIN/QtMeshEditor.app/Contents/MacOS/QtMeshEditor}"
 
 case "${1:-}" in
 prepare)
-    SRC="$2"; OUT="$3/src"; mkdir -p "$OUT"
+    SRC="$2"; OUT="$3/src"; mkdir -p "$OUT"; FAILED=0
     for f in quaternius-men/Male_Suit quaternius-knight/KnightCharacter quaternius-robot/Robot \
              quaternius-alien/Alien quaternius-monsters/Skeleton quaternius-monsters/Dragon \
              quaternius-farm-animals/Horse quaternius-farm-animals/Cow quaternius-dinosaurs/Trex \
              quaternius-enemies/Spider quaternius-enemies/Frog quaternius-fish/Shark \
              quaternius-knight/Helmet1; do
         n=$(basename "$f")
-        "$APP" --cli convert "$SRC/$f.fbx" -o "$OUT/$n.obj" >/dev/null 2>&1
-        "$APP" --cli segment "$SRC/$f.fbx" --dump-training-data "$OUT/$n.rig.json" >/dev/null 2>&1 || true
+        # Never leave a new OBJ next to stale or missing truth: convert into a
+        # scratch folder under the final names and install the set together.
+        STAGE="$OUT/.stage"; rm -rf "$STAGE"; mkdir -p "$STAGE"
+        if ! "$APP" --cli convert "$SRC/$f.fbx" -o "$STAGE/$n.obj" >/dev/null 2>&1 || [ ! -s "$STAGE/$n.obj" ]; then
+            echo "FAILED to convert $f (skipped)" >&2; FAILED=1; continue
+        fi
+        if [ "$n" = Helmet1 ]; then   # a prop: its pieces are the truth
+            rm -f "$OUT/$n.rig.json"
+        elif ! "$APP" --cli segment "$SRC/$f.fbx" --dump-training-data "$STAGE/$n.rig.json" >/dev/null 2>&1 \
+             || [ ! -s "$STAGE/$n.rig.json" ]; then
+            echo "FAILED to extract the rig truth of $f (skipped)" >&2; FAILED=1; continue
+        fi
+        mv "$STAGE"/* "$OUT/"
     done
-    rm -f "$OUT/Helmet1.rig.json"   # a prop: its pieces are the truth
     for n in Pistol SniperRifle; do cp "$SRC/quaternius-guns/$n.obj" "$SRC/quaternius-guns/$n.mtl" "$OUT/"; done
     for n in a e h; do cp "$SRC/kenney-blocky/character-$n.obj" "$SRC/kenney-blocky/character-$n.mtl" "$OUT/"; done
+    rm -rf "$OUT/.stage"
     ls "$OUT"/*.obj | wc -l
+    exit "$FAILED"
     ;;
 run)
     B="$2"; NAME="$3"; mkdir -p "$B/results"
@@ -47,9 +59,18 @@ run)
     export QTMESH_GENSEG_VARIANTS="${VARIANTS:-low,dense}" QTMESH_GENSEG_GRAN="${GRAN:-coarse,medium,fine}"
     export QTMESH_GENSEG_OPT="${OPT:-}"
     if [ -n "${DUMP:-}" ]; then export QTMESH_GENSEG_DUMP="$B/dump/$NAME"; fi
-    "$BIN/UnitTests" --gtest_also_run_disabled_tests --gtest_filter='GenericSegmenter.DISABLED_Benchmark' 2>&1 \
-        | grep -vE '^\[|^Note|^UnitTests|^$|onnxruntime' > "$B/results/$NAME.txt"
-    grep -E '^  |^SAM' "$B/results/$NAME.txt"
+    RAW="$B/results/$NAME.log"
+    STATUS=0
+    "$BIN/UnitTests" --gtest_also_run_disabled_tests --gtest_filter='GenericSegmenter.DISABLED_Benchmark' \
+        > "$RAW" 2>&1 || STATUS=$?
+    if [ "$STATUS" -ne 0 ]; then
+        echo "benchmark failed (exit $STATUS); full log: $RAW" >&2
+        tail -20 "$RAW" >&2
+        exit "$STATUS"
+    fi
+    grep -vE '^\[|^Note|^UnitTests|^$|onnxruntime' "$RAW" > "$B/results/$NAME.txt"
+    rm -f "$RAW"
+    grep -E '^  [a-z]+ [a-z]+ +tIoU|^SAM' "$B/results/$NAME.txt"
     ;;
 *)
     sed -n '2,20p' "$0"; exit 2 ;;

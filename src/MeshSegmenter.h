@@ -221,7 +221,9 @@ public:
     // Honours QTMESH_SEGMENT_NO_DOWNLOAD + base-URL override
     // QTMESH_SEGMENT_MODEL_BASE_URL / QSettings ai/segmentModelBaseUrl.
     // Call on a thread with an event loop.
-    static QString ensureModelBlocking(Category c = Category::Body);
+    // `cancelled` (Generic only) is polled during the download.
+    static QString ensureModelBlocking(Category c = Category::Body,
+                                       const std::function<bool()>& cancelled = {});
     // Generic: ensureModelBlocking fetches the SAM 2.1 graphs (main thread
     // only) and returns the encoder path; when it returns empty, this says why.
     static QString genericModelError();

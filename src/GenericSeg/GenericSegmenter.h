@@ -89,6 +89,10 @@ struct Options {
     // hand) so they cannot end up in different parts. Lengths and areas are
     // in the normalised mesh (unit bounding sphere).
     bool graphCut = true;
+    // The refinement stores one cost per (face, candidate part). Above this
+    // many entries (32M = 128 MB) it is skipped and the voted labels stand
+    // (Stats::graphCutSkipped); e.g. 1M faces x 200 parts would need 800 MB.
+    long long graphCutMaxEntries = 32LL * 1024 * 1024;
     // Votes are weighted by (median mask area / mask area)^exponent: a small
     // mask is more specific than the large one that also covers the patch
     // (in views where SAM gave no mask for a wheel, the whole-car mask votes
@@ -118,6 +122,7 @@ struct Stats {
     int communities = 0;
     int unseenFaces = 0;      // faces no view saw (labelled from neighbours)
     int parts = 0;
+    bool graphCutSkipped = false;   // over graphCutMaxEntries
 };
 
 struct Result {

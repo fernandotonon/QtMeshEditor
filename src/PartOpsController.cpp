@@ -173,25 +173,45 @@ void PartOpsController::splitGeneric(const std::string& entityName, int axis, bo
         emit splitFinished(tr("No readable geometry to segment."), true);
         return;
     }
+    // Snapshot BEFORE the download: its nested event loop lets the user delete
+    // or replace the entity, so `entity` must not be dereferenced after it.
+    const Ogre::Mesh* meshAtStart = entity->getMesh().get();
+    entity = nullptr;
+    // The cancel token exists before the download so Cancel (shown as soon as
+    // the split is busy) also stops a first-use download.
+    m_splitCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_splitCancel;
     const MeshSegmenter::Category cat = MeshSegmenter::Category::Generic;
-    if (!MeshSegmenter::modelPresent(cat)) setSplitState(true, true, 0, 0);
-    const QString modelPath = MeshSegmenter::ensureModelBlocking(cat);
+    setSplitState(true, !MeshSegmenter::modelPresent(cat), 0, 0);
+    const QString modelPath = MeshSegmenter::ensureModelBlocking(cat, [cancel]() { return cancel->load(); });
+    if (cancel->load()) {
+        setSplitState(false, false, 0, 0);
+        emit splitFinished(tr("Split cancelled."), false);
+        return;
+    }
     if (modelPath.isEmpty()) {
         setSplitState(false, false, 0, 0);
         emit splitFinished(tr("Generic segmentation is unavailable: %1")
                                .arg(MeshSegmenter::genericModelError()), true);
         return;
     }
+    Ogre::Entity* still = findEntity(entityName);
+    if (!still || still->getMesh().get() != meshAtStart) {
+        setSplitState(false, false, 0, 0);
+        emit splitFinished(tr("The mesh changed while the model was downloading; split again."), true);
+        return;
+    }
     SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
         QStringLiteral("gui split generic granularity=%1").arg(granularity));
     setSplitState(true, false, 0, 0);
-    m_splitCancel = std::make_shared<std::atomic_bool>(false);
-    auto cancel = m_splitCancel;
-    const Ogre::Mesh* meshAtStart = entity->getMesh().get();
     QPointer<PartOpsController> self(this);
+    // Labels are per triangle in THIS order; the completion step checks the
+    // live index buffer still matches (an in-place reorder such as the vertex
+    // cache optimisation keeps the mesh and the triangle count).
+    auto inputIndices = std::make_shared<const std::vector<uint32_t>>(indices);
 
     std::thread([self, verts = std::move(verts), indices = std::move(indices), modelPath, cancel,
-                 granularity, axis, solidify, entityName, meshAtStart]() {
+                 granularity, axis, solidify, entityName, meshAtStart, inputIndices]() {
         QElapsedTimer clock;
         clock.start();
         MeshSegmenter::Options opts;
@@ -210,7 +230,7 @@ void PartOpsController::splitGeneric(const std::string& entityName, int axis, bo
             modelPath, opts, nullptr, progress);
         const qint64 ms = clock.elapsed();
         QMetaObject::invokeMethod(qApp, [self, r, cancel, solidify, axis, entityName, meshAtStart,
-                                         granularity, ms, triCount = indices.size() / 3]() {
+                                         granularity, ms, inputIndices]() {
             if (!self) return;
             self->setSplitState(false, false, 0, 0);
             if (cancel->load() || r.fallbackReason == QLatin1String("cancelled")) {
@@ -223,7 +243,10 @@ void PartOpsController::splitGeneric(const std::string& entityName, int axis, bo
             }
             // The mesh may have changed (or gone) during the minute it took.
             Ogre::Entity* e = findEntity(entityName);
-            if (!e || e->getMesh().get() != meshAtStart || r.faceLabels.size() != triCount) {
+            std::vector<float> liveVerts;
+            std::vector<uint32_t> liveIndices;
+            if (!e || e->getMesh().get() != meshAtStart || r.faceLabels.size() != inputIndices->size() / 3
+                || !AutoRig::gatherGeometry(e, liveVerts, liveIndices) || liveIndices != *inputIndices) {
                 emit self->splitFinished(tr("The mesh changed while it was being segmented; split again."), true);
                 return;
             }

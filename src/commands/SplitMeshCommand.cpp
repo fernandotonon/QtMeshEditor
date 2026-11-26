@@ -144,6 +144,14 @@ void SplitMeshCommand::redo()
                 mError = r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error;
                 return;
             }
+            // The model download and the progress pump run event loops, which
+            // can delete or replace the entity: never reuse the old pointer.
+            entity = resolveEntity();
+            if (!entity || entity->getMesh() != mOriginalMesh) {
+                mError = QStringLiteral("the mesh changed while it was being segmented");
+                mOriginalMesh.reset();
+                return;
+            }
         }
 
         SubMeshOps::SplitOptions sopts;

@@ -999,16 +999,30 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
     // so the worker below never downloads.
     QString genericModelPath;
     const bool generic = cat == MeshSegmenter::Category::Generic;
+    // Created before the download so Cancel also stops a first-use download.
+    m_segmentCancel = std::make_shared<std::atomic_bool>(false);
     if (generic) {
-        if (!MeshSegmenter::modelPresent(cat)) {
-            m_segmentBusy = true;
-            m_segmentDownloading = true;
-            emit segmentProgressChanged();
-        }
-        genericModelPath = MeshSegmenter::ensureModelBlocking(cat);
+        // The download's nested loop can end edit mode or replace the mesh:
+        // keep identities (compared by address only) and re-check after it.
+        const Ogre::Entity* entityAtStart = m_editEntity;
+        const Ogre::Mesh* meshAtStart = m_editEntity ? m_editEntity->getMesh().get() : nullptr;
+        auto cancelToken = m_segmentCancel;
+        m_segmentBusy = true;
+        m_segmentDownloading = !MeshSegmenter::modelPresent(cat);
+        emit segmentProgressChanged();
+        genericModelPath = MeshSegmenter::ensureModelBlocking(cat, [cancelToken]() { return cancelToken->load(); });
         m_segmentBusy = false;
         m_segmentDownloading = false;
         emit segmentProgressChanged();
+        if (cancelToken->load()) {
+            emit segmentFinished(tr("Segmentation cancelled."), false);
+            return tr("Segmentation cancelled.");
+        }
+        if (m_editEntity != entityAtStart || !m_editEntity || m_editEntity->getMesh().get() != meshAtStart) {
+            const QString msg = tr("The mesh changed while the model was downloading; try again.");
+            emit segmentFinished(msg, true);
+            return msg;
+        }
         if (genericModelPath.isEmpty()) {
             const QString msg = tr("Generic segmentation is unavailable: %1")
                                     .arg(MeshSegmenter::genericModelError());
@@ -1026,7 +1040,6 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
     m_segmentTotal = 0;
     emit segmentProgressChanged();
 
-    m_segmentCancel = std::make_shared<std::atomic_bool>(false);
     auto cancel = m_segmentCancel;
     QPointer<EditModeController> self(this);
 

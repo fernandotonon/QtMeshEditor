@@ -24,7 +24,7 @@ SegMesh SegMesh::build(const float* pos, int vertexCount, const uint32_t* idx, i
     if (!pos || !idx || vertexCount <= 0 || faceCount <= 0)
         return m;
     for (int i = 0; i < faceCount * 3; ++i)
-        if (int(idx[i]) >= vertexCount)
+        if (idx[i] >= uint32_t(vertexCount))
             return m;
 
     // Normalise: bbox centre to origin, farthest vertex at radius 1.

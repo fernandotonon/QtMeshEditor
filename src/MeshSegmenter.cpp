@@ -1177,11 +1177,11 @@ QString& genericModelErrorRef() { static QString e; return e; }
 
 QString MeshSegmenter::genericModelError() { return genericModelErrorRef(); }
 
-QString MeshSegmenter::ensureModelBlocking(Category c)
+QString MeshSegmenter::ensureModelBlocking(Category c, const std::function<bool()>& cancelled)
 {
     if (c == Category::Generic) {
         QString why;
-        if (!GenericSeg::SamMaskProvider::ensureModelsBlocking(&why)) {
+        if (!GenericSeg::SamMaskProvider::ensureModelsBlocking(&why, cancelled)) {
             genericModelErrorRef() = why;
             return {};
         }
@@ -1254,6 +1254,7 @@ MeshSegmenter::Result predictGeneric(const float* positions, int vertexCount,
     bool okGran = true;
     go.granularity = GenericSeg::granularityFromName(opts.granularity, &okGran);
     go.views = opts.genericViews > 0 ? std::clamp(opts.genericViews, 4, 64) : 0;
+    go.cleanup = opts.cleanupIslands;   // --no-island-cleanup / MCP no_cleanup
     bool cancelled = false;
     // Progress in one range: one step per rendered image, plus a final step
     // for the merge / labels / refinement (each well under a second).

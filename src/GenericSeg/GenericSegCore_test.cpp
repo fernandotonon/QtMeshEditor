@@ -104,6 +104,12 @@ TEST(GenericSegMesh, RejectsInvalidInput)
     std::vector<uint32_t> bad{0, 1, 7};
     EXPECT_EQ(SegMesh::build(pos.data(), 3, bad.data(), 3).faceCount(), 0);
     EXPECT_EQ(SegMesh::build(nullptr, 0, nullptr, 0).faceCount(), 0);
+    // An index past INT_MAX wraps negative as an int; it must still be rejected.
+    std::vector<uint32_t> huge{0, 1, UINT32_MAX};
+    EXPECT_EQ(SegMesh::build(pos.data(), 3, huge.data(), 3).faceCount(), 0);
+    TriangleBvh bvh;
+    bvh.build(pos.data(), 3, huge.data(), 3);   // must not read outside `pos`
+    EXPECT_EQ(bvh.triangleCount(), 1);
 }
 
 // ---------------------------------------------------------------- Raster

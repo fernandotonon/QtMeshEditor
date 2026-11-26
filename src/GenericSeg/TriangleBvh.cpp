@@ -28,10 +28,10 @@ void TriangleBvh::build(const float* positions, int vertexCount,
     m_order.clear();
     m_nodes.clear();
     const int triCount = indexCount / 3;
-    if (!positions || !indices || triCount <= 0)
+    if (!positions || !indices || triCount <= 0 || vertexCount <= 0)
         return;
     auto P = [&](uint32_t i) {
-        if (int(i) >= vertexCount) return Vec3();
+        if (i >= uint32_t(vertexCount)) return Vec3();
         return Vec3(positions[3 * i], positions[3 * i + 1], positions[3 * i + 2]);
     };
     m_tris.resize(triCount);

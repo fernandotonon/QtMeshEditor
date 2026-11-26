@@ -1,6 +1,7 @@
 #include "ShapeDiameter.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <thread>
 
@@ -84,13 +85,22 @@ std::vector<float> shapeDiameter(const SegMesh& mesh, const TriangleBvh& bvh, co
 
     int threads = opts.threads > 0 ? opts.threads : int(std::thread::hardware_concurrency());
     threads = std::clamp(threads, 1, 64);
+    // Workers pull faces from a shared counter, and the calling thread works
+    // too: if a thread cannot be started, the ones that did (or this thread
+    // alone) finish every face, and each started thread is joined.
+    std::atomic<int> next{0};
+    auto work = [&] {
+        for (int f = next.fetch_add(1); f < faceCount; f = next.fetch_add(1))
+            sdf[f] = faceSdf(mesh, bvh, f, cone);
+    };
     std::vector<std::thread> pool;
-    for (int w = 0; w < threads; ++w) {
-        pool.emplace_back([&, w] {
-            for (int f = w; f < faceCount; f += threads)
-                sdf[f] = faceSdf(mesh, bvh, f, cone);
-        });
+    try {
+        pool.reserve(size_t(threads - 1));
+        for (int w = 1; w < threads; ++w) pool.emplace_back(work);
+    } catch (const std::exception&) {
+        // Fewer workers; the work still completes below.
     }
+    work();
     for (std::thread& th : pool) th.join();
 
     // Fill faces with no valid hit from their neighbours (several sweeps).
