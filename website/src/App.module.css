@@ -4,9 +4,14 @@
   color: var(--text-0);
 }
 .main {
+  scroll-margin-top: calc(var(--site-header-height, 90px) + 1rem);
   padding-bottom: 6rem;
 }
 .siteHeader {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--surface-0);
   max-width: 1440px;
   margin: auto;
   min-height: 90px;
@@ -65,6 +70,13 @@
   top: 1rem;
 }
 .hero {
+  position: sticky;
+  top: min(
+    calc(var(--site-header-height, 90px) + 1rem),
+    calc(100dvh - var(--panel-height, 100dvh) - 1rem)
+  );
+  z-index: 1;
+  background: var(--surface-0);
   width: min(1320px, 92%);
   margin: 0 auto;
   padding: 6rem 0 4rem;

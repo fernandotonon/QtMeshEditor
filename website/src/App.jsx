@@ -5,6 +5,7 @@ import CodePanel from './components/CodePanel';
 import Section from './components/Section';
 import VATDemo from './components/VATDemo';
 import DemoVideo from './components/DemoVideo';
+import useMeasuredHeight from './hooks/useMeasuredHeight';
 import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 import {
   cloudBadgeMarkdown,
@@ -142,6 +143,8 @@ async function copyText(text) {
 }
 
 function App() {
+  const [siteHeaderRef, siteHeaderHeight] = useMeasuredHeight();
+  const [heroRef, heroHeight] = useMeasuredHeight();
   const [demoEnabled, setDemoEnabled] = useState(false);
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
@@ -482,11 +485,18 @@ function App() {
 
   return (
     <>
-      <div className={styles.page}>
+      <div
+        className={styles.page}
+        style={{
+          '--site-header-height': siteHeaderHeight
+            ? `${siteHeaderHeight}px`
+            : '90px',
+        }}
+      >
         <a className={styles.skipLink} href="#editor">
           Skip to content
         </a>
-        <header className={styles.siteHeader}>
+        <header ref={siteHeaderRef} className={styles.siteHeader}>
           <a
             className={styles.brand}
             href="#editor"
@@ -526,7 +536,13 @@ function App() {
           </button>
         </header>
         <main id="editor" className={styles.main}>
-          <header className={styles.hero}>
+          <header
+            ref={heroRef}
+            className={styles.hero}
+            style={{
+              '--panel-height': heroHeight ? `${heroHeight}px` : '100dvh',
+            }}
+          >
             <div className={styles.heroCopy}>
               <p className={styles.kicker}>Open-source 3D creation</p>
               <h1 className={styles.heroTitle}>
