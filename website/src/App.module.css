@@ -70,13 +70,6 @@
   top: 1rem;
 }
 .hero {
-  position: sticky;
-  top: min(
-    calc(var(--site-header-height, 90px) + 1rem),
-    calc(100dvh - var(--panel-height, 100dvh) - 1rem)
-  );
-  z-index: 1;
-  background: var(--surface-0);
   width: min(1320px, 92%);
   margin: 0 auto;
   padding: 6rem 0 4rem;

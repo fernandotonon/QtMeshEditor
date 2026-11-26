@@ -1,12 +1,4 @@
 .section {
-  /* Tall panels finish scrolling before they pin; short panels sit below the nav. */
-  position: sticky;
-  top: min(
-    calc(var(--site-header-height, 90px) + 1rem),
-    calc(100dvh - var(--panel-height, 100dvh) - 1rem)
-  );
-  z-index: 1;
-  background: var(--surface-0);
   scroll-margin-top: calc(var(--site-header-height, 90px) + 1rem);
   width: min(1240px, 92vw);
   margin: 0 auto;
