@@ -194,6 +194,7 @@ GenericSeg/SegMesh.cpp
 GenericSeg/MeshRaster.cpp
 GenericSeg/ShapeDiameter.cpp
 GenericSeg/Leiden.cpp
+GenericSeg/GraphCut.cpp
 GenericSeg/GenericSegmenter.cpp
 GenericSeg/SamMasks.cpp
 GenericSeg/SamMaskProvider.cpp
@@ -534,6 +535,7 @@ GenericSeg/SegMesh.h
 GenericSeg/MeshRaster.h
 GenericSeg/ShapeDiameter.h
 GenericSeg/Leiden.h
+GenericSeg/GraphCut.h
 GenericSeg/GenericSegmenter.h
 GenericSeg/SamMasks.h
 GenericSeg/SamMaskProvider.h

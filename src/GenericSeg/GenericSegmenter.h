@@ -77,6 +77,23 @@ struct Options {
     // Per image, a pixel belongs only to the smallest mask covering it
     // (SAMesh). Off only for providers that return disjoint masks anyway.
     bool smallestMaskWins = true;
+    // Graph-cut refinement of the voted labels (alpha-expansion): each face
+    // pays -log of its vote share for the part it gets, each edge between two
+    // parts pays smoothness * edge length (much less along concave creases),
+    // and short "through" links tie the two sides of a thin part (a tail, a
+    // hand) so they cannot end up in different parts. Lengths and areas are
+    // in the normalised mesh (unit bounding sphere).
+    bool graphCut = true;
+    // Votes are weighted by (median mask area / mask area)^exponent: a small
+    // mask is more specific than the large one that also covers the patch
+    // (in views where SAM gave no mask for a wheel, the whole-car mask votes
+    // "body" on it). The cross-view version of smallestMaskWins.
+    float voteAreaExponent = 0.5f;
+    float voteSmoothing = 0.3f;     // pseudo-vote per part: few views = weak evidence
+    float smoothness = 0.1f;        // cost per unit of boundary length on smooth surface
+    float creaseAngleDegrees = 15.0f;   // concave edges sharper than this are cheap to cut
+    float throughWeight = 4.0f;     // cost per unit area of splitting a thin part's two sides
+    float throughThickness = 0.15f; // thickness where the through link has fallen to 1/e
     bool cleanup = true;            // boundary smoothing + small-island cleanup
     int smoothIterations = 3;
     SdfOptions sdf;

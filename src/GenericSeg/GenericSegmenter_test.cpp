@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QDataStream>
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
@@ -40,7 +41,7 @@ public:
         for (size_t i = 0; i < r.face.size(); ++i) {
             const int f = r.face[i];
             if (f < 0 || (hide && hide(f))) continue;
-            Mask& m = byPart[mesh.truth[f]];
+            Mask& m = byPart[claimedPart ? claimedPart(f) : mesh.truth[f]];
             if (m.pixels.empty()) m.pixels.assign(r.face.size(), 0);
             m.pixels[i] = 1;
         }
@@ -79,6 +80,7 @@ public:
     int splitEvery = 0;
     bool wholeObject = false;   // also return one mask of everything (SAM does)
     std::function<bool(int face)> hide;   // faces never put in a mask
+    std::function<int(int face)> claimedPart;   // the part every mask puts a face in (default: truth)
 };
 
 Options fastOptions()
@@ -183,13 +185,60 @@ TEST(GenericSegmenter, AWholeObjectMaskInEveryViewDoesNotSwallowTheParts)
                              table.indices.data(), table.indexCount(), provider, fastOptions());
     expectMatchesTruth(table, r, 5);
 
+    // Without the three guards against it (per-image smallest-wins painting,
+    // the cross-view specificity weighting, and the graph cut, whose
+    // boundary cost alone pulls the parts back) the whole-object masks win.
     Options off = fastOptions();
     off.smallestMaskWins = false;
+    off.voteAreaExponent = 0.0f;
+    off.graphCut = false;
     TruthMaskProvider again(table);
     again.wholeObject = true;
     const Result collapsed = segment(table.positions.data(), table.vertexCount(),
                                      table.indices.data(), table.indexCount(), again, off);
     EXPECT_NE(collapsed.parts, 5);   // without it the parts come out wrong
+}
+
+TEST(GenericSegmenter, BothSidesOfAThinPartStayTogether)
+{
+    // A thin slab: left half part 0, right half part 1. Every view puts the
+    // right half's UNDERSIDE in part 0's mask (the rat tail's underside,
+    // which the views from below lump with the body). The vote alone gives
+    // that underside part 0's label; the graph cut's through links (inward
+    // rays that exit the slab right away) tie it to the top above it.
+    TestMesh m;
+    GenericSegTest::addBox(m, {-1.0f, -0.04f, -0.4f}, {1.0f, 0.04f, 0.4f}, 16,
+                           [](float x, float, float) { return x < 0 ? 0 : 1; });
+    auto underside = [&m](int f) { return m.centroid(f)[0] > 0.0f && m.centroid(f)[1] < -0.035f; };
+    auto top = [&m](int f) { return m.centroid(f)[0] > 0.0f && m.centroid(f)[1] > 0.035f; };
+    auto claimed = [&](int f) { return underside(f) ? 0 : m.truth[f]; };
+    // Share of the right half's underside that got the label of the top above it.
+    auto agreeing = [&](const Result& r) {
+        std::map<int, int> topLabels;
+        for (int f = 0; f < m.faceCount(); ++f) if (top(f)) ++topLabels[r.faceLabels[f]];
+        int topLabel = -1, best = 0;
+        for (const auto& [l, n] : topLabels) if (n > best) { best = n; topLabel = l; }
+        int n = 0, same = 0;
+        for (int f = 0; f < m.faceCount(); ++f)
+            if (underside(f)) { ++n; same += r.faceLabels[f] == topLabel; }
+        return double(same) / std::max(1, n);
+    };
+
+    TruthMaskProvider provider(m);
+    provider.claimedPart = claimed;
+    Options o = fastOptions();
+    o.graphCut = false;
+    const Result voted = segment(m.positions.data(), m.vertexCount(), m.indices.data(), m.indexCount(), provider, o);
+    ASSERT_TRUE(voted.ok);
+    EXPECT_LT(agreeing(voted), 0.5);
+
+    TruthMaskProvider again(m);
+    again.claimedPart = claimed;
+    const Result r = segment(m.positions.data(), m.vertexCount(), m.indices.data(), m.indexCount(),
+                             again, fastOptions());
+    ASSERT_TRUE(r.ok);
+    EXPECT_GT(agreeing(r), 0.95);
+    expectMatchesTruth(m, r, 2);
 }
 
 TEST(GenericSegmenter, ShapeDiameterImagesPathRuns)
@@ -207,14 +256,17 @@ TEST(GenericSegmenter, ShapeDiameterImagesPathRuns)
 
 TEST(GenericSegmenter, SmallPartsMergeIntoANeighbour)
 {
-    // A sliver part (x > 0.9, about 5 % of the surface): a 10 % floor merges
-    // it into its neighbour, a 0 floor keeps it.
+    // A small end part (x > 0.75, the end cap + one ring: about 17 % of the
+    // surface): a 20 % floor merges it into its neighbour, a 0 floor keeps it.
+    // The boundary sits on a grid line; a centroid threshold inside a ring
+    // would make a saw-tooth boundary the graph cut straightens onto the
+    // nearest grid line, changing the part's size.
     TestMesh bar;
     GenericSegTest::addBox(bar, {-1.0f, -0.25f, -0.25f}, {1.0f, 0.25f, 0.25f}, 8,
-                           [](float x, float, float) { return x < 0 ? 0 : (x > 0.9f ? 2 : 1); });
+                           [](float x, float, float) { return x < 0 ? 0 : (x > 0.75f ? 2 : 1); });
     TruthMaskProvider provider(bar);
     Options o = fastOptions();
-    o.minPartFraction = 0.1f;
+    o.minPartFraction = 0.2f;
     const Result r = segment(bar.positions.data(), bar.vertexCount(),
                              bar.indices.data(), bar.indexCount(), provider, o);
     ASSERT_TRUE(r.ok);
@@ -338,7 +390,10 @@ QImage shadeLabels(const Raster& r, const SegMesh& mesh, const OrthoCamera& cam,
                    const std::vector<int>& faceLabels)
 {
     static const QRgb palette[] = {0x808080, 0xe6194b, 0x3cb44b, 0xffe119, 0x4363d8, 0xf58231,
-                                   0x911eb4, 0x46f0f0, 0xf032e6, 0xbcf60c, 0xfabebe, 0x008080};
+                                   0x911eb4, 0x46f0f0, 0xf032e6, 0xbcf60c, 0xfabebe, 0x008080,
+                                   0xe6beff, 0x9a6324, 0xfffac8, 0x800000, 0xaaffc3, 0x808000,
+                                   0xffd8b1, 0x000075, 0xffffff, 0x5f9ea0, 0xff7f50, 0x6a5acd};
+    constexpr int kColours = int(sizeof(palette) / sizeof(palette[0]));
     const QImage matte = shadeMatte(r, mesh, cam);
     QImage img(r.size, r.size, QImage::Format_RGB32);
     img.fill(Qt::black);
@@ -346,7 +401,7 @@ QImage shadeLabels(const Raster& r, const SegMesh& mesh, const OrthoCamera& cam,
         for (int x = 0; x < r.size; ++x) {
             const int f = r.at(x, y);
             if (f < 0) continue;
-            const QRgb c = palette[faceLabels[f] % 12];
+            const QRgb c = palette[faceLabels[f] == 0 ? 0 : 1 + (faceLabels[f] - 1) % (kColours - 1)];
             const float s = 0.35f + 0.65f * qGray(matte.pixel(x, y)) / 255.0f;
             img.setPixel(x, y, qRgb(int(qRed(c) * s), int(qGreen(c) * s), int(qBlue(c) * s)));
         }
@@ -361,7 +416,41 @@ public:
         const auto key = std::make_pair(v.view, int(v.kind));
         auto it = cache.find(key);
         if (it == cache.end()) {
-            it = cache.emplace(key, inner.masksFor(v)).first;
+            // Optional disk cache (QTMESH_GENSEG_MASKCACHE=<dir>): iterate on the
+            // post-processing without re-running SAM.
+            const QString file = diskPrefix.isEmpty() ? QString()
+                : QStringLiteral("%1_v%2_%3.masks").arg(diskPrefix).arg(v.view).arg(imageKindName(v.kind));
+            std::vector<Mask> masks;
+            bool loaded = false;
+            if (!file.isEmpty()) {
+                QFile f(file);
+                if (f.open(QIODevice::ReadOnly)) {
+                    QDataStream in(qUncompress(f.readAll()));
+                    quint32 n = 0;
+                    in >> n;
+                    for (quint32 i = 0; i < n && in.status() == QDataStream::Ok; ++i) {
+                        Mask m;
+                        QByteArray px;
+                        in >> m.score >> px;
+                        m.pixels.assign(px.begin(), px.end());
+                        masks.push_back(std::move(m));
+                    }
+                    loaded = in.status() == QDataStream::Ok;
+                }
+            }
+            if (!loaded) {
+                masks = inner.masksFor(v);
+                if (!file.isEmpty()) {
+                    QByteArray buf;
+                    QDataStream out(&buf, QIODevice::WriteOnly);
+                    out << quint32(masks.size());
+                    for (const Mask& m : masks)
+                        out << m.score << QByteArray(reinterpret_cast<const char*>(m.pixels.data()), int(m.pixels.size()));
+                    QFile f(file);
+                    if (f.open(QIODevice::WriteOnly)) f.write(qCompress(buf));
+                }
+            }
+            it = cache.emplace(key, std::move(masks)).first;
             const QString dumpDir = qEnvironmentVariable("QTMESH_GENSEG_MASKDUMP");
             if (!dumpDir.isEmpty() && v.view < 3) {   // the image + one tile per mask
                 std::vector<QImage> tiles{v.image.scaled(256, 256)};
@@ -380,6 +469,7 @@ public:
     }
     MaskProvider& inner;
     std::map<std::pair<int, int>, std::vector<Mask>>& cache;
+    QString diskPrefix;
 };
 
 bool loadObj(const QString& path, std::vector<float>& pos, std::vector<uint32_t>& idx)
@@ -484,11 +574,28 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
                             samDir + "/" + SamMaskProvider::decoderFileName(), so);
         ASSERT_TRUE(sam.ok()) << sam.error().toStdString();
         std::map<std::pair<int, int>, std::vector<Mask>> cache;   // same renders per granularity
-        std::vector<QImage> tiles;
-        for (Granularity g : {Granularity::Coarse, Granularity::Medium, Granularity::Fine}) {
+        std::vector<QImage> tiles, detail;
+        const QString cacheDir = qEnvironmentVariable("QTMESH_GENSEG_MASKCACHE");
+        if (!cacheDir.isEmpty()) QDir().mkpath(cacheDir);
+        std::vector<Granularity> grans{Granularity::Coarse, Granularity::Medium, Granularity::Fine};
+        if (qEnvironmentVariableIsSet("QTMESH_GENSEG_GRAN"))
+            grans = {granularityFromName(qEnvironmentVariable("QTMESH_GENSEG_GRAN"))};
+        for (Granularity g : grans) {
             CachedProvider cached(sam, cache);
+            if (!cacheDir.isEmpty())
+                cached.diskPrefix = cacheDir + "/" + QFileInfo(path).completeBaseName().replace(' ', '_');
             Options o;
             o.granularity = g;
+            // Tuning knobs: QTMESH_GENSEG_GC="smoothness,through,thickness,voteSmoothing", or "off".
+            const QStringList gc = qEnvironmentVariable("QTMESH_GENSEG_GC").split(',', Qt::SkipEmptyParts);
+            if (gc.value(0) == QLatin1String("off")) o.graphCut = false;
+            else {
+                if (gc.size() > 0) o.smoothness = gc[0].toFloat();
+                if (gc.size() > 1) o.throughWeight = gc[1].toFloat();
+                if (gc.size() > 2) o.throughThickness = gc[2].toFloat();
+                if (gc.size() > 3) o.voteSmoothing = gc[3].toFloat();
+                if (gc.size() > 4) o.voteAreaExponent = gc[4].toFloat();
+            }
             QElapsedTimer t;
             t.start();
             const Result r = segment(pos.data(), int(pos.size() / 3), idx.data(), int(idx.size()), cached, o);
@@ -500,7 +607,13 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
                 const OrthoCamera cam = OrthoCamera::lookingFrom(all[v]);
                 tiles.push_back(shadeLabels(rasterize(sm, cam, 384), sm, cam, r.faceLabels));
             }
+            if (g == grans.back())   // close-up sheet: 8 views at 512 px
+                for (int v : {0, 3, 6, 9, 12, 15, 17, 19}) {
+                    const OrthoCamera cam = OrthoCamera::lookingFrom(all[v]);
+                    detail.push_back(shadeLabels(rasterize(sm, cam, 512), sm, cam, r.faceLabels));
+                }
         }
+        contactSheet(detail, 4).save(dir + "/" + stem + "_detail_" + granularityName(grans.back()) + ".png");
         const auto tm = sam.timing();
         fprintf(stderr, "    SAM: %d images, encode %.0f ms, decode %.0f ms, post %.0f ms, "
                 "%d prompts, %d candidates, %d kept\n", tm.images, tm.encodeMs, tm.decodeMs,

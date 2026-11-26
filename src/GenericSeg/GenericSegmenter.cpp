@@ -1,5 +1,6 @@
 #include "GenericSegmenter.h"
 
+#include "GraphCut.h"
 #include "Leiden.h"
 #include "../MeshSegmenter.h"
 
@@ -194,6 +195,95 @@ int renumberByArea(const SegMesh& mesh, std::vector<int>& labels)
     return int(order.size());
 }
 
+// Graph-cut refinement (see Options::graphCut). `labels` are community + 1
+// from the vote, every face labelled (after the flood).
+void refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::vector<int>& patchOf,
+                        const std::vector<std::vector<std::pair<int, float>>>& patchVotes,
+                        const Options& opts, std::vector<int>& labels)
+{
+    const int faceCount = mesh.faceCount();
+    // Candidate labels: the ones that won somewhere.
+    std::unordered_map<int, int> index;   // label -> 0..K-1
+    std::vector<int> labelOf;
+    for (int l : labels)
+        if (l > 0 && index.emplace(l, int(labelOf.size())).second) labelOf.push_back(l);
+    const int K = int(labelOf.size());
+    if (K < 2) return;
+
+    // Unary: -log of the smoothed vote share, per unit area. Unvoted faces
+    // cost the same for every label (the neighbours decide).
+    const float a = std::max(1e-3f, opts.voteSmoothing);
+    std::vector<float> unary(size_t(faceCount) * K, 0.0f);
+    for (int f = 0; f < faceCount; ++f) {
+        const auto& votes = patchVotes[patchOf[f]];
+        if (votes.empty()) continue;
+        double total = 0.0;
+        std::vector<float> s(K, 0.0f);
+        for (const auto& [c, sc] : votes) {
+            const auto it = index.find(c + 1);
+            if (it == index.end()) continue;
+            s[it->second] += sc;
+            total += sc;
+        }
+        const double denom = total + double(K) * a;
+        for (int k = 0; k < K; ++k)
+            unary[size_t(f) * K + k] = float(-std::log((s[k] + a) / denom) * mesh.faceAreas[f]);
+    }
+
+    std::vector<Vec3> centroid(faceCount);
+    for (int f = 0; f < faceCount; ++f)
+        centroid[f] = (mesh.positions[mesh.indices[3 * f]] + mesh.positions[mesh.indices[3 * f + 1]]
+                       + mesh.positions[mesh.indices[3 * f + 2]]) * (1.0f / 3.0f);
+
+    std::vector<GraphEdge> edges;
+    // Surface edges: length * smoothness, cheap along concave creases.
+    const float crease = std::max(1e-3f, opts.creaseAngleDegrees * 3.14159265f / 180.0f);
+    for (int f = 0; f < faceCount; ++f) {
+        for (int g : mesh.faceNeighbors[f]) {
+            if (g <= f) continue;
+            // Shared welded edge.
+            int shared[2], n = 0;
+            for (int i = 0; i < 3 && n < 2; ++i)
+                for (int j = 0; j < 3; ++j)
+                    if (mesh.weldedIndices[3 * f + i] == mesh.weldedIndices[3 * g + j]) {
+                        shared[n++] = int(mesh.indices[3 * f + i]);
+                        break;
+                    }
+            if (n < 2) continue;
+            const float len = length(mesh.positions[shared[0]] - mesh.positions[shared[1]]);
+            const Vec3 nf = mesh.faceNormals[f], ng = mesh.faceNormals[g];
+            const float cosT = std::clamp(dot(nf, ng), -1.0f, 1.0f);
+            const float theta = std::acos(cosT);
+            const bool concave = dot(nf, centroid[g] - centroid[f]) > 0.0f;
+            float w = 1.0f;
+            if (concave) w = std::max(0.02f, 1.0f / (1.0f + (theta / crease) * (theta / crease)));
+            if (len > 0) edges.push_back({f, g, opts.smoothness * len * w});
+        }
+    }
+    // Through links: straight inward from each face to the wall it exits.
+    if (opts.throughWeight > 0 && bvh.triangleCount() == faceCount) {
+        const float tau = std::max(1e-4f, opts.throughThickness);
+        for (int f = 0; f < faceCount; ++f) {
+            const Vec3 nf = mesh.faceNormals[f];
+            if (length(nf) < 0.5f) continue;
+            const Vec3 d = nf * -1.0f;
+            TriangleBvh::Hit h;
+            if (!bvh.intersect(centroid[f], d, 1e-5f, 5.0f * tau, h, f)) continue;
+            if (dot(bvh.faceNormal(h.face), d) < 0.3f) continue;   // entering another surface
+            const float w = opts.throughWeight * std::min(mesh.faceAreas[f], mesh.faceAreas[h.face])
+                            * std::exp(-h.t / tau);
+            if (w > 0) edges.push_back({f, h.face, w});
+        }
+    }
+
+    std::vector<int> init(faceCount);
+    for (int f = 0; f < faceCount; ++f) init[f] = labels[f] > 0 ? index[labels[f]] : 0;
+    const std::vector<int> out = alphaExpansion(faceCount, K, unary, edges, init);
+    // Faces no view saw and the flood could not reach (floating pieces) stay unknown.
+    for (int f = 0; f < faceCount; ++f)
+        if (labels[f] > 0) labels[f] = labelOf[out[f]];
+}
+
 } // namespace
 
 Result segment(const float* positions, int vertexCount,
@@ -228,9 +318,9 @@ Result segment(const float* positions, int vertexCount,
         if (kinds.empty()) kinds.push_back(ImageKind::Normal);
     }
     std::vector<float> sdf01;
-    if (std::find(kinds.begin(), kinds.end(), ImageKind::Sdf) != kinds.end()) {
-        if (!progress(QStringLiteral("shape diameter"), 0, 1)) return res;
-        TriangleBvh bvh;
+    const bool wantSdf = std::find(kinds.begin(), kinds.end(), ImageKind::Sdf) != kinds.end();
+    TriangleBvh bvh;
+    if (wantSdf || opts.graphCut) {
         std::vector<float> flat(mesh.positions.size() * 3);
         for (size_t v = 0; v < mesh.positions.size(); ++v) {
             flat[3 * v] = mesh.positions[v].x;
@@ -238,6 +328,9 @@ Result segment(const float* positions, int vertexCount,
             flat[3 * v + 2] = mesh.positions[v].z;
         }
         bvh.build(flat.data(), int(mesh.positions.size()), mesh.indices.data(), int(mesh.indices.size()));
+    }
+    if (wantSdf) {
+        if (!progress(QStringLiteral("shape diameter"), 0, 1)) return res;
         sdf01 = normalizeSdf(shapeDiameter(mesh, bvh, opts.sdf));
     }
 
@@ -403,7 +496,17 @@ Result segment(const float* positions, int vertexCount,
     // ---- Patch vote -> face labels -----------------------------------------
     if (!progress(QStringLiteral("labels"), 0, 1)) return res;
     std::vector<int> patchLabel(patchCount, 0);
+    std::vector<std::vector<std::pair<int, float>>> patchVotes(patchCount);   // (community, score)
     {
+        std::vector<float> specificity(nodes.size(), 1.0f);
+        if (opts.voteAreaExponent > 0 && !nodes.empty()) {
+            std::vector<double> areas;
+            for (const Node& n : nodes) areas.push_back(n.area);
+            std::nth_element(areas.begin(), areas.begin() + areas.size() / 2, areas.end());
+            const double median = std::max(1e-12, areas[areas.size() / 2]);
+            for (size_t n = 0; n < nodes.size(); ++n)
+                specificity[n] = float(std::pow(median / std::max(1e-12, nodes[n].area), opts.voteAreaExponent));
+        }
         std::unordered_map<int, float> score;
         for (int p = 0; p < patchCount; ++p) {
             if (nodesOfPatch[p].empty()) continue;
@@ -413,18 +516,27 @@ Result segment(const float* positions, int vertexCount,
                 const auto it = std::lower_bound(node.patches.begin(), node.patches.end(), p);
                 const float cov = (it != node.patches.end() && *it == p)
                                       ? node.coverage[size_t(it - node.patches.begin())] : 1.0f;
-                score[community[n]] += node.score * cov;
+                // Only a mask holding most of the patch gets the specificity
+                // boost: a small mask's partial cover at its silhouette edge
+                // must not outvote the mask the patch really belongs to.
+                score[community[n]] += node.score * cov * (cov >= 0.5f ? specificity[n] : 1.0f);
             }
             int best = -1;
             float bestScore = -1.0f;
-            for (const auto& [c, sc] : score)
+            for (const auto& [c, sc] : score) {
+                patchVotes[p].push_back({c, sc});
                 if (sc > bestScore || (sc == bestScore && c < best)) { bestScore = sc; best = c; }
+            }
             patchLabel[p] = best + 1;
         }
     }
     std::vector<int> labels(faceCount, 0);
     for (int f = 0; f < faceCount; ++f) labels[f] = patchLabel[patchOf[f]];
     floodUnlabelled(mesh, labels);
+    if (opts.graphCut) {
+        if (!progress(QStringLiteral("refine"), 0, 1)) return res;
+        refineWithGraphCut(mesh, bvh, patchOf, patchVotes, opts, labels);
+    }
 
     // ---- Cleanup -----------------------------------------------------------
     const float minFraction = opts.minPartFraction >= 0 ? opts.minPartFraction
@@ -440,6 +552,19 @@ Result segment(const float* positions, int vertexCount,
         mergeSmallParts(mesh, labels, minFraction);
     }
     res.parts = renumberByArea(mesh, labels);
+    if (qEnvironmentVariableIsSet("QTMESH_GENSEG_DEBUG")) {
+        std::map<int, std::pair<double, int>> info;   // label -> (area, border faces)
+        double total = 0;
+        for (int f = 0; f < faceCount; ++f) {
+            info[labels[f]].first += mesh.faceAreas[f];
+            total += mesh.faceAreas[f];
+            for (int g : mesh.faceNeighbors[f]) if (labels[g] != labels[f]) { ++info[labels[f]].second; break; }
+        }
+        QString s;
+        for (const auto& [l, v] : info)
+            s += QStringLiteral(" %1:%2%/%3").arg(l).arg(100.0 * v.first / total, 0, 'f', 2).arg(v.second);
+        fprintf(stderr, "[genseg] parts (label:area/borderFaces):%s\n", qPrintable(s));
+    }
     res.stats.parts = res.parts;
 
     res.faceLabels = std::move(labels);
