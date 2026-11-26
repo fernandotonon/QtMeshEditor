@@ -17,14 +17,15 @@ file, so it produces the same geometry with no editor undo step.
 The named categories only know their own parts (a body's head and limbs, a
 car's wheels, …). **Generic** splits *any* object — props, furniture,
 vehicles, creatures — into **unnamed parts**: `part_01` (the largest),
-`part_02`, … It renders the mesh from 20 directions, asks Meta's SAM 2.1 for
+`part_02`, … It renders the mesh from 12 directions (20 for low-poly meshes), asks Meta's SAM 2.1 for
 2D masks on each render, and merges them on the mesh
 ([design](GENERIC_SEGMENTATION_DESIGN.md)).
 
 - **Detail** (`--granularity` / `granularity`): `coarse` (a few big parts),
   `medium` (default) or `fine` (small parts such as bottles, wheels, desk bars).
-- **Cost**: about a minute per mesh on a CPU (10–25k faces); the SAM 2.1 model
-  (~160 MB, Apache-2.0) downloads on first use. `--views 12` is faster.
+- **Cost**: about 30–40 s per mesh on a CPU (10–25k faces); the SAM 2.1 model
+  (~160 MB, Apache-2.0) downloads on first use. `--views N` (4–64) overrides
+  the automatic view count.
 - **No offline mode**: part instances need the model, so `--no-model` /
   `no_model` is refused for it. Auto never picks Generic; choose it explicitly.
 - Every PartOps operation works with it: the split names its submeshes

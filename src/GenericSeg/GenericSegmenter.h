@@ -51,7 +51,12 @@ public:
 };
 
 struct Options {
-    int views = 20;                 // 12, 20, or any count (Fibonacci sphere)
+    // Rendered views: 12, 20, or any count (Fibonacci sphere); 0 = automatic
+    // (viewCountFor). Measured on the benchmark (docs/GENERIC_SEGMENTATION_DESIGN.md):
+    // normal + SDF meshes score the same or better with 12 views as with 20
+    // at 60 % of the SAM time, matte (low-poly) meshes lose 0.05-0.08 F at 12,
+    // i.e. what matters is about 20-24 images.
+    int views = 0;
     int resolution = 512;           // raster size in pixels
     bool normalImages = true;
     bool sdfImages = true;
@@ -130,6 +135,11 @@ struct Result {
 Result segment(const float* positions, int vertexCount,
                const uint32_t* indices, int indexCount,
                MaskProvider& provider, const Options& opts = {});
+
+// Views and images per view a mesh with `faceCount` triangles gets.
+bool usesMatteImages(int faceCount, const Options& opts);
+int viewCountFor(int faceCount, const Options& opts);
+int imagesPerViewFor(int faceCount, const Options& opts);
 
 // Granularity presets (resolution, min part fraction).
 double leidenResolutionFor(Granularity g);

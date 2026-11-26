@@ -169,9 +169,10 @@ public:
         // is meaningless. Default ON; gated by `cleanupIslands` (same switch).
         bool levelLimbCuts = true;
         // Generic category only: "coarse" | "medium" | "fine" and the number
-        // of rendered views (12 is faster, 20 the default).
+        // of rendered views (0 = automatic: 12 for dense meshes, 20 for
+        // low-poly ones; GenericSeg::viewCountFor).
         QString granularity = QStringLiteral("medium");
-        int genericViews = 20;
+        int genericViews = 0;
     };
 
     struct Result {

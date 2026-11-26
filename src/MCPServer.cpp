@@ -6808,7 +6808,8 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             content["granularity"] = opts.granularity;
             SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
                 QStringLiteral("generic parts=%1 granularity=%2 views=%3 ms=%4")
-                    .arg(resultPartCount).arg(opts.granularity).arg(opts.genericViews)
+                    .arg(resultPartCount).arg(opts.granularity)
+                .arg(opts.genericViews > 0 ? QString::number(opts.genericViews) : QStringLiteral("auto"))
                     .arg(segmentTimer.elapsed()));
         }
 
@@ -13648,7 +13649,7 @@ QJsonArray MCPServer::buildToolsList()
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
         props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building", "generic"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation. generic (#1179) = ANY object split into unnamed parts part_01, part_02, … (part_01 = largest) with SAM 2.1 on multi-view renders; ~160 MB model on first use, about a minute per mesh on CPU, no geometric fallback. Never chosen by 'auto'."}};
         props["granularity"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"coarse", "medium", "fine"}}, {"description", "category 'generic' only: how finely to split (default 'medium'). coarse = a few big parts, fine = small parts like fingers, bottles, wheels."}};
-        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default 20; 12 is faster)."}};
+        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default: automatic, 12 for dense meshes and 20 for low-poly ones)."}};
         props["no_cleanup"] = QJsonObject{{"type", "boolean"}, {"description", "Return RAW model labels: skip the split-cleanup pass (#863) that de-fringes ragged part seams and reabsorbs small disconnected junction islands. Default false (cleanup ON)."}};
         appendTool(
             "segment_mesh",
@@ -13677,7 +13678,7 @@ QJsonArray MCPServer::buildToolsList()
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for segmentation. Default 'y'."}};
         props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building", "generic"}}, {"description", "Segmentation category (default 'auto'). 'generic' = any object, unnamed parts part_01… (SAM 2.1, about a minute)."}};
         props["granularity"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"coarse", "medium", "fine"}}, {"description", "category 'generic' only (default 'medium')."}};
-        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default 20)."}};
+        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default: automatic, 12 for dense meshes and 20 for low-poly ones)."}};
         props["solidify"] = QJsonObject{{"type", "boolean"}, {"description", "Give each part real WALL VOLUME before capping (default false). For thin-shell game assets (single-sided surfaces) an exploded part otherwise exposes its hollow interior at the cut; solidify offsets an inner shell so the cut shows a solid wall. Adds geometry — only meaningful for thin shells."}};
         appendTool(
             "split_mesh_by_segments",

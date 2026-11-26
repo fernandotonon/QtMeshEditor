@@ -1253,12 +1253,12 @@ MeshSegmenter::Result predictGeneric(const float* positions, int vertexCount,
     GenericSeg::Options go;
     bool okGran = true;
     go.granularity = GenericSeg::granularityFromName(opts.granularity, &okGran);
-    go.views = std::clamp(opts.genericViews, 4, 64);
+    go.views = opts.genericViews > 0 ? std::clamp(opts.genericViews, 4, 64) : 0;
     bool cancelled = false;
     // Progress in one range: one step per rendered image, plus a final step
     // for the merge / labels / refinement (each well under a second).
-    const int imagesPerView = 2;   // normal + SDF (matte meshes use one: the bar just jumps)
-    const int total = go.views * imagesPerView + 1;
+    const int faceCount = indexCount / 3;
+    const int total = GenericSeg::viewCountFor(faceCount, go) * GenericSeg::imagesPerViewFor(faceCount, go) + 1;
     go.progress = [&](const QString& stage, int done, int) {
         if (!progress) return true;
         const int step = stage == QLatin1String("views") ? done

@@ -60,6 +60,24 @@ double leidenResolutionFor(Granularity g)
     return 0.05;
 }
 
+bool usesMatteImages(int faceCount, const Options& opts)
+{
+    return faceCount < opts.matteBelowFaces;
+}
+
+int viewCountFor(int faceCount, const Options& opts)
+{
+    if (opts.views > 0) return opts.views;
+    return usesMatteImages(faceCount, opts) ? 20 : 12;
+}
+
+int imagesPerViewFor(int faceCount, const Options& opts)
+{
+    if (usesMatteImages(faceCount, opts)) return 1;
+    const int n = int(opts.normalImages) + int(opts.sdfImages);
+    return n > 0 ? n : 1;
+}
+
 float minPartFractionFor(Granularity g)
 {
     switch (g) {
@@ -318,7 +336,7 @@ Result segment(const float* positions, int vertexCount,
     }
 
     // ---- Images -----------------------------------------------------------
-    const bool matte = faceCount < opts.matteBelowFaces;
+    const bool matte = usesMatteImages(faceCount, opts);
     std::vector<ImageKind> kinds;
     if (matte) {
         kinds.push_back(ImageKind::Matte);
@@ -372,7 +390,7 @@ Result segment(const float* positions, int vertexCount,
     res.stats.patches = patchCount;
 
     // ---- Views -> masks -> lifted nodes ------------------------------------
-    const std::vector<Vec3> dirs = viewDirections(std::max(1, opts.views));
+    const std::vector<Vec3> dirs = viewDirections(viewCountFor(faceCount, opts));
     std::vector<Node> nodes;
     std::vector<char> seen(faceCount, 0);
     std::vector<std::vector<char>> visibleIn(dirs.size());   // [view][patch]

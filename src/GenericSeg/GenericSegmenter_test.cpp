@@ -3,6 +3,7 @@
 // the merge graph, the face vote, unseen faces and cleanup with no model.
 
 #include "GenericSeg/GenericSegmenter.h"
+#include "GenericSeg/GenericSegBenchmark.h"
 #include "GenericSeg/GenericSegTestMeshes.h"
 #include "GenericSeg/SamMaskProvider.h"
 #include "GenericSeg/TriangleBvh.h"
@@ -497,6 +498,24 @@ bool loadObj(const QString& path, std::vector<float>& pos, std::vector<uint32_t>
 
 } // namespace
 
+TEST(GenericSegmenter, ViewCountIsAutomaticUnlessSet)
+{
+    // Benchmark result (slice 4): about 20-24 SAM images per mesh, i.e. 12
+    // views of normal + SDF images, 20 views of the single matte image.
+    Options o;
+    EXPECT_EQ(o.views, 0);
+    EXPECT_TRUE(usesMatteImages(o.matteBelowFaces - 1, o));
+    EXPECT_EQ(viewCountFor(o.matteBelowFaces - 1, o), 20);
+    EXPECT_EQ(imagesPerViewFor(o.matteBelowFaces - 1, o), 1);
+    EXPECT_EQ(viewCountFor(o.matteBelowFaces, o), 12);
+    EXPECT_EQ(imagesPerViewFor(o.matteBelowFaces, o), 2);
+    o.sdfImages = false;
+    EXPECT_EQ(imagesPerViewFor(o.matteBelowFaces, o), 1);
+    o.views = 7;
+    EXPECT_EQ(viewCountFor(10, o), 7);
+    EXPECT_EQ(viewCountFor(100000, o), 7);
+}
+
 TEST(GenericSegmenter, SamModelsHonourTheNoDownloadSwitch)
 {
     // The suite runs with QTMESH_SEGMENT_NO_DOWNLOAD set: missing graphs are
@@ -649,4 +668,133 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
                 tm.postMs, tm.prompts, tm.candidates, tm.kept);
         contactSheet(tiles, 4).save(dir + "/" + stem + "_sam_segments_p" + QString::number(so.pointsPerSide) + ".png");
     }
+}
+
+// Benchmark (#1179 slice 4) against CC0 models whose coloured pieces give a
+// ground truth (GenericSegBenchmark.h). Opt-in:
+//   QTMESH_GENSEG_BENCH=<dir of .obj | a.obj;b.obj>  QTMESH_SAM2_DIR=<graphs | download>
+//   QTMESH_GENSEG_MASKCACHE=<dir>   SAM masks on disk: re-runs only redo the lifting
+//   QTMESH_GENSEG_VARIANTS=low,dense  QTMESH_GENSEG_GRAN=fine,medium,coarse
+//   QTMESH_GENSEG_OPT="views=12,smoothness=0.2,..."  (GenericSegBench::applyOverrides)
+//   QTMESH_GENSEG_DUMP=<dir>        truth | prediction sheets
+// Prints one line per (mesh, variant, granularity) and the means.
+TEST(GenericSegmenter, DISABLED_Benchmark)
+{
+    const QString bench = qEnvironmentVariable("QTMESH_GENSEG_BENCH");
+    QString samDir = qEnvironmentVariable("QTMESH_SAM2_DIR");
+    if (bench.isEmpty() || samDir.isEmpty()) GTEST_SKIP() << "set QTMESH_GENSEG_BENCH and QTMESH_SAM2_DIR";
+    if (samDir == QLatin1String("download")) {
+        QString why;
+        ASSERT_TRUE(SamMaskProvider::ensureModelsBlocking(&why)) << why.toStdString();
+        samDir = SamMaskProvider::modelDir();
+    }
+    QStringList files;
+    if (QFileInfo(bench).isDir()) {
+        for (const QString& f : QDir(bench).entryList({QStringLiteral("*.obj")}, QDir::Files, QDir::Name))
+            files << QDir(bench).filePath(f);
+    } else {
+        files = bench.split(';', Qt::SkipEmptyParts);
+    }
+    ASSERT_FALSE(files.isEmpty());
+    const QStringList variants = qEnvironmentVariable("QTMESH_GENSEG_VARIANTS", QStringLiteral("low,dense"))
+                                     .split(',', Qt::SkipEmptyParts);
+    std::vector<Granularity> grans;
+    for (const QString& g : qEnvironmentVariable("QTMESH_GENSEG_GRAN", QStringLiteral("coarse,medium,fine"))
+                                .split(',', Qt::SkipEmptyParts))
+        grans.push_back(granularityFromName(g));
+    const QString optSpec = qEnvironmentVariable("QTMESH_GENSEG_OPT");
+    {
+        Options probe;
+        const QStringList unknown = GenericSegBench::applyOverrides(probe, optSpec);
+        ASSERT_TRUE(unknown.isEmpty()) << "unknown option: " << unknown.join(',').toStdString();
+    }
+    SamMaskProvider::Options so;
+    if (qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS") > 0)
+        so.pointsPerSide = qEnvironmentVariableIntValue("QTMESH_SAM2_POINTS");
+    so.preferGpu = qEnvironmentVariableIntValue("QTMESH_SAM2_GPU") > 0;
+    SamMaskProvider sam(samDir + "/" + SamMaskProvider::encoderFileName(),
+                        samDir + "/" + SamMaskProvider::decoderFileName(), so);
+    ASSERT_TRUE(sam.ok()) << sam.error().toStdString();
+    const QString cacheDir = qEnvironmentVariable("QTMESH_GENSEG_MASKCACHE");
+    if (!cacheDir.isEmpty()) QDir().mkpath(cacheDir);
+    const QString dumpDir = qEnvironmentVariable("QTMESH_GENSEG_DUMP");
+    if (!dumpDir.isEmpty()) QDir().mkpath(dumpDir);
+
+    struct Sum { double t = 0, p = 0, f = 0; long long ms = 0; int n = 0; };
+    std::map<QString, Sum> sums;
+    fprintf(stderr, "%-16s %-6s %-5s %-6s %6s %5s %5s %6s %6s %6s %7s\n", "mesh", "truth", "var", "gran", "faces",
+            "truth", "pred", "tIoU", "pIoU", "F", "ms");
+    for (const QString& path : files) {
+        GenericSegBench::ObjMesh obj;
+        ASSERT_TRUE(GenericSegBench::loadObj(path, obj)) << qPrintable(path);
+        const QString stem = QFileInfo(path).completeBaseName().replace(' ', '_');
+        const SegMesh lowMesh = SegMesh::build(obj.positions.data(), int(obj.positions.size() / 3),
+                                               obj.indices.data(), int(obj.indices.size()));
+        // Rigged assets: body regions from the skeleton (a painted animal's
+        // colour patches are not its parts); else coloured pieces.
+        const QString rigJson = QFileInfo(path).path() + "/" + QFileInfo(path).completeBaseName() + ".rig.json";
+        std::vector<int> groups = GenericSegBench::rigFaceGroups(obj, rigJson);
+        const QString truthKind = groups.empty() ? QStringLiteral("pieces") : QStringLiteral("rig");
+        if (groups.empty()) groups = obj.faceGroup;
+        const std::vector<int> lowTruth = GenericSegBench::truthRegions(lowMesh, groups);
+        for (const QString& variant : variants) {
+            std::vector<float> pos = obj.positions;
+            std::vector<uint32_t> idx = obj.indices;
+            std::vector<int> truth = lowTruth;
+            if (variant == QLatin1String("dense")) {
+                GenericSegBench::weld(pos, idx);
+                for (int level = 0; level < 4 && idx.size() / 3 < 8000; ++level)
+                    GenericSegBench::loopSubdivide(pos, idx, truth);
+            }
+            const SegMesh sm = SegMesh::build(pos.data(), int(pos.size() / 3), idx.data(), int(idx.size()));
+            std::map<std::pair<int, int>, std::vector<Mask>> cache;
+            for (Granularity g : grans) {
+                Options o;
+                o.granularity = g;
+                GenericSegBench::applyOverrides(o, optSpec);
+                CachedProvider cached(sam, cache);
+                if (!cacheDir.isEmpty())
+                    cached.diskPrefix = QStringLiteral("%1/%2_%3_v%4_r%5_p%6_%7")
+                                            .arg(cacheDir, stem, variant).arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution)
+                                            .arg(so.pointsPerSide)
+                                            .arg(sm.faceCount() < o.matteBelowFaces ? "matte" : "ns");
+                QElapsedTimer t;
+                t.start();
+                const Result r = segment(pos.data(), int(pos.size() / 3), idx.data(), int(idx.size()), cached, o);
+                const long long ms = t.elapsed();
+                if (!r.ok) {   // scored as nothing found; the run goes on
+                    fprintf(stderr, "%-22s %-5s %-6s FAILED: %s\n", qPrintable(stem.left(22)), qPrintable(variant),
+                            qPrintable(granularityName(g)), qPrintable(r.error));
+                    Sum& sum = sums[variant + QLatin1Char(' ') + granularityName(g)];
+                    sum.ms += ms; ++sum.n;
+                    continue;
+                }
+                const GenericSegBench::Score s = GenericSegBench::evaluate(sm.faceAreas, truth, r.faceLabels);
+                fprintf(stderr, "%-16s %-6s %-5s %-6s %6d %5d %5d %6.3f %6.3f %6.3f %7lld\n", qPrintable(stem.left(16)),
+                        qPrintable(truthKind), qPrintable(variant), qPrintable(granularityName(g)), sm.faceCount(), s.truthParts,
+                        s.predParts, s.truthIoU, s.predIoU, s.f, ms);
+                Sum& sum = sums[variant + QLatin1Char(' ') + granularityName(g)];
+                sum.t += s.truthIoU; sum.p += s.predIoU; sum.f += s.f; sum.ms += ms; ++sum.n;
+                if (!dumpDir.isEmpty()) {
+                    std::vector<int> truthLabels(truth.size());
+                    for (size_t i = 0; i < truth.size(); ++i) truthLabels[i] = truth[i] + 1;
+                    std::vector<QImage> tiles;
+                    const std::vector<Vec3> all = viewDirections(20);
+                    for (const std::vector<int>* labels : {static_cast<const std::vector<int>*>(&truthLabels), &r.faceLabels})
+                        for (int v : {0, 6, 12, 15}) {
+                            const OrthoCamera cam = OrthoCamera::lookingFrom(all[v]);
+                            tiles.push_back(shadeLabels(rasterize(sm, cam, 320), sm, cam, *labels));
+                        }
+                    contactSheet(tiles, 4).save(QStringLiteral("%1/%2_%3_%4.png").arg(dumpDir, stem, variant,
+                                                                                     granularityName(g)));
+                }
+            }
+        }
+    }
+    fprintf(stderr, "\nmeans:\n");
+    for (const auto& [k, s] : sums)
+        fprintf(stderr, "  %-14s tIoU %.3f  pIoU %.3f  F %.3f  (%d meshes, %.1f s)\n", qPrintable(k),
+                s.t / s.n, s.p / s.n, s.f / s.n, s.n, s.ms / 1000.0);
+    const auto tm = sam.timing();
+    fprintf(stderr, "SAM: %d images, encode %.0f ms, decode %.0f ms\n", tm.images, tm.encodeMs, tm.decodeMs);
 }

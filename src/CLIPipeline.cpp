@@ -14628,7 +14628,8 @@ int CLIPipeline::cmdSegment(int argc, char* argv[])
     if (generic)
         SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
             QStringLiteral("generic parts=%1 granularity=%2 views=%3 ms=%4")
-                .arg(resultPartCount).arg(opts.granularity).arg(opts.genericViews)
+                .arg(resultPartCount).arg(opts.granularity)
+                .arg(opts.genericViews > 0 ? QString::number(opts.genericViews) : QStringLiteral("auto"))
                 .arg(segmentTimer.elapsed()));
     SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.completed"),
         QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("cli")},

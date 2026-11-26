@@ -1,6 +1,6 @@
 # Generic part segmentation (design)
 
-Status: **slices 1-3 implemented** (pure-data core in `src/GenericSeg/`; SAM 2.1 export + C++ mask provider, hosted and fetched on first use; `Category::Generic` wired into CLI, MCP and both Inspector sections). Slice 4 (tuning) pending (#1179). Proposed new `MeshSegmenter::Category::Generic`.
+Status: **slices 1-4 implemented** (pure-data core in `src/GenericSeg/`; SAM 2.1 export + C++ mask provider, hosted and fetched on first use; `Category::Generic` wired into CLI, MCP and both Inspector sections; a ground-truth benchmark and the tuning it supported, see "Slice 4"). Heads are still not separated (#1179). Proposed new `MeshSegmenter::Category::Generic`.
 
 ## Problem
 
@@ -269,18 +269,19 @@ later decision, measured on the benchmark.
 - Sentry: `ai.assist.segment` with `category=generic`, view count, mask count, part count, time.
 - AI agent: `segmentation` capability doc lists the generic category ("any object, unnamed parts").
 
-## Performance (measured, M-series CPU, 10-12k faces, 20 views × normal + SDF, 512 px)
+## Performance (measured, M-series CPU, 10-25k faces, 12 views × normal + SDF, 512 px)
 
 | Stage | Time |
 |---|---|
 | SDF + raster + lift + merge + cleanup | < 0.5 s |
 | Graph-cut refinement | 0.2-1 s |
-| SAM encoder (40 images, small) | ~24 s ← dominant |
-| SAM decoder (16×16 grid, ~1,700-3,600 prompts) | 20-48 s |
-| Total | 44-74 s |
+| SAM encoder (24 images, small) | ~16 s ← dominant |
+| SAM decoder (16×16 grid, ~800-1,700 prompts) | 10-20 s |
+| Total | 27-38 s |
 
-Ideas, untested: 12 views, normals-only for Coarse, the tiny tier, CoreML
-for the encoder, fewer prompts on views that add nothing new.
+With 20 views (40 images), the default before slice 4: 44-74 s. CoreML is not
+an option for these graphs (one dense mesh had not finished after 9 minutes;
+CPU takes 28 s).
 
 ## Slices
 
@@ -290,7 +291,8 @@ for the encoder, fewer prompts on views that add nothing new.
    hosting, `ModelFetch` with pinned digests.
 3. **Integration**: `Category::Generic`, `labelNames` plumbing, CLI/MCP/GUI,
    breadcrumbs, docs (this file → user section in `docs/PART_OPS.md`).
-4. **Benchmark + tuning**: thresholds, view count, tier, granularity presets.
+4. **Benchmark + tuning**: a ground-truth benchmark; view count tuned; every
+   other knob measured and left where it was (see "Slice 4").
 5. Later: naming parts with the local vision-language model (render each part
    highlighted, ask for a noun); hierarchical tree from several resolutions;
    Auto → Generic routing; HoloPart completion fed by these masks.
@@ -306,10 +308,8 @@ for the encoder, fewer prompts on views that add nothing new.
   officer into body, hat, arms, shoes, belt, pockets; an orc archer into body,
   arms, shoulder pad, loincloth, feet (head not separated); a car into body + 4
   wheels; a rat into body, ears, paws, tail; a horse into body, head, tail,
-  hooves and two lower legs. Merging the remaining horse legs and separating
-  heads is slice 4 (*base+*, more prompts).
-- Can the encoder run on CoreML for these shapes? (Several of our ONNX graphs
-  fall back to CPU; measure before promising speed.)
+  hooves and two lower legs. Separating heads is still open: on the benchmark
+  no option moves it (see "Slice 4").
 - Textured assets: should a textured render be a third image kind? Texture
   boundaries often are part boundaries (and sometimes are not: decals, seams).
   Off by default; measure on the benchmark.
@@ -333,3 +333,73 @@ for the encoder, fewer prompts on views that add nothing new.
   meanwhile. MCP pumps events at ~20 Hz with `toolProgress` + Stop.
 - Measured (M-series CPU): cleaning cart 22k faces 58 s (54 s SAM), school
   desk 12 views 35-37 s via CLI and MCP.
+
+## Slice 4: benchmark and tuning
+
+### The benchmark
+
+`scripts/genseg-benchmark.sh` (`prepare`, then `run`) drives
+`GenericSegmenter.DISABLED_Benchmark` over 18 CC0 models (Quaternius, Kenney;
+used locally, never redistributed). There is no part-annotated CC0 set (the
+annotations of PartObjaverse-Tiny are CC-BY-NC), so the truth is derived:
+
+- **Pieces** (props: guns, helmet, Kenney blocky characters): a connected
+  region of faces with one OBJ group + material.
+- **Rig** (characters, animals): `qtmesh segment --dump-training-data` labels
+  each vertex with the body part of its dominant bone; a truth part is a
+  connected region of one label (head, torso, each arm, each leg; tail and
+  ears go with torso and head). Painted animals made the material truth
+  useless: a cow's truth parts were its spots.
+
+Both are proxies. The rig truth puts dominant-bone boundaries where a person
+would not (half of a T-rex's flank belongs to each leg), so scores are a
+relative signal for comparing settings, always checked against the images
+(`DUMP=1` writes truth | prediction sheets). Each model runs as is (low-poly,
+mostly the matte path) and as a dense copy: welded, Loop-subdivided to
+>= 8,000 faces, the shape of a TRELLIS.2 asset (normal + SDF path).
+
+Score (`GenericSegBenchmark.h`, unit-tested): truth IoU = mean over truth
+parts (>= 0.5 % of the area) of the best IoU with a predicted part; predicted
+IoU the other way round; F = their harmonic mean. Merging and over-splitting
+both lower it. Label 0 (unknown) counts against the truth. SAM masks are
+cached on disk per (mesh, variant, view count, prompt grid), so a run that only
+changes post-processing takes seconds.
+
+### Results (F, mean of 18 models)
+
+| Setting | dense coarse | dense medium | dense fine | low medium |
+|---|---|---|---|---|
+| Slice 3 defaults (20 views) | 0.694 | 0.647 | 0.612 | 0.629 |
+| **12 views** (dense) | **0.695** | **0.657** | **0.628** | |
+| 16 views | 0.687 | 0.636 | 0.608 | 0.533 |
+| 24×24 prompt grid (×2.2 SAM time) | 0.687 | 0.643 | 0.607 | |
+| matte images for dense meshes | 0.645 | 0.597 | 0.579 | |
+| SDF images only | 0.681 | 0.637 | 0.630 | |
+| normal images only | 0.654 | 0.615 | 0.577 | |
+| per-view tight framing (12 views; low: vs 0.544 plain) | 0.673 | 0.624 | 0.591 | 0.495 |
+| graph cut off | | 0.598 | | 0.555 |
+| no through links | | 0.623 | | 0.596 |
+| no mask-specificity weight | | 0.603 | | 0.612 |
+
+What changed: **`Options::views` is automatic** (`viewCountFor`): 12 views
+when normal + SDF images are rendered, 20 for the matte path. What counts is
+the number of SAM images (about 20-24): matte meshes lose 0.05-0.08 F at 12
+views, dense ones lose nothing and run in 60 % of the time. The effect of the
+view count is not monotonic (16 is below both 12 and 20), i.e. differences of
+about 0.02 are where the views happen to fall, not the count. Single models
+move more (Alien, 3,780 faces, drops 0.11 at 12 views), so `--views 20` stays
+available.
+
+What did not: every post-processing knob (Leiden resolution 0.02-0.2, overlap
+threshold, coverage, common fraction, smoothness, through weight, vote
+exponent) stays within 0.01 of the defaults, which are therefore kept. The
+ablations confirm the slice 1-3 additions earn their place (graph cut +0.05,
+specificity weight +0.04, through links +0.03). Per-view tight framing (zoom
+each view on the object's outline) was implemented and removed: it lowers the
+score, presumably because SAM's masks of differently scaled views agree less.
+
+Still open: **heads**. SAM rarely proposes a head mask on these untextured
+renders (one partial head mask in 12 views of the T-rex), so no merge setting
+can recover it. Candidates for a later slice: a textured or matte image kind in
+addition to normal + SDF for dense meshes, SAM's *base+* tier, or a geometric
+cue (the neck as a minimal cross-section).
