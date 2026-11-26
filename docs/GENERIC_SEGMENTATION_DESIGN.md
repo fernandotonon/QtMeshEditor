@@ -203,12 +203,15 @@ inward from each face to the wall it exits, weighted
 of a thin part pay to differ. That last term fixed the worst defect of the
 plain vote: the views that see a thin part's underside are not the ones that
 see its top, so their masks never link and the underside came out as another
-part (the rat tail's underside took the body's label; the back of a dancer's
-hand was its own part). Faces still unknown after the flood (floating pieces
-no view saw) stay unknown. Tuned on the four test meshes with cached masks:
-smoothness 0.2 already absorbs the dancer's legs into the torso, 0.1 keeps the
-eyes; a thickness of 0.04 left the dancer's shirt front and back as two
-parts, 0.15 joins them. Then: split each label into connected
+part (the rat tail's underside took the body's label; the back of a
+character's hand was its own part). Faces still unknown after the flood (floating pieces no view saw) stay
+unknown. Each part's expansion move is solved only around the faces that voted
+for it, plus two hops along surface and through links (which reach a thin
+part's other side): whole-mesh moves took 12-24 s on 25k-face props with 30-60
+parts, local ones take 0.2-1 s for the whole refinement with the same quality.
+Weights tuned with cached masks: smoothness 0.2 already absorbs a character's
+legs into the torso, 0.1 keeps the eyes; a thickness of 0.04 left a shirt's
+front and back as two parts, 0.15 joins them. Then: split each label into connected
 components (two wheels = two parts), merge parts below `minPartFraction` of
 the surface into the neighbour with the longest shared border, boundary
 smoothing + island cleanup (`MeshSegmenter`), split/merge again, renumber by
@@ -266,7 +269,7 @@ later decision, measured on the benchmark.
 | Stage | Time |
 |---|---|
 | SDF + raster + lift + merge + cleanup | < 0.5 s |
-| Graph-cut refinement | 0.3-4 s |
+| Graph-cut refinement | 0.2-1 s |
 | SAM encoder (40 images, small) | ~24 s ← dominant |
 | SAM decoder (16×16 grid, ~1,700-3,600 prompts) | 20-48 s |
 | Total | 44-74 s |
@@ -289,13 +292,17 @@ for the encoder, fewer prompts on views that add nothing new.
 
 ## Open questions
 
-- SAM 2.1 *small* on untextured normal/SDF renders, with the specificity
-  weight and the graph cut: a cartoon character splits into head, ears, arms
-  (hands included), shirt, legs, feet, tail, eyes, nose; a car into body + 4
-  wheels; a rat into body, ears, paws, tail; a horse at Fine into body, head,
-  tail and hooves, with only one lower leg found. The horse legs are slice 4
-  (*base+*, more prompts). The cut costs 0.3-1 s on these meshes (3-4 s on
-  the car, whose 10k faces span many labels).
+- Evaluation meshes: our own TRELLIS.2 game assets (characters, props,
+  vehicles from the QtMesh games) plus a rat, a car and a horse; no Mixamo
+  assets. SAM 2.1 *small* on untextured normal/SDF renders, with the
+  specificity weight and the graph cut, at Fine: a school desk splits into top,
+  seat, back, each leg and bar; a cleaning cart into body, bottles, mop,
+  handle, bags, wheels; a turret into barrel, housings, legs, feet; a police
+  officer into body, hat, arms, shoes, belt, pockets; an orc archer into body,
+  arms, shoulder pad, loincloth, feet (head not separated); a car into body + 4
+  wheels; a rat into body, ears, paws, tail; a horse into body, head, tail,
+  hooves and two lower legs. Merging the remaining horse legs and separating
+  heads is slice 4 (*base+*, more prompts).
 - Can the encoder run on CoreML for these shapes? (Several of our ONNX graphs
   fall back to CPU; measure before promising speed.)
 - Textured assets: should a textured render be a third image kind? Texture

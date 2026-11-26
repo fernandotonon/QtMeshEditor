@@ -94,6 +94,14 @@ TEST(GenericSegGraphCut, StraightensABoundaryOnAGrid)
     const std::vector<int> out = alphaExpansion(n, K, unary, edges, init);
     for (int y = 0; y < W; ++y)
         for (int x = 0; x < W; ++x) EXPECT_EQ(out[y * W + x], x < W / 2 ? 0 : 1) << x << "," << y;
+
+    // Local moves (each label only around the nodes that voted for it) reach
+    // the same straight cut.
+    std::vector<std::vector<int>> candidates(K);
+    for (int i = 0; i < n; ++i) candidates[init[i]].push_back(i);
+    EXPECT_EQ(alphaExpansion(n, K, unary, edges, init, 4, &candidates, 2), out);
+    // With no hops a label can only take its own candidates: nothing to gain.
+    EXPECT_EQ(alphaExpansion(n, K, unary, edges, init, 4, &candidates, 0), init);
 }
 
 TEST(GenericSegGraphCut, BadInputIsReturnedUnchanged)

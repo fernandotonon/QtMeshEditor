@@ -278,7 +278,17 @@ void refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::
 
     std::vector<int> init(faceCount);
     for (int f = 0; f < faceCount; ++f) init[f] = labels[f] > 0 ? index[labels[f]] : 0;
-    const std::vector<int> out = alphaExpansion(faceCount, K, unary, edges, init);
+    // Each part's move is solved around the faces that voted for it (plus two
+    // hops along surface and through links, which reach a thin part's other
+    // side): on a 25k-face prop with 50 parts, whole-mesh moves took 20 s.
+    std::vector<std::vector<int>> candidates(K);
+    for (int f = 0; f < faceCount; ++f)
+        for (const auto& [c, sc] : patchVotes[patchOf[f]]) {
+            (void)sc;
+            const auto it = index.find(c + 1);
+            if (it != index.end()) candidates[it->second].push_back(f);
+        }
+    const std::vector<int> out = alphaExpansion(faceCount, K, unary, edges, init, 4, &candidates, 2);
     // Faces no view saw and the flood could not reach (floating pieces) stay unknown.
     for (int f = 0; f < faceCount; ++f)
         if (labels[f] > 0) labels[f] = labelOf[out[f]];

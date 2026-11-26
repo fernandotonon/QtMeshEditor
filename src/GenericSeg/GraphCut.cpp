@@ -123,59 +123,121 @@ double labelingEnergy(int labelCount, const std::vector<float>& unary,
 
 std::vector<int> alphaExpansion(int nodeCount, int labelCount, const std::vector<float>& unary,
                                 const std::vector<GraphEdge>& edges, std::vector<int> labels,
-                                int maxSweeps)
+                                int maxSweeps, const std::vector<std::vector<int>>* candidates,
+                                int grow)
 {
     if (nodeCount <= 0 || labelCount <= 1 || int(labels.size()) != nodeCount
-        || unary.size() != size_t(nodeCount) * labelCount)
+        || unary.size() != size_t(nodeCount) * labelCount
+        || (candidates && int(candidates->size()) != labelCount))
         return labels;
-    double energy = labelingEnergy(labelCount, unary, edges, labels);
+    // Incident edges per node.
+    std::vector<std::vector<int>> incident(nodeCount);
+    for (int e = 0; e < int(edges.size()); ++e) {
+        if (edges[e].a == edges[e].b) continue;
+        incident[edges[e].a].push_back(e);
+        incident[edges[e].b].push_back(e);
+    }
+    std::vector<int> local(nodeCount, -1);   // node -> index in the move's graph
+    std::vector<int> mark(nodeCount, -1);    // BFS stamp
+    std::vector<int> edgeStamp(edges.size(), -1);
+    int stamp = 0;
+
     for (int sweep = 0; sweep < maxSweeps; ++sweep) {
         bool changed = false;
         for (int alpha = 0; alpha < labelCount; ++alpha) {
-            // Binary move per node: x = 0 keeps its label, x = 1 takes alpha.
-            // Source side = keep. A node already labelled alpha has nothing to
-            // decide (equal costs).
-            MaxFlow g(nodeCount);
-            std::vector<double> c0(nodeCount), c1(nodeCount);   // cost of keep / switch
-            for (int i = 0; i < nodeCount; ++i) {
-                c0[i] = unary[size_t(i) * labelCount + labels[i]];
-                c1[i] = unary[size_t(i) * labelCount + alpha];
-            }
-            // Potts pair, written as A + (C-A) x_a + (D-C) x_b + (B+C-A-D)(1-x_a) x_b
-            // with A..D the costs of (keep,keep), (keep,switch), (switch,keep), (switch,switch).
-            for (const GraphEdge& e : edges) {
-                const int a = e.a, b = e.b;
-                if (a == b) continue;
-                const double w = e.weight;
-                const double A = labels[a] != labels[b] ? w : 0.0;
-                const double B = labels[a] != alpha ? w : 0.0;
-                const double C = labels[b] != alpha ? w : 0.0;
-                const double D = 0.0;
-                c1[a] += C - A;
-                c1[b] += D - C;
-                // Cut a->b when a keeps and b switches.
-                g.addEdge(a, b, B + C - A - D);
-            }
-            for (int i = 0; i < nodeCount; ++i) {
-                if (labels[i] == alpha) {   // forced keep
-                    g.addEdge(g.source(), i, 0.0);
-                    g.addEdge(i, g.sink(), 0.0);
-                    c1[i] = c0[i] + 1e30;
+            ++stamp;
+            // The nodes that may switch: the candidates for alpha (all nodes
+            // without a list) plus everything within `grow` hops of them or of
+            // alpha's current region. The rest keep their label (a restricted
+            // move: still never raises the energy).
+            std::vector<int> active, frontier;
+            auto visit = [&](int i) {
+                if (mark[i] == stamp) return;
+                mark[i] = stamp;
+                frontier.push_back(i);
+            };
+            if (candidates) {
+                for (int i : (*candidates)[alpha]) if (i >= 0 && i < nodeCount) visit(i);
+                for (int i = 0; i < nodeCount; ++i) if (labels[i] == alpha) visit(i);
+                std::vector<int> all = frontier;
+                for (int hop = 0; hop < grow; ++hop) {
+                    std::vector<int> next;
+                    std::swap(next, frontier);
+                    for (int i : next)
+                        for (int e : incident[i]) visit(edges[e].a == i ? edges[e].b : edges[e].a);
+                    all.insert(all.end(), frontier.begin(), frontier.end());
                 }
-                const double m = std::min(c0[i], c1[i]);
-                // Paying c1 means ending on the sink side: cut source->i.
-                g.addEdge(g.source(), i, c1[i] - m);
-                g.addEdge(i, g.sink(), c0[i] - m);
+                for (int i : all) if (labels[i] != alpha) active.push_back(i);
+            } else {
+                for (int i = 0; i < nodeCount; ++i) if (labels[i] != alpha) active.push_back(i);
+            }
+            if (active.empty()) continue;
+            const int n = int(active.size());
+            for (int k = 0; k < n; ++k) local[active[k]] = k;
+
+            // Binary move per active node: x = 0 keeps its label, x = 1 takes
+            // alpha. Source side = keep.
+            MaxFlow g(n);
+            std::vector<double> c0(n), c1(n);   // cost of keep / switch
+            for (int k = 0; k < n; ++k) {
+                c0[k] = unary[size_t(active[k]) * labelCount + labels[active[k]]];
+                c1[k] = unary[size_t(active[k]) * labelCount + alpha];
+            }
+            for (int k = 0; k < n; ++k) {
+                for (int e : incident[active[k]]) {
+                    if (edgeStamp[e] == stamp) continue;
+                    edgeStamp[e] = stamp;
+                    const int a = edges[e].a, b = edges[e].b;
+                    const double w = edges[e].weight;
+                    const int la = local[a], lb = local[b];
+                    if (la >= 0 && lb >= 0) {
+                        // Potts pair, written as A + (C-A) x_a + (D-C) x_b + (B+C-A-D)(1-x_a) x_b
+                        // with A..D the costs of (keep,keep), (keep,switch), (switch,keep), (switch,switch).
+                        const double A = labels[a] != labels[b] ? w : 0.0;
+                        const double B = labels[a] != alpha ? w : 0.0;
+                        const double C = labels[b] != alpha ? w : 0.0;
+                        c1[la] += C - A;
+                        c1[lb] += -C;
+                        g.addEdge(la, lb, B + C - A);   // cut when a keeps and b switches
+                    } else {
+                        // One end fixed at its label.
+                        const int act = la >= 0 ? la : lb;
+                        const int actNode = la >= 0 ? a : b;
+                        const int fixedLabel = labels[la >= 0 ? b : a];
+                        c0[act] += labels[actNode] != fixedLabel ? w : 0.0;
+                        c1[act] += alpha != fixedLabel ? w : 0.0;
+                    }
+                }
+            }
+            for (int k = 0; k < n; ++k) {
+                const double m = std::min(c0[k], c1[k]);
+                // Paying c1 means ending on the sink side: cut source->k.
+                g.addEdge(g.source(), k, c1[k] - m);
+                g.addEdge(k, g.sink(), c0[k] - m);
             }
             g.run();
             const std::vector<char> keep = g.sourceSide();
-            std::vector<int> next = labels;
-            for (int i = 0; i < nodeCount; ++i)
-                if (!keep[i]) next[i] = alpha;
-            const double e2 = labelingEnergy(labelCount, unary, edges, next);
-            if (e2 < energy - 1e-9 * std::max(1.0, std::abs(energy))) {
-                labels.swap(next);
-                energy = e2;
+            // Energy change of the move, from the switched nodes only.
+            std::vector<int> switched;
+            for (int k = 0; k < n; ++k) if (!keep[k]) switched.push_back(active[k]);
+            double delta = 0.0;
+            ++stamp;
+            for (int i : switched) {
+                delta += unary[size_t(i) * labelCount + alpha] - unary[size_t(i) * labelCount + labels[i]];
+                mark[i] = stamp;   // reuse as "switched" flag
+            }
+            for (int i : switched)
+                for (int e : incident[i]) {
+                    if (edgeStamp[e] == stamp) continue;
+                    edgeStamp[e] = stamp;
+                    const int a = edges[e].a, b = edges[e].b;
+                    const int na = mark[a] == stamp ? alpha : labels[a];
+                    const int nb = mark[b] == stamp ? alpha : labels[b];
+                    delta += ((na != nb) - (labels[a] != labels[b])) * double(edges[e].weight);
+                }
+            for (int i : active) local[i] = -1;
+            if (delta < -1e-12) {
+                for (int i : switched) labels[i] = alpha;
                 changed = true;
             }
         }
