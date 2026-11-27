@@ -95,6 +95,10 @@ Metrics analyze(const Geometry& g, const Limits& limits = {});
 // lossless: the rendered surface is unchanged.
 struct FixOptions {
     bool removeDegenerates = false;
+    // Only drop triangles with a repeated corner index. For skinned or
+    // morphed geometry a zero-area triangle in the base pose can open up
+    // once deformed, so only the index test is lossless there.
+    bool degeneratesByIndexOnly = false;
     bool weld = false;           // merge exact duplicate vertices
     bool vertexCache = false;
     bool overdraw = false;

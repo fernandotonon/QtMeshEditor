@@ -73,13 +73,16 @@ double overfetchOf(const std::vector<uint32_t>& idx, size_t vertexCount, size_t 
 }
 
 std::vector<uint32_t> withoutDegenerates(const Geometry& g, const std::vector<uint32_t>& idx,
-                                         const Limits& limits, size_t* removed)
+                                         const Limits& limits, bool indexOnly, size_t* removed)
 {
     std::vector<uint32_t> out;
     out.reserve(idx.size());
     size_t dropped = 0;
     for (size_t t = 0; t + 2 < idx.size(); t += 3) {
-        if (isDegenerate(g, idx[t], idx[t + 1], idx[t + 2], limits)) {
+        const uint32_t a = idx[t], b = idx[t + 1], c = idx[t + 2];
+        const bool degenerate = indexOnly ? (a == b || b == c || a == c)
+                                          : isDegenerate(g, a, b, c, limits);
+        if (degenerate) {
             ++dropped;
             continue;
         }
@@ -186,7 +189,7 @@ FixResult fix(const Geometry& g, const FixOptions& opt, const Limits& limits)
     std::vector<uint32_t> remap;   // old -> current, empty = identity
 
     if (opt.removeDegenerates)
-        idx = withoutDegenerates(g, idx, limits, &r.degeneratesRemoved);
+        idx = withoutDegenerates(g, idx, limits, opt.degeneratesByIndexOnly, &r.degeneratesRemoved);
 
     if (opt.weld && !idx.empty()) {
         size_t stride = 0;

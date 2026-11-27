@@ -73,9 +73,16 @@ struct Doc {
     // Per buffer: absolute path of an external .bin, or empty (GLB chunk / data URI).
     QStringList externalPaths;
     qint64 bytesOnDisk = 0;
+    // GLB only: the buffer stored in the BIN chunk (buffer 0 when it has no
+    // uri, else none), the BIN chunk bytes as read, and whether the file
+    // carries chunks this writer cannot reproduce.
+    int binBuffer = -1;
+    QByteArray glbBin;
+    bool glbExtraChunks = false;
 };
 
-bool parseGlb(const QByteArray& bytes, QJsonObject& json, QByteArray& bin, QString& err)
+bool parseGlb(const QByteArray& bytes, QJsonObject& json, QByteArray& bin, bool& extraChunks,
+              QString& err)
 {
     if (bytes.size() < 12) {
         err = QStringLiteral("GLB is too small");
@@ -93,6 +100,8 @@ bool parseGlb(const QByteArray& bytes, QJsonObject& json, QByteArray& bin, QStri
     }
     qint64 offset = 12;
     QByteArray jsonChunk;
+    bool haveJson = false;
+    bool haveBin = false;
     while (offset + 8 <= total) {
         const qint64 len = qFromLittleEndian<quint32>(p + offset);
         const quint32 type = qFromLittleEndian<quint32>(p + offset + 4);
@@ -101,10 +110,15 @@ bool parseGlb(const QByteArray& bytes, QJsonObject& json, QByteArray& bin, QStri
             err = QStringLiteral("GLB chunk overruns the file");
             return false;
         }
-        if (type == kChunkJson)
+        if (type == kChunkJson && !haveJson) {
             jsonChunk = bytes.mid(offset, len);
-        else if (type == kChunkBin && bin.isEmpty())
+            haveJson = true;
+        } else if (type == kChunkBin && !haveBin) {
             bin = bytes.mid(offset, len);
+            haveBin = true;
+        } else {
+            extraChunks = true;   // a rewrite would drop it
+        }
         offset += len;
     }
     QJsonParseError perr;
@@ -130,8 +144,9 @@ bool loadDoc(const QString& path, Doc& d, QString& err)
     QByteArray glbBin;
     if (bytes.startsWith("glTF")) {
         d.glb = true;
-        if (!parseGlb(bytes, d.json, glbBin, err))
+        if (!parseGlb(bytes, d.json, glbBin, d.glbExtraChunks, err))
             return false;
+        d.glbBin = glbBin;
     } else {
         QJsonParseError perr;
         const QJsonDocument doc = QJsonDocument::fromJson(bytes, &perr);
@@ -153,6 +168,7 @@ bool loadDoc(const QString& path, Doc& d, QString& err)
             }
             d.buffers.append(glbBin);
             d.externalPaths.append(QString());
+            d.binBuffer = 0;
         } else if (uri.startsWith(QLatin1String("data:"))) {
             const int comma = uri.indexOf(QLatin1Char(','));
             if (comma < 0) {
@@ -375,6 +391,133 @@ QHash<int, int> accessorReferences(const QJsonObject& json)
     return refs;
 }
 
+// Bytes one accessor or bufferView occupies in its buffer.
+struct Range {
+    int buffer = -1;
+    int view = -1;
+    qint64 start = 0;
+    qint64 end = 0;
+};
+
+bool overlaps(const Range& a, const Range& b)
+{
+    return a.buffer >= 0 && a.buffer == b.buffer && a.start < b.end && b.start < a.end;
+}
+
+// Views referenced from anywhere but an accessor's own `bufferView`:
+// images, sparse indices/values, extensions. Their bytes have readers the
+// accessor bookkeeping does not see.
+std::vector<char> viewsReferencedOutsideAccessors(const QJsonObject& json, int nViews)
+{
+    std::vector<char> marked(size_t(std::max(0, nViews)), 0);
+    std::function<void(const QJsonValue&)> mark = [&](const QJsonValue& v) {
+        if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            for (auto it = o.begin(); it != o.end(); ++it) {
+                if (it.key() == QLatin1String("bufferView") && it.value().isDouble()) {
+                    const int bv = it.value().toInt(-1);
+                    if (bv >= 0 && bv < nViews)
+                        marked[size_t(bv)] = 1;
+                }
+                mark(it.value());
+            }
+        } else if (v.isArray()) {
+            for (const QJsonValue& e : v.toArray())
+                mark(e);
+        }
+    };
+    for (auto it = json.begin(); it != json.end(); ++it)
+        if (it.key() != QLatin1String("accessors"))
+            mark(it.value());
+    for (const QJsonValue& a : json.value(QStringLiteral("accessors")).toArray())
+        mark(a.toObject().value(QStringLiteral("sparse")));
+    return marked;
+}
+
+// Where every accessor and bufferView lives, so a rewrite can prove that
+// the bytes it changes belong to nobody else. Accessor-ID reference counts
+// are not enough: two accessors (or two views) may address the same bytes.
+struct Storage {
+    QHash<int, Range> accessors;
+    QList<Range> views;
+    std::vector<char> outsideRefs;
+};
+
+Storage storageMap(const Doc& d)
+{
+    Storage st;
+    const QJsonArray views = d.json.value(QStringLiteral("bufferViews")).toArray();
+    for (int v = 0; v < views.size(); ++v) {
+        const QJsonObject o = views.at(v).toObject();
+        Range r;
+        r.buffer = o.value(QStringLiteral("buffer")).toInt(-1);
+        r.view = v;
+        r.start = o.value(QStringLiteral("byteOffset")).toInt(0);
+        r.end = r.start + o.value(QStringLiteral("byteLength")).toInt(0);
+        st.views.append(r);
+    }
+    const int nAcc = d.json.value(QStringLiteral("accessors")).toArray().size();
+    for (int i = 0; i < nAcc; ++i) {
+        Acc a;
+        QString err;
+        if (!accessor(d, i, a, err))
+            continue;
+        st.accessors.insert(i, {a.buffer, a.view, a.base, a.base + qint64(a.count - 1) * a.stride + a.elem});
+    }
+    st.outsideRefs = viewsReferencedOutsideAccessors(d.json, int(views.size()));
+    return st;
+}
+
+// May `a` be rewritten when the accessors in `own` are rewritten with it?
+bool privateStorage(const Storage& st, const QSet<int>& own, const Acc& a, QString& why)
+{
+    if (a.view >= 0 && size_t(a.view) < st.outsideRefs.size() && st.outsideRefs[size_t(a.view)]) {
+        why = QStringLiteral("bufferView %1 is also read by an image, sparse data or an extension").arg(a.view);
+        return false;
+    }
+    const Range mine = st.accessors.value(a.index);
+    QSet<int> ownViews;
+    for (int i : own)
+        ownViews.insert(st.accessors.value(i).view);
+    for (auto it = st.accessors.begin(); it != st.accessors.end(); ++it) {
+        if (!own.contains(it.key()) && overlaps(mine, it.value())) {
+            why = QStringLiteral("its bytes overlap accessor %1").arg(it.key());
+            return false;
+        }
+    }
+    for (const Range& v : st.views) {
+        if (!ownViews.contains(v.view) && overlaps(mine, v)) {
+            why = QStringLiteral("its bytes overlap bufferView %1").arg(v.view);
+            return false;
+        }
+    }
+    return true;
+}
+
+// Does any material the primitive can be drawn with blend (alphaMode
+// BLEND)? Variants count: any of them may be selected at runtime.
+bool usesBlendedMaterial(const QJsonObject& json, const QJsonObject& prim)
+{
+    const QJsonArray materials = json.value(QStringLiteral("materials")).toArray();
+    auto blended = [&materials](const QJsonValue& idx) {
+        if (!idx.isDouble())
+            return false;
+        const int m = idx.toInt(-1);
+        return m >= 0 && m < materials.size()
+            && materials.at(m).toObject().value(QStringLiteral("alphaMode")).toString()
+                   == QLatin1String("BLEND");
+    };
+    if (blended(prim.value(QStringLiteral("material"))))
+        return true;
+    const QJsonArray mappings = prim.value(QStringLiteral("extensions")).toObject()
+                                    .value(QStringLiteral("KHR_materials_variants")).toObject()
+                                    .value(QStringLiteral("mappings")).toArray();
+    for (const QJsonValue& m : mappings)
+        if (blended(m.toObject().value(QStringLiteral("material"))))
+            return true;
+    return false;
+}
+
 // Everything the scan needs about one primitive.
 struct Prim {
     PrimitiveReport report;
@@ -385,7 +528,8 @@ struct Prim {
 
 // Read one primitive. Returns false (with report.note set) when it cannot
 // be measured.
-bool readPrimitive(const Doc& d, const QHash<int, int>& refs, int m, int p, Prim& out)
+bool readPrimitive(const Doc& d, const QHash<int, int>& refs, const Storage& st, int m, int p,
+                   Prim& out)
 {
     const QJsonObject mesh = d.json.value(QStringLiteral("meshes")).toArray().at(m).toObject();
     const QJsonObject prim = mesh.value(QStringLiteral("primitives")).toArray().at(p).toObject();
@@ -496,37 +640,60 @@ bool readPrimitive(const Doc& d, const QHash<int, int>& refs, int m, int p, Prim
         col += size_t(a.elem);
     }
 
+    // The bytes a rewrite would change must belong to this primitive alone.
+    QString why;
+    const bool indexPrivate = privateStorage(st, {out.indices.index}, out.indices, why);
+    const QString indexBlocker = indexPrivate ? QString() : QStringLiteral("index accessor: %1").arg(why);
+    if (vertexFixable) {
+        QSet<int> own;
+        for (const Acc& a : out.vertexAccessors)
+            own.insert(a.index);
+        for (const Acc& a : out.vertexAccessors) {
+            if (!privateStorage(st, own, a, why)) {
+                vertexFixable = false;
+                blockers << QStringLiteral("vertex accessor %1: %2").arg(a.index).arg(why);
+                break;
+            }
+        }
+    }
+
     r.measured = true;
-    r.indexFixable = refs.value(out.indices.index) <= 1 && !ngonEncoded;
+    r.indexFixable = refs.value(out.indices.index) <= 1 && !ngonEncoded && indexPrivate;
     r.vertexFixable = vertexFixable && r.indexFixable;
+    const bool blended = usesBlendedMaterial(d.json, prim);
+    r.orderFixable = r.indexFixable && !blended;
+    r.deformable = !targets.isEmpty();
+    for (auto it = attrs.begin(); it != attrs.end() && !r.deformable; ++it)
+        r.deformable = it.key().startsWith(QLatin1String("JOINTS_"));
     if (ngonEncoded)
         blockers.prepend(QStringLiteral("its triangle order encodes n-gons (FB_ngon_encoding)"));
+    else if (!indexBlocker.isEmpty())
+        blockers.prepend(indexBlocker);
     else if (!r.indexFixable)
         blockers.prepend(QStringLiteral("its index accessor is shared"));
+    if (blended && r.indexFixable)
+        blockers << QStringLiteral("its material is alpha-blended, so triangle order is visible");
     if (!blockers.isEmpty())
         r.note = blockers.join(QStringLiteral("; "));
     return true;
 }
 
-// Shrink bufferViews to the bytes their accessors still use and repack each
-// buffer. Views referenced from anywhere but an accessor's own `bufferView`
-// (images, sparse data, extensions) keep their full length.
-void compactBuffers(Doc& d)
+// Buffers whose bytes something addresses directly, not through a plain
+// bufferView (EXT_meshopt_compression's `buffer`/`byteOffset`, any view
+// extension): moving their views would leave those references stale.
+std::vector<char> buffersAddressedByExtensions(const QJsonArray& views, int nBuffers)
 {
-    QJsonArray views = d.json.value(QStringLiteral("bufferViews")).toArray();
-    const int nViews = views.size();
-    std::vector<qint64> used(size_t(nViews), 0);
-    std::vector<char> keepFull(size_t(nViews), 0);
-
+    std::vector<char> fixed(size_t(std::max(0, nBuffers)), 0);
+    auto markBuffer = [&fixed, nBuffers](int b) {
+        if (b >= 0 && b < nBuffers)
+            fixed[size_t(b)] = 1;
+    };
     std::function<void(const QJsonValue&)> markRefs = [&](const QJsonValue& v) {
         if (v.isObject()) {
             const QJsonObject o = v.toObject();
             for (auto it = o.begin(); it != o.end(); ++it) {
-                if (it.key() == QLatin1String("bufferView") && it.value().isDouble()) {
-                    const int bv = it.value().toInt(-1);
-                    if (bv >= 0 && bv < nViews)
-                        keepFull[size_t(bv)] = 1;
-                }
+                if (it.key() == QLatin1String("buffer") && it.value().isDouble())
+                    markBuffer(it.value().toInt(-1));
                 markRefs(it.value());
             }
         } else if (v.isArray()) {
@@ -534,18 +701,76 @@ void compactBuffers(Doc& d)
                 markRefs(e);
         }
     };
-    for (auto it = d.json.begin(); it != d.json.end(); ++it)
-        if (it.key() != QLatin1String("accessors"))
-            markRefs(it.value());
+    for (const QJsonValue& vv : views) {
+        const QJsonObject vo = vv.toObject();
+        if (!vo.contains(QStringLiteral("extensions")))
+            continue;
+        markBuffer(vo.value(QStringLiteral("buffer")).toInt(-1));
+        markRefs(vo.value(QStringLiteral("extensions")));
+    }
+    return fixed;
+}
+
+// Repack one buffer's views back to back. Returns false (buffer untouched)
+// when the views overlap or any of them lies outside the loaded bytes.
+bool repackBuffer(Doc& d, int b, QJsonArray& views, const std::vector<qint64>& newLength)
+{
+    const int nViews = views.size();
+    std::vector<int> mine;
+    for (int v = 0; v < nViews; ++v)
+        if (views.at(v).toObject().value(QStringLiteral("buffer")).toInt(-1) == b)
+            mine.push_back(v);
+    if (mine.empty())
+        return false;
+    auto offsetOf = [&views](int v) {
+        return qint64(views.at(v).toObject().value(QStringLiteral("byteOffset")).toInt(0));
+    };
+    auto lengthOf = [&views](int v) {
+        return qint64(views.at(v).toObject().value(QStringLiteral("byteLength")).toInt(0));
+    };
+    std::sort(mine.begin(), mine.end(), [&offsetOf](int x, int y) { return offsetOf(x) < offsetOf(y); });
+    const qint64 size = d.buffers.at(b).size();
+    qint64 prevEnd = 0;
+    for (int v : mine) {
+        const qint64 off = offsetOf(v);
+        const qint64 len = lengthOf(v);
+        // Overlapping views (legal, rare) cannot be repacked independently,
+        // and a view past the end (an image nobody validated) must not be read.
+        if (off < prevEnd || off < 0 || len < 0 || off + len > size || newLength[size_t(v)] > len)
+            return false;
+        prevEnd = off + len;
+    }
+    QByteArray repacked;
+    for (int v : mine) {
+        QJsonObject vo = views.at(v).toObject();
+        while (repacked.size() % 4 != 0)
+            repacked.append('\0');
+        const qint64 newOff = repacked.size();
+        repacked.append(d.buffers.at(b).constData() + offsetOf(v), newLength[size_t(v)]);
+        vo.insert(QStringLiteral("byteOffset"), newOff);
+        vo.insert(QStringLiteral("byteLength"), newLength[size_t(v)]);
+        views.replace(v, vo);
+    }
+    d.buffers[b] = repacked;
+    return true;
+}
+
+// Shrink bufferViews to the bytes their accessors still use and repack each
+// buffer. Views referenced from anywhere but an accessor's own `bufferView`
+// (images, sparse data, extensions) keep their full length, and buffers an
+// extension addresses directly are not repacked at all.
+void compactBuffers(Doc& d)
+{
+    QJsonArray views = d.json.value(QStringLiteral("bufferViews")).toArray();
+    const int nViews = views.size();
+    std::vector<qint64> used(size_t(nViews), 0);
+    const std::vector<char> keepFull = viewsReferencedOutsideAccessors(d.json, nViews);
 
     const QJsonArray accessors = d.json.value(QStringLiteral("accessors")).toArray();
     for (int i = 0; i < accessors.size(); ++i) {
-        const QJsonObject o = accessors.at(i).toObject();
-        if (o.contains(QStringLiteral("sparse")))
-            markRefs(o.value(QStringLiteral("sparse")));
         Acc a;
         QString err;
-        if (!o.contains(QStringLiteral("bufferView")) || !accessor(d, i, a, err))
+        if (!accessors.at(i).toObject().contains(QStringLiteral("bufferView")) || !accessor(d, i, a, err))
             continue;
         const qint64 viewStart = views.at(a.view).toObject().value(QStringLiteral("byteOffset")).toInt(0);
         const qint64 end = a.base - viewStart + qint64(a.count - 1) * a.stride + a.elem;
@@ -565,41 +790,13 @@ void compactBuffers(Doc& d)
     if (!shrank)
         return;
 
+    const std::vector<char> pinned = buffersAddressedByExtensions(views, d.buffers.size());
     QJsonArray buffers = d.json.value(QStringLiteral("buffers")).toArray();
     for (int b = 0; b < d.buffers.size(); ++b) {
-        std::vector<int> mine;
-        for (int v = 0; v < nViews; ++v)
-            if (views.at(v).toObject().value(QStringLiteral("buffer")).toInt(-1) == b)
-                mine.push_back(v);
-        std::sort(mine.begin(), mine.end(), [&views](int x, int y) {
-            return views.at(x).toObject().value(QStringLiteral("byteOffset")).toInt(0)
-                 < views.at(y).toObject().value(QStringLiteral("byteOffset")).toInt(0);
-        });
-        // Overlapping views (legal, rare) cannot be repacked independently.
-        bool overlap = false;
-        for (size_t i = 1; i < mine.size() && !overlap; ++i) {
-            const QJsonObject prev = views.at(mine[i - 1]).toObject();
-            const qint64 prevEnd = prev.value(QStringLiteral("byteOffset")).toInt(0)
-                                 + prev.value(QStringLiteral("byteLength")).toInt(0);
-            overlap = views.at(mine[i]).toObject().value(QStringLiteral("byteOffset")).toInt(0) < prevEnd;
-        }
-        if (overlap || mine.empty())
+        if (pinned[size_t(b)] || !repackBuffer(d, b, views, newLength))
             continue;
-        QByteArray repacked;
-        for (int v : mine) {
-            QJsonObject vo = views.at(v).toObject();
-            const qint64 off = vo.value(QStringLiteral("byteOffset")).toInt(0);
-            while (repacked.size() % 4 != 0)
-                repacked.append('\0');
-            const qint64 newOff = repacked.size();
-            repacked.append(d.buffers.at(b).constData() + off, newLength[size_t(v)]);
-            vo.insert(QStringLiteral("byteOffset"), newOff);
-            vo.insert(QStringLiteral("byteLength"), newLength[size_t(v)]);
-            views.replace(v, vo);
-        }
-        d.buffers[b] = repacked;
         QJsonObject bo = buffers.at(b).toObject();
-        bo.insert(QStringLiteral("byteLength"), repacked.size());
+        bo.insert(QStringLiteral("byteLength"), d.buffers.at(b).size());
         buffers.replace(b, bo);
     }
     d.json.insert(QStringLiteral("bufferViews"), views);
@@ -638,7 +835,9 @@ QByteArray buildGlb(const QJsonObject& json, const QByteArray& bin)
     return out;
 }
 
-// Serialise the document: the main file plus every external buffer.
+// Serialise the document: every external buffer, then the main file LAST
+// (writeAll publishes in this order, so the manifest that points at the new
+// buffer layout is the final file to change).
 QList<QPair<QString, QByteArray>> serialise(Doc& d)
 {
     QList<QPair<QString, QByteArray>> files;
@@ -647,7 +846,8 @@ QList<QPair<QString, QByteArray>> serialise(Doc& d)
         QJsonObject bo = buffers.at(b).toObject();
         if (!d.externalPaths.at(b).isEmpty()) {
             files.append({d.externalPaths.at(b), d.buffers.at(b)});
-        } else if (!(d.glb && b == 0)) {
+        } else if (b != d.binBuffer) {
+            // A data-URI buffer (also possible inside a GLB) stays one.
             bo.insert(QStringLiteral("uri"), QStringLiteral("data:application/octet-stream;base64,")
                                                  + QString::fromLatin1(d.buffers.at(b).toBase64()));
         }
@@ -657,25 +857,93 @@ QList<QPair<QString, QByteArray>> serialise(Doc& d)
     if (!buffers.isEmpty())
         d.json.insert(QStringLiteral("buffers"), buffers);
     const QByteArray main = d.glb
-        ? buildGlb(d.json, d.buffers.isEmpty() ? QByteArray() : d.buffers.at(0))
+        ? buildGlb(d.json, d.binBuffer >= 0 ? d.buffers.at(d.binBuffer) : d.glbBin)
         : QJsonDocument(d.json).toJson(QJsonDocument::Indented);
-    files.prepend({d.path, main});
+    files.append({d.path, main});
     return files;
 }
 
+QString stagingPath(const QString& path) { return path + QStringLiteral(".qtmesh_tmp"); }
+QString backupPath(const QString& path) { return path + QStringLiteral(".qtmesh_bak"); }
+
+// Publish `files` as one unit: stage every file next to its destination,
+// then swap them in (in order: buffers, then the main document). A failed
+// swap restores every file already replaced, so the asset is never left
+// with new offsets pointing into old buffer bytes.
 bool writeAll(const QList<QPair<QString, QByteArray>>& files, QString& err)
 {
-    // Commit only after every file was written: QSaveFile renames on commit.
+    auto removeStaged = [&files]() {
+        for (const auto& f : files)
+            QFile::remove(stagingPath(f.first));
+    };
     for (const auto& [path, bytes] : files) {
-        QSaveFile f(path);
-        if (!f.open(QIODevice::WriteOnly)) {
+        QFile f(stagingPath(path));
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(bytes) != bytes.size()
+            || !f.flush()) {
             err = QStringLiteral("cannot write %1").arg(path);
+            f.close();
+            removeStaged();
             return false;
         }
-        if (f.write(bytes) != bytes.size() || !f.commit()) {
-            err = QStringLiteral("short write to %1").arg(path);
+    }
+
+    QList<QString> swapped;   // destinations replaced so far (backups exist)
+    auto rollback = [&]() {
+        for (auto it = swapped.rbegin(); it != swapped.rend(); ++it) {
+            QFile::remove(*it);
+            QFile::rename(backupPath(*it), *it);
+        }
+        removeStaged();
+    };
+    for (const auto& f : files) {
+        const QString& path = f.first;
+        QFile::remove(backupPath(path));
+        if (QFile::exists(path) && !QFile::rename(path, backupPath(path))) {
+            err = QStringLiteral("cannot replace %1").arg(path);
+            rollback();
             return false;
         }
+        if (!QFile::rename(stagingPath(path), path)) {
+            QFile::rename(backupPath(path), path);
+            err = QStringLiteral("cannot replace %1").arg(path);
+            rollback();
+            return false;
+        }
+        swapped.append(path);
+    }
+    for (const QString& path : swapped)
+        QFile::remove(backupPath(path));
+    return true;
+}
+
+// Refuse rewrites this writer cannot do faithfully or safely.
+bool checkWritable(const Doc& d, const QString& writeRoot, QString& err)
+{
+    if (d.glbExtraChunks) {
+        err = QStringLiteral("the GLB has chunks besides JSON and BIN, which a rewrite would drop");
+        return false;
+    }
+    const QString root = QFileInfo(writeRoot.isEmpty() ? QFileInfo(d.path).absolutePath() : writeRoot)
+                             .canonicalFilePath();
+    if (root.isEmpty()) {
+        err = QStringLiteral("cannot resolve the write root %1").arg(writeRoot);
+        return false;
+    }
+    const QString rootPrefix = root.endsWith(QLatin1Char('/')) ? root : root + QLatin1Char('/');
+    QSet<QString> seen{QFileInfo(d.path).canonicalFilePath()};
+    for (const QString& ext : d.externalPaths) {
+        if (ext.isEmpty())
+            continue;
+        const QString canon = QFileInfo(ext).canonicalFilePath();
+        if (canon.isEmpty() || !canon.startsWith(rootPrefix)) {
+            err = QStringLiteral("external buffer %1 is outside %2; not rewriting it").arg(ext, root);
+            return false;
+        }
+        if (seen.contains(canon)) {
+            err = QStringLiteral("two buffers (or the document) resolve to %1; not rewriting").arg(canon);
+            return false;
+        }
+        seen.insert(canon);
     }
     return true;
 }
@@ -684,12 +952,13 @@ QList<Prim> readPrimitives(const Doc& d)
 {
     QList<Prim> prims;
     const QHash<int, int> refs = accessorReferences(d.json);
+    const Storage st = storageMap(d);
     const QJsonArray meshes = d.json.value(QStringLiteral("meshes")).toArray();
     for (int m = 0; m < meshes.size(); ++m) {
         const int n = meshes.at(m).toObject().value(QStringLiteral("primitives")).toArray().size();
         for (int p = 0; p < n; ++p) {
             Prim prim;
-            readPrimitive(d, refs, m, p, prim);
+            readPrimitive(d, refs, st, m, p, prim);
             prims.append(prim);
         }
     }
@@ -720,11 +989,11 @@ AnalyzeResult analyzeFile(const QString& path, const MeshQuality::Limits& limits
 }
 
 FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool dryRun,
-                  const MeshQuality::Limits& limits)
+                  const MeshQuality::Limits& limits, const QString& writeRoot)
 {
     FixReport rep;
     Doc d;
-    if (!loadDoc(path, d, rep.error))
+    if (!loadDoc(path, d, rep.error) || !checkWritable(d, writeRoot, rep.error))
         return rep;
     rep.bytesBefore = d.bytesOnDisk;
     rep.bytesAfter = d.bytesOnDisk;
@@ -744,6 +1013,14 @@ FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool 
             o.weld = false;
             o.vertexFetch = false;
             rep.notes << QStringLiteral("%1: vertex order and welding skipped (%2)").arg(label, pr.note);
+        }
+        if (!pr.orderFixable && (o.vertexCache || o.overdraw)) {
+            o.vertexCache = false;
+            o.overdraw = false;
+            rep.notes << QStringLiteral("%1: triangle reordering skipped (%2)").arg(label, pr.note);
+        }
+        if (pr.deformable && o.removeDegenerates) {
+            o.degeneratesByIndexOnly = true;
         }
         const MeshQuality::FixResult r = MeshQuality::fix(prim.geometry, o, limits);
         if (!r.changed)

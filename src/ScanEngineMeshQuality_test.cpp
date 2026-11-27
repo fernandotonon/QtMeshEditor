@@ -27,6 +27,7 @@ MeshQualityEntry entry(size_t tris, double acmr, double acmrOpt)
     e.measured = true;
     e.indexFixable = true;
     e.vertexFixable = true;
+    e.orderFixable = true;
     e.metrics.triangles = tris;
     e.metrics.vertices = tris;
     e.metrics.acmr = acmr;
@@ -85,6 +86,7 @@ TEST(ScanMeshQuality, UnfixablePrimitivesSayWhy)
     MeshQualityEntry e = entry(5000, 1.2, 0.7);
     e.indexFixable = false;
     e.vertexFixable = false;
+    e.orderFixable = false;
     e.note = QStringLiteral("its triangle order encodes n-gons (FB_ngon_encoding)");
     a.meshQuality = {e};
     const auto fs = ScanEngine::evaluateRules(a, ScanConfig::defaults());
@@ -214,4 +216,18 @@ TEST(ScanMeshQuality, SelectedFixOnBrokenFileReportsTheFailure)
     ASSERT_NE(f, nullptr);
     EXPECT_FALSE(f->fixed);
     EXPECT_TRUE(f->message.contains("fix failed"));
+}
+
+TEST(ScanMeshQuality, BlendedPrimitivesAreNotOfferedTheReorderFix)
+{
+    AssetInfo a = gltfAsset();
+    MeshQualityEntry e = entry(5000, 1.2, 0.7);
+    e.orderFixable = false;
+    e.note = QStringLiteral("its material is alpha-blended, so triangle order is visible");
+    a.meshQuality = {e};
+    const auto fs = ScanEngine::evaluateRules(a, ScanConfig::defaults());
+    const Finding* f = findRule(fs, "detect_acmr_gain_pct");
+    ASSERT_NE(f, nullptr);
+    EXPECT_FALSE(f->fixable);
+    EXPECT_TRUE(f->message.contains("alpha-blended")) << f->message.toStdString();
 }

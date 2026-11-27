@@ -49,6 +49,8 @@ struct MeshQualityEntry {
     bool measured = false;
     bool indexFixable = false;
     bool vertexFixable = false;
+    bool orderFixable = false;   // triangles may be reordered (false under alpha blending)
+    bool deformable = false;     // skinned / morphed
     QString note;
     MeshQuality::Metrics metrics;
 };

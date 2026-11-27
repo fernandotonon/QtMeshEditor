@@ -33,6 +33,12 @@ struct PrimitiveReport {
     bool measured = false;      // false = skipped (see note)
     bool indexFixable = false;  // its index accessor can be rewritten
     bool vertexFixable = false; // its vertex accessors can be rewritten (weld / fetch order)
+    // Its triangles may be REORDERED (vertex cache / overdraw). False for
+    // alpha-blended materials, where draw order changes the blended result.
+    bool orderFixable = false;
+    // Skinned or morphed: a zero-area base triangle may open up when
+    // deformed, so the degenerate fix only drops repeated-corner triangles.
+    bool deformable = false;
     QString note;               // why it was skipped or only partly fixable
 };
 
@@ -59,10 +65,16 @@ struct FixReport {
     QStringList notes;          // primitives left alone, and why
 };
 
-// Apply `opt` to every primitive that allows it and write the file back
-// (atomically; external .bin buffers are rewritten too). With `dryRun` the
-// report is computed and nothing is written.
+// Apply `opt` to every primitive that allows it and write the file back.
+// External .bin buffers are rewritten too: every file is staged first, the
+// buffers are swapped in before the main document, and a failure rolls the
+// already-replaced files back. With `dryRun` the report is computed and
+// nothing is written.
+//
+// `writeRoot` bounds where external buffers may be written (canonical
+// paths, so `..` and symlinks cannot leave it); empty = the asset's own
+// directory. A buffer outside it refuses the whole fix.
 FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool dryRun = false,
-                  const MeshQuality::Limits& limits = {});
+                  const MeshQuality::Limits& limits = {}, const QString& writeRoot = QString());
 
 } // namespace GltfMeshQuality

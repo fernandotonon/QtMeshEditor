@@ -228,3 +228,16 @@ TEST(MeshQuality, RemapStreamFirstWriterWins)
     EXPECT_EQ(out[0], 20);
     EXPECT_EQ(out[1], 10);
 }
+
+TEST(MeshQuality, IndexOnlyDegenerateRemovalKeepsZeroAreaTriangles)
+{
+    Geometry g = shuffledGrid(4);
+    g.indices.insert(g.indices.end(), {0, 0, 1});   // repeated corner
+    g.indices.insert(g.indices.end(), {0, 1, 2});   // collinear: may open up when skinned
+    FixOptions o;
+    o.removeDegenerates = true;
+    o.degeneratesByIndexOnly = true;
+    const FixResult r = fix(g, o);
+    EXPECT_EQ(r.degeneratesRemoved, 1u);
+    EXPECT_EQ(r.trianglesAfter, r.trianglesBefore - 1);
+}

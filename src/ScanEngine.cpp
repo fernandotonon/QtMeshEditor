@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QMap>
 #include <QLocale>
 #include <QRegularExpression>
@@ -231,6 +232,10 @@ static void copyAssetInspectExtensionFields(AssetInfo& dst, const AssetInfo& src
     dst.estimatedTextureVramBytes = src.estimatedTextureVramBytes;
     dst.estimatedDrawCalls = src.estimatedDrawCalls;
     dst.lodMeshCount = src.lodMeshCount;
+    dst.degenerateTriangles = src.degenerateTriangles;
+    dst.degenerateTrianglesOf = src.degenerateTrianglesOf;
+    dst.largestSubmeshTriangles = src.largestSubmeshTriangles;
+    dst.largestSubmeshName = src.largestSubmeshName;
 }
 
 static void finalizeAssetInspect(AssetInfo& info, const AssetInspectOptions& options)
@@ -1057,6 +1062,8 @@ static void meshQualityFromGltfFile(const QString& filePath, AssetInfo& info)
         e.measured = p.measured;
         e.indexFixable = p.indexFixable;
         e.vertexFixable = p.vertexFixable;
+        e.orderFixable = p.orderFixable;
+        e.deformable = p.deformable;
         e.note = p.note;
         e.metrics = p.metrics;
         info.meshQuality.append(e);
@@ -1748,6 +1755,14 @@ QString fixHint(const QString& fixId)
     return QStringLiteral(" Fix: `qtmesh scan --fix-mesh %1` (or `fix.optimize_meshes: true`).").arg(fixId);
 }
 
+// What the fix for an ordering metric rewrites.
+enum class Rewrite { TriangleOrder, VertexBuffer };
+
+bool canRewrite(const MeshQualityEntry& e, Rewrite what)
+{
+    return what == Rewrite::VertexBuffer ? e.vertexFixable : e.orderFixable;
+}
+
 // One ordering metric (vertex cache, overdraw, vertex fetch) summed over the
 // primitives big enough to matter, weighted by `weight`.
 struct OrderingTotals {
@@ -1766,7 +1781,7 @@ struct OrderingTotals {
 };
 
 template<typename Before, typename After, typename Weight>
-OrderingTotals orderingTotals(const AssetInfo& asset, int minTriangles, bool needsVertexRewrite,
+OrderingTotals orderingTotals(const AssetInfo& asset, int minTriangles, Rewrite rewrite,
                               Before before, After after, Weight weight)
 {
     OrderingTotals t;
@@ -1783,7 +1798,7 @@ OrderingTotals orderingTotals(const AssetInfo& asset, int minTriangles, bool nee
         t.weight += w;
         ++t.primitives;
         const double gain = MeshQuality::Metrics::gainPct(b, a);
-        if (gain > 0.0 && (needsVertexRewrite ? e.vertexFixable : e.indexFixable))
+        if (gain > 0.0 && canRewrite(e, rewrite))
             t.fixable = true;
         else if (gain > 0.0 && t.blocker.isEmpty())
             t.blocker = e.note;
@@ -1896,7 +1911,7 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
     // ---- detect_acmr_gain_pct ----
     if (config.detectAcmrGainPct > 0.0) {
         const OrderingTotals t = orderingTotals(
-            asset, minTris, false, [](const MeshQuality::Metrics& m) { return m.acmr; },
+            asset, minTris, Rewrite::TriangleOrder, [](const MeshQuality::Metrics& m) { return m.acmr; },
             [](const MeshQuality::Metrics& m) { return m.acmrOptimized; }, triangles);
         if (t.gainPct() >= config.detectAcmrGainPct)
             appendOrderingFinding(findings, asset, kRuleAcmr,
@@ -1910,7 +1925,7 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
     // ---- detect_overdraw_gain_pct ----
     if (config.detectOverdrawGainPct > 0.0) {
         const OrderingTotals t = orderingTotals(
-            asset, minTris, false, [](const MeshQuality::Metrics& m) { return m.overdraw; },
+            asset, minTris, Rewrite::TriangleOrder, [](const MeshQuality::Metrics& m) { return m.overdraw; },
             [](const MeshQuality::Metrics& m) { return m.overdrawOptimized; }, triangles);
         if (t.gainPct() >= config.detectOverdrawGainPct)
             appendOrderingFinding(findings, asset, kRuleOverdraw,
@@ -1924,7 +1939,7 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
     // ---- detect_vertex_fetch_gain_pct ----
     if (config.detectVertexFetchGainPct > 0.0) {
         const OrderingTotals t = orderingTotals(
-            asset, minTris, true, [](const MeshQuality::Metrics& m) { return m.overfetch; },
+            asset, minTris, Rewrite::VertexBuffer, [](const MeshQuality::Metrics& m) { return m.overfetch; },
             [](const MeshQuality::Metrics& m) { return m.overfetchOptimized; },
             [](const MeshQuality::Metrics& m) { return double(m.vertices); });
         if (t.gainPct() >= config.detectVertexFetchGainPct)
@@ -2464,7 +2479,9 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
     if (opt.overdraw)
         opt.vertexCache = true;
 
-    const GltfMeshQuality::FixReport rep = GltfMeshQuality::fixFile(asset.filePath, opt, config.dryRun);
+    // External buffers may only be rewritten inside the scanned tree.
+    const GltfMeshQuality::FixReport rep =
+        GltfMeshQuality::fixFile(asset.filePath, opt, config.dryRun, {}, scanRoot);
     if (!rep.ok) {
         for (Finding* f : applied)
             f->message += QStringLiteral(" [fix failed: %1]").arg(rep.error);
@@ -2501,20 +2518,35 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
 
     SentryReporter::addBreadcrumb(QStringLiteral("scan.fix.mesh"),
         QStringLiteral("%1: %2").arg(fixIds.join(QLatin1Char(',')), summary));
-    for (int i = 0; i < applied.size(); ++i) {
-        Finding* f = applied[i];
-        f->fixed = true;
-        f->severity = Severity::Info;
-        f->message += QStringLiteral(" [fixed: %1]").arg(summary);
-        if (i == 0)
-            f->bytesSaved = std::max<qint64>(0, rep.bytesBefore - rep.bytesAfter);
-    }
-    if (!rep.notes.isEmpty())
-        applied.first()->message += QStringLiteral(" (%1)").arg(rep.notes.join(QStringLiteral("; ")));
 
+    // Re-measure the rewritten file and re-run the rules: a finding is only
+    // "fixed" when its rule no longer fires (a blocked primitive, a simplify
+    // stopped by its error limit or a partial weld can leave it standing).
     AssetInspectOptions inspectOpts;
     inspectOpts.probeTextureFiles = config.probeTextureFiles;
     asset = ScanEngine::inspectAsset(asset.filePath, scanRoot, inspectOpts);
+    const bool remeasured = asset.meshQualityMeasured;
+    QSet<QString> stillFiring;
+    if (remeasured)
+        for (const Finding& f : ScanEngine::evaluateRules(asset, globalConfig))
+            stillFiring.insert(f.rule);
+
+    bool firstFixed = true;
+    for (Finding* f : applied) {
+        if (stillFiring.contains(f->rule)) {
+            f->message += QStringLiteral(" [partly fixed (%1), still over the threshold]").arg(summary);
+            continue;
+        }
+        f->fixed = true;
+        f->severity = Severity::Info;
+        f->message += QStringLiteral(" [fixed: %1%2]")
+                          .arg(summary, remeasured ? QString() : QStringLiteral("; not re-measured"));
+        if (firstFixed)
+            f->bytesSaved = std::max<qint64>(0, rep.bytesBefore - rep.bytesAfter);
+        firstFixed = false;
+    }
+    if (!rep.notes.isEmpty())
+        applied.first()->message += QStringLiteral(" (%1)").arg(rep.notes.join(QStringLiteral("; ")));
 }
 
 void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
@@ -3050,6 +3082,8 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
                     po["overfetchOptimized"] = round3(m.overfetchOptimized);
                     po["indexFixable"] = e.indexFixable;
                     po["vertexFixable"] = e.vertexFixable;
+                    po["orderFixable"] = e.orderFixable;
+                    po["deformable"] = e.deformable;
                 }
                 prims.append(po);
             }

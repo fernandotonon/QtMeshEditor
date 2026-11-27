@@ -5,6 +5,8 @@
 
 #include <gtest/gtest.h>
 
+#include <type_traits>
+
 #include <QByteArray>
 #include <QDir>
 #include <QFile>
@@ -259,11 +261,16 @@ QJsonObject gridPrimitive(Doc& d, const GridSpec& s)
     if (s.duplicate) {
         // Duplicate vertex 0 and point the first triangle using it at the copy.
         const uint32_t copy = uint32_t(pos.size() / 3);
-        pos.insert(pos.end(), pos.begin(), pos.begin() + 3);
-        uv.insert(uv.end(), uv.begin(), uv.begin() + 2);
-        delta.insert(delta.end(), delta.begin(), delta.begin() + 3);
-        joints.insert(joints.end(), joints.begin(), joints.begin() + 4);
-        weights.insert(weights.end(), weights.begin(), weights.begin() + 4);
+        // Copy first: a range insert from the same vector is undefined.
+        auto appendPrefix = [](auto& v, size_t n) {
+            const std::decay_t<decltype(v)> head(v.begin(), v.begin() + std::ptrdiff_t(n));
+            v.insert(v.end(), head.begin(), head.end());
+        };
+        appendPrefix(pos, 3);
+        appendPrefix(uv, 2);
+        appendPrefix(delta, 3);
+        appendPrefix(joints, 4);
+        appendPrefix(weights, 4);
         bool redirected = false;
         for (auto& t : tris)
             for (auto& v : t)
@@ -498,4 +505,181 @@ TEST(GltfMeshQuality, BrokenFilesReportAnError)
     EXPECT_FALSE(GltfMeshQuality::analyzeFile(dir.filePath("bad.glb")).ok);
     EXPECT_FALSE(GltfMeshQuality::fixFile(dir.filePath("bad.glb"), allLossless()).ok);
     EXPECT_FALSE(GltfMeshQuality::analyzeFile(dir.filePath("missing.gltf")).ok);
+}
+
+namespace {
+
+QByteArray fileBytes(const QString& path)
+{
+    QFile f(path);
+    return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray();
+}
+
+MeshQuality::FixOptions orderOnly()
+{
+    MeshQuality::FixOptions o;
+    o.vertexCache = o.overdraw = true;
+    return o;
+}
+
+} // namespace
+
+TEST(GltfMeshQuality, BlendedMaterialsKeepTheirTriangleOrder)
+{
+    for (bool viaVariant : {false, true}) {
+        QTemporaryDir dir;
+        Doc d;
+        GridSpec s;
+        s.degenerate = s.duplicate = false;
+        QJsonObject prim = gridPrimitive(d, s);
+        if (viaVariant) {
+            prim.insert("material", 0);
+            prim.insert("extensions", QJsonObject{{"KHR_materials_variants", QJsonObject{
+                {"mappings", QJsonArray{QJsonObject{{"material", 1}, {"variants", QJsonArray{0}}}}}}}});
+        } else {
+            prim.insert("material", 1);
+        }
+        d.primitive(prim);
+        QJsonObject json = d.json();
+        json.insert("materials", QJsonArray{QJsonObject{{"alphaMode", "OPAQUE"}},
+                                            QJsonObject{{"alphaMode", "BLEND"}}});
+        const QString path = writeGlb(dir.filePath("glass.glb"), json, d.bin);
+        const QByteArray original = fileBytes(path);
+
+        const auto res = GltfMeshQuality::analyzeFile(path);
+        ASSERT_TRUE(res.ok);
+        EXPECT_TRUE(res.primitives[0].indexFixable);
+        EXPECT_FALSE(res.primitives[0].orderFixable);
+        EXPECT_TRUE(res.primitives[0].note.contains("alpha-blended"));
+
+        const auto rep = GltfMeshQuality::fixFile(path, orderOnly());
+        ASSERT_TRUE(rep.ok);
+        EXPECT_EQ(rep.primitivesChanged, 0);
+        EXPECT_EQ(fileBytes(path), original);
+    }
+}
+
+TEST(GltfMeshQuality, SkinnedAndMorphedPrimitivesAreDeformable)
+{
+    QTemporaryDir dir;
+    Doc d;
+    GridSpec skinned;
+    skinned.skin = true;
+    d.primitive(gridPrimitive(d, skinned));
+    d.primitive(gridPrimitive(d, {}));
+    const auto res = GltfMeshQuality::analyzeFile(writeGlb(dir.filePath("d.glb"), d.json(), d.bin));
+    ASSERT_TRUE(res.ok);
+    EXPECT_TRUE(res.primitives[0].deformable);
+    EXPECT_FALSE(res.primitives[1].deformable);
+}
+
+TEST(GltfMeshQuality, AccessorsAliasingTheSameBytesAreNotRewritten)
+{
+    QTemporaryDir dir;
+    Doc d;
+    GridSpec s;
+    s.degenerate = false;
+    const QJsonObject a = gridPrimitive(d, s);
+    // b reads the SAME bytes through its own accessor objects: every
+    // accessor has one reference, yet a rewrite of a would scramble b.
+    QJsonObject battrs;
+    const QJsonObject aattrs = a["attributes"].toObject();
+    for (auto it = aattrs.begin(); it != aattrs.end(); ++it) {
+        d.accessors.append(d.accessors.at(it.value().toInt()));
+        battrs.insert(it.key(), d.accessors.size() - 1);
+    }
+    QJsonObject b{{"attributes", battrs}, {"mode", 4},
+                  {"indices", d.indices(std::vector<uint32_t>{0, 1, 22, 0, 22, 21}, kUShort)}};
+    d.primitive(a, "a");
+    d.primitive(b, "b");
+    const QString path = writeGlb(dir.filePath("alias.glb"), d.json(), d.bin);
+    const auto res = GltfMeshQuality::analyzeFile(path);
+    ASSERT_TRUE(res.ok);
+    EXPECT_FALSE(res.primitives[0].vertexFixable);
+    EXPECT_TRUE(res.primitives[0].note.contains("overlap"));
+
+    const auto [json0, bin0] = readGlb(path);
+    const auto beforeB = triangles(json0, bin0, 1);
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(rep.verticesWelded, 0u);
+    const auto [json1, bin1] = readGlb(path);
+    EXPECT_EQ(triangles(json1, bin1, 1), beforeB);
+}
+
+TEST(GltfMeshQuality, GlbWithExtraChunksIsNotRewritten)
+{
+    QTemporaryDir dir;
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    const QString path = writeGlb(dir.filePath("extra.glb"), d.json(), d.bin);
+    QByteArray bytes = fileBytes(path);
+    appendU32(bytes, 4);
+    appendU32(bytes, 0x54584558);   // an unknown extension chunk
+    bytes.append("abcd");
+    qToLittleEndian<quint32>(quint32(bytes.size()), bytes.data() + 8);
+    {
+        QFile f(path);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(bytes);
+    }
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    EXPECT_FALSE(rep.ok);
+    EXPECT_TRUE(rep.error.contains("chunks"));
+    EXPECT_EQ(fileBytes(path), bytes);
+}
+
+TEST(GltfMeshQuality, ExternalBuffersOutsideTheRootAreNotWritten)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(QDir(dir.path()).mkpath("assets"));
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    QJsonObject json = d.json();
+    json.insert("buffers", QJsonArray{QJsonObject{{"byteLength", d.bin.size()}, {"uri", "../outside.bin"}}});
+    {
+        QFile bf(dir.filePath("outside.bin"));
+        ASSERT_TRUE(bf.open(QIODevice::WriteOnly));
+        bf.write(d.bin);
+        QFile f(dir.filePath("assets/mesh.gltf"));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(QJsonDocument(json).toJson());
+    }
+    const QString path = dir.filePath("assets/mesh.gltf");
+    const QByteArray binBefore = fileBytes(dir.filePath("outside.bin"));
+    for (const QString& root : {QString(), dir.filePath("assets")}) {
+        const auto rep = GltfMeshQuality::fixFile(path, allLossless(), false, {}, root);
+        EXPECT_FALSE(rep.ok);
+        EXPECT_TRUE(rep.error.contains("outside"));
+        EXPECT_EQ(fileBytes(dir.filePath("outside.bin")), binBefore);
+    }
+    // Inside a wider root it is allowed.
+    EXPECT_TRUE(GltfMeshQuality::fixFile(path, allLossless(), false, {}, dir.path()).ok);
+    EXPECT_NE(fileBytes(dir.filePath("outside.bin")), binBefore);
+}
+
+TEST(GltfMeshQuality, GlbBufferZeroWithADataUriStaysADataUri)
+{
+    QTemporaryDir dir;
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    QJsonObject json = d.json();
+    json.insert("buffers", QJsonArray{QJsonObject{
+        {"byteLength", d.bin.size()},
+        {"uri", "data:application/octet-stream;base64," + QString::fromLatin1(d.bin.toBase64())}}});
+    const QString path = writeGlb(dir.filePath("uri.glb"), json, QByteArray());
+    const auto before = triangles(json, d.bin, 0);
+
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(rep.primitivesChanged, 1);
+    const auto [json1, bin1] = readGlb(path);
+    const QString uri = json1["buffers"].toArray()[0].toObject()["uri"].toString();
+    ASSERT_TRUE(uri.startsWith("data:"));
+    const QByteArray data = QByteArray::fromBase64(uri.mid(uri.indexOf(',') + 1).toLatin1());
+    EXPECT_EQ(json1["buffers"].toArray()[0].toObject()["byteLength"].toInt(), data.size());
+    const auto after = triangles(json1, data, 0);
+    EXPECT_EQ(after.size(), before.size() - 1);   // only the degenerate one is gone
+    for (const auto& t : after)
+        EXPECT_TRUE(before.count(t) > 0);
 }
