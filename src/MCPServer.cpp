@@ -6671,7 +6671,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         std::vector<uint32_t> indices;
         // Prediction pumps events (model download, progress): a queued
         // delete_entity can free `entity`, so later code uses only this name.
-        const QString segmentedName = segmentedName;
+        const QString segmentedName = QString::fromStdString(entity->getName());
         if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
             return makeErrorResult("Error: no readable geometry");
         const int vertexCount = static_cast<int>(verts.size() / 3);

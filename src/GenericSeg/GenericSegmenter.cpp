@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <deque>
+#include <exception>
 #include <map>
 #include <numeric>
 #include <unordered_map>
@@ -317,9 +318,9 @@ bool refineWithGraphCut(const SegMesh& mesh, const TriangleBvh& bvh, const std::
 
 } // namespace
 
-Result segment(const float* positions, int vertexCount,
-               const uint32_t* indices, int indexCount,
-               MaskProvider& provider, const Options& opts)
+static Result segmentImpl(const float* positions, int vertexCount,
+                          const uint32_t* indices, int indexCount,
+                          MaskProvider& provider, const Options& opts)
 {
     Result res;
     auto progress = [&](const QString& stage, int done, int total) {
@@ -606,6 +607,21 @@ Result segment(const float* positions, int vertexCount,
         res.labelNames << QStringLiteral("part_%1").arg(p, 2, 10, QLatin1Char('0'));
     res.ok = true;
     return res;
+}
+
+Result segment(const float* positions, int vertexCount,
+               const uint32_t* indices, int indexCount,
+               MaskProvider& provider, const Options& opts)
+{
+    // Large meshes allocate a lot (patches, mask graph, SDF rays): an
+    // out-of-memory or a provider failure becomes an error, not a crash.
+    try {
+        return segmentImpl(positions, vertexCount, indices, indexCount, provider, opts);
+    } catch (const std::exception& e) {
+        Result res;
+        res.error = QStringLiteral("Segmentation failed: %1").arg(QString::fromUtf8(e.what()));
+        return res;
+    }
 }
 
 } // namespace GenericSeg

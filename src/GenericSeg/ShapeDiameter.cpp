@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <exception>
+#include <mutex>
 #include <thread>
 
 namespace GenericSeg {
@@ -87,11 +89,22 @@ std::vector<float> shapeDiameter(const SegMesh& mesh, const TriangleBvh& bvh, co
     threads = std::clamp(threads, 1, 64);
     // Workers pull faces from a shared counter, and the calling thread works
     // too: if a thread cannot be started, the ones that did (or this thread
-    // alone) finish every face, and each started thread is joined.
+    // alone) finish every face. Every started thread is joined before an
+    // exception (e.g. bad_alloc in a worker) is rethrown here: a joinable
+    // std::thread being destroyed, or an exception escaping a worker, would
+    // terminate the process.
     std::atomic<int> next{0};
+    std::mutex errorMutex;
+    std::exception_ptr error;
     auto work = [&] {
-        for (int f = next.fetch_add(1); f < faceCount; f = next.fetch_add(1))
-            sdf[f] = faceSdf(mesh, bvh, f, cone);
+        try {
+            for (int f = next.fetch_add(1); f < faceCount; f = next.fetch_add(1))
+                sdf[f] = faceSdf(mesh, bvh, f, cone);
+        } catch (...) {
+            next.store(faceCount);   // stop the others early
+            const std::lock_guard<std::mutex> lock(errorMutex);
+            if (!error) error = std::current_exception();
+        }
     };
     std::vector<std::thread> pool;
     try {
@@ -102,6 +115,7 @@ std::vector<float> shapeDiameter(const SegMesh& mesh, const TriangleBvh& bvh, co
     }
     work();
     for (std::thread& th : pool) th.join();
+    if (error) std::rethrow_exception(error);
 
     // Fill faces with no valid hit from their neighbours (several sweeps).
     bool anyValid = std::any_of(sdf.begin(), sdf.end(), [](float v) { return v >= 0; });

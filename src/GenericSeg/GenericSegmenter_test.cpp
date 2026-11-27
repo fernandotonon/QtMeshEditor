@@ -7,6 +7,7 @@
 #include "GenericSeg/GenericSegTestMeshes.h"
 #include "GenericSeg/SamMaskProvider.h"
 #include "GenericSeg/TriangleBvh.h"
+#include "ModelDownloader.h"
 
 #include <gtest/gtest.h>
 
@@ -185,19 +186,21 @@ TEST(GenericSegmenter, AWholeObjectMaskInEveryViewDoesNotSwallowTheParts)
     const Result r = segment(table.positions.data(), table.vertexCount(),
                              table.indices.data(), table.indexCount(), provider, fastOptions());
     expectMatchesTruth(table, r, 5);
+    // No "guards off" counter-check: on this synthetic table the unguarded
+    // run does not collapse either (macOS: 8 pure parts, Linux: 5), so it
+    // proved nothing and its outcome depended on platform floating point.
+}
 
-    // Without the three guards against it (per-image smallest-wins painting,
-    // the cross-view specificity weighting, and the graph cut, whose
-    // boundary cost alone pulls the parts back) the whole-object masks win.
-    Options off = fastOptions();
-    off.smallestMaskWins = false;
-    off.voteAreaExponent = 0.0f;
-    off.graphCut = false;
-    TruthMaskProvider again(table);
-    again.wholeObject = true;
-    const Result collapsed = segment(table.positions.data(), table.vertexCount(),
-                                     table.indices.data(), table.indexCount(), again, off);
-    EXPECT_NE(collapsed.parts, 5);   // without it the parts come out wrong
+TEST(GenericSegmenter, AProviderExceptionBecomesAnError)
+{
+    struct Throwing : MaskProvider {
+        std::vector<Mask> masksFor(const ViewImage&) override { throw std::bad_alloc(); }
+    } provider;
+    const TestMesh bar = GenericSegTest::makeBar();
+    const Result r = segment(bar.positions.data(), bar.vertexCount(),
+                             bar.indices.data(), bar.indexCount(), provider, fastOptions());
+    EXPECT_FALSE(r.ok);
+    EXPECT_FALSE(r.error.isEmpty());
 }
 
 TEST(GenericSegmenter, GraphCutOverTheMemoryBudgetIsSkipped)
@@ -446,6 +449,16 @@ QString meshKey(const std::vector<float>& pos, const std::vector<uint32_t>& idx)
     return QString::number(h, 16).left(12);
 }
 
+// Mask-cache key part identifying the SAM graphs: QTMESH_SAM2_DIR may point at
+// any export, so the digests (not the folder) say whose masks are cached.
+QString graphKey(const QString& samDir)
+{
+    QString key;
+    for (const QString& f : {SamMaskProvider::encoderFileName(), SamMaskProvider::decoderFileName()})
+        key += ModelDownloader::sha256HexOfFile(samDir + "/" + f).left(8);
+    return key;
+}
+
 class CachedProvider : public MaskProvider {
 public:
     CachedProvider(MaskProvider& p, std::map<std::pair<int, int>, std::vector<Mask>>& c) : inner(p), cache(c) {}
@@ -662,6 +675,7 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
         std::vector<QImage> tiles, detail;
         const QString cacheDir = qEnvironmentVariable("QTMESH_GENSEG_MASKCACHE");
         if (!cacheDir.isEmpty()) QDir().mkpath(cacheDir);
+        const QString samGraphs = cacheDir.isEmpty() ? QString() : graphKey(samDir);
         std::vector<Granularity> grans{Granularity::Coarse, Granularity::Medium, Granularity::Fine};
         if (qEnvironmentVariableIsSet("QTMESH_GENSEG_GRAN"))
             grans = {granularityFromName(qEnvironmentVariable("QTMESH_GENSEG_GRAN"))};
@@ -672,7 +686,7 @@ TEST(GenericSegmenter, DISABLED_VisualDump)
             if (!cacheDir.isEmpty())
                 cached.diskPrefix = QStringLiteral("%1/%2_%3_v%4_r%5_p%6")
                                         .arg(cacheDir, QFileInfo(path).completeBaseName().replace(' ', '_'),
-                                             meshKey(pos, idx))
+                                             meshKey(pos, idx) + "_" + samGraphs)
                                         .arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution).arg(so.pointsPerSide);
             // Tuning knobs: QTMESH_GENSEG_GC="smoothness,through,thickness,voteSmoothing", or "off".
             const QStringList gc = qEnvironmentVariable("QTMESH_GENSEG_GC").split(',', Qt::SkipEmptyParts);
@@ -757,6 +771,7 @@ TEST(GenericSegmenter, DISABLED_Benchmark)
     ASSERT_TRUE(sam.ok()) << sam.error().toStdString();
     const QString cacheDir = qEnvironmentVariable("QTMESH_GENSEG_MASKCACHE");
     if (!cacheDir.isEmpty()) QDir().mkpath(cacheDir);
+    const QString samGraphs = cacheDir.isEmpty() ? QString() : graphKey(samDir);
     const QString dumpDir = qEnvironmentVariable("QTMESH_GENSEG_DUMP");
     if (!dumpDir.isEmpty()) QDir().mkpath(dumpDir);
 
@@ -795,7 +810,7 @@ TEST(GenericSegmenter, DISABLED_Benchmark)
                 CachedProvider cached(sam, cache);
                 if (!cacheDir.isEmpty())
                     cached.diskPrefix = QStringLiteral("%1/%2_%3_%4_v%5_r%6_p%7_%8")
-                                            .arg(cacheDir, stem, variant, meshKey(pos, idx))
+                                            .arg(cacheDir, stem, variant, meshKey(pos, idx) + "_" + samGraphs)
                                             .arg(viewCountFor(sm.faceCount(), o)).arg(o.resolution)
                                             .arg(so.pointsPerSide)
                                             .arg(sm.faceCount() < o.matteBelowFaces ? "matte" : "ns");
