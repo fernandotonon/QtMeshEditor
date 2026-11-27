@@ -899,6 +899,17 @@ int appendIndices(Ogre::SubMesh* sub, Ogre::Mesh* mesh,
 
 } // namespace
 
+bool AutoRig::geometryMatches(Ogre::Entity* entity,
+                              const std::vector<float>& verts,
+                              const std::vector<uint32_t>& indices)
+{
+    std::vector<float> nowVerts;
+    std::vector<uint32_t> nowIndices;
+    if (!entity || !gatherGeometry(entity, nowVerts, nowIndices))
+        return false;
+    return nowIndices == indices && nowVerts == verts;
+}
+
 bool AutoRig::gatherGeometry(Ogre::Entity* entity,
                              std::vector<float>& outVerts,
                              std::vector<uint32_t>& outIndices)

@@ -6712,28 +6712,42 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                         {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
                         {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
+        // The pump resets the Stop flag when it is created, so create it
+        // BEFORE the first-use downloads: a Stop during them is then kept.
+        const MeshSegmenter::ProgressFn pump = segmentProgressPump(QStringLiteral("segment_mesh"));
+        const auto stopRequested = [this]() { return m_toolCancelRequested; };
+
         // Auto → classifier (first-use download); offline/no_model → body.
         if (!noModel)
             opts.category = MeshSegmenter::resolveCategoryBlocking(
                 verts.data(), vertexCount, opts);
         else if (opts.category == MeshSegmenter::Category::Auto)
             opts.category = MeshSegmenter::Category::Body;
+        if (stopRequested()) return makeErrorResult(QStringLiteral("cancelled"));
 
         QString modelPath;
-        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category, stopRequested);
+        if (stopRequested()) return makeErrorResult(QStringLiteral("cancelled"));
 
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
-            rigLabels.empty() ? nullptr : rigLabels.data(),
-            segmentProgressPump(QStringLiteral("segment_mesh")));
+            rigLabels.empty() ? nullptr : rigLabels.data(), pump);
         {
-            bool stillThere = false;
+            // The downloads and the pump run event loops: re-resolve by name
+            // and require the same positions and triangle order, else the
+            // labels would index faces that moved.
+            Ogre::Entity* now = nullptr;
             for (auto* ent : mgr->getEntities())
                 if (ent && ent->getMovableType() == "Entity"
-                    && QString::fromStdString(ent->getName()) == segmentedName) { stillThere = true; break; }
-            if (!stillThere)
+                    && QString::fromStdString(ent->getName()) == segmentedName) {
+                    now = ent;
+                    break;
+                }
+            if (!now)
                 return makeErrorResult(QStringLiteral("Error: entity '%1' was removed during segmentation").arg(segmentedName));
+            if (!AutoRig::geometryMatches(now, verts, indices))
+                return makeErrorResult(QStringLiteral("Error: the mesh of '%1' changed during segmentation").arg(segmentedName));
         }
         if (!r.ok) {
             SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),

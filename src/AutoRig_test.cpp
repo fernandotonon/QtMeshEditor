@@ -904,3 +904,59 @@ TEST(AutoRigFacing, StrideKeepsTheSignalAndNaNIsIgnored)
     EXPECT_EQ(AutoRig::facingFromFeet(v.data(), int(v.size() / 3), 1, 2), -1)
         << "a non-finite vertex is skipped, not fed into the cell maths";
 }
+
+// Labels computed while an event loop ran are applied only when the geometry
+// they were computed on is still there: same positions, same triangle order.
+#include "TestHelpers.h"
+#include "Manager.h"
+#include <OgreEntity.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreMeshManager.h>
+#include <OgreSubMesh.h>
+
+TEST(AutoRigGeometry, GeometryMatchesDetectsReorderAndMoves)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        "AutoRigGeometryMatches", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* sub = mesh->createSubMesh();
+    sub->useSharedVertices = false;
+    sub->vertexData = new Ogre::VertexData();
+    sub->vertexData->vertexDeclaration->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    float pos[] = {0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0};
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        3 * sizeof(float), 4, Ogre::HardwareBuffer::HBU_STATIC, /*useShadowBuffer=*/true);
+    vbuf->writeData(0, sizeof(pos), pos);
+    sub->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+    sub->vertexData->vertexCount = 4;
+    uint16_t idx[] = {0, 1, 2, 1, 3, 2};
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 6, Ogre::HardwareBuffer::HBU_STATIC, true);
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 6;
+    mesh->_setBounds(Ogre::AxisAlignedBox(0, 0, 0, 1, 1, 0));
+    mesh->load();
+    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(mesh);
+
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    ASSERT_TRUE(AutoRig::gatherGeometry(entity, verts, indices));
+    EXPECT_TRUE(AutoRig::geometryMatches(entity, verts, indices));
+
+    // Same mesh, same name, triangles swapped in place (an index reorder).
+    uint16_t swapped[] = {1, 3, 2, 0, 1, 2};
+    ibuf->writeData(0, sizeof(swapped), swapped);
+    EXPECT_FALSE(AutoRig::geometryMatches(entity, verts, indices));
+    ibuf->writeData(0, sizeof(idx), idx);
+    EXPECT_TRUE(AutoRig::geometryMatches(entity, verts, indices));
+
+    // A moved vertex.
+    pos[0] = 0.5f;
+    vbuf->writeData(0, sizeof(pos), pos);
+    EXPECT_FALSE(AutoRig::geometryMatches(entity, verts, indices));
+
+    EXPECT_FALSE(AutoRig::geometryMatches(nullptr, verts, indices));
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Ogre::MeshManager::getSingleton().remove(mesh);
+}

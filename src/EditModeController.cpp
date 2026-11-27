@@ -1087,7 +1087,7 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
             rigLabels.empty() ? nullptr : rigLabels.data(), progress);
 
         // Hand the result back to the main thread to touch Ogre selection.
-        QMetaObject::invokeMethod(qApp, [self, r, cancel]() {
+        QMetaObject::invokeMethod(qApp, [self, r, cancel, verts, indices]() {
             if (!self) return;
             // If the user cancelled, predict() may still return an OK "cancelled"
             // fallback — do NOT mutate the selection; just report cancellation.
@@ -1101,6 +1101,15 @@ QString EditModeController::selectByPart(const QString& upAxis, const QString& c
                 self->m_segmentBusy = false; self->m_segmentDownloading = false;
                 emit self->segmentProgressChanged();
                 emit self->segmentFinished(tr("Segmentation failed: %1").arg(r.error), true);
+                return;
+            }
+            // Undo/redo rewrites the triangle stream without meshDataChanged,
+            // so compare it with what was segmented before applying labels.
+            if (self->m_editModeActive && self->m_editEntity
+                && !AutoRig::geometryMatches(self->m_editEntity, verts, indices)) {
+                self->m_segmentBusy = false; self->m_segmentDownloading = false;
+                emit self->segmentProgressChanged();
+                emit self->segmentFinished(tr("The mesh changed while it was being segmented; try again."), true);
                 return;
             }
             self->finishSegmentOnMain(r.faceLabels, r.usedModel, QString(), r.labelNames);

@@ -147,7 +147,8 @@ void SplitMeshCommand::redo()
             // The model download and the progress pump run event loops, which
             // can delete or replace the entity: never reuse the old pointer.
             entity = resolveEntity();
-            if (!entity || entity->getMesh() != mOriginalMesh) {
+            if (!entity || entity->getMesh() != mOriginalMesh
+                || !AutoRig::geometryMatches(entity, verts, indices)) {
                 mError = QStringLiteral("the mesh changed while it was being segmented");
                 mOriginalMesh.reset();
                 return;
