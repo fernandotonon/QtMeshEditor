@@ -916,6 +916,7 @@ TEST(AutoRigFacing, StrideKeepsTheSignalAndNaNIsIgnored)
 
 TEST(AutoRigGeometry, GeometryMatchesDetectsReorderAndMoves)
 {
+    ASSERT_TRUE(tryInitOgre());
     ASSERT_TRUE(canLoadMeshFiles());
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
         "AutoRigGeometryMatches", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);

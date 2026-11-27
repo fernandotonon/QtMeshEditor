@@ -1774,11 +1774,10 @@ jobs:
             }
 
             # Listing runs the test binary too, so it gets its own wall-clock cap: the binary intermittently hangs at
-            # startup on the software-GL runner, and an uncapped listing call (outside the per-suite timeout below)
-            # sat until the 2 h job timeout cancelled the whole run (twice on PR #1177, once on master). A stalled
-            # listing is retried once; if it still fails the count is 0, so the suite fails visibly on the
-            # "ran N/0 discovered" check instead of eating the job.
-            count_listed_tests() {
+            # startup on the software-GL runner, and an uncapped listing call sat until the 2 h job timeout cancelled
+            # the whole run (twice on PR #1177, once on master). A stalled listing is retried once; if it still fails
+            # the caller gets a non-zero status and must fail the run (an empty listing would otherwise "pass" 0/0).
+            list_tests() {
                 local test_path=$1
                 local filter=${2:-}
                 local args=(--gtest_list_tests)
@@ -1786,12 +1785,61 @@ jobs:
                 local listing attempt
                 for attempt in 1 2; do
                     if listing=$(timeout --foreground --signal=KILL 180 $test_path "${args[@]}" 2>/dev/null); then
-                        printf '%s\n' "$listing" | grep -E '^  [^[:space:]]' | wc -l
-                        return
+                        printf '%s\n' "$listing"
+                        return 0
                     fi
                     echo "WARNING: listing tests (${filter:-all}) stalled or failed on attempt $attempt/2" >&2
                 done
-                echo 0
+                return 1
+            }
+
+            count_listed_tests() {
+                local listing
+                listing=$(list_tests "$@") || { echo 0; return; }
+                printf '%s\n' "$listing" | grep -E '^  [^[:space:]]' | wc -l
+            }
+
+            # Runs one suite and returns its exit code, or 124 when it was killed. Two caps:
+            #  - SUITE_STALL_SECONDS of NO OUTPUT. The software-GL runner intermittently hangs a test process (at
+            #    startup or in the first GL call) and it then never prints again; the retry of the same suite passes
+            #    in under a second. With only the wall-clock cap each such stall cost the full 20 min (three of them
+            #    in one run of PR #1182 = 1 h of a 1 h 38 min test step). The longest single test case measured on
+            #    the runner is ~90 s with no output in between, so 300 s of silence is a hang, not a slow test.
+            #  - PER_SUITE_TIMEOUT of wall time, for a suite that keeps printing but never ends.
+            # The suite runs in its own session (setsid) so the kill also takes any helper process it spawned.
+            # Output is buffered to a file (the size is what the watchdog watches) and printed when the suite ends.
+            run_suite_with_watchdog() {
+                local log
+                log=$(mktemp)
+                setsid "$@" > "$log" 2>&1 &
+                local pid=$!
+                local start=$SECONDS last_change=$SECONDS last_size=0 size killed=0 polls=0
+                while kill -0 "$pid" 2>/dev/null; do
+                    # Poll fast while the suite is young (most suites finish in well under a second, and a fixed
+                    # 0.2 s first sleep alone added ~2.5 min over ~725 suites), then back off.
+                    polls=$((polls + 1))
+                    if [ "$polls" -le 40 ]; then sleep 0.05; else sleep 0.5; fi
+                    size=$(stat -c %s "$log" 2>/dev/null || echo 0)
+                    if [ "$size" -ne "$last_size" ]; then
+                        last_size=$size
+                        last_change=$SECONDS
+                    fi
+                    if [ $((SECONDS - last_change)) -ge "$SUITE_STALL_SECONDS" ] \
+                       || [ $((SECONDS - start)) -ge "$PER_SUITE_TIMEOUT" ]; then
+                        killed=1
+                        kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+                        break
+                    fi
+                done
+                wait "$pid" 2>/dev/null
+                local rc=$?
+                cat "$log"
+                rm -f "$log"
+                if [ "$killed" -eq 1 ]; then
+                    echo "WATCHDOG: killed after $((SECONDS - start)) s ($((SECONDS - last_change)) s without output)."
+                    return 124
+                fi
+                return $rc
             }
 
             # === Run UnitTests: each test suite in its own process ===
@@ -1802,13 +1850,31 @@ jobs:
             UNIT_TEST_PATH=$(find_test "UnitTests")
             if [ -n "$UNIT_TEST_PATH" ]; then
                 echo "=== Running UnitTests suites in isolation ==="
-                # Get list of test suites
-                SUITES=$($UNIT_TEST_PATH --gtest_list_tests 2>/dev/null | grep -E '^\w' | sed 's/\.$//' | sort -u)
                 # Real-video inference is an opt-in local validation; CI has no
                 # capture frames or model assets, so exclude that one test rather
                 # than reporting its intentional GTEST_SKIP as a suite failure.
                 UNIT_TEST_FILTER='*-BodyRetargeterGeometryTest.ReplayVideoFrames'
-                EXPECTED_UNIT_TESTS=$(count_listed_tests "$UNIT_TEST_PATH" "$UNIT_TEST_FILTER")
+                # List the tests ONCE and take the suites and per-suite counts
+                # from that listing. Listing per suite launched the binary a
+                # second time for each of ~725 suites (minutes of start-up, and
+                # each launch could hit the start-up stall for another 3 min).
+                declare -A SUITE_TEST_COUNTS=()
+                SUITES=""
+                EXPECTED_UNIT_TESTS=0
+                if UNIT_TEST_LISTING=$(list_tests "$UNIT_TEST_PATH" "$UNIT_TEST_FILTER"); then
+                    while read -r suite count; do
+                        SUITE_TEST_COUNTS[$suite]=$count
+                        EXPECTED_UNIT_TESTS=$((EXPECTED_UNIT_TESTS + count))
+                    done < <(printf '%s\n' "$UNIT_TEST_LISTING" | awk '
+                        /^[A-Za-z0-9_]/ { suite = $1; sub(/\.$/, "", suite); if (!(suite in n)) { order[++k] = suite; n[suite] = 0 } next }
+                        /^  [^[:space:]]/ { n[suite]++ }
+                        END { for (i = 1; i <= k; i++) print order[i], n[order[i]] }')
+                    SUITES=$(printf '%s\n' "${!SUITE_TEST_COUNTS[@]}" | sort)
+                fi
+                if [ -z "$SUITES" ] || [ "$EXPECTED_UNIT_TESTS" -eq 0 ]; then
+                    echo "ERROR: could not list the UnitTests suites."
+                    FAILED_SUITES=$((FAILED_SUITES + 1))
+                fi
                 ACTUAL_UNIT_TESTS=0
 
                 # Per-suite wall-clock cap. Most suites finish in <10s;
@@ -1831,6 +1897,7 @@ jobs:
                 # honour SIGTERM. `--foreground` keeps it usable inside a
                 # for-loop where the shell isn't a session leader.
                 PER_SUITE_TIMEOUT=1200
+                SUITE_STALL_SECONDS=300
 
                 # The software-GL (llvmpipe/Xvfb) runner stalls intermittently:
                 # on 2026-10-22 two unrelated GL suites (CLIPipeline_cmdPs1 and
@@ -1855,11 +1922,11 @@ jobs:
                     if [ "$suite" = "BodyRetargeterGeometryTest" ]; then
                         suite_filter="${suite}.*-BodyRetargeterGeometryTest.ReplayVideoFrames"
                     fi
-                    expected_suite_tests=$(count_listed_tests "$UNIT_TEST_PATH" "$suite_filter")
+                    expected_suite_tests=${SUITE_TEST_COUNTS[$suite]:-0}
                     attempt=1
                     while :; do
-                        timeout --foreground --signal=KILL "$PER_SUITE_TIMEOUT" \
-                            $UNIT_TEST_PATH --gtest_filter="$suite_filter" --gtest_output=xml:${suite_xml} 2>&1
+                        run_suite_with_watchdog \
+                            $UNIT_TEST_PATH --gtest_filter="$suite_filter" --gtest_output=xml:${suite_xml}
                         exit_code=$?
                         # A STALL (wall-clock cap: 124, or the SIGKILL the cap
                         # sends, which lands here as 137) is the intermittent
@@ -1892,7 +1959,7 @@ jobs:
                     # warning (same shape as the GL-crash allowlist) so the
                     # remaining suites still run and report.
                     if [ $exit_code -eq 124 ]; then
-                        echo "WARNING: Suite $suite TIMED OUT after ${PER_SUITE_TIMEOUT}s — killed by wall-clock cap."
+                        echo "WARNING: Suite $suite TIMED OUT - killed by the watchdog (${SUITE_STALL_SECONDS}s without output or ${PER_SUITE_TIMEOUT}s in total)."
                         CRASHED_SUITES=$((CRASHED_SUITES + 1))
                         continue
                     fi
