@@ -416,6 +416,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshQuality.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GltfMeshQuality.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.cpp
@@ -598,6 +600,8 @@ ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/runtime/MeshReconstructorTexKeys.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshQuality.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GltfMeshQuality.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvUnwrap.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvProject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UvPipeline.h

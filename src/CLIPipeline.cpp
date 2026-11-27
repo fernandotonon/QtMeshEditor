@@ -766,6 +766,9 @@ void CLIPipeline::printUsage()
         "  --sarif <file>            Write SARIF report to file\n"
         "  --fix                     Enable auto-fixes\n"
         "  --dry-run                 Show what fixes would be applied\n"
+        "  --fix-mesh <list|all>     Also rewrite glTF/GLB mesh buffers (implies --fix): degenerates,\n"
+        "                            weld, vertex-cache, overdraw, vertex-fetch (all = these five,\n"
+        "                            lossless) and simplify (destructive, to max_triangles_per_submesh)\n"
         "  --include <patterns>      File patterns, comma-separated (e.g. *.fbx,*.glb)\n"
         "  --exclude <patterns>      Exclude patterns, comma-separated\n"
         "  --allowed-formats <list>  Allowed formats CSV (e.g. fbx,glb,obj)\n"
@@ -818,6 +821,17 @@ void CLIPipeline::printUsage()
         "    detect_overlapping_uvs_pct: <n>   Warn at >= n% overlapping UV0 AABBs\n"
         "    detect_non_manifold_edges_pct: <n>  Warn at >= n% non-manifold edges\n"
         "    redundant_keyframes_pct: <n>      Warn at >= n% redundant anim keys (fixable)\n"
+        "\n"
+        "  Mesh-buffer rules (#678, ON by default, 0 disables; glTF/GLB read from the file itself):\n"
+        "    detect_degenerate_tris_pct: 0.1   Warn at >= n% zero-area / repeated-corner triangles\n"
+        "    detect_redundant_verts_pct: 5     Warn at >= n% exact duplicate vertices (glTF)\n"
+        "    detect_acmr_gain_pct: 25          Warn when reordering would cut vertex shading by >= n% (glTF)\n"
+        "    detect_overdraw_gain_pct: 25      Warn when reordering would cut overdraw by >= n% (glTF)\n"
+        "    detect_vertex_fetch_gain_pct: 25  Warn when reordering would cut vertex fetch by >= n% (glTF)\n"
+        "    mesh_quality_min_triangles: 500   Ordering rules skip primitives smaller than this\n"
+        "    max_triangles_per_submesh: <n>    Per-submesh triangle budget (off by default)\n"
+        "  Fix them with --fix-mesh, or in qtmesh.yml: fix: { optimize_meshes: true } /\n"
+        "  fix: { mesh_fixes: [weld, vertex-cache], simplify_target_tris: 20000 }.\n"
         "\n"
         "  --fail-on <level>         Exit 1 threshold: info, warning, error, never\n"
         "  --token <token>           Ingest token (overrides QTMESH_TOKEN / QTMESH_CLOUD_TOKEN)\n"
@@ -8103,6 +8117,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     int maxSubmeshesOverride = -1;
     int maxDrawCallsOverride = -1;
     double maxAcmrOverride = -1.0;
+    QString fixMeshArg;
     int maxMeshesOverride = -1;
     int minMeshesOverride = -1;
     int maxMaterialsOverride = -1;
@@ -8195,6 +8210,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         parseResult = parseValueArg(arg, "--sarif", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) { sarifPath = value; continue; }
+        parseResult = parseValueArg(arg, "--fix-mesh", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { fixMeshArg = value; fix = true; continue; }
         parseResult = parseValueArg(arg, "--include", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) { includeArg = value; continue; }
@@ -8481,6 +8499,17 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // CLI overrides
     if (fix)     config.fixEnabled = true;
     if (dryRun)  config.dryRun = true;
+    if (!fixMeshArg.isEmpty()) {
+        QStringList unknown;
+        config.meshFixes = ScanConfig::normalizeMeshFixes({fixMeshArg}, &unknown);
+        if (!unknown.isEmpty()) {
+            err() << "Error: unknown --fix-mesh value(s): " << unknown.join(", ")
+                  << " (known: " << ScanConfig::meshFixIds().join(", ") << ", all)" << Qt::endl;
+            return 2;
+        }
+        SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+            QStringLiteral("fix-mesh=%1").arg(config.meshFixes.join(QLatin1Char(','))));
+    }
 
     if (hasAllowedFormatsOverride) {
         config.allowedFormats.clear();

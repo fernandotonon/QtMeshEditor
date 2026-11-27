@@ -2,6 +2,7 @@
 #define SCANENGINE_H
 
 #include "ScanConfig.h"
+#include "MeshQuality.h"
 #include <QJsonObject>
 #include <QList>
 #include <QString>
@@ -38,6 +39,18 @@ struct MeshStats {
     unsigned int vertexCount = 0;
     unsigned int triangleCount = 0;
     unsigned int submeshCount = 0;
+};
+
+/// Buffer quality of one glTF primitive, measured on the file's own buffers (#678).
+struct MeshQualityEntry {
+    QString meshName;
+    int mesh = 0;
+    int primitive = 0;
+    bool measured = false;
+    bool indexFixable = false;
+    bool vertexFixable = false;
+    QString note;
+    MeshQuality::Metrics metrics;
 };
 
 /// Filesystem probe of one external texture reference (issue #364).
@@ -140,6 +153,20 @@ struct AssetInfo {
     // UVs coincident/collinear). -1 when UV0 isn't present or the asset has no
     // triangulated submeshes. Common on PS1 flat-shaded/untextured prims (#428).
     double ps1RipDegenerateUvRatio = -1.0;
+
+    // Mesh-buffer quality (#678). glTF / GLB: one entry per primitive, from
+    // the file's buffers (meshQualityMeasured). Other formats store polygons
+    // that every engine re-triangulates and re-orders on import, so only
+    // the degenerate-triangle count applies to them; it is measured on the
+    // imported geometry.
+    QList<MeshQualityEntry> meshQuality;
+    bool meshQualityMeasured = false;
+    QString meshQualityError;
+    long long degenerateTriangles = -1;     // -1 = not measured
+    long long degenerateTrianglesOf = 0;    // triangles they were counted over
+    // Largest submesh (glTF primitive) triangle count; 0 = not measured.
+    unsigned int largestSubmeshTriangles = 0;
+    QString largestSubmeshName;
 
     bool loadError = false;
     QString errorMessage;
