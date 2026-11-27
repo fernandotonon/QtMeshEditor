@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QJsonObject>
+#include "MeshSegmenter.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QFile>
@@ -279,6 +280,9 @@ private:
     QJsonObject applyKimodoMotion(const QJsonObject& args, Ogre::Entity* entity, const QStringList& files, const QJsonObject& manifest);
     QJsonObject toolAdjustArmSpace(const QJsonObject &args);    // #854 arm-space
     QJsonObject toolPinFeet(const QJsonObject &args);           // #856 foot-contact pin
+    bool applyGenericSegmentArgs(const QJsonObject& args, bool generic,
+                                 MeshSegmenter::Options& opts, QString& error);
+    MeshSegmenter::ProgressFn segmentProgressPump(const QString& tool);
     QJsonObject toolSegmentMesh(const QJsonObject &args);
     QJsonObject toolSplitMeshBySegments(const QJsonObject &args);
     // Lattice deformer (free-form deformation)

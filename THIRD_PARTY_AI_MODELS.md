@@ -25,7 +25,8 @@ For a one-page overview of every model and what it does in the app, see
 > [`QtMeshEditor-faceblendshapes-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-faceblendshapes-onnx),
 > [`QtMeshEditor-blazepose-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-blazepose-onnx),
 > [`QtMeshEditor-poselandmarks-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-poselandmarks-onnx),
-> [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx)
+> [`QtMeshEditor-depthanything-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-depthanything-onnx),
+> [`QtMeshEditor-sam2-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-sam2-onnx)
 > (plus the in-house
 > [`QtMeshEditor-rmib-inbetween`](https://huggingface.co/fernandotonon/QtMeshEditor-rmib-inbetween),
 > [`QtMeshEditor-mesh-segmentation`](https://huggingface.co/fernandotonon/QtMeshEditor-mesh-segmentation),
@@ -574,6 +575,33 @@ For a one-page overview of every model and what it does in the app, see
   component islands + an up-axis/lateral spatial heuristic, refined by rig
   bone-proximity when available) — always present, no model needed, and good
   enough for reasonable head/torso/limb labels on upright humanoids.
+
+## SAM 2.1 Hiera-Small — generic (any-object) part segmentation (issue #1179)
+
+- **Model:** Meta's [SAM 2](https://github.com/facebookresearch/sam2)
+  (*"SAM 2: Segment Anything in Images and Videos"*, Ravi et al. 2024),
+  checkpoint `sam2.1_hiera_small.pt`. **Code and weights: Apache-2.0.** All
+  credit for the model goes to Meta AI / FAIR.
+- **What is hosted** (`fernandotonon/QtMeshEditor-models` under `segment/`,
+  mirrored with a model card at
+  [`QtMeshEditor-sam2-onnx`](https://huggingface.co/fernandotonon/QtMeshEditor-sam2-onnx)):
+  `sam2.1_hiera_small_encoder.onnx` (138 MB, image encoder) and
+  `sam2.1_hiera_small_decoder.onnx` (21 MB, prompt encoder + mask decoder),
+  plus Meta's licence text as `LICENSE-SAM2.txt`, which the app downloads next
+  to the graphs. A format conversion only (no fine-tuning):
+  `scripts/export-sam2-onnx.py` (SAM 2 commit `2b90b9f5`), which refuses to
+  finish unless the graphs match Meta's `SAM2ImagePredictor` (mask IoU ≥ 0.99,
+  measured ≥ 0.9995). Uploaded with `scripts/upload-sam2-models.sh`.
+- **Download:** first use, ~160 MB, to `ai_models/segment/`. The default URL is
+  pinned to an HF commit and every file is checked against its SHA-256 (also an
+  existing file), in `src/GenericSeg/SamMaskProvider.cpp`; re-exporting means
+  updating the revision and the digests together. Overrides shared with the
+  segmentation models above: QSettings `ai/segmentModelBaseUrl`,
+  `QTMESH_SEGMENT_MODEL_BASE_URL` (a mirror is not digest-checked),
+  `QTMESH_SEGMENT_NO_DOWNLOAD`.
+- **Method:** the SAMesh pipeline (Tang et al., arXiv 2408.13679) is our own
+  implementation, not SAMesh's code (that repository has no licence). See
+  `docs/GENERIC_SEGMENTATION_DESIGN.md`.
 
 ## Text-to-motion template library (issue #411)
 

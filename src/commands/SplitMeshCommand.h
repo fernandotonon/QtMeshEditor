@@ -6,6 +6,7 @@
 
 #include <OgreMesh.h>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,18 @@ public:
     void undo() override;
     void redo() override;
 
+    // Set before the first redo (push). Generic category (#1179): granularity
+    // ("coarse"|"medium"|"fine") and rendered view count.
+    void setGenericOptions(const QString& granularity, int views);
+    // Called during the first redo's segmentation (done, total); returning
+    // false cancels it (the command then fails with "cancelled").
+    void setProgress(std::function<bool(int, int)> progress) { mProgress = std::move(progress); }
+    // Skip segmentation and split by these face labels (one per triangle, the
+    // entity's submesh-then-local order). For callers that segmented on a
+    // worker thread first: the generic category takes about a minute.
+    // `labelNames` (index = label) names the parts; empty = MeshSegmenter::partName.
+    void setPrecomputedLabels(std::vector<int> faceLabels, std::vector<QString> labelNames);
+
     bool ok() const { return mOk; }
     const QString& error() const { return mError; }
     int createdSubMeshes() const { return mCreatedSubMeshes; }
@@ -68,6 +81,12 @@ private:
     bool        mNoModel = false;
     QString     mNamePrefix;
     bool        mSolidify = false;
+    QString     mGranularity;
+    int         mViews = 0;
+    std::function<bool(int, int)> mProgress;
+    std::vector<int> mPresetFaceLabels;
+    std::vector<QString> mPresetLabelNames;
+    bool        mHasPresetLabels = false;
 
     Ogre::SceneNode* mReselectNode = nullptr; ///< transient: node to reselect after a swap.
     Ogre::MeshPtr mOriginalMesh; ///< kept resident so undo can restore it.

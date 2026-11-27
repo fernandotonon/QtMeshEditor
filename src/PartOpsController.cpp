@@ -6,9 +6,19 @@
 #include "commands/SplitMeshCommand.h"
 #include "commands/ExplodePartsCommand.h"
 #include "commands/JoinPartsCommand.h"
+#include "AutoRig.h"
+#include "Manager.h"
+#include "MeshSegmenter.h"
+
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QPointer>
 
 #include <OgreEntity.h>
 #include <OgreMesh.h>
+#include <OgreSceneManager.h>
+
+#include <thread>
 
 PartOpsController* PartOpsController::m_pSingleton = nullptr;
 
@@ -74,7 +84,8 @@ bool PartOpsController::canJoin() const
 }
 
 void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QString& category,
-                                               bool noModel, bool solidify)  // NOLINT
+                                               bool noModel, bool solidify,
+                                               const QString& granularity)  // NOLINT
 {
     const auto* sel = SelectionSet::getSingleton();
     if (!sel) {
@@ -96,6 +107,14 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
                                   QStringLiteral("split_into_parts%1")
                                       .arg(noModel ? QStringLiteral(" offline") : QString()));
     const std::string entName = entities.first()->getName();
+    if (MeshSegmenter::categoryFromName(category) == MeshSegmenter::Category::Generic) {
+        if (noModel) {
+            emit splitFinished(tr("Generic segmentation needs the SAM 2.1 model; it has no offline mode."), true);
+            return;
+        }
+        splitGeneric(entName, axis, solidify, granularity);
+        return;
+    }
     // push() runs redo() synchronously (AutoRigController pattern); read the
     // result back. A failed split leaves a harmless no-op on the undo stack.
     auto* cmd = new SplitMeshCommand(entName, axis, category, noModel,
@@ -109,6 +128,142 @@ void PartOpsController::splitSelectedIntoParts(const QString& upAxis, const QStr
     SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
                                   QStringLiteral("gui parts=%1").arg(cmd->createdSubMeshes()));
     emit splitFinished(tr("Split into %1 part submeshes.").arg(cmd->createdSubMeshes()), false);
+}
+
+void PartOpsController::setSplitState(bool busy, bool downloading, int progress, int total)
+{
+    m_splitBusy = busy;
+    m_splitDownloading = downloading;
+    m_splitProgress = progress;
+    m_splitTotal = total;
+    emit splitProgressChanged();
+}
+
+void PartOpsController::cancelSplit()
+{
+    if (m_splitCancel) m_splitCancel->store(true);
+}
+
+namespace {
+Ogre::Entity* findEntity(const std::string& name)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    auto* sm = mgr ? mgr->getSceneMgr() : nullptr;
+    return (sm && sm->hasEntity(name)) ? sm->getEntity(name) : nullptr;
+}
+} // namespace
+
+void PartOpsController::splitGeneric(const std::string& entityName, int axis, bool solidify,
+                                     const QString& granularity)
+{
+    if (m_splitBusy) {
+        emit splitFinished(tr("A split is already running."), true);
+        return;
+    }
+    Ogre::Entity* entity = findEntity(entityName);
+    if (!entity) {
+        emit splitFinished(tr("Select a single mesh to split."), true);
+        return;
+    }
+    // MAIN thread: geometry (locks Ogre buffers) and the model download
+    // (ModelDownloader lives here; its nested loop keeps the UI painting).
+    std::vector<float> verts;
+    std::vector<uint32_t> indices;
+    if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty()) {
+        emit splitFinished(tr("No readable geometry to segment."), true);
+        return;
+    }
+    // Snapshot BEFORE the download: its nested event loop lets the user delete
+    // or replace the entity, so `entity` must not be dereferenced after it.
+    const Ogre::Mesh* meshAtStart = entity->getMesh().get();
+    entity = nullptr;
+    // The cancel token exists before the download so Cancel (shown as soon as
+    // the split is busy) also stops a first-use download.
+    m_splitCancel = std::make_shared<std::atomic_bool>(false);
+    auto cancel = m_splitCancel;
+    const MeshSegmenter::Category cat = MeshSegmenter::Category::Generic;
+    setSplitState(true, !MeshSegmenter::modelPresent(cat), 0, 0);
+    const QString modelPath = MeshSegmenter::ensureModelBlocking(cat, [cancel]() { return cancel->load(); });
+    if (cancel->load()) {
+        setSplitState(false, false, 0, 0);
+        emit splitFinished(tr("Split cancelled."), false);
+        return;
+    }
+    if (modelPath.isEmpty()) {
+        setSplitState(false, false, 0, 0);
+        emit splitFinished(tr("Generic segmentation is unavailable: %1")
+                               .arg(MeshSegmenter::genericModelError()), true);
+        return;
+    }
+    Ogre::Entity* still = findEntity(entityName);
+    if (!still || still->getMesh().get() != meshAtStart) {
+        setSplitState(false, false, 0, 0);
+        emit splitFinished(tr("The mesh changed while the model was downloading; split again."), true);
+        return;
+    }
+    SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+        QStringLiteral("gui split generic granularity=%1").arg(granularity));
+    setSplitState(true, false, 0, 0);
+    QPointer<PartOpsController> self(this);
+    // Labels are per triangle in THIS order; the completion step checks the
+    // live index buffer still matches (an in-place reorder such as the vertex
+    // cache optimisation keeps the mesh and the triangle count).
+    auto inputIndices = std::make_shared<const std::vector<uint32_t>>(indices);
+
+    std::thread([self, verts = std::move(verts), indices = std::move(indices), modelPath, cancel,
+                 granularity, axis, solidify, entityName, meshAtStart, inputIndices]() {
+        QElapsedTimer clock;
+        clock.start();
+        MeshSegmenter::Options opts;
+        opts.upAxis = axis;
+        opts.category = MeshSegmenter::Category::Generic;
+        if (!granularity.isEmpty()) opts.granularity = granularity;
+        auto progress = [self, cancel](int done, int total) -> bool {
+            if (cancel->load()) return false;
+            QMetaObject::invokeMethod(qApp, [self, done, total]() {
+                if (self) self->setSplitState(true, false, done, total);
+            }, Qt::QueuedConnection);
+            return true;
+        };
+        const MeshSegmenter::Result r = MeshSegmenter::predict(
+            verts.data(), int(verts.size() / 3), indices.data(), int(indices.size()),
+            modelPath, opts, nullptr, progress);
+        const qint64 ms = clock.elapsed();
+        QMetaObject::invokeMethod(qApp, [self, r, cancel, solidify, axis, entityName, meshAtStart,
+                                         granularity, ms, inputIndices]() {
+            if (!self) return;
+            self->setSplitState(false, false, 0, 0);
+            if (cancel->load() || r.fallbackReason == QLatin1String("cancelled")) {
+                emit self->splitFinished(tr("Split cancelled."), false);
+                return;
+            }
+            if (!r.ok) {
+                emit self->splitFinished(tr("Segmentation failed: %1").arg(r.error), true);
+                return;
+            }
+            // The mesh may have changed (or gone) during the minute it took.
+            Ogre::Entity* e = findEntity(entityName);
+            std::vector<float> liveVerts;
+            std::vector<uint32_t> liveIndices;
+            if (!e || e->getMesh().get() != meshAtStart || r.faceLabels.size() != inputIndices->size() / 3
+                || !AutoRig::gatherGeometry(e, liveVerts, liveIndices) || liveIndices != *inputIndices) {
+                emit self->splitFinished(tr("The mesh changed while it was being segmented; split again."), true);
+                return;
+            }
+            auto* cmd = new SplitMeshCommand(entityName, axis, QStringLiteral("generic"), false,
+                                             QStringLiteral("Body"), solidify);
+            cmd->setPrecomputedLabels(r.faceLabels, r.labelNames);
+            UndoManager::getSingleton()->push(cmd);
+            if (!cmd->ok()) {
+                emit self->splitFinished(cmd->error().isEmpty() ? tr("Split failed.") : cmd->error(), true);
+                return;
+            }
+            SentryReporter::addBreadcrumb(QStringLiteral("mesh.parts.split_segments"),
+                QStringLiteral("gui generic parts=%1 granularity=%2 ms=%3")
+                    .arg(cmd->createdSubMeshes()).arg(granularity).arg(ms));
+            emit self->splitFinished(tr("Split into %1 part submeshes.").arg(cmd->createdSubMeshes()), false);
+        }, Qt::QueuedConnection);
+    }).detach();
 }
 
 void PartOpsController::explodeSelected(double distance)

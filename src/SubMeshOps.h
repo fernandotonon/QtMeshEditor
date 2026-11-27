@@ -51,7 +51,11 @@ public:
      *  `FaceGroup`s, one per distinct label that occurs. Names come from
      *  `MeshSegmenter::partName`. Order is stable: groups sorted by label
      *  value, so `unknown`(0) is first. Empty labels → empty result. */
-    static std::vector<FaceGroup> groupFacesByLabel(const std::vector<int>& faceLabels);
+    // `labelNames` (index = label) names the groups when the labels are not
+    // MeshSegmenter::Part values (generic segmentation's part_01, part_02, …);
+    // empty = MeshSegmenter::partName.
+    static std::vector<FaceGroup> groupFacesByLabel(const std::vector<int>& faceLabels,
+                                                    const std::vector<QString>& labelNames = {});
 
     /** Total triangle count across every submesh (the length a valid
      *  `faceLabels` array must have). */

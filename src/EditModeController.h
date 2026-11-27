@@ -692,8 +692,13 @@ public:
     /// manual override for meshes the classifier gets wrong (e.g. a car with
     /// detached wheels). An explicit NON-body category also skips the
     /// rig-prior fast path (rig labels are body parts).
+    ///
+    /// "generic" (#1179) splits ANY object into unnamed parts part_01… with
+    /// SAM 2.1 (about a minute; the ~160 MB model is fetched first, on the
+    /// main thread). `granularity` ("coarse"|"medium"|"fine") applies to it.
     Q_INVOKABLE QString selectByPart(const QString& upAxis = QStringLiteral("y"),
-                                     const QString& category = QStringLiteral("auto"));
+                                     const QString& category = QStringLiteral("auto"),
+                                     const QString& granularity = QStringLiteral("medium"));
 
     /// Cancel an in-flight selectByPart worker (no-op otherwise).
     Q_INVOKABLE void cancelSegment();
@@ -1023,7 +1028,8 @@ private:
     // Applies a finished segmentation Result's face labels to the selection
     // (main thread); emits segmentFinished. Declared here, defined in the .cpp.
     void finishSegmentOnMain(const std::vector<int>& faceLabels,
-                             bool usedModel, const QString& predictError);
+                             bool usedModel, const QString& predictError,
+                             const std::vector<QString>& labelNames = {});
 
     // PartOps Slice A (#860): cache the last segmentation's per-face labels so
     // the preview workflow (select/hide/rename/exclude a group, then split /
@@ -1035,6 +1041,10 @@ private:
     // from downstream split/explode. `m_partDisplayName[label]` overrides the
     // default part name for display.
     std::vector<int> m_segLabels;
+    // Names per label when the labels are not MeshSegmenter::Part values
+    // (generic: part_01, …); empty = MeshSegmenter::partName.
+    std::vector<QString> m_segLabelNames;
+    QString segLabelName(int label) const;
     struct PartGroupState {
         int label = 0;
         int faceCount = 0;

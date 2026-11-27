@@ -191,6 +191,7 @@
 #include "MotionGenerator.h"
 #include "MotionInbetween.h"
 #include "MeshSegmenter.h"
+#include "GenericSeg/GenericSegmenter.h"
 #include "AnimationControlController.h"
 #include "SubMeshTransform.h"
 #include "UndoManager.h"
@@ -6594,6 +6595,54 @@ QJsonObject MCPServer::toolPinFeet(const QJsonObject &args)
     }
 }
 
+// Generic segmentation (#1179) args shared by segment_mesh and
+// split_mesh_by_segments: granularity + views, accepted for 'generic' only.
+bool MCPServer::applyGenericSegmentArgs(const QJsonObject& args, bool generic,
+                                        MeshSegmenter::Options& opts, QString& error)
+{
+    const QString gran = args.value("granularity").toString().trimmed().toLower();
+    const bool hasViews = args.contains("views");
+    if (!generic && (!gran.isEmpty() || hasViews)) {
+        error = QStringLiteral("Error: granularity and views apply to category 'generic' only");
+        return false;
+    }
+    if (!gran.isEmpty()) {
+        bool ok = false;
+        GenericSeg::granularityFromName(gran, &ok);
+        if (!ok) {
+            error = QStringLiteral("Error: granularity must be 'coarse', 'medium', or 'fine'");
+            return false;
+        }
+        opts.granularity = gran;
+    }
+    if (hasViews) {
+        const int v = args.value("views").toInt(-1);
+        if (v < 4 || v > 64) {
+            error = QStringLiteral("Error: views must be an integer from 4 to 64");
+            return false;
+        }
+        opts.genericViews = v;
+    }
+    return true;
+}
+
+// Main-thread pump for a long segmentation (generic: about a minute): reports
+// toolProgress, keeps the window painting (~20 Hz) and lets Stop cancel.
+MeshSegmenter::ProgressFn MCPServer::segmentProgressPump(const QString& tool)
+{
+    m_toolCancelRequested = false;
+    auto clock = std::make_shared<QElapsedTimer>();
+    clock->start();
+    return [this, tool, clock](int done, int total) {
+        emit toolProgress(tool, QStringLiteral("segmenting"), done, total);
+        if (clock->elapsed() >= 50) {
+            clock->restart();
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+        }
+        return !m_toolCancelRequested;
+    };
+}
+
 QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 {
     try {
@@ -6620,6 +6669,9 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
 
         std::vector<float> verts;
         std::vector<uint32_t> indices;
+        // Prediction pumps events (model download, progress): a queued
+        // delete_entity can free `entity`, so later code uses only this name.
+        const QString segmentedName = QString::fromStdString(entity->getName());
         if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty())
             return makeErrorResult("Error: no readable geometry");
         const int vertexCount = static_cast<int>(verts.size() / 3);
@@ -6645,8 +6697,14 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
             opts.category = MeshSegmenter::categoryFromName(categoryStr, &okCat);
             if (!okCat)
                 return makeErrorResult("Error: category must be 'auto', 'body', "
-                                       "'vegetation', 'vehicle', or 'building'");
+                                       "'vegetation', 'vehicle', 'building', or 'generic'");
         }
+        const bool generic = opts.category == MeshSegmenter::Category::Generic;
+        QString genericError;
+        if (!applyGenericSegmentArgs(args, generic, opts, genericError))
+            return makeErrorResult(genericError);
+        if (generic && noModel)
+            return makeErrorResult("Error: category 'generic' needs the SAM 2.1 model; it has no no_model fallback");
         SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.started"),
             QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
                         {QStringLiteral("requested_category"), requestedCategory},
@@ -6654,20 +6712,43 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                         {QStringLiteral("manual"), !(categoryStr.isEmpty() || requestedCategory == QStringLiteral("auto"))},
                         {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
+        // The pump resets the Stop flag when it is created, so create it
+        // BEFORE the first-use downloads: a Stop during them is then kept.
+        const MeshSegmenter::ProgressFn pump = segmentProgressPump(QStringLiteral("segment_mesh"));
+        const auto stopRequested = [this]() { return m_toolCancelRequested; };
+
         // Auto → classifier (first-use download); offline/no_model → body.
         if (!noModel)
             opts.category = MeshSegmenter::resolveCategoryBlocking(
                 verts.data(), vertexCount, opts);
         else if (opts.category == MeshSegmenter::Category::Auto)
             opts.category = MeshSegmenter::Category::Body;
+        if (stopRequested()) return makeErrorResult(QStringLiteral("cancelled"));
 
         QString modelPath;
-        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+        if (!noModel) modelPath = MeshSegmenter::ensureModelBlocking(opts.category, stopRequested);
+        if (stopRequested()) return makeErrorResult(QStringLiteral("cancelled"));
 
         const MeshSegmenter::Result r = MeshSegmenter::predict(
             verts.data(), vertexCount, indices.data(),
             static_cast<int>(indices.size()), modelPath, opts,
-            rigLabels.empty() ? nullptr : rigLabels.data());
+            rigLabels.empty() ? nullptr : rigLabels.data(), pump);
+        {
+            // The downloads and the pump run event loops: re-resolve by name
+            // and require the same positions and triangle order, else the
+            // labels would index faces that moved.
+            Ogre::Entity* now = nullptr;
+            for (auto* ent : mgr->getEntities())
+                if (ent && ent->getMovableType() == "Entity"
+                    && QString::fromStdString(ent->getName()) == segmentedName) {
+                    now = ent;
+                    break;
+                }
+            if (!now)
+                return makeErrorResult(QStringLiteral("Error: entity '%1' was removed during segmentation").arg(segmentedName));
+            if (!AutoRig::geometryMatches(now, verts, indices))
+                return makeErrorResult(QStringLiteral("Error: the mesh of '%1' changed during segmentation").arg(segmentedName));
+        }
         if (!r.ok) {
             SentryReporter::captureTelemetryEvent(QStringLiteral("segmentation.failed"),
                 QJsonObject{{QStringLiteral("source_surface"), QStringLiteral("mcp")},
@@ -6686,7 +6767,9 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                 .arg(r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error));
         }
 
-        const int P = MeshSegmenter::partCount();
+        // Generic labels are instances named by the result (#1179).
+        const int P = r.labelNames.empty() ? MeshSegmenter::partCount()
+                                           : static_cast<int>(r.labelNames.size());
         std::vector<int> vCount(P, 0);
         for (int l : r.vertexLabels) if (l >= 0 && l < P) ++vCount[l];
         std::vector<int> fCount(P, 0);
@@ -6710,12 +6793,12 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
                         {QStringLiteral("capability"), QStringLiteral("segmentation")}});
 
         QString summary = QString("Segmented '%1' (%2 verts, category %3) via %4:")
-            .arg(QString::fromStdString(entity->getName())).arg(vertexCount)
+            .arg(segmentedName).arg(vertexCount)
             .arg(MeshSegmenter::categoryName(r.category))
             .arg(r.usedModel ? "model" : "geometric fallback");
         for (int p = 0; p < P; ++p)
             if (vCount[p] > 0)
-                summary += QString(" %1=%2").arg(MeshSegmenter::partName(p)).arg(vCount[p]);
+                summary += QString(" %1=%2").arg(r.labelName(p)).arg(vCount[p]);
         if (!r.usedModel && !r.fallbackReason.isEmpty())
             summary += QString(" (%1)").arg(r.fallbackReason);
 
@@ -6723,7 +6806,7 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         // material to a part, drive a selection, etc.) rather than parse prose.
         QJsonObject content;
         content["ok"]              = true;
-        content["entity"]          = QString::fromStdString(entity->getName());
+        content["entity"]          = segmentedName;
         content["vertex_count"]    = vertexCount;
         content["face_count"]      = static_cast<int>(r.faceLabels.size());
         content["used_model"]      = r.usedModel;
@@ -6737,12 +6820,23 @@ QJsonObject MCPServer::toolSegmentMesh(const QJsonObject &args)
         for (int p = 0; p < P; ++p) {
             QJsonObject part;
             part["index"]        = p;
-            part["name"]         = MeshSegmenter::partName(p);
+            part["name"]         = r.labelName(p);
             part["vertex_count"] = vCount[p];
             part["face_count"]   = fCount[p];
             parts.append(part);
         }
         content["parts"] = parts;
+        if (!r.labelNames.empty()) {
+            QJsonArray ln;
+            for (const QString& n : r.labelNames) ln.append(n);
+            content["label_names"] = ln;
+            content["granularity"] = opts.granularity;
+            SentryReporter::addBreadcrumb(QStringLiteral("ai.assist.segment"),
+                QStringLiteral("generic parts=%1 granularity=%2 views=%3 ms=%4")
+                    .arg(resultPartCount).arg(opts.granularity)
+                .arg(opts.genericViews > 0 ? QString::number(opts.genericViews) : QStringLiteral("auto"))
+                    .arg(segmentTimer.elapsed()));
+        }
 
         // Per-face labels (index into `parts`) — the primary actionable output
         // for face-level part selection / per-part material assignment.
@@ -6800,8 +6894,22 @@ QJsonObject MCPServer::toolSplitMeshBySegments(const QJsonObject &args)
         // which destroys this Ogre::Entity (mesh swap). Reading entity->getName()
         // after would dereference the freed pointer (CodeRabbit Critical).
         const QString entityNameOut = QString::fromStdString(entity->getName());
+        bool okCat = false;
+        const bool generic =
+            MeshSegmenter::categoryFromName(category, &okCat) == MeshSegmenter::Category::Generic;
+        if (!okCat)
+            return makeErrorResult("Error: category must be 'auto', 'body', 'vegetation', "
+                                   "'vehicle', 'building', or 'generic'");
+        MeshSegmenter::Options genericOpts;
+        QString genericError;
+        if (!applyGenericSegmentArgs(args, generic, genericOpts, genericError))
+            return makeErrorResult(genericError);
         auto* cmd = new SplitMeshCommand(entity->getName(), axis, category, noModel,
                                          QStringLiteral("Body"), solidify);
+        if (generic) {
+            cmd->setGenericOptions(genericOpts.granularity, genericOpts.genericViews);
+            cmd->setProgress(segmentProgressPump(QStringLiteral("split_mesh_by_segments")));
+        }
         UndoManager::getSingleton()->push(cmd); // runs redo() synchronously
         if (!cmd->ok())
             return makeErrorResult(cmd->error().isEmpty()
@@ -13564,7 +13672,9 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity to segment. If omitted, uses the first mesh entity."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the deterministic geometric fallback instead of the PointNet++ ML model. Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis. Affects BOTH the ML model (the point cloud is remapped to the model's +Y-up training frame before inference) and the geometric fallback's head-vs-leg heuristic. Set this for X/Z-up meshes or labels will be wrong. Default 'y' (+Y up)."}};
-        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building", "generic"}}, {"description", "Mesh category (#818): selects the specialised label set + model. 'auto' (default) runs the tiny point-cloud category classifier first (downloads on first use; falls back to 'body' when unavailable). body = head/torso/arms/legs; vegetation = trunk/branch/foliage/root/flower; vehicle = vehicle_body/wheel/window/wing/rotor; building = wall/roof/window/door/chimney/foundation. generic (#1179) = ANY object split into unnamed parts part_01, part_02, … (part_01 = largest) with SAM 2.1 on multi-view renders; ~160 MB model on first use, about a minute per mesh on CPU, no geometric fallback. Never chosen by 'auto'."}};
+        props["granularity"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"coarse", "medium", "fine"}}, {"description", "category 'generic' only: how finely to split (default 'medium'). coarse = a few big parts, fine = small parts like fingers, bottles, wheels."}};
+        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default: automatic, 12 for dense meshes and 20 for low-poly ones)."}};
         props["no_cleanup"] = QJsonObject{{"type", "boolean"}, {"description", "Return RAW model labels: skip the split-cleanup pass (#863) that de-fringes ragged part seams and reabsorbs small disconnected junction islands. Default false (cleanup ON)."}};
         appendTool(
             "segment_mesh",
@@ -13578,7 +13688,9 @@ QJsonArray MCPServer::buildToolsList()
             "automatically to a deterministic geometric segmenter (connected "
             "components + spatial heuristic, refined by rig bone proximity) when "
             "the model is unavailable or the build lacks ONNX — the result reports "
-            "which path ran.",
+            "which path ran. category 'generic' splits ANY object (props, vehicles, "
+            "creatures) into unnamed parts with SAM 2.1; `parts[].name` then reads "
+            "part_01, part_02, … and `label_names` maps label values to names.",
             props
         );
     }
@@ -13589,7 +13701,9 @@ QJsonArray MCPServer::buildToolsList()
         props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Entity to split. Empty → the first mesh entity in the scene."}};
         props["no_model"] = QJsonObject{{"type", "boolean"}, {"description", "Force the offline geometric/rig-prior segmentation (skip the ONNX model). Default false."}};
         props["up_axis"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"x", "y", "z"}}, {"description", "Mesh up axis for segmentation. Default 'y'."}};
-        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building"}}, {"description", "Segmentation category (default 'auto')."}};
+        props["category"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"auto", "body", "vegetation", "vehicle", "building", "generic"}}, {"description", "Segmentation category (default 'auto'). 'generic' = any object, unnamed parts part_01… (SAM 2.1, about a minute)."}};
+        props["granularity"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"coarse", "medium", "fine"}}, {"description", "category 'generic' only (default 'medium')."}};
+        props["views"] = QJsonObject{{"type", "integer"}, {"description", "category 'generic' only: rendered views, 4..64 (default: automatic, 12 for dense meshes and 20 for low-poly ones)."}};
         props["solidify"] = QJsonObject{{"type", "boolean"}, {"description", "Give each part real WALL VOLUME before capping (default false). For thin-shell game assets (single-sided surfaces) an exploded part otherwise exposes its hollow interior at the cut; solidify offsets an inner shell so the cut shows a solid wall. Adds geometry — only meaningful for thin shells."}};
         appendTool(
             "split_mesh_by_segments",

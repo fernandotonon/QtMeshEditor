@@ -197,6 +197,13 @@ public:
     static bool gatherGeometry(Ogre::Entity* entity,
                                std::vector<float>& outVerts,
                                std::vector<uint32_t>& outIndices);
+    // True when `entity` still has exactly the positions and triangle order
+    // gatherGeometry returned earlier. Labels computed while an event loop ran
+    // (download, progress pump, worker) are only valid if this holds: an
+    // in-place reorder or an undo keeps the same mesh and name but moves faces.
+    static bool geometryMatches(Ogre::Entity* entity,
+                                const std::vector<float>& verts,
+                                const std::vector<uint32_t>& indices);
 
     // --- Rig-prior part labels (shared by Edit-Mode select-by-part + the
     //     segmentation training-data miner) ---------------------------------

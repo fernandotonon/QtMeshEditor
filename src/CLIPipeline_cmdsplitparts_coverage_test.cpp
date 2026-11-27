@@ -362,3 +362,48 @@ TEST_F(CLIPipelineCmdSplitPartsCoverageTest, WriteLabelsProducesSchemaJson)
     // faceLabels length matches faceCount.
     EXPECT_EQ(o.value("faceLabels").toArray().size(), o.value("faceCount").toInt());
 }
+
+// ---- generic category argument checks (#1179) --------------------------------
+// They run before Ogre starts, so no GL context is needed: an existing file is
+// enough (its content is never read when the arguments are rejected).
+namespace {
+int segmentWithArgs(std::initializer_list<const char*> extra)
+{
+    QTemporaryDir tmp;
+    const QString file = tmp.filePath(QStringLiteral("any.obj"));
+    QFile f(file);
+    if (!f.open(QIODevice::WriteOnly)) return -1;
+    f.write("v 0 0 0\n");
+    f.close();
+    const QByteArray in = file.toUtf8();
+    std::vector<const char*> v{"qtmesh", "segment", in.constData()};
+    v.insert(v.end(), extra.begin(), extra.end());
+    QList<QByteArray> storage;
+    QList<char*> argv;
+    for (const char* a : v) storage.push_back(QByteArray(a));
+    for (auto& b : storage) argv.push_back(b.data());
+    return CLIPipeline::cmdSegment(int(argv.size()), argv.data());
+}
+} // namespace
+
+TEST(CLIPipelineSegmentGenericArgs, GranularityAndViewsNeedTheGenericCategory)
+{
+    EXPECT_EQ(2, segmentWithArgs({"--granularity", "fine"}));
+    EXPECT_EQ(2, segmentWithArgs({"--category", "body", "--views", "12"}));
+}
+
+TEST(CLIPipelineSegmentGenericArgs, BadValuesAreRejected)
+{
+    EXPECT_EQ(2, segmentWithArgs({"--category", "generic", "--granularity", "huge"}));
+    EXPECT_EQ(2, segmentWithArgs({"--category", "generic", "--views", "2"}));
+    EXPECT_EQ(2, segmentWithArgs({"--category", "generic", "--views", "abc"}));
+    EXPECT_EQ(2, segmentWithArgs({"--category", "spaceship"}));
+}
+
+TEST(CLIPipelineSegmentGenericArgs, GenericHasNoOfflineOrMiningMode)
+{
+    // No geometric fallback can produce part instances, and the training-data
+    // miner reads body labels from a rig.
+    EXPECT_EQ(2, segmentWithArgs({"--category", "generic", "--no-model"}));
+    EXPECT_EQ(2, segmentWithArgs({"--category", "generic", "--dump-training-data", "/tmp/x.json"}));
+}

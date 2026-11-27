@@ -404,6 +404,15 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionComposer_test.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MotionGenerator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshSegmenter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/TriangleBvh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/SegMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/MeshRaster.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/ShapeDiameter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/Leiden.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/GraphCut.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/GenericSegmenter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/SamMasks.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/GenericSeg/SamMaskProvider.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshDepthRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshOptimizerLod.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ExportOptimizer.cpp

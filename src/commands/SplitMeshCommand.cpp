@@ -100,39 +100,59 @@ void SplitMeshCommand::redo()
 
         // Segment: gather geometry + rig-prior labels, resolve category, run
         // predict — the same pipeline the CLI uses (offline when noModel).
-        std::vector<float> verts;
-        std::vector<uint32_t> indices;
-        if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty()) {
-            mError = QStringLiteral("no readable geometry");
-            return;
-        }
-        const int vertexCount = static_cast<int>(verts.size() / 3);
-        int rigResolved = 0;
-        std::vector<int> rigLabels =
-            AutoRig::rigPriorPartLabels(entity, vertexCount, &rigResolved);
+        // Precomputed labels (a worker already segmented) skip all of it.
+        MeshSegmenter::Result r;
+        if (mHasPresetLabels) {
+            r.ok = true;
+            r.faceLabels = mPresetFaceLabels;
+            r.labelNames = mPresetLabelNames;
+        } else {
+            std::vector<float> verts;
+            std::vector<uint32_t> indices;
+            if (!AutoRig::gatherGeometry(entity, verts, indices) || verts.empty()) {
+                mError = QStringLiteral("no readable geometry");
+                return;
+            }
+            const int vertexCount = static_cast<int>(verts.size() / 3);
+            int rigResolved = 0;
+            std::vector<int> rigLabels =
+                AutoRig::rigPriorPartLabels(entity, vertexCount, &rigResolved);
 
-        MeshSegmenter::Options opts;
-        opts.upAxis = mUpAxis;
-        opts.forceFallback = mNoModel;
-        bool ok = false;
-        opts.category = MeshSegmenter::categoryFromName(mCategory, &ok);
-        if (!ok)
-            opts.category = MeshSegmenter::Category::Auto;
-        if (!mNoModel)
-            opts.category = MeshSegmenter::resolveCategoryBlocking(verts.data(), vertexCount, opts);
-        else if (opts.category == MeshSegmenter::Category::Auto)
-            opts.category = MeshSegmenter::Category::Body;
+            MeshSegmenter::Options opts;
+            opts.upAxis = mUpAxis;
+            opts.forceFallback = mNoModel;
+            bool ok = false;
+            opts.category = MeshSegmenter::categoryFromName(mCategory, &ok);
+            if (!ok)
+                opts.category = MeshSegmenter::Category::Auto;
+            if (!mNoModel)
+                opts.category = MeshSegmenter::resolveCategoryBlocking(verts.data(), vertexCount, opts);
+            else if (opts.category == MeshSegmenter::Category::Auto)
+                opts.category = MeshSegmenter::Category::Body;
 
-        QString modelPath;
-        if (!mNoModel)
-            modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+            if (!mGranularity.isEmpty()) opts.granularity = mGranularity;
+            if (mViews > 0) opts.genericViews = mViews;
 
-        const MeshSegmenter::Result r = MeshSegmenter::predict(
-            verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
-            modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data());
-        if (!r.ok) {
-            mError = r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error;
-            return;
+            QString modelPath;
+            if (!mNoModel)
+                modelPath = MeshSegmenter::ensureModelBlocking(opts.category);
+
+            r = MeshSegmenter::predict(
+                verts.data(), vertexCount, indices.data(), static_cast<int>(indices.size()),
+                modelPath, opts, rigLabels.empty() ? nullptr : rigLabels.data(), mProgress);
+            if (!r.ok) {
+                mError = r.error.isEmpty() ? QStringLiteral("segmentation failed") : r.error;
+                return;
+            }
+            // The model download and the progress pump run event loops, which
+            // can delete or replace the entity: never reuse the old pointer.
+            entity = resolveEntity();
+            if (!entity || entity->getMesh() != mOriginalMesh
+                || !AutoRig::geometryMatches(entity, verts, indices)) {
+                mError = QStringLiteral("the mesh changed while it was being segmented");
+                mOriginalMesh.reset();
+                return;
+            }
         }
 
         SubMeshOps::SplitOptions sopts;
@@ -142,7 +162,7 @@ void SplitMeshCommand::redo()
         // solid wall instead of the hollow interior — this also seals each part
         // watertight (#863 follow-up).
         sopts.solidifyParts = mSolidify;
-        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels);
+        auto groups = SubMeshOps::groupFacesByLabel(r.faceLabels, r.labelNames);
         PartOpsMesh::SplitOutcome so = PartOpsMesh::splitEntity(
             entity, r.faceLabels, groups, sopts,
             mEntityName + std::string("_parts"));
@@ -173,4 +193,17 @@ void SplitMeshCommand::undo()
     if (!mOriginalMesh)
         return;
     swapEntityMesh(mOriginalMesh);
+}
+
+void SplitMeshCommand::setGenericOptions(const QString& granularity, int views)
+{
+    mGranularity = granularity;
+    mViews = views;
+}
+
+void SplitMeshCommand::setPrecomputedLabels(std::vector<int> faceLabels, std::vector<QString> labelNames)
+{
+    mPresetFaceLabels = std::move(faceLabels);
+    mPresetLabelNames = std::move(labelNames);
+    mHasPresetLabels = true;
 }
