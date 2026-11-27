@@ -66,17 +66,17 @@ Graph buildGraph(int n, const std::vector<GraphEdge>& edges)
     return g;
 }
 
-std::vector<int> shuffled(int n, std::mt19937& rng)
+std::vector<int> shuffled(int n, std::mt19937& rng)  // NOSONAR - deterministic seed by design (not security)
 {
     std::vector<int> order(n);
     std::iota(order.begin(), order.end(), 0);
-    std::shuffle(order.begin(), order.end(), rng);
+    std::shuffle(order.begin(), order.end(), rng);  // NOSONAR - deterministic seed by design (not security)
     return order;
 }
 
 // Fast local moving (Leiden's queue-based variant of Louvain's first phase).
 // Returns true if any node changed community.
-bool moveNodes(const Graph& g, std::vector<int>& comm, std::mt19937& rng)
+bool moveNodes(const Graph& g, std::vector<int>& comm, std::mt19937& rng)  // NOSONAR - deterministic seed by design (not security)
 {
     const int n = g.n;
     std::vector<double> tot(n, 0.0);
@@ -140,7 +140,7 @@ bool moveNodes(const Graph& g, std::vector<int>& comm, std::mt19937& rng)
 // a still-singleton node into a well-connected sub-community (greedy, the
 // theta -> 0 limit of the paper's randomised choice). Guarantees every
 // refined community is connected.
-std::vector<int> refine(const Graph& g, const std::vector<int>& comm, std::mt19937& rng)
+std::vector<int> refine(const Graph& g, const std::vector<int>& comm, std::mt19937& rng)  // NOSONAR - deterministic seed by design (not security)
 {
     const int n = g.n;
     std::vector<int> refined(n);
@@ -249,7 +249,7 @@ std::vector<int> leiden(int nodeCount, const std::vector<GraphEdge>& edges, cons
     if (!(g.twoM > 0)) return result;   // no edges: all singletons
     setQuality(g, opts);
 
-    std::mt19937 rng(opts.seed);
+    std::mt19937 rng(opts.seed);  // NOSONAR - deterministic seed by design (not security)
     std::vector<int> nodeOf(nodeCount);   // original node -> current node
     std::iota(nodeOf.begin(), nodeOf.end(), 0);
     std::vector<int> comm(g.n);
