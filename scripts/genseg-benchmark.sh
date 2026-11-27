@@ -9,7 +9,7 @@
 # ones (<name>.rig.json: the truth for characters and animals, whose colour
 # patches are not their parts). Nothing here is redistributed.
 #
-# run: the DISABLED_Benchmark test over every <bench-dir>/src/*.obj, in a
+# run: the GenericSegmenter.Benchmark test (opt-in via its env vars) over every <bench-dir>/src/*.obj, in a
 # low-poly and a dense (Loop-subdivided) variant, per granularity. SAM masks
 # are cached in <bench-dir>/maskcache, so re-runs with other post-processing
 # options take seconds. Results go to <bench-dir>/results/<name>.txt.
@@ -61,7 +61,7 @@ run)
     if [ -n "${DUMP:-}" ]; then export QTMESH_GENSEG_DUMP="$B/dump/$NAME"; fi
     RAW="$B/results/$NAME.log"
     STATUS=0
-    "$BIN/UnitTests" --gtest_also_run_disabled_tests --gtest_filter='GenericSegmenter.DISABLED_Benchmark' \
+    "$BIN/UnitTests" --gtest_filter='GenericSegmenter.Benchmark' \
         > "$RAW" 2>&1 || STATUS=$?
     if [ "$STATUS" -ne 0 ]; then
         echo "benchmark failed (exit $STATUS); full log: $RAW" >&2

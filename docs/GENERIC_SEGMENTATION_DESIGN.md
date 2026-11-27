@@ -339,7 +339,7 @@ CPU takes 28 s).
 ### The benchmark
 
 `scripts/genseg-benchmark.sh` (`prepare`, then `run`) drives
-`GenericSegmenter.DISABLED_Benchmark` over 18 CC0 models (Quaternius, Kenney;
+`GenericSegmenter.Benchmark` over 18 CC0 models (Quaternius, Kenney;
 used locally, never redistributed). There is no part-annotated CC0 set (the
 annotations of PartObjaverse-Tiny are CC-BY-NC), so the truth is derived:
 
