@@ -1027,7 +1027,8 @@ bool writeAll(const QList<QPair<QString, QByteArray>>& files, QString& err)
 }
 
 // Refuse rewrites this writer cannot do faithfully or safely.
-bool checkWritable(const Doc& d, const QString& writeRoot, QString& err)
+bool checkWritable(const Doc& d, const QString& writeRoot, const QSet<QString>& sharedBuffers,
+                   QString& err)
 {
     if (d.glbExtraChunks) {
         err = QStringLiteral("the GLB has chunks besides JSON and BIN, which a rewrite would drop");
@@ -1051,6 +1052,11 @@ bool checkWritable(const Doc& d, const QString& writeRoot, QString& err)
         }
         if (seen.contains(canon)) {
             err = QStringLiteral("two buffers (or the document) resolve to %1; not rewriting").arg(canon);
+            return false;
+        }
+        if (sharedBuffers.contains(canon)) {
+            err = QStringLiteral("external buffer %1 is also used by another glTF file; rewriting it "
+                                 "would break that file").arg(ext);
             return false;
         }
         seen.insert(canon);
@@ -1099,11 +1105,12 @@ AnalyzeResult analyzeFile(const QString& path, const MeshQuality::Limits& limits
 }
 
 FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool dryRun,
-                  const MeshQuality::Limits& limits, const QString& writeRoot)
+                  const MeshQuality::Limits& limits, const QString& writeRoot,
+                  const QSet<QString>& sharedBuffers)
 {
     FixReport rep;
     Doc d;
-    if (!loadDoc(path, d, rep.error) || !checkWritable(d, writeRoot, rep.error))
+    if (!loadDoc(path, d, rep.error) || !checkWritable(d, writeRoot, sharedBuffers, rep.error))
         return rep;
     rep.bytesBefore = d.bytesOnDisk;
     rep.bytesAfter = d.bytesOnDisk;
@@ -1174,6 +1181,57 @@ FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool 
         return rep;
     rep.ok = true;
     return rep;
+}
+
+QStringList externalBufferPaths(const QString& path)
+{
+    // JSON only: the buffers themselves are not read.
+    QStringList out;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly))
+        return out;
+    const QByteArray bytes = f.readAll();
+    QJsonObject json;
+    if (bytes.startsWith("glTF")) {
+        QByteArray bin;
+        bool extra = false;
+        QString err;
+        if (!parseGlb(bytes, json, bin, extra, err))
+            return out;
+    } else {
+        const QJsonDocument doc = QJsonDocument::fromJson(bytes);
+        if (!doc.isObject())
+            return out;
+        json = doc.object();
+    }
+    const QDir dir = QFileInfo(path).absoluteDir();
+    for (const QJsonValue& b : json.value(QStringLiteral("buffers")).toArray()) {
+        const QString uri = b.toObject().value(QStringLiteral("uri")).toString();
+        if (uri.isEmpty() || uri.startsWith(QLatin1String("data:")))
+            continue;
+        const QString canon = QFileInfo(QDir::cleanPath(
+            dir.filePath(QUrl::fromPercentEncoding(uri.toUtf8())))).canonicalFilePath();
+        if (!canon.isEmpty() && !out.contains(canon))
+            out << canon;
+    }
+    return out;
+}
+
+QSet<QString> sharedExternalBuffers(const QStringList& documents)
+{
+    QHash<QString, int> users;
+    for (const QString& doc : documents) {
+        const QString suffix = QFileInfo(doc).suffix().toLower();
+        if (suffix != QLatin1String("gltf") && suffix != QLatin1String("glb"))
+            continue;
+        for (const QString& buf : externalBufferPaths(doc))
+            ++users[buf];
+    }
+    QSet<QString> shared;
+    for (auto it = users.cbegin(); it != users.cend(); ++it)
+        if (it.value() > 1)
+            shared.insert(it.key());
+    return shared;
 }
 
 } // namespace GltfMeshQuality

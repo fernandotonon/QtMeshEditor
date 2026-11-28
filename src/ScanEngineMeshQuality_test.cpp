@@ -260,6 +260,12 @@ TEST(ScanMeshQuality, SliversAreReportedButNotOfferedTheFix)
     EXPECT_FALSE(fixable());
     a.meshQuality[0].metrics.repeatedCornerTriangles = 2;
     EXPECT_TRUE(fixable());
+    // Fixable, yet 3 of the 5 counted are only flat in the base pose: the
+    // message says so next to the fix hint.
+    const QList<Finding> found = ScanEngine::evaluateRules(a, ScanConfig::defaults());
+    const Finding* d = findRule(found, "detect_degenerate_tris_pct");
+    ASSERT_NE(d, nullptr);
+    EXPECT_TRUE(d->message.contains("base pose")) << d->message.toStdString();
 }
 
 TEST(ScanMeshQuality, FetchGainIsWeightedByReferencedBytes)

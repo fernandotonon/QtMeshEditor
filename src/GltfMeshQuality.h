@@ -17,6 +17,7 @@
 #include "MeshQuality.h"
 
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 
@@ -74,7 +75,22 @@ struct FixReport {
 // `writeRoot` bounds where external buffers may be written (canonical
 // paths, so `..` and symlinks cannot leave it); empty = the asset's own
 // directory. A buffer outside it refuses the whole fix.
+//
+// `sharedBuffers` holds canonical paths of external buffers that another
+// glTF document also reads (see sharedExternalBuffers). Rewriting one would
+// move bytes under the other document's accessors, so a document using any
+// of them is refused as a whole and the shared file is left untouched.
 FixReport fixFile(const QString& path, const MeshQuality::FixOptions& opt, bool dryRun = false,
-                  const MeshQuality::Limits& limits = {}, const QString& writeRoot = QString());
+                  const MeshQuality::Limits& limits = {}, const QString& writeRoot = QString(),
+                  const QSet<QString>& sharedBuffers = {});
+
+// Canonical paths of the external (file) buffers a glTF/GLB references;
+// data URIs and the GLB BIN chunk are not included. Empty when the file
+// cannot be parsed.
+QStringList externalBufferPaths(const QString& path);
+
+// External buffers referenced by two or more of `documents` (canonical
+// paths). Non-glTF paths in the list are ignored.
+QSet<QString> sharedExternalBuffers(const QStringList& documents);
 
 } // namespace GltfMeshQuality

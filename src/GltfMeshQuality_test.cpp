@@ -671,6 +671,33 @@ TEST(GltfMeshQuality, ExternalBuffersOutsideTheRootAreNotWritten)
     EXPECT_NE(fileBytes(dir.filePath("outside.bin")), binBefore);
 }
 
+TEST(GltfMeshQuality, BuffersSharedByTwoDocumentsAreNotRewritten)
+{
+    QTemporaryDir dir;
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    const QString a = writeGltfExternal(dir.path(), d.json(), d.bin);
+    // A second document reading the same .bin, plus a GLB that reads nothing external.
+    const QString b = dir.filePath("other.gltf");
+    ASSERT_TRUE(QFile::copy(a, b));
+    const QString glb = writeGlb(dir.filePath("own.glb"), d.json(), d.bin);
+
+    const QString bin = QFileInfo(dir.filePath("mesh data.bin")).canonicalFilePath();
+    EXPECT_EQ(GltfMeshQuality::externalBufferPaths(a), QStringList{bin});
+    EXPECT_TRUE(GltfMeshQuality::externalBufferPaths(glb).isEmpty());
+    const QSet<QString> shared = GltfMeshQuality::sharedExternalBuffers({a, b, glb, dir.filePath("x.fbx")});
+    EXPECT_EQ(shared, QSet<QString>{bin});
+    EXPECT_TRUE(GltfMeshQuality::sharedExternalBuffers({a, glb}).isEmpty());
+
+    const QByteArray before = fileBytes(dir.filePath("mesh data.bin"));
+    const auto rep = GltfMeshQuality::fixFile(a, allLossless(), false, {}, QString(), shared);
+    EXPECT_FALSE(rep.ok);
+    EXPECT_TRUE(rep.error.contains("another glTF")) << rep.error.toStdString();
+    EXPECT_EQ(fileBytes(dir.filePath("mesh data.bin")), before);
+    // A document not using the shared buffer is still fixed.
+    EXPECT_TRUE(GltfMeshQuality::fixFile(glb, allLossless(), false, {}, QString(), shared).ok);
+}
+
 TEST(GltfMeshQuality, GlbBufferZeroWithADataUriStaysADataUri)
 {
     QTemporaryDir dir;

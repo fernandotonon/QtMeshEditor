@@ -5,6 +5,7 @@
 #include "MeshQuality.h"
 #include <QJsonObject>
 #include <QList>
+#include <QSet>
 #include <QString>
 #include <QStringList>
 #include <functional>
@@ -232,8 +233,10 @@ public:
 
     /// Apply safe auto-fixes for findings that support it.
     /// \a scanRoot is the directory \c asset.relativePath is relative to (same as \c ScanEngine::run).
+    /// \a sharedGltfBuffers: external glTF buffers other scanned documents also
+    /// read (GltfMeshQuality::sharedExternalBuffers); a mesh fix never rewrites them.
     static void applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
-                           QList<Finding>& findings);
+                           QList<Finding>& findings, const QSet<QString>& sharedGltfBuffers = {});
 
     // --- Formatters ---
 

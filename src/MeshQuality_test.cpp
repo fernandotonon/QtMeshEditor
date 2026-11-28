@@ -277,7 +277,8 @@ TEST(MeshQuality, WideVertexKeysAreWeldedWithoutMeshoptimizer)
     // Duplicate vertex 0 (positions and key) and use the copy once.
     const uint32_t copy = uint32_t(g.vertexCount);
     g.positions.insert(g.positions.end(), {g.positions[0], g.positions[1], g.positions[2]});
-    g.keys.insert(g.keys.end(), g.keys.begin(), g.keys.begin() + std::ptrdiff_t(g.keyStride));
+    const std::vector<unsigned char> firstKey(g.keys.begin(), g.keys.begin() + std::ptrdiff_t(g.keyStride));
+    g.keys.insert(g.keys.end(), firstKey.begin(), firstKey.end());
     ++g.vertexCount;
     *std::find(g.indices.begin(), g.indices.end(), 0u) = copy;
     g.vertexBytes = 300;

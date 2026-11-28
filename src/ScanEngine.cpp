@@ -1857,6 +1857,14 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
                                          "(almost) nothing.")
                               .arg(asset.degenerateTriangles).arg(asset.degenerateTrianglesOf)
                               .arg(formatPct(pct));
+            const bool baseOnly = std::any_of(asset.meshQuality.cbegin(), asset.meshQuality.cend(),
+                [](const MeshQualityEntry& e) {
+                    return e.deformable && e.metrics.degenerateTriangles > e.metrics.repeatedCornerTriangles;
+                });
+            if (baseOnly)
+                msg += QStringLiteral(" Skinned or morphed primitives are measured in their base pose; "
+                                      "deformation can open some of these triangles up, so only those with "
+                                      "a repeated corner are removed there.");
             if (fixable)
                 msg += fixHint(QStringLiteral("degenerates"));
             else if (gltf)
@@ -2465,7 +2473,8 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
 // in ONE rewrite of the glTF file. A plain --fix leaves meshes alone, because
 // unlike a rename this rewrites the asset.
 static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString& scanRoot,
-                                  AssetInfo& asset, QList<Finding>& findings)
+                                  AssetInfo& asset, QList<Finding>& findings,
+                                  const QSet<QString>& sharedGltfBuffers)
 {
     const ScanConfig config = globalConfig.withScopeOverrides(asset.relativePath);
     const QStringList selected = config.effectiveMeshFixes();
@@ -2498,9 +2507,10 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
     if (opt.overdraw)
         opt.vertexCache = true;
 
-    // External buffers may only be rewritten inside the scanned tree.
+    // External buffers may only be rewritten inside the scanned tree, and
+    // never when another scanned glTF reads the same buffer file.
     const GltfMeshQuality::FixReport rep =
-        GltfMeshQuality::fixFile(asset.filePath, opt, config.dryRun, {}, scanRoot);
+        GltfMeshQuality::fixFile(asset.filePath, opt, config.dryRun, {}, scanRoot, sharedGltfBuffers);
     if (!rep.ok) {
         for (Finding* f : applied)
             f->message += QStringLiteral(" [fix failed: %1]").arg(rep.error);
@@ -2578,7 +2588,7 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
 }
 
 void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
-                            QList<Finding>& findings)
+                            QList<Finding>& findings, const QSet<QString>& sharedGltfBuffers)
 {
     if (!config.fixEnabled) return;
 
@@ -2795,7 +2805,7 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
         }
     }
 
-    applyMeshQualityFixes(config, scanRoot, asset, findings);
+    applyMeshQualityFixes(config, scanRoot, asset, findings, sharedGltfBuffers);
 }
 
 // ---------------------------------------------------------------------------
@@ -2831,6 +2841,11 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
         AssetInspectOptions inspectOpts;
         inspectOpts.probeTextureFiles = config.probeTextureFiles;
 
+        // A buffer two glTF files share must never be repacked for one of
+        // them (#678). Only the JSON is read, and only when fixes run.
+        const QSet<QString> sharedGltfBuffers = config.fixEnabled
+            ? GltfMeshQuality::sharedExternalBuffers(files) : QSet<QString>();
+
         for (const auto& filePath : files) {
             AssetInfo asset = inspectAsset(filePath, scanRoot, inspectOpts);
             if (asset.loadError)
@@ -2839,7 +2854,7 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
             QList<Finding> findings = evaluateRules(asset, config);
 
             // Apply fixes where possible
-            applyFixes(config, scanRoot, asset, findings);
+            applyFixes(config, scanRoot, asset, findings, sharedGltfBuffers);
 
             if (onAssetProcessed)
                 onAssetProcessed(asset, findings);
