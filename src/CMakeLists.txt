@@ -134,6 +134,8 @@ SymmetryMirrorMap.cpp
 MeshLodController.cpp
 MeshOptimizerLod.cpp
 ExportOptimizer.cpp
+MeshQuality.cpp
+GltfMeshQuality.cpp
 UvUnwrap.cpp
 UvUnwrapController.cpp
 UvProject.cpp
@@ -497,6 +499,8 @@ PaintChannelPresets.h
 MeshLodController.h
 MeshOptimizerLod.h
 ExportOptimizer.h
+MeshQuality.h
+GltfMeshQuality.h
 UvUnwrap.h
 UvUnwrapController.h
 UvProject.h

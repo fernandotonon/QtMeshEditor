@@ -293,6 +293,21 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
         ps1RipZeroAreaPct = r["ps1-rip-zero-area"].toDouble();
     if (r.contains("ps1-rip-degenerate-uv"))
         ps1RipDegenerateUvPct = r["ps1-rip-degenerate-uv"].toDouble();
+    // Mesh-buffer quality (#678)
+    if (r.contains("detect_acmr_gain_pct"))
+        detectAcmrGainPct = r["detect_acmr_gain_pct"].toDouble();
+    if (r.contains("detect_overdraw_gain_pct"))
+        detectOverdrawGainPct = r["detect_overdraw_gain_pct"].toDouble();
+    if (r.contains("detect_vertex_fetch_gain_pct"))
+        detectVertexFetchGainPct = r["detect_vertex_fetch_gain_pct"].toDouble();
+    if (r.contains("detect_redundant_verts_pct"))
+        detectRedundantVertsPct = r["detect_redundant_verts_pct"].toDouble();
+    if (r.contains("detect_degenerate_tris_pct"))
+        detectDegenerateTrisPct = r["detect_degenerate_tris_pct"].toDouble();
+    if (r.contains("max_triangles_per_submesh"))
+        maxTrianglesPerSubmesh = r["max_triangles_per_submesh"].toInt();
+    if (r.contains("mesh_quality_min_triangles"))
+        meshQualityMinTriangles = r["mesh_quality_min_triangles"].toInt();
     // Budget rules (#365)
     if (r.contains("max_triangle_count"))
         maxTriangleCount = r["max_triangle_count"].toInt();
@@ -409,6 +424,47 @@ QStringList ScanConfig::defaultIncludePatternsForAssimpImports()
     return cached;
 }
 
+QStringList ScanConfig::meshFixIds()
+{
+    return {QStringLiteral("degenerates"), QStringLiteral("weld"), QStringLiteral("vertex-cache"),
+            QStringLiteral("overdraw"), QStringLiteral("vertex-fetch"), QStringLiteral("simplify")};
+}
+
+QStringList ScanConfig::normalizeMeshFixes(const QStringList& requested, QStringList* unknown)
+{
+    const QStringList known = meshFixIds();
+    QStringList out;
+    auto add = [&out](const QString& id) {
+        if (!out.contains(id))
+            out.append(id);
+    };
+    for (const QString& raw : requested) {
+        for (QString id : raw.split(QLatin1Char(','), Qt::SkipEmptyParts)) {
+            id = id.trimmed().toLower().replace(QLatin1Char('_'), QLatin1Char('-'));
+            if (id.isEmpty())
+                continue;
+            if (id == QLatin1String("all")) {
+                for (const QString& k : known)
+                    if (k != QLatin1String("simplify"))
+                        add(k);
+            } else if (known.contains(id)) {
+                add(id);
+            } else if (unknown) {
+                unknown->append(id);
+            }
+        }
+    }
+    return out;
+}
+
+QStringList ScanConfig::effectiveMeshFixes() const
+{
+    QStringList fixes = meshFixes;
+    if (optimizeMeshes)
+        fixes = normalizeMeshFixes(fixes + QStringList{QStringLiteral("all")});
+    return fixes;
+}
+
 ScanConfig ScanConfig::defaults()
 {
     return ScanConfig();
@@ -509,6 +565,14 @@ void ScanConfig::applyProjectConfig(ScanConfig& config, const QVariantMap& root)
         config.fixEnabled       = fix.value("enabled",           config.fixEnabled).toBool();
         config.dryRun           = fix.value("dry_run",           config.dryRun).toBool();
         config.optimizeMeshes   = fix.value("optimize_meshes",   config.optimizeMeshes).toBool();
+        if (fix.contains("mesh_fixes")) {
+            QStringList unknown;
+            config.meshFixes = normalizeMeshFixes(fix.value("mesh_fixes").toStringList(), &unknown);
+            for (const QString& u : unknown)
+                QTextStream(stderr) << "Warning: unknown fix.mesh_fixes entry '" << u
+                                    << "' (known: " << meshFixIds().join(", ") << ", all)" << Qt::endl;
+        }
+        config.simplifyTargetTris = fix.value("simplify_target_tris", config.simplifyTargetTris).toInt();
         config.renameAnimations = fix.value("rename_animations", config.renameAnimations).toBool();
         config.convertToFormat  = fix.value("convert_to_format", config.convertToFormat).toString();
         config.outputDir        = fix.value("output_dir",        config.outputDir).toString();

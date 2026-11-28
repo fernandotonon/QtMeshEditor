@@ -556,6 +556,7 @@ qtmesh turntable <file> -o frame_%02d.png [--frames N] [--axis y|x|z]`}
               ['--max-vertices <n>', 'Override max_vertex_count for this run (0 = no limit)'],
               ['--min-vertices <n>', 'Override min_vertex_count for this run (0 = no limit)'],
               ['--max-acmr <n>', 'Override max_acmr for this run (e.g. 1.5; 0 = no limit)'],
+              ['--fix-mesh <list|all>', 'Also rewrite glTF/GLB mesh buffers (implies --fix): degenerates, weld, vertex-cache, overdraw, vertex-fetch (all = these five, lossless) and simplify (destructive)'],
               ['--require-skeleton / --no-require-skeleton', 'Enable/disable require_skeleton for this run'],
               ['--require-animations / --no-require-animations', 'Enable/disable require_animations for this run'],
               ['--allow-embedded-textures / --disallow-embedded-textures', 'Enable/disable embedded textures for this run'],
@@ -1229,6 +1230,21 @@ rules:
   detect_overlapping_uvs_pct: 5.0        # warn at >= 5% overlapping UV0 AABBs
   detect_non_manifold_edges_pct: 1.0     # warn at >= 1% non-manifold edges
 
+  # Mesh-buffer quality — ON by default (0 disables); glTF/GLB read from the file
+  detect_degenerate_tris_pct: 0.1        # zero-area / repeated-corner triangles
+  detect_redundant_verts_pct: 5          # exact duplicate vertices (glTF)
+  detect_acmr_gain_pct: 25               # reordering would cut vertex shading by >= 25%
+  detect_overdraw_gain_pct: 25           # reordering would cut overdraw by >= 25%
+  detect_vertex_fetch_gain_pct: 25       # reordering would cut vertex fetch by >= 25%
+  mesh_quality_min_triangles: 500        # ordering rules skip smaller primitives
+  max_triangles_per_submesh: 0           # per-submesh budget (off by default)
+
+# Mesh fixes run only when asked (--fix-mesh, or here)
+fix:
+  optimize_meshes: false                 # true = every lossless mesh fix
+  mesh_fixes: [weld, vertex-cache]       # or pick them; add simplify for the budget
+  simplify_target_tris: 0                # 0 = max_triangles_per_submesh
+
 # Path-specific rule overrides
 scopes:
   "characters/**":
@@ -1481,6 +1497,44 @@ redundant_keyframes_scale_tol: 0.001`} />
                 open boundaries in your DCC.</>}
               example={`detect_non_manifold_edges_pct: 1.0    # 1% manifold-violation tolerance`} />
 
+            <h3 className={s.subsection}>Mesh-Buffer Rules</h3>
+            <p className={s.para}>
+              These rules are <strong>on by default</strong> and only warn. For glTF / GLB they read the
+              index and vertex buffers exactly as stored in the file (the buffers an engine uploads), not the
+              editor's import. The three ordering rules compare the file with what meshoptimizer reaches on the
+              same mesh and fire on the <em>gain</em>, because a mesh's shape alone can force overdraw or cache
+              misses. On a sample of real files: a TRELLIS.2 mesh (963k triangles) drew at 2.63x overdraw,
+              1.38x after reordering (-48%); a Sketchfab car (286k triangles) had ACMR 1.16, 0.71 after reordering
+              (-39% vertex shader runs); small props and files this editor exported stayed quiet.
+            </p>
+            <RuleCard name="detect_degenerate_tris_pct" type="number" severity="warning"
+              description={<>Warn when at least this percentage of triangles are degenerate: a repeated corner, or a
+                height below 1e-5 of the longest edge (scale-invariant). Every format; the auto-fix covers glTF/GLB.</>}
+              example={`detect_degenerate_tris_pct: 0.1    # default`} />
+            <RuleCard name="detect_redundant_verts_pct" type="number" severity="warning"
+              description={<>glTF/GLB: warn when at least this percentage of vertices are exact duplicates of another
+                vertex. Every attribute must match, skin weights and morph-target deltas included, so welding never
+                changes the surface.</>}
+              example={`detect_redundant_verts_pct: 5    # default`} />
+            <RuleCard name="detect_acmr_gain_pct" type="number" severity="warning"
+              description={<>glTF/GLB: warn when reordering the triangles for the GPU vertex cache would cut vertex
+                shader runs (ACMR, 32-entry cache) by at least this percentage. Primitives under{' '}
+                <Code>mesh_quality_min_triangles</Code> (500) are ignored. The absolute <Code>max_acmr</Code> ceiling
+                is still available.</>}
+              example={`detect_acmr_gain_pct: 25    # default`} />
+            <RuleCard name="detect_overdraw_gain_pct" type="number" severity="warning"
+              description={<>glTF/GLB: warn when drawing the triangles front to back would cut overdraw by at least this
+                percentage (meshoptimizer's analyzer, primitives up to 1M triangles).</>}
+              example={`detect_overdraw_gain_pct: 25    # default`} />
+            <RuleCard name="detect_vertex_fetch_gain_pct" type="number" severity="warning"
+              description={<>glTF/GLB: warn when reordering the vertex buffer by first use would cut the bytes the GPU
+                fetches by at least this percentage.</>}
+              example={`detect_vertex_fetch_gain_pct: 25    # default`} />
+            <RuleCard name="max_triangles_per_submesh" type="number" severity="warning"
+              description={<>Per-submesh (glTF primitive) triangle budget. Off by default. Fixable with the destructive{' '}
+                <Code>simplify</Code> mesh fix.</>}
+              example={`max_triangles_per_submesh: 20000`} />
+
             <h3 className={s.subsection}>Naming Rules</h3>
             <RuleCard name="file_name_case" type="string" severity="warning"
               description={<>Enforce file naming convention. Supported: <Code>snake_case</Code>, <Code>kebab-case</Code>, <Code>camelCase</Code>, <Code>PascalCase</Code>, <Code>lowercase</Code>. This rule is auto-fixable.</>}
@@ -1593,10 +1647,23 @@ scopes:
                     rewrite would be materially larger than the original.
                   </td>
                 </tr>
+                <tr>
+                  <td>Mesh-buffer rules</td>
+                  <td>
+                    glTF/GLB only, and only when asked: <Code>--fix-mesh all</Code> (or a list such as
+                    <Code> --fix-mesh weld,vertex-cache</Code>), or <Code>fix.optimize_meshes: true</Code>. A plain
+                    <Code> --fix</Code> leaves meshes alone and says so. The fixes rewrite the index and vertex accessors in
+                    place (degenerate removal, welding, vertex-cache / overdraw / fetch order; <Code>simplify</Code> is
+                    destructive and never part of <Code>all</Code>), recompute accessor min/max and repack the buffer; materials,
+                    skins, morph targets, animations and extensions are untouched. Primitives with shared or sparse
+                    buffers, compression, or <Code>FB_ngon_encoding</Code> (whose triangle order encodes polygons) are left
+                    alone with a note. Every fixed file was checked against the Khronos glTF validator and keeps the same set of triangles.
+                  </td>
+                </tr>
               </tbody>
             </table>
             <p className={s.para}>
-              Additional fix capabilities (mesh optimization, format conversion) are planned. Use <Code>qtmesh fix</Code> for per-file mesh optimization.
+              Use <Code>qtmesh fix</Code> for a full re-import / re-export of a single file.
             </p>
           </section>
 

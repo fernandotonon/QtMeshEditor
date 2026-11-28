@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSet>
 #include <QMap>
 #include <QLocale>
 #include <QRegularExpression>
@@ -29,6 +30,8 @@
 #include "CLIPipeline.h"
 #include "FBX/FBXExporter.h"
 #include "VertexCacheOptimizer.h"
+#include "GltfMeshQuality.h"
+#include "MeshQuality.h"
 
 #include <OgreLogManager.h>
 #include <OgreMaterialManager.h>
@@ -229,6 +232,10 @@ static void copyAssetInspectExtensionFields(AssetInfo& dst, const AssetInfo& src
     dst.estimatedTextureVramBytes = src.estimatedTextureVramBytes;
     dst.estimatedDrawCalls = src.estimatedDrawCalls;
     dst.lodMeshCount = src.lodMeshCount;
+    dst.degenerateTriangles = src.degenerateTriangles;
+    dst.degenerateTrianglesOf = src.degenerateTrianglesOf;
+    dst.largestSubmeshTriangles = src.largestSubmeshTriangles;
+    dst.largestSubmeshName = src.largestSubmeshName;
 }
 
 static void finalizeAssetInspect(AssetInfo& info, const AssetInspectOptions& options)
@@ -972,6 +979,109 @@ static void ps1RipDegeneracyRatiosForEntities(const QList<Ogre::Entity*>& entiti
             ? static_cast<double>(degenerateUv) / static_cast<double>(uvTriTotal) : -1.0;
 }
 
+// Degenerate triangles and the largest submesh, measured on the imported
+// geometry (#678). Used for formats whose buffers are not what the file
+// stores (everything but glTF, which GltfMeshQuality reads directly).
+static void meshQualityFromEntities(const QList<Ogre::Entity*>& entities, AssetInfo& info)
+{
+    long long degenerate = 0;
+    long long triangles = 0;
+    std::set<const Ogre::Mesh*> seen;
+    for (const Ogre::Entity* entity : entities) {
+        const Ogre::MeshPtr mesh = entity ? entity->getMesh() : Ogre::MeshPtr();
+        if (!mesh || !seen.insert(mesh.get()).second)
+            continue;
+        for (unsigned int s = 0; s < mesh->getNumSubMeshes(); ++s) {
+            const Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            const std::vector<uint32_t> idx = readSubmeshIndexBuffer(sub);
+            if (idx.empty())
+                continue;
+            const auto subTris = static_cast<unsigned int>(idx.size() / 3);
+            if (subTris > info.largestSubmeshTriangles) {
+                info.largestSubmeshTriangles = subTris;
+                info.largestSubmeshName = QStringLiteral("%1 submesh %2")
+                                              .arg(QString::fromStdString(mesh->getName()))
+                                              .arg(s);
+            }
+            const Ogre::VertexData* vd = sub->useSharedVertices ? mesh->sharedVertexData : sub->vertexData;
+            const Ogre::VertexElement* posElem = (vd && vd->vertexDeclaration)
+                ? vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION) : nullptr;
+            if (!posElem || posElem->getType() != Ogre::VET_FLOAT3)
+                continue;
+            const Ogre::HardwareVertexBufferSharedPtr buf =
+                vd->vertexBufferBinding->getBuffer(posElem->getSource());
+            if (!buf)
+                continue;
+            MeshQuality::Geometry g;
+            g.vertexCount = vd->vertexStart + vd->vertexCount;
+            g.positions.resize(g.vertexCount * 3, 0.0f);
+            const auto* base = static_cast<const unsigned char*>(
+                buf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            const size_t stride = buf->getVertexSize();
+            const size_t available = buf->getNumVertices();
+            for (size_t v = 0; v < g.vertexCount && v < available; ++v) {
+                float* fp = nullptr;
+                posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + v * stride), &fp);
+                std::copy(fp, fp + 3, &g.positions[v * 3]);
+            }
+            buf->unlock();
+            for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+                if (idx[t] >= g.vertexCount || idx[t + 1] >= g.vertexCount || idx[t + 2] >= g.vertexCount)
+                    continue;
+                ++triangles;
+                if (MeshQuality::isDegenerate(g, idx[t], idx[t + 1], idx[t + 2]))
+                    ++degenerate;
+            }
+        }
+    }
+    if (triangles > 0) {
+        info.degenerateTriangles = degenerate;
+        info.degenerateTrianglesOf = triangles;
+    }
+}
+
+// glTF / GLB: buffer quality of every primitive, read from the file itself
+// (the Ogre import above welds and reorders, see GltfMeshQuality.h).
+static void meshQualityFromGltfFile(const QString& filePath, AssetInfo& info)
+{
+    const GltfMeshQuality::AnalyzeResult res = GltfMeshQuality::analyzeFile(filePath);
+    if (!res.ok) {
+        info.meshQualityError = res.error;
+        return;
+    }
+    info.meshQualityMeasured = true;
+    long long degenerate = 0;
+    long long triangles = 0;
+    info.largestSubmeshTriangles = 0;
+    info.largestSubmeshName.clear();
+    for (const GltfMeshQuality::PrimitiveReport& p : res.primitives) {
+        MeshQualityEntry e;
+        e.meshName = p.meshName;
+        e.mesh = p.mesh;
+        e.primitive = p.primitive;
+        e.measured = p.measured;
+        e.indexFixable = p.indexFixable;
+        e.vertexFixable = p.vertexFixable;
+        e.orderFixable = p.orderFixable;
+        e.deformable = p.deformable;
+        e.note = p.note;
+        e.metrics = p.metrics;
+        info.meshQuality.append(e);
+        if (!p.measured)
+            continue;
+        degenerate += static_cast<long long>(p.metrics.degenerateTriangles);
+        triangles += static_cast<long long>(p.metrics.triangles);
+        if (p.metrics.triangles > info.largestSubmeshTriangles) {
+            info.largestSubmeshTriangles = static_cast<unsigned int>(p.metrics.triangles);
+            info.largestSubmeshName = p.meshName.isEmpty()
+                ? QStringLiteral("mesh %1 primitive %2").arg(p.mesh).arg(p.primitive)
+                : QStringLiteral("'%1' primitive %2").arg(p.meshName).arg(p.primitive);
+        }
+    }
+    info.degenerateTriangles = triangles > 0 ? degenerate : -1;
+    info.degenerateTrianglesOf = triangles;
+}
+
 // Detect embedded textures: walk each TextureUnitState used by every
 // SubEntity's Material and ask Ogre if the texture was manually loaded
 // (i.e. fed bytes from an in-memory stream rather than resolved through
@@ -1192,6 +1302,7 @@ static bool inspectAssetViaOgre(const QString& filePath, AssetInfo& info,
     info.nonManifoldEdgesRatio = nonManifoldEdgesRatioForEntities(entities);
     ps1RipDegeneracyRatiosForEntities(entities, &info.ps1RipZeroAreaRatio,
                                       &info.ps1RipDegenerateUvRatio);
+    meshQualityFromEntities(entities, info);
 
     fillMeshStatsFromOgreEntities(entities, info);
     syncTriangleDerivedFields(info);
@@ -1483,6 +1594,8 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         }
         return info;
     }
+    if (GltfMeshQuality::handles(filePath))
+        meshQualityFromGltfFile(filePath, info);
 
     finalizeAssetInspect(info, options);
     return info;
@@ -1586,6 +1699,284 @@ bool textureFormatMatchesList(const QString& format, const QStringList& patterns
             return true;
     }
     return false;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Mesh-buffer quality rules (#678)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const QString kRuleDegenerate = QStringLiteral("detect_degenerate_tris_pct");
+const QString kRuleRedundant = QStringLiteral("detect_redundant_verts_pct");
+const QString kRuleAcmr = QStringLiteral("detect_acmr_gain_pct");
+const QString kRuleOverdraw = QStringLiteral("detect_overdraw_gain_pct");
+const QString kRuleFetch = QStringLiteral("detect_vertex_fetch_gain_pct");
+const QString kRuleSubmeshBudget = QStringLiteral("max_triangles_per_submesh");
+
+// Rule id -> the `--fix-mesh` id that fixes it.
+const QMap<QString, QString>& meshRuleFixes()
+{
+    static const QMap<QString, QString> m{
+        {kRuleDegenerate, QStringLiteral("degenerates")},
+        {kRuleRedundant, QStringLiteral("weld")},
+        {kRuleAcmr, QStringLiteral("vertex-cache")},
+        {kRuleOverdraw, QStringLiteral("overdraw")},
+        {kRuleFetch, QStringLiteral("vertex-fetch")},
+        {kRuleSubmeshBudget, QStringLiteral("simplify")},
+    };
+    return m;
+}
+
+QString primitiveLabel(const MeshQualityEntry& e)
+{
+    return e.meshName.isEmpty()
+        ? QStringLiteral("mesh %1 primitive %2").arg(e.mesh).arg(e.primitive)
+        : QStringLiteral("'%1' primitive %2").arg(e.meshName).arg(e.primitive);
+}
+
+QString formatPct(double pct)
+{
+    if (pct > 0.0 && pct < 0.01)
+        return QStringLiteral("<0.01");
+    return QString::number(pct, 'f', pct >= 10.0 ? 0 : (pct >= 1.0 ? 1 : 2));
+}
+
+QString notFixable(const QString& why)
+{
+    return why.isEmpty() ? QStringLiteral(" Not auto-fixable in this file.")
+                         : QStringLiteral(" Not auto-fixable: %1.").arg(why);
+}
+
+QString fixHint(const QString& fixId)
+{
+    return QStringLiteral(" Fix: `qtmesh scan --fix-mesh %1` (or `fix.optimize_meshes: true`).").arg(fixId);
+}
+
+// What the fix for an ordering metric rewrites.
+enum class Rewrite { TriangleOrder, VertexBuffer };
+
+bool canRewrite(const MeshQualityEntry& e, Rewrite what)
+{
+    return what == Rewrite::VertexBuffer ? e.vertexFixable : e.orderFixable;
+}
+
+// One ordering metric (vertex cache, overdraw, vertex fetch) summed over the
+// primitives big enough to matter, weighted by `weight`.
+struct OrderingTotals {
+    double before = 0.0;
+    double after = 0.0;
+    double weight = 0.0;
+    int primitives = 0;
+    bool fixable = false;
+    QString worst;
+    double worstGain = 0.0;
+    QString blocker;   // why a primitive that would gain cannot be rewritten
+
+    double gainPct() const { return MeshQuality::Metrics::gainPct(before, after); }
+    double meanBefore() const { return weight > 0.0 ? before / weight : 0.0; }
+    double meanAfter() const { return weight > 0.0 ? after / weight : 0.0; }
+};
+
+template<typename Before, typename After, typename Weight>
+OrderingTotals orderingTotals(const AssetInfo& asset, int minTriangles, Rewrite rewrite,
+                              Before before, After after, Weight weight)
+{
+    OrderingTotals t;
+    for (const MeshQualityEntry& e : asset.meshQuality) {
+        if (!e.measured || e.metrics.triangles < size_t(std::max(0, minTriangles)))
+            continue;
+        const double b = before(e.metrics);
+        const double a = after(e.metrics);
+        if (!(b > 0.0) || a < 0.0)
+            continue;
+        const double w = weight(e.metrics);
+        t.before += b * w;
+        t.after += a * w;
+        t.weight += w;
+        ++t.primitives;
+        const double gain = MeshQuality::Metrics::gainPct(b, a);
+        if (gain > 0.0 && canRewrite(e, rewrite))
+            t.fixable = true;
+        else if (gain > 0.0 && t.blocker.isEmpty())
+            t.blocker = e.note;
+        if (gain > t.worstGain) {
+            t.worstGain = gain;
+            t.worst = primitiveLabel(e);
+        }
+    }
+    return t;
+}
+
+void appendOrderingFinding(QList<Finding>& findings, const AssetInfo& asset, const QString& rule,
+                           const QString& what, const OrderingTotals& t, const QString& fixId)
+{
+    QString msg = what;
+    if (t.primitives > 1 && !t.worst.isEmpty())
+        msg += QStringLiteral(" Worst: %1 (%2%).").arg(t.worst, QString::number(t.worstGain, 'f', 0));
+    msg += t.fixable ? fixHint(fixId) : notFixable(t.blocker);
+    findings.append({asset.relativePath, rule, Severity::Warning, msg, t.fixable});
+}
+
+void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config, QList<Finding>& findings)
+{
+    const bool gltf = asset.meshQualityMeasured;
+
+    // ---- detect_degenerate_tris_pct ---- (every format)
+    if (config.detectDegenerateTrisPct > 0.0 && asset.degenerateTriangles > 0
+        && asset.degenerateTrianglesOf > 0) {
+        const double pct = 100.0 * double(asset.degenerateTriangles) / double(asset.degenerateTrianglesOf);
+        if (pct >= config.detectDegenerateTrisPct) {
+            // The count uses a relative height (slivers included); the
+            // lossless fix only removes exactly flat triangles, and on a
+            // skinned/morphed primitive only repeated-corner ones (a flat
+            // base-pose triangle can open up when it deforms).
+            bool fixable = false;
+            QString blocker;
+            for (const MeshQualityEntry& e : asset.meshQuality) {
+                if (e.metrics.degenerateTriangles == 0)
+                    continue;
+                const size_t removable = e.deformable ? e.metrics.repeatedCornerTriangles
+                                                      : e.metrics.zeroAreaTriangles;
+                fixable = fixable || (e.indexFixable && removable > 0);
+                if (!blocker.isEmpty())
+                    continue;
+                if (!e.indexFixable)
+                    blocker = e.note;
+                else if (removable == 0)
+                    blocker = e.deformable
+                        ? QStringLiteral("they are flat only in the base pose of a skinned or morphed mesh, "
+                                         "where deformation can open them up")
+                        : QStringLiteral("they are thin slivers, not exactly flat, so removing them would "
+                                         "change the surface");
+            }
+            QString msg = QStringLiteral("%1 of %2 triangles (%3%) are degenerate (zero or near-zero area, or a "
+                                         "repeated corner): they cost index and vertex work and draw "
+                                         "(almost) nothing.")
+                              .arg(asset.degenerateTriangles).arg(asset.degenerateTrianglesOf)
+                              .arg(formatPct(pct));
+            const bool baseOnly = std::any_of(asset.meshQuality.cbegin(), asset.meshQuality.cend(),
+                [](const MeshQualityEntry& e) {
+                    return e.deformable && e.metrics.degenerateTriangles > e.metrics.repeatedCornerTriangles;
+                });
+            if (baseOnly)
+                msg += QStringLiteral(" Skinned or morphed primitives are measured in their base pose; "
+                                      "deformation can open some of these triangles up, so only those with "
+                                      "a repeated corner are removed there.");
+            if (fixable)
+                msg += fixHint(QStringLiteral("degenerates"));
+            else if (gltf)
+                msg += notFixable(blocker);
+            else
+                msg += QStringLiteral(" Remove them in the source tool (the scan auto-fix rewrites glTF/GLB only).");
+            findings.append({asset.relativePath, kRuleDegenerate, Severity::Warning, msg, fixable});
+        }
+    }
+
+    // ---- max_triangles_per_submesh ---- (every format)
+    if (config.maxTrianglesPerSubmesh > 0
+        && asset.largestSubmeshTriangles > unsigned(config.maxTrianglesPerSubmesh)) {
+        int over = 0;
+        bool fixable = false;
+        for (const MeshQualityEntry& e : asset.meshQuality) {
+            if (e.measured && e.metrics.triangles > size_t(config.maxTrianglesPerSubmesh)) {
+                ++over;
+                fixable = fixable || e.indexFixable;
+            }
+        }
+        QString msg = QStringLiteral("%1 has %2 triangles, over the per-submesh budget of %3")
+                          .arg(asset.largestSubmeshName).arg(asset.largestSubmeshTriangles)
+                          .arg(config.maxTrianglesPerSubmesh);
+        if (over > 1)
+            msg += QStringLiteral(" (%1 submeshes are over it)").arg(over);
+        msg += QStringLiteral(". Split it or add LODs");
+        msg += fixable ? QStringLiteral(", or simplify it: `qtmesh scan --fix-mesh simplify` (destructive).")
+                       : QStringLiteral(".");
+        findings.append({asset.relativePath, kRuleSubmeshBudget, Severity::Warning, msg, fixable});
+    }
+
+    // The remaining rules describe GPU buffers, which only glTF stores as-is.
+    if (!gltf)
+        return;
+
+    // ---- detect_redundant_verts_pct ----
+    if (config.detectRedundantVertsPct > 0.0) {
+        size_t redundant = 0;
+        size_t vertices = 0;
+        bool fixable = false;
+        QString blocker;
+        for (const MeshQualityEntry& e : asset.meshQuality) {
+            if (!e.measured)
+                continue;
+            redundant += e.metrics.redundantVertices;
+            vertices += e.metrics.vertices;
+            if (e.metrics.redundantVertices == 0)
+                continue;
+            fixable = fixable || e.vertexFixable;
+            if (!e.vertexFixable && blocker.isEmpty())
+                blocker = e.note;
+        }
+        const double pct = vertices ? 100.0 * double(redundant) / double(vertices) : 0.0;
+        if (redundant > 0 && pct >= config.detectRedundantVertsPct) {
+            QString msg = QStringLiteral("%1 of %2 vertices (%3%) are exact duplicates of another vertex "
+                                         "(every attribute equal): welding them saves memory and vertex work.")
+                              .arg(redundant).arg(vertices).arg(formatPct(pct));
+            msg += fixable ? fixHint(QStringLiteral("weld")) : notFixable(blocker);
+            findings.append({asset.relativePath, kRuleRedundant, Severity::Warning, msg, fixable});
+        }
+    }
+
+    const int minTris = config.meshQualityMinTriangles;
+    auto triangles = [](const MeshQuality::Metrics& m) { return double(m.triangles); };
+
+    // ---- detect_acmr_gain_pct ----
+    if (config.detectAcmrGainPct > 0.0) {
+        const OrderingTotals t = orderingTotals(
+            asset, minTris, Rewrite::TriangleOrder, [](const MeshQuality::Metrics& m) { return m.acmr; },
+            [](const MeshQuality::Metrics& m) { return m.acmrOptimized; }, triangles);
+        if (t.gainPct() >= config.detectAcmrGainPct)
+            appendOrderingFinding(findings, asset, kRuleAcmr,
+                QStringLiteral("Vertex cache: ACMR %1 drops to %2 when the triangles are reordered "
+                               "(%3% fewer vertex shader runs).")
+                    .arg(QString::number(t.meanBefore(), 'f', 2), QString::number(t.meanAfter(), 'f', 2),
+                         QString::number(t.gainPct(), 'f', 0)),
+                t, QStringLiteral("vertex-cache"));
+    }
+
+    // ---- detect_overdraw_gain_pct ----
+    if (config.detectOverdrawGainPct > 0.0) {
+        const OrderingTotals t = orderingTotals(
+            asset, minTris, Rewrite::TriangleOrder, [](const MeshQuality::Metrics& m) { return m.overdraw; },
+            [](const MeshQuality::Metrics& m) { return m.overdrawOptimized; }, triangles);
+        if (t.gainPct() >= config.detectOverdrawGainPct)
+            appendOrderingFinding(findings, asset, kRuleOverdraw,
+                QStringLiteral("Overdraw: %1x drops to %2x when the triangles are drawn front to back "
+                               "(%3% less pixel shading).")
+                    .arg(QString::number(t.meanBefore(), 'f', 2), QString::number(t.meanAfter(), 'f', 2),
+                         QString::number(t.gainPct(), 'f', 0)),
+                t, QStringLiteral("overdraw"));
+    }
+
+    // ---- detect_vertex_fetch_gain_pct ----
+    if (config.detectVertexFetchGainPct > 0.0) {
+        const OrderingTotals t = orderingTotals(
+            asset, minTris, Rewrite::VertexBuffer, [](const MeshQuality::Metrics& m) { return m.overfetch; },
+            [](const MeshQuality::Metrics& m) { return m.overfetchOptimized; },
+            // overfetch = fetched bytes / referenced vertex bytes, so this
+            // weight makes the sums total fetched bytes.
+            [](const MeshQuality::Metrics& m) {
+                return double(m.referencedVertices()) * double(m.vertexBytes);
+            });
+        if (t.gainPct() >= config.detectVertexFetchGainPct)
+            appendOrderingFinding(findings, asset, kRuleFetch,
+                QStringLiteral("Vertex fetch: the GPU reads %1x the vertex buffer; %2x after the vertex "
+                               "buffer is reordered by first use (%3% less memory traffic).")
+                    .arg(QString::number(t.meanBefore(), 'f', 2), QString::number(t.meanAfter(), 'f', 2),
+                         QString::number(t.gainPct(), 'f', 0)),
+                t, QStringLiteral("vertex-fetch"));
+    }
 }
 
 } // namespace
@@ -1719,6 +2110,19 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                                  "GPU vertex cache (qtmesh vertex-cache -o <out>)")
                              .arg(QString::number(asset.weightedAcmr, 'f', 3))
                              .arg(QString::number(config.maxAcmr, 'f', 3))});
+    }
+
+    // ---- mesh-buffer quality (#678) ----
+    {
+        const int before = findings.size();
+        appendMeshQualityFindings(asset, config, findings);
+        if (findings.size() > before) {
+            QStringList fired;
+            for (int i = before; i < findings.size(); ++i)
+                fired << findings.at(i).rule;
+            SentryReporter::addBreadcrumb(QStringLiteral("scan.rule"),
+                QStringLiteral("mesh quality: %1").arg(fired.join(QLatin1Char(','))));
+        }
     }
 
     // ---- require_skeleton ----
@@ -2064,8 +2468,127 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
 // Assimp::Exporter for the rewrite step.
 // ---------------------------------------------------------------------------
 
+// Mesh-buffer fixes (#678): every fixable mesh-quality finding the user
+// asked to fix (--fix-mesh / fix.mesh_fixes / fix.optimize_meshes) is applied
+// in ONE rewrite of the glTF file. A plain --fix leaves meshes alone, because
+// unlike a rename this rewrites the asset.
+static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString& scanRoot,
+                                  AssetInfo& asset, QList<Finding>& findings,
+                                  const QSet<QString>& sharedGltfBuffers)
+{
+    const ScanConfig config = globalConfig.withScopeOverrides(asset.relativePath);
+    const QStringList selected = config.effectiveMeshFixes();
+    MeshQuality::FixOptions opt;
+    QList<Finding*> applied;
+    QStringList fixIds;
+    for (Finding& f : findings) {
+        const QString fixId = meshRuleFixes().value(f.rule);
+        if (fixId.isEmpty() || !f.fixable || f.fixed)
+            continue;
+        if (!selected.contains(fixId)) {
+            f.message += QStringLiteral(" [not fixed: --fix rewrites meshes only when asked; add "
+                                        "--fix-mesh %1 or set fix.optimize_meshes: true]").arg(fixId);
+            continue;
+        }
+        if (fixId == QLatin1String("degenerates")) opt.removeDegenerates = true;
+        else if (fixId == QLatin1String("weld")) opt.weld = true;
+        else if (fixId == QLatin1String("vertex-cache")) opt.vertexCache = true;
+        else if (fixId == QLatin1String("overdraw")) opt.overdraw = true;
+        else if (fixId == QLatin1String("vertex-fetch")) opt.vertexFetch = true;
+        else if (fixId == QLatin1String("simplify"))
+            opt.simplifyTargetTriangles = size_t(config.simplifyTargetTris > 0 ? config.simplifyTargetTris
+                                                                               : config.maxTrianglesPerSubmesh);
+        applied.append(&f);
+        fixIds << fixId;
+    }
+    if (applied.isEmpty() || !opt.any())
+        return;
+    // meshoptimizer's overdraw pass expects a cache-ordered index buffer.
+    if (opt.overdraw)
+        opt.vertexCache = true;
+
+    // External buffers may only be rewritten inside the scanned tree, and
+    // never when another scanned glTF reads the same buffer file.
+    const GltfMeshQuality::FixReport rep =
+        GltfMeshQuality::fixFile(asset.filePath, opt, config.dryRun, {}, scanRoot, sharedGltfBuffers);
+    if (!rep.ok) {
+        for (Finding* f : applied)
+            f->message += QStringLiteral(" [fix failed: %1]").arg(rep.error);
+        return;
+    }
+    if (rep.primitivesChanged == 0) {
+        const QString why = rep.notes.isEmpty() ? QStringLiteral("nothing to change")
+                                                : rep.notes.join(QStringLiteral("; "));
+        for (Finding* f : applied)
+            f->message += QStringLiteral(" [not fixed: %1]").arg(why);
+        return;
+    }
+
+    QStringList parts;
+    if (rep.degeneratesRemoved)
+        parts << QStringLiteral("%1 degenerate triangles removed").arg(rep.degeneratesRemoved);
+    if (rep.primitivesSimplified)
+        parts << QStringLiteral("%1 primitives simplified (%2 -> %3 triangles)")
+                     .arg(rep.primitivesSimplified).arg(rep.trianglesBefore).arg(rep.trianglesAfter);
+    if (rep.verticesWelded)
+        parts << QStringLiteral("%1 vertices welded").arg(rep.verticesWelded);
+    if (rep.verticesDropped)
+        parts << QStringLiteral("%1 unused vertices dropped").arg(rep.verticesDropped);
+    if (opt.vertexCache || opt.overdraw || opt.vertexFetch)
+        parts << QStringLiteral("%1 primitives reordered").arg(rep.primitivesChanged);
+    parts << QStringLiteral("%1 KB -> %2 KB").arg(rep.bytesBefore / 1024).arg(rep.bytesAfter / 1024);
+    const QString summary = parts.join(QStringLiteral(", "));
+
+    if (config.dryRun) {
+        for (Finding* f : applied)
+            f->message += QStringLiteral(" [dry-run, would apply: %1]").arg(summary);
+        return;
+    }
+
+    SentryReporter::addBreadcrumb(QStringLiteral("scan.fix.mesh"),
+        QStringLiteral("%1: %2").arg(fixIds.join(QLatin1Char(',')), summary));
+
+    // Re-measure the rewritten file and re-run the rules: a finding is only
+    // "fixed" when its rule no longer fires (a blocked primitive, a simplify
+    // stopped by its error limit or a partial weld can leave it standing).
+    AssetInspectOptions inspectOpts;
+    inspectOpts.probeTextureFiles = config.probeTextureFiles;
+    asset = ScanEngine::inspectAsset(asset.filePath, scanRoot, inspectOpts);
+    const bool remeasured = asset.meshQualityMeasured;
+    QSet<QString> stillFiring;
+    if (remeasured)
+        for (const Finding& f : ScanEngine::evaluateRules(asset, globalConfig))
+            stillFiring.insert(f.rule);
+
+    if (!remeasured) {
+        // Written, but not verified: the rule may still fire.
+        for (Finding* f : applied)
+            f->message += QStringLiteral(" [written (%1), but the rewritten file could not be re-measured, "
+                                         "so the fix is not verified]").arg(summary);
+        if (!rep.notes.isEmpty())
+            applied.first()->message += QStringLiteral(" (%1)").arg(rep.notes.join(QStringLiteral("; ")));
+        return;
+    }
+
+    bool firstFixed = true;
+    for (Finding* f : applied) {
+        if (stillFiring.contains(f->rule)) {
+            f->message += QStringLiteral(" [partly fixed (%1), still over the threshold]").arg(summary);
+            continue;
+        }
+        f->fixed = true;
+        f->severity = Severity::Info;
+        f->message += QStringLiteral(" [fixed: %1]").arg(summary);
+        if (firstFixed)
+            f->bytesSaved = std::max<qint64>(0, rep.bytesBefore - rep.bytesAfter);
+        firstFixed = false;
+    }
+    if (!rep.notes.isEmpty())
+        applied.first()->message += QStringLiteral(" (%1)").arg(rep.notes.join(QStringLiteral("; ")));
+}
+
 void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
-                            QList<Finding>& findings)
+                            QList<Finding>& findings, const QSet<QString>& sharedGltfBuffers)
 {
     if (!config.fixEnabled) return;
 
@@ -2281,6 +2804,8 @@ void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, A
             asset = inspectAsset(asset.filePath, scanRoot, inspectOpts);
         }
     }
+
+    applyMeshQualityFixes(config, scanRoot, asset, findings, sharedGltfBuffers);
 }
 
 // ---------------------------------------------------------------------------
@@ -2307,14 +2832,28 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
         roots.append(QDir::currentPath());
     }
 
-    // Enumerate and inspect all files across all roots
+    // Enumerate every root first: a buffer two glTF files share must never be
+    // repacked for one of them (#678), and the two may sit in different roots.
+    // Only the JSON is read, and only when fixes run. The write boundary stays
+    // per root (applyFixes gets its own scanRoot).
+    QList<QStringList> filesPerRoot;
+    QStringList allFiles;
     for (const auto& scanRoot : roots) {
+        filesPerRoot.append(enumerateFiles(config, scanRoot));
+        allFiles += filesPerRoot.constLast();
+    }
+    const QSet<QString> sharedGltfBuffers = config.fixEnabled
+        ? GltfMeshQuality::sharedExternalBuffers(allFiles) : QSet<QString>();
+
+    AssetInspectOptions inspectOpts;
+    inspectOpts.probeTextureFiles = config.probeTextureFiles;
+
+    // Inspect all files across all roots
+    for (qsizetype rootIdx = 0; rootIdx < roots.size(); ++rootIdx) {
+        const QString& scanRoot = roots.at(rootIdx);
+        const QStringList& files = filesPerRoot.at(rootIdx);
         SentryReporter::addBreadcrumb("file.import",
             QString("Scan start: %1").arg(scanRoot));
-        QStringList files = enumerateFiles(config, scanRoot);
-
-        AssetInspectOptions inspectOpts;
-        inspectOpts.probeTextureFiles = config.probeTextureFiles;
 
         for (const auto& filePath : files) {
             AssetInfo asset = inspectAsset(filePath, scanRoot, inspectOpts);
@@ -2324,7 +2863,7 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
             QList<Finding> findings = evaluateRules(asset, config);
 
             // Apply fixes where possible
-            applyFixes(config, scanRoot, asset, findings);
+            applyFixes(config, scanRoot, asset, findings, sharedGltfBuffers);
 
             if (onAssetProcessed)
                 onAssetProcessed(asset, findings);
@@ -2552,6 +3091,63 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
         if (asset.weightedAcmr > 0.0)
             ao["weightedAcmr"] = asset.weightedAcmr;
 
+        // Mesh-buffer quality (#678). glTF/GLB carry per-primitive metrics
+        // from the file's own buffers; other formats only the degenerate
+        // count and the largest submesh.
+        if (asset.meshQualityMeasured || asset.degenerateTriangles >= 0
+            || !asset.meshQualityError.isEmpty()) {
+            QJsonObject mq;
+            mq["source"] = asset.meshQualityMeasured ? QStringLiteral("file") : QStringLiteral("import");
+            if (!asset.meshQualityError.isEmpty())
+                mq["error"] = asset.meshQualityError;
+            if (asset.degenerateTriangles >= 0) {
+                mq["degenerateTriangles"] = static_cast<qint64>(asset.degenerateTriangles);
+                mq["trianglesChecked"] = static_cast<qint64>(asset.degenerateTrianglesOf);
+            }
+            if (asset.largestSubmeshTriangles > 0)
+                mq["largestSubmeshTriangles"] = static_cast<int>(asset.largestSubmeshTriangles);
+            auto round3 = [](double v) { return std::round(v * 1000.0) / 1000.0; };
+            QJsonArray prims;
+            for (const MeshQualityEntry& e : asset.meshQuality) {
+                QJsonObject po;
+                po["mesh"] = e.mesh;
+                po["primitive"] = e.primitive;
+                if (!e.meshName.isEmpty())
+                    po["name"] = e.meshName;
+                po["measured"] = e.measured;
+                if (!e.note.isEmpty())
+                    po["note"] = e.note;
+                if (e.measured) {
+                    const MeshQuality::Metrics& m = e.metrics;
+                    po["triangles"] = static_cast<qint64>(m.triangles);
+                    po["vertices"] = static_cast<qint64>(m.vertices);
+                    po["degenerateTriangles"] = static_cast<qint64>(m.degenerateTriangles);
+                    po["removableDegenerateTriangles"] = static_cast<qint64>(
+                        e.deformable ? m.repeatedCornerTriangles : m.zeroAreaTriangles);
+                    po["redundantVertices"] = static_cast<qint64>(m.redundantVertices);
+                    po["unreferencedVertices"] = static_cast<qint64>(m.unreferencedVertices);
+                    po["acmr"] = round3(m.acmr);
+                    po["acmrOptimized"] = round3(m.acmrOptimized);
+                    if (m.overdraw >= 0.0) {
+                        po["overdraw"] = round3(m.overdraw);
+                        po["overdrawOptimized"] = round3(m.overdrawOptimized);
+                    }
+                    if (m.vertexBytes > 0) {
+                        po["overfetch"] = round3(m.overfetch);
+                        po["overfetchOptimized"] = round3(m.overfetchOptimized);
+                    }
+                    po["indexFixable"] = e.indexFixable;
+                    po["vertexFixable"] = e.vertexFixable;
+                    po["orderFixable"] = e.orderFixable;
+                    po["deformable"] = e.deformable;
+                }
+                prims.append(po);
+            }
+            if (!prims.isEmpty())
+                mq["primitives"] = prims;
+            ao["meshQuality"] = mq;
+        }
+
         if (!asset.animationNames.isEmpty()) {
             QJsonArray anims;
             for (int i = 0; i < asset.animationNames.size(); ++i) {
@@ -2749,6 +3345,13 @@ QString ScanEngine::formatSarif(const ScanResult& result, const QString& activeP
     ruleDescriptions["max_texture_dimension"]       = "Texture exceeds maximum dimension (alias of max_texture_resolution)";
     ruleDescriptions["texture_not_power_of_two"]    = "Referenced texture dimensions are not power-of-two";
     ruleDescriptions["texture_format_disallowed"]   = "Referenced texture uses a disallowed or non-allow-listed format";
+    // Mesh-buffer quality (#678)
+    ruleDescriptions["detect_degenerate_tris_pct"]   = "Mesh has zero-area or repeated-corner triangles";
+    ruleDescriptions["detect_redundant_verts_pct"]   = "Vertex buffer holds exact duplicate vertices that could be welded";
+    ruleDescriptions["detect_acmr_gain_pct"]         = "Triangle order wastes the GPU vertex cache (reordering would cut vertex shader runs)";
+    ruleDescriptions["detect_overdraw_gain_pct"]     = "Triangle order causes avoidable overdraw";
+    ruleDescriptions["detect_vertex_fetch_gain_pct"] = "Vertex buffer order makes the GPU fetch more memory than needed";
+    ruleDescriptions["max_triangles_per_submesh"]    = "A submesh exceeds the per-submesh triangle budget";
 
     // Collect unique rules used in findings
     QSet<QString> usedRules;

@@ -112,6 +112,28 @@ struct ScanConfig {
     // texture-atlas and lightmap workflows. 0 = disabled.
     double ps1RipDegenerateUvPct = 0.0;
 
+    // Mesh-buffer quality (#678). ON by default: these are warnings only;
+    // nothing is rewritten unless a mesh fix is asked for (see meshFixes).
+    //
+    // The three ordering rules compare the file's buffers with what
+    // meshoptimizer reaches on the same mesh and fire when the fix would
+    // gain at least this many percent. An absolute ceiling would flag
+    // meshes whose shape alone forces overdraw / misses. 0 = disabled.
+    double detectAcmrGainPct = 25.0;          // detect_acmr_gain_pct
+    double detectOverdrawGainPct = 25.0;      // detect_overdraw_gain_pct
+    double detectVertexFetchGainPct = 25.0;   // detect_vertex_fetch_gain_pct
+    // Share of vertices that are exact duplicates (every attribute, skin
+    // weights and morph deltas included) of another vertex. 0 = disabled.
+    double detectRedundantVertsPct = 5.0;     // detect_redundant_verts_pct
+    // Share of zero-area / repeated-index triangles. 0 = disabled.
+    double detectDegenerateTrisPct = 0.1;     // detect_degenerate_tris_pct
+    // Per-submesh (glTF primitive) triangle budget. 0 = disabled (budgets
+    // are project specific, so there is no default).
+    int maxTrianglesPerSubmesh = 0;           // max_triangles_per_submesh
+    // The ordering rules ignore primitives smaller than this: reordering a
+    // 12-triangle crate is a large percentage of nothing.
+    int meshQualityMinTriangles = 500;        // mesh_quality_min_triangles
+
     // inspect (issue #364) — enabled via platform profile metadata `inspect_textures: true`
     bool probeTextureFiles = false;
 
@@ -131,7 +153,15 @@ struct ScanConfig {
     // fix section
     bool fixEnabled = false;
     bool dryRun = false;
+    // `optimize_meshes: true` asks for every lossless mesh fix (the same as
+    // `mesh_fixes: [all]`); `mesh_fixes` / CLI `--fix-mesh` pick them one by
+    // one: degenerates, weld, vertex-cache, overdraw, vertex-fetch, simplify
+    // (`simplify` is destructive and never part of `all`). Only glTF / GLB
+    // files are rewritten (#678).
     bool optimizeMeshes = false;
+    QStringList meshFixes;
+    // Triangle target for the `simplify` fix; 0 = max_triangles_per_submesh.
+    int simplifyTargetTris = 0;
     bool renameAnimations = false;
     QString convertToFormat;
     QString outputDir;
@@ -166,6 +196,16 @@ struct ScanConfig {
 
     /// Apply rule overrides from a QVariantMap (used by scope merging).
     void applyRuleOverrides(const QVariantMap& rules);
+
+    /// Mesh fix ids accepted by `mesh_fixes` / `--fix-mesh`.
+    static QStringList meshFixIds();
+    /// Normalise a `--fix-mesh` / `mesh_fixes` list ("all" expands to the
+    /// lossless fixes, '_' and '-' are interchangeable). Unknown ids are
+    /// returned in @p unknown and left out.
+    static QStringList normalizeMeshFixes(const QStringList& requested, QStringList* unknown = nullptr);
+    /// The fixes in effect: meshFixes, plus every lossless one when
+    /// optimizeMeshes is set.
+    QStringList effectiveMeshFixes() const;
 };
 
 /// Minimal YAML parser for the qtmesh.yml config schema.
