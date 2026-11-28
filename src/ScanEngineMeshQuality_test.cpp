@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 
@@ -292,4 +293,82 @@ TEST(ScanMeshQuality, FetchGainIsWeightedByReferencedBytes)
     const Finding* f = findRule(fs, "detect_vertex_fetch_gain_pct");
     ASSERT_NE(f, nullptr);
     EXPECT_TRUE(f->message.contains("33%")) << f->message.toStdString();
+}
+
+namespace {
+
+// A .gltf with one degenerate (repeated-corner) triangle whose geometry lives
+// in an external .bin at `binUri` (relative to the .gltf).
+void writeGltfUsing(const QString& gltfPath, const QString& binUri, qsizetype binSize)
+{
+    const QByteArray json = QStringLiteral(R"({
+ "asset": {"version": "2.0"},
+ "buffers": [{"uri": "%1", "byteLength": %2}],
+ "bufferViews": [
+  {"buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962},
+  {"buffer": 0, "byteOffset": 48, "byteLength": 24, "target": 34963}],
+ "accessors": [
+  {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3",
+   "min": [0, 0, 0], "max": [1, 1, 0]},
+  {"bufferView": 1, "componentType": 5125, "count": 6, "type": "SCALAR"}],
+ "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1}]}],
+ "nodes": [{"mesh": 0}],
+ "scenes": [{"nodes": [0]}],
+ "scene": 0
+})").arg(binUri).arg(binSize).toUtf8();
+    QFile f(gltfPath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(json);
+}
+
+QByteArray sharedBin()
+{
+    const float pos[] = {0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0};
+    const uint32_t idx[] = {0, 1, 2, 0, 0, 3};   // second triangle repeats a corner
+    QByteArray bin(reinterpret_cast<const char*>(pos), sizeof(pos));
+    bin.append(reinterpret_cast<const char*>(idx), sizeof(idx));
+    return bin;
+}
+
+} // namespace
+
+// Two roots, one .bin: the document in root A and the one in root B share it,
+// so a fix of either would move bytes under the other's accessors (#678).
+TEST(ScanMeshQuality, BufferSharedAcrossScanRootsIsNotRewritten)
+{
+    QTemporaryDir dir;
+    const QString rootA = dir.filePath("a");
+    const QString rootB = dir.filePath("b");
+    ASSERT_TRUE(QDir().mkpath(rootA));
+    ASSERT_TRUE(QDir().mkpath(rootB));
+    const QByteArray bin = sharedBin();
+    {
+        QFile f(QDir(rootA).filePath("shared.bin"));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write(bin);
+    }
+    writeGltfUsing(QDir(rootA).filePath("a.gltf"), "shared.bin", bin.size());
+    writeGltfUsing(QDir(rootB).filePath("b.gltf"), "../a/shared.bin", bin.size());
+
+    ScanConfig c = ScanConfig::defaults();
+    c.roots = {rootA, rootB};
+    c.includePatterns = {"**/*.gltf"};
+    c.excludePatterns = {};
+    c.failOn = "never";
+    c.fixEnabled = true;
+    c.meshFixes = {QStringLiteral("degenerates")};
+    const ScanResult r = ScanEngine::run(c);
+
+    bool measured = false;
+    for (const AssetInfo& a : r.assets)
+        measured = measured || a.meshQualityMeasured;
+    if (!measured) {
+        // The scan loads every asset through Ogre first; without a render
+        // system nothing is measured and nothing could be rewritten.
+        SUCCEED() << "assets not loaded (no Ogre render system); nothing to check";
+        return;
+    }
+    QFile check(QDir(rootA).filePath("shared.bin"));
+    ASSERT_TRUE(check.open(QIODevice::ReadOnly));
+    EXPECT_EQ(check.readAll(), bin);
 }

@@ -688,6 +688,10 @@ TEST(GltfMeshQuality, BuffersSharedByTwoDocumentsAreNotRewritten)
     const QSet<QString> shared = GltfMeshQuality::sharedExternalBuffers({a, b, glb, dir.filePath("x.fbx")});
     EXPECT_EQ(shared, QSet<QString>{bin});
     EXPECT_TRUE(GltfMeshQuality::sharedExternalBuffers({a, glb}).isEmpty());
+    // The same document listed twice (overlapping scan roots, another spelling
+    // of its path) is still one user.
+    EXPECT_TRUE(GltfMeshQuality::sharedExternalBuffers(
+        {a, a, dir.path() + "/./" + QFileInfo(a).fileName()}).isEmpty());
 
     const QByteArray before = fileBytes(dir.filePath("mesh data.bin"));
     const auto rep = GltfMeshQuality::fixFile(a, allLossless(), false, {}, QString(), shared);

@@ -2832,19 +2832,28 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
         roots.append(QDir::currentPath());
     }
 
-    // Enumerate and inspect all files across all roots
+    // Enumerate every root first: a buffer two glTF files share must never be
+    // repacked for one of them (#678), and the two may sit in different roots.
+    // Only the JSON is read, and only when fixes run. The write boundary stays
+    // per root (applyFixes gets its own scanRoot).
+    QList<QStringList> filesPerRoot;
+    QStringList allFiles;
     for (const auto& scanRoot : roots) {
+        filesPerRoot.append(enumerateFiles(config, scanRoot));
+        allFiles += filesPerRoot.constLast();
+    }
+    const QSet<QString> sharedGltfBuffers = config.fixEnabled
+        ? GltfMeshQuality::sharedExternalBuffers(allFiles) : QSet<QString>();
+
+    AssetInspectOptions inspectOpts;
+    inspectOpts.probeTextureFiles = config.probeTextureFiles;
+
+    // Inspect all files across all roots
+    for (qsizetype rootIdx = 0; rootIdx < roots.size(); ++rootIdx) {
+        const QString& scanRoot = roots.at(rootIdx);
+        const QStringList& files = filesPerRoot.at(rootIdx);
         SentryReporter::addBreadcrumb("file.import",
             QString("Scan start: %1").arg(scanRoot));
-        QStringList files = enumerateFiles(config, scanRoot);
-
-        AssetInspectOptions inspectOpts;
-        inspectOpts.probeTextureFiles = config.probeTextureFiles;
-
-        // A buffer two glTF files share must never be repacked for one of
-        // them (#678). Only the JSON is read, and only when fixes run.
-        const QSet<QString> sharedGltfBuffers = config.fixEnabled
-            ? GltfMeshQuality::sharedExternalBuffers(files) : QSet<QString>();
 
         for (const auto& filePath : files) {
             AssetInfo asset = inspectAsset(filePath, scanRoot, inspectOpts);

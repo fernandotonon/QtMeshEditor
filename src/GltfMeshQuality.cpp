@@ -1219,12 +1219,24 @@ QStringList externalBufferPaths(const QString& path)
 
 QSet<QString> sharedExternalBuffers(const QStringList& documents)
 {
+    // Each DOCUMENT counts once per buffer: overlapping scan roots list the
+    // same file twice, and a document may name one .bin in several buffers;
+    // neither is a second user.
     QHash<QString, int> users;
+    QSet<QString> seenDocs;
     for (const QString& doc : documents) {
-        const QString suffix = QFileInfo(doc).suffix().toLower();
+        const QFileInfo info(doc);
+        const QString suffix = info.suffix().toLower();
         if (suffix != QLatin1String("gltf") && suffix != QLatin1String("glb"))
             continue;
-        for (const QString& buf : externalBufferPaths(doc))
+        QString key = info.canonicalFilePath();
+        if (key.isEmpty())
+            key = info.absoluteFilePath();
+        if (seenDocs.contains(key))
+            continue;
+        seenDocs.insert(key);
+        const QStringList bufs = externalBufferPaths(doc);
+        for (const QString& buf : QSet<QString>(bufs.cbegin(), bufs.cend()))
             ++users[buf];
     }
     QSet<QString> shared;
