@@ -52,7 +52,14 @@ struct Limits {
 struct Metrics {
     size_t triangles = 0;
     size_t vertices = 0;
+    // Below the relative-height threshold (or a repeated corner): what the
+    // warning counts.
     size_t degenerateTriangles = 0;
+    // What the lossless fix may remove: exactly flat triangles, or (on
+    // skinned/morphed geometry, where a flat base-pose triangle can open up)
+    // only those with a repeated corner.
+    size_t zeroAreaTriangles = 0;
+    size_t repeatedCornerTriangles = 0;
     size_t redundantVertices = 0;     // exact duplicates of another referenced vertex
     size_t unreferencedVertices = 0;
 
@@ -63,8 +70,16 @@ struct Metrics {
     double acmrOptimized = 0.0;
     double overdraw = -1.0;           // shaded / covered pixels; -1 = skipped
     double overdrawOptimized = -1.0;
-    double overfetch = 0.0;           // fetched bytes / buffer bytes, best 1.0
+    // Fetched bytes / referenced vertex bytes, best 1.0. 0 = not measured
+    // (meshoptimizer only analyses vertices up to 256 bytes).
+    double overfetch = 0.0;
     double overfetchOptimized = 0.0;
+    size_t vertexBytes = 0;           // bytes per vertex the fetch metric used (0 = not measured)
+
+    size_t referencedVertices() const
+    {
+        return vertices > unreferencedVertices ? vertices - unreferencedVertices : 0;
+    }
 
     // Relative improvement the matching fix would bring, in percent
     // (0 when already optimal or not measured).
@@ -94,6 +109,9 @@ Metrics analyze(const Geometry& g, const Limits& limits = {});
 // Which fixes to run. Every one except `simplifyTargetTriangles` is
 // lossless: the rendered surface is unchanged.
 struct FixOptions {
+    // Drop exactly flat triangles (repeated corner or zero cross product).
+    // Slivers that only fall below Limits::degenerateRelativeHeight still
+    // cover pixels and are kept.
     bool removeDegenerates = false;
     // Only drop triangles with a repeated corner index. For skinned or
     // morphed geometry a zero-area triangle in the base pose can open up

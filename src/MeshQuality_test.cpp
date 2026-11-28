@@ -232,6 +232,7 @@ TEST(MeshQuality, RemapStreamFirstWriterWins)
 TEST(MeshQuality, IndexOnlyDegenerateRemovalKeepsZeroAreaTriangles)
 {
     Geometry g = shuffledGrid(4);
+    const std::vector<uint32_t> grid = g.indices;
     g.indices.insert(g.indices.end(), {0, 0, 1});   // repeated corner
     g.indices.insert(g.indices.end(), {0, 1, 2});   // collinear: may open up when skinned
     FixOptions o;
@@ -239,5 +240,58 @@ TEST(MeshQuality, IndexOnlyDegenerateRemovalKeepsZeroAreaTriangles)
     o.degeneratesByIndexOnly = true;
     const FixResult r = fix(g, o);
     EXPECT_EQ(r.degeneratesRemoved, 1u);
-    EXPECT_EQ(r.trianglesAfter, r.trianglesBefore - 1);
+    std::vector<uint32_t> expected = grid;
+    expected.insert(expected.end(), {0, 1, 2});   // only the repeated corner is gone
+    EXPECT_EQ(r.indices, expected);
+}
+
+TEST(MeshQuality, SliversAreCountedButNotRemoved)
+{
+    Geometry g = shuffledGrid(4);
+    const std::vector<uint32_t> grid = g.indices;
+    // A thin but real triangle: height 1e-6 of its 2-unit length (below
+    // the relative threshold) still covers pixels.
+    const uint32_t s = uint32_t(g.vertexCount);
+    g.positions.insert(g.positions.end(), {0.0f, 0.0f, 5.0f, 2.0f, 0.0f, 5.0f, 1.0f, 2e-6f, 5.0f});
+    g.vertexCount += 3;
+    g.indices.insert(g.indices.end(), {s, s + 1, s + 2});
+    const Metrics m = analyze(g);
+    EXPECT_EQ(m.degenerateTriangles, 1u);
+    EXPECT_EQ(m.zeroAreaTriangles, 0u);
+    FixOptions o;
+    o.removeDegenerates = true;
+    const FixResult r = fix(g, o);
+    EXPECT_EQ(r.degeneratesRemoved, 0u);
+    EXPECT_EQ(r.indices, g.indices);
+}
+
+TEST(MeshQuality, WideVertexKeysAreWeldedWithoutMeshoptimizer)
+{
+    // 300 key bytes per vertex: over meshoptimizer's 256-byte limit (it
+    // asserts there), so the weld and the redundancy count use our own map.
+    Geometry g = shuffledGrid(6);
+    g.keyStride = 300;
+    g.keys.assign(g.vertexCount * g.keyStride, 0);
+    for (size_t v = 0; v < g.vertexCount; ++v)
+        std::memcpy(g.keys.data() + v * g.keyStride, &g.positions[v * 3], sizeof(float) * 3);
+    // Duplicate vertex 0 (positions and key) and use the copy once.
+    const uint32_t copy = uint32_t(g.vertexCount);
+    g.positions.insert(g.positions.end(), {g.positions[0], g.positions[1], g.positions[2]});
+    g.keys.insert(g.keys.end(), g.keys.begin(), g.keys.begin() + std::ptrdiff_t(g.keyStride));
+    ++g.vertexCount;
+    *std::find(g.indices.begin(), g.indices.end(), 0u) = copy;
+    g.vertexBytes = 300;
+
+    const Metrics m = analyze(g);
+    EXPECT_EQ(m.redundantVertices, 1u);
+    EXPECT_EQ(m.vertexBytes, 0u);      // fetch not measured over 256 bytes
+    EXPECT_EQ(m.overfetchGainPct(), 0.0);
+    EXPECT_GT(m.acmr, 0.0);            // the other metrics still are
+
+    FixOptions o;
+    o.weld = true;
+    const FixResult r = fix(g, o);
+    EXPECT_EQ(r.verticesWelded, 1u);
+    EXPECT_EQ(r.newVertexCount, g.vertexCount - 1);
+    EXPECT_EQ(triangleSet(remappedPositions(g, r), r.indices), triangleSet(g.positions, g.indices));
 }

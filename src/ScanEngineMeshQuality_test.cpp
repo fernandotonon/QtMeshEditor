@@ -231,3 +231,59 @@ TEST(ScanMeshQuality, BlendedPrimitivesAreNotOfferedTheReorderFix)
     EXPECT_FALSE(f->fixable);
     EXPECT_TRUE(f->message.contains("alpha-blended")) << f->message.toStdString();
 }
+
+TEST(ScanMeshQuality, SliversAreReportedButNotOfferedTheFix)
+{
+    AssetInfo a = gltfAsset();
+    MeshQualityEntry e = entry(1000, 0.7, 0.7);
+    e.metrics.degenerateTriangles = 5;   // below the relative height...
+    e.metrics.zeroAreaTriangles = 0;     // ...but none exactly flat
+    a.meshQuality = {e};
+    a.degenerateTriangles = 5;
+    a.degenerateTrianglesOf = 1000;
+    const QList<Finding> fs = ScanEngine::evaluateRules(a, ScanConfig::defaults());
+    const Finding* f = findRule(fs, "detect_degenerate_tris_pct");
+    ASSERT_NE(f, nullptr);
+    EXPECT_FALSE(f->fixable);
+    EXPECT_TRUE(f->message.contains("slivers")) << f->message.toStdString();
+
+    // Exactly flat ones are fixable, except on a deformable primitive
+    // where only repeated corners are removable.
+    auto fixable = [&a]() {
+        const QList<Finding> found = ScanEngine::evaluateRules(a, ScanConfig::defaults());
+        const Finding* d = findRule(found, "detect_degenerate_tris_pct");
+        return d && d->fixable;
+    };
+    a.meshQuality[0].metrics.zeroAreaTriangles = 5;
+    EXPECT_TRUE(fixable());
+    a.meshQuality[0].deformable = true;
+    EXPECT_FALSE(fixable());
+    a.meshQuality[0].metrics.repeatedCornerTriangles = 2;
+    EXPECT_TRUE(fixable());
+}
+
+TEST(ScanMeshQuality, FetchGainIsWeightedByReferencedBytes)
+{
+    // A: 13 vertices, 3 referenced, fetch 2.0 -> 1.0. B: 3 of 3, already 1.0.
+    // Fetched bytes go 216 -> 144 (33%); weighting by ALL vertices would
+    // claim 45%.
+    AssetInfo a = gltfAsset();
+    MeshQualityEntry ea = entry(5000, 0.7, 0.7);
+    ea.metrics.vertices = 13;
+    ea.metrics.unreferencedVertices = 10;
+    ea.metrics.vertexBytes = 24;
+    ea.metrics.overfetch = 2.0;
+    ea.metrics.overfetchOptimized = 1.0;
+    MeshQualityEntry eb = entry(5000, 0.7, 0.7);
+    eb.metrics.vertices = 3;
+    eb.metrics.vertexBytes = 24;
+    a.meshQuality = {ea, eb};
+    ScanConfig c = ScanConfig::defaults();
+    c.detectVertexFetchGainPct = 40.0;
+    EXPECT_EQ(findRule(ScanEngine::evaluateRules(a, c), "detect_vertex_fetch_gain_pct"), nullptr);
+    c.detectVertexFetchGainPct = 30.0;
+    const QList<Finding> fs = ScanEngine::evaluateRules(a, c);
+    const Finding* f = findRule(fs, "detect_vertex_fetch_gain_pct");
+    ASSERT_NE(f, nullptr);
+    EXPECT_TRUE(f->message.contains("33%")) << f->message.toStdString();
+}

@@ -223,6 +223,20 @@ std::multiset<std::array<QByteArray, 3>> triangles(const QJsonObject& json, cons
     return out;
 }
 
+// `tris` without its repeated-corner triangles (byte-identical corners):
+// what a lossless degenerate removal must leave, exactly.
+std::multiset<std::array<QByteArray, 3>> withoutRepeatedCorners(std::multiset<std::array<QByteArray, 3>> tris)
+{
+    for (auto it = tris.begin(); it != tris.end();) {
+        const auto& c = *it;
+        if (c[0] == c[1] || c[1] == c[2] || c[0] == c[2])
+            it = tris.erase(it);
+        else
+            ++it;
+    }
+    return tris;
+}
+
 // A shuffled n x n grid with POSITION (min/max), TEXCOORD_0, optional JOINTS/WEIGHTS
 // and a morph target, plus `dupes` duplicated vertices and one degenerate triangle.
 struct GridSpec {
@@ -359,9 +373,8 @@ TEST(GltfMeshQuality, FixKeepsEveryNonDegenerateTriangle)
         auto after = triangles(json1, bin1, 0);
         // The only triangle gone is the degenerate one; welding the duplicate
         // vertex leaves byte-identical corners.
-        EXPECT_EQ(after.size(), before.size() - 1);
-        for (const auto& t : after)
-            EXPECT_TRUE(before.count(t) > 0);
+        ASSERT_EQ(withoutRepeatedCorners(before).size(), before.size() - 1);
+        EXPECT_EQ(after, withoutRepeatedCorners(before));
 
         // The fix leaves nothing for a second pass.
         const auto again = GltfMeshQuality::analyzeFile(path);
@@ -678,8 +691,119 @@ TEST(GltfMeshQuality, GlbBufferZeroWithADataUriStaysADataUri)
     ASSERT_TRUE(uri.startsWith("data:"));
     const QByteArray data = QByteArray::fromBase64(uri.mid(uri.indexOf(',') + 1).toLatin1());
     EXPECT_EQ(json1["buffers"].toArray()[0].toObject()["byteLength"].toInt(), data.size());
-    const auto after = triangles(json1, data, 0);
-    EXPECT_EQ(after.size(), before.size() - 1);   // only the degenerate one is gone
-    for (const auto& t : after)
-        EXPECT_TRUE(before.count(t) > 0);
+    // Exactly the degenerate triangle is gone, nothing else lost or duplicated.
+    ASSERT_EQ(withoutRepeatedCorners(before).size(), before.size() - 1);
+    EXPECT_EQ(triangles(json1, data, 0), withoutRepeatedCorners(before));
+}
+
+namespace {
+
+// Four vertices, a real triangle and a triangle that is exactly flat in
+// POSITION (0,0,0)-(1,0,0)-(2,0,0); with `morph`, a target lifts vertex 2
+// so the flat triangle opens up when the morph is applied.
+QJsonObject flatTrianglePrimitive(Doc& d, bool morph)
+{
+    const std::vector<float> pos{0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 1, 0};
+    QJsonObject prim{{"attributes", QJsonObject{{"POSITION", d.floats(pos, "VEC3", 3, true)}}},
+                     {"indices", d.indices(std::vector<uint32_t>{0, 1, 3, 0, 1, 2}, kUShort)},
+                     {"mode", 4}};
+    if (morph) {
+        const std::vector<float> delta{0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0};
+        prim.insert("targets", QJsonArray{QJsonObject{{"POSITION", d.floats(delta, "VEC3", 3, true)}}});
+    }
+    return prim;
+}
+
+} // namespace
+
+TEST(GltfMeshQuality, MorphedFlatTrianglesAreKept)
+{
+    QTemporaryDir dir;
+    for (bool morph : {true, false}) {
+        Doc d;
+        d.primitive(flatTrianglePrimitive(d, morph));
+        const QString path = writeGlb(dir.filePath(morph ? "morph.glb" : "static.glb"), d.json(), d.bin);
+        const auto res = GltfMeshQuality::analyzeFile(path);
+        ASSERT_TRUE(res.ok);
+        const auto& pr = res.primitives[0];
+        EXPECT_EQ(pr.deformable, morph);   // morph alone, no skin
+        EXPECT_EQ(pr.metrics.degenerateTriangles, 1u);
+        EXPECT_EQ(pr.metrics.zeroAreaTriangles, 1u);
+        EXPECT_EQ(pr.metrics.repeatedCornerTriangles, 0u);
+
+        MeshQuality::FixOptions o;
+        o.removeDegenerates = true;
+        const auto rep = GltfMeshQuality::fixFile(path, o);
+        ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+        EXPECT_EQ(rep.degeneratesRemoved, morph ? 0u : 1u);
+        const auto [json1, bin1] = readGlb(path);
+        EXPECT_EQ(indexValues(json1, bin1, json1["meshes"].toArray()[0].toObject()["primitives"]
+                                               .toArray()[0].toObject()["indices"].toInt()).size(),
+                  morph ? 6u : 3u);
+    }
+}
+
+TEST(GltfMeshQuality, MeshoptFallbackBufferDoesNotBlockPlainPrimitives)
+{
+    QTemporaryDir dir;
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    QJsonObject json = d.json();
+    const QJsonObject fallback{{"byteLength", 4096},
+                               {"extensions", QJsonObject{{"EXT_meshopt_compression",
+                                                           QJsonObject{{"fallback", true}}}}}};
+    QJsonArray buffers = json["buffers"].toArray();
+    buffers.append(fallback);
+    json.insert("buffers", buffers);
+    const QString path = writeGlb(dir.filePath("fallback.glb"), json, d.bin);
+
+    const auto res = GltfMeshQuality::analyzeFile(path);
+    ASSERT_TRUE(res.ok) << res.error.toStdString();
+    EXPECT_TRUE(res.primitives[0].indexFixable);
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(rep.primitivesChanged, 1);
+    const auto [json1, bin1] = readGlb(path);
+    EXPECT_EQ(json1["buffers"].toArray()[1].toObject(), fallback);   // untouched, still no uri
+}
+
+TEST(GltfMeshQuality, OutlineExtensionCountsAsAnIndexConsumer)
+{
+    QTemporaryDir dir;
+    Doc d;
+    const QJsonObject a = gridPrimitive(d, {});
+    QJsonObject b{{"attributes", a["attributes"]}, {"mode", 1}, {"indices", d.indices({0, 1}, kUShort)},
+                  {"extensions", QJsonObject{{"CESIUM_primitive_outline",
+                                              QJsonObject{{"indices", a["indices"]}}}}}};
+    d.primitive(a, "a");
+    d.primitive(b, "b");
+    const QString path = writeGlb(dir.filePath("outline.glb"), d.json(), d.bin);
+    const auto res = GltfMeshQuality::analyzeFile(path);
+    ASSERT_TRUE(res.ok);
+    EXPECT_FALSE(res.primitives[0].indexFixable);
+    const QByteArray original = fileBytes(path);
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    ASSERT_TRUE(rep.ok);
+    EXPECT_EQ(rep.primitivesChanged, 0);
+    EXPECT_EQ(fileBytes(path), original);
+}
+
+TEST(GltfMeshQuality, ExistingStagingAndBackupNamesAreLeftAlone)
+{
+    QTemporaryDir dir;
+    Doc d;
+    d.primitive(gridPrimitive(d, {}));
+    const QString path = writeGlb(dir.filePath("mesh.glb"), d.json(), d.bin);
+    for (const QString& stray : {path + ".qtmesh_tmp", path + ".qtmesh_bak"}) {
+        QFile f(stray);
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("not ours");
+    }
+    const auto rep = GltfMeshQuality::fixFile(path, allLossless());
+    ASSERT_TRUE(rep.ok) << rep.error.toStdString();
+    EXPECT_EQ(rep.primitivesChanged, 1);
+    EXPECT_EQ(fileBytes(path + ".qtmesh_tmp"), QByteArray("not ours"));
+    EXPECT_EQ(fileBytes(path + ".qtmesh_bak"), QByteArray("not ours"));
+    // Nothing of our own is left behind either.
+    EXPECT_EQ(QDir(dir.path()).entryList(QDir::Files).size(), 3);
 }

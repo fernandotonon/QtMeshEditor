@@ -5,12 +5,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string_view>
+#include <unordered_map>
 
 namespace MeshQuality {
 
 namespace {
 
 constexpr uint32_t kDropped = ~0u;
+// meshoptimizer asserts on vertices wider than this (generateVertexRemap,
+// analyzeVertexFetch).
+constexpr size_t kMeshoptMaxVertexSize = 256;
 
 bool indicesValid(const std::vector<uint32_t>& indices, size_t vertexCount)
 {
@@ -50,6 +55,49 @@ size_t countReferenced(const std::vector<uint32_t>& indices, size_t vertexCount)
     return n;
 }
 
+// meshopt_generateVertexRemap, also for keys wider than meshoptimizer
+// accepts: referenced vertices numbered in first-use order, equal keys
+// share a number, unreferenced vertices get ~0u. Returns the unique count.
+size_t vertexRemap(std::vector<unsigned int>& remap, const std::vector<uint32_t>& idx,
+                   const unsigned char* keys, size_t n, size_t stride)
+{
+    remap.assign(n, kDropped);
+    if (stride <= kMeshoptMaxVertexSize)
+        return meshopt_generateVertexRemap(remap.data(), idx.data(), idx.size(), keys, n, stride);
+    std::unordered_map<std::string_view, unsigned int> seen;
+    seen.reserve(n);
+    unsigned int next = 0;
+    for (uint32_t v : idx) {
+        if (remap[v] != kDropped)
+            continue;
+        const std::string_view key(reinterpret_cast<const char*>(keys) + size_t(v) * stride, stride);
+        const auto [it, inserted] = seen.emplace(key, next);
+        if (inserted)
+            ++next;
+        remap[v] = it->second;
+    }
+    return next;
+}
+
+// Exactly flat: a repeated corner, coincident corners or a zero cross
+// product. Only these draw nothing in every case, so only these are removed
+// by the (lossless) fix; isDegenerate's relative threshold also counts
+// slivers, which do cover a few pixels.
+bool isZeroArea(const Geometry& g, uint32_t a, uint32_t b, uint32_t c)
+{
+    if (a == b || b == c || a == c)
+        return true;
+    const float* p0 = &g.positions[size_t(a) * 3];
+    const float* p1 = &g.positions[size_t(b) * 3];
+    const float* p2 = &g.positions[size_t(c) * 3];
+    const double e0[3] = {double(p1[0]) - p0[0], double(p1[1]) - p0[1], double(p1[2]) - p0[2]};
+    const double e1[3] = {double(p2[0]) - p0[0], double(p2[1]) - p0[1], double(p2[2]) - p0[2]};
+    const double cx = e0[1] * e1[2] - e0[2] * e1[1];
+    const double cy = e0[2] * e1[0] - e0[0] * e1[2];
+    const double cz = e0[0] * e1[1] - e0[1] * e1[0];
+    return cx == 0.0 && cy == 0.0 && cz == 0.0;
+}
+
 double acmrOf(const std::vector<uint32_t>& idx, size_t vertexCount, unsigned int cacheSize)
 {
     if (idx.empty())
@@ -67,13 +115,13 @@ double overdrawOf(const std::vector<uint32_t>& idx, const std::vector<float>& po
 
 double overfetchOf(const std::vector<uint32_t>& idx, size_t vertexCount, size_t vertexBytes)
 {
-    if (idx.empty() || vertexCount == 0)
-        return 0.0;
+    if (idx.empty() || vertexCount == 0 || vertexBytes > kMeshoptMaxVertexSize)
+        return 0.0;   // not measured
     return meshopt_analyzeVertexFetch(idx.data(), idx.size(), vertexCount, vertexBytes).overfetch;
 }
 
 std::vector<uint32_t> withoutDegenerates(const Geometry& g, const std::vector<uint32_t>& idx,
-                                         const Limits& limits, bool indexOnly, size_t* removed)
+                                         bool indexOnly, size_t* removed)
 {
     std::vector<uint32_t> out;
     out.reserve(idx.size());
@@ -81,7 +129,7 @@ std::vector<uint32_t> withoutDegenerates(const Geometry& g, const std::vector<ui
     for (size_t t = 0; t + 2 < idx.size(); t += 3) {
         const uint32_t a = idx[t], b = idx[t + 1], c = idx[t + 2];
         const bool degenerate = indexOnly ? (a == b || b == c || a == c)
-                                          : isDegenerate(g, a, b, c, limits);
+                                          : isZeroArea(g, a, b, c);
         if (degenerate) {
             ++dropped;
             continue;
@@ -130,25 +178,30 @@ Metrics analyze(const Geometry& g, const Limits& limits)
         || !positionsValid(g))
         return m;
 
-    for (size_t t = 0; t + 2 < g.indices.size(); t += 3)
-        if (isDegenerate(g, g.indices[t], g.indices[t + 1], g.indices[t + 2], limits))
+    for (size_t t = 0; t + 2 < g.indices.size(); t += 3) {
+        const uint32_t a = g.indices[t], b = g.indices[t + 1], c = g.indices[t + 2];
+        if (isDegenerate(g, a, b, c, limits))
             ++m.degenerateTriangles;
+        if (a == b || b == c || a == c)
+            ++m.repeatedCornerTriangles;
+        if (isZeroArea(g, a, b, c))
+            ++m.zeroAreaTriangles;
+    }
 
     const size_t referenced = countReferenced(g.indices, g.vertexCount);
     m.unreferencedVertices = g.vertexCount - referenced;
     {
         size_t stride = 0;
         const unsigned char* keys = keyData(g, &stride);
-        std::vector<unsigned int> remap(g.vertexCount);
-        const size_t unique = meshopt_generateVertexRemap(remap.data(), g.indices.data(),
-                                                          g.indices.size(), keys,
-                                                          g.vertexCount, stride);
+        std::vector<unsigned int> remap;
+        const size_t unique = vertexRemap(remap, g.indices, keys, g.vertexCount, stride);
         m.redundantVertices = referenced > unique ? referenced - unique : 0;
     }
 
     const size_t vertexBytes = g.vertexBytes ? g.vertexBytes : sizeof(float) * 3;
     m.acmr = acmrOf(g.indices, g.vertexCount, limits.cacheSize);
     m.overfetch = overfetchOf(g.indices, g.vertexCount, vertexBytes);
+    m.vertexBytes = vertexBytes <= kMeshoptMaxVertexSize ? vertexBytes : 0;
 
     std::vector<uint32_t> opt(g.indices.size());
     meshopt_optimizeVertexCache(opt.data(), g.indices.data(), g.indices.size(), g.vertexCount);
@@ -189,15 +242,14 @@ FixResult fix(const Geometry& g, const FixOptions& opt, const Limits& limits)
     std::vector<uint32_t> remap;   // old -> current, empty = identity
 
     if (opt.removeDegenerates)
-        idx = withoutDegenerates(g, idx, limits, opt.degeneratesByIndexOnly, &r.degeneratesRemoved);
+        idx = withoutDegenerates(g, idx, opt.degeneratesByIndexOnly, &r.degeneratesRemoved);
 
     if (opt.weld && !idx.empty()) {
         size_t stride = 0;
         const unsigned char* keys = keyData(g, &stride);
         const size_t referenced = countReferenced(idx, n);
-        std::vector<unsigned int> weld(n);
-        const size_t unique = meshopt_generateVertexRemap(weld.data(), idx.data(), idx.size(),
-                                                          keys, n, stride);
+        std::vector<unsigned int> weld;
+        const size_t unique = vertexRemap(weld, idx, keys, n, stride);
         r.verticesWelded = referenced - unique;
         r.verticesDropped += n - referenced;
         meshopt_remapIndexBuffer(idx.data(), idx.data(), idx.size(), weld.data());

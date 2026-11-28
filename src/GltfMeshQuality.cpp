@@ -10,6 +10,7 @@
 #include <QSaveFile>
 #include <QSet>
 #include <QUrl>
+#include <QUuid>
 #include <QtEndian>
 
 #include <algorithm>
@@ -79,7 +80,18 @@ struct Doc {
     int binBuffer = -1;
     QByteArray glbBin;
     bool glbExtraChunks = false;
+    // EXT_meshopt_compression fallback buffers: no uri and no bytes (a
+    // loader that decodes the extension never reads them). Loaded empty and
+    // written back untouched.
+    QSet<int> placeholderBuffers;
 };
+
+bool isMeshoptFallback(const QJsonObject& buffer)
+{
+    return buffer.value(QStringLiteral("extensions")).toObject()
+               .value(QStringLiteral("EXT_meshopt_compression")).toObject()
+               .value(QStringLiteral("fallback")).toBool();
+}
 
 bool parseGlb(const QByteArray& bytes, QJsonObject& json, QByteArray& bin, bool& extraChunks,
               QString& err)
@@ -161,7 +173,13 @@ bool loadDoc(const QString& path, Doc& d, QString& err)
     const QJsonArray buffers = d.json.value(QStringLiteral("buffers")).toArray();
     for (int i = 0; i < buffers.size(); ++i) {
         const QString uri = buffers.at(i).toObject().value(QStringLiteral("uri")).toString();
-        if (uri.isEmpty()) {
+        if (uri.isEmpty() && isMeshoptFallback(buffers.at(i).toObject())) {
+            // Views into it read past the (empty) bytes, so the primitives
+            // using them are reported as unmeasurable, never rewritten.
+            d.buffers.append(QByteArray());
+            d.externalPaths.append(QString());
+            d.placeholderBuffers.insert(i);
+        } else if (uri.isEmpty()) {
             if (!(d.glb && i == 0)) {
                 err = QStringLiteral("buffer %1 has no data").arg(i);
                 return false;
@@ -366,6 +384,28 @@ QHash<int, int> accessorReferences(const QJsonObject& json)
         for (auto it = o.begin(); it != o.end(); ++it)
             add(it.value());
     };
+    // Accessors a primitive extension names (CESIUM_primitive_outline's
+    // `indices`, an `attributes` map, ...). Unknown extensions are read
+    // conservatively: an extra count only blocks a rewrite. Draco's
+    // `attributes` are Draco ids, not accessors, and the variants
+    // extension names materials.
+    std::function<void(const QJsonValue&)> addExtensionRefs = [&](const QJsonValue& v) {
+        if (v.isArray()) {
+            for (const QJsonValue& e : v.toArray())
+                addExtensionRefs(e);
+            return;
+        }
+        const QJsonObject o = v.toObject();
+        for (auto it = o.begin(); it != o.end(); ++it) {
+            const QString& key = it.key();
+            if (key == QLatin1String("attributes") && it.value().isObject())
+                addAll(it.value().toObject());
+            else if (key == QLatin1String("indices") || key == QLatin1String("accessor"))
+                add(it.value());
+            else if (it.value().isObject() || it.value().isArray())
+                addExtensionRefs(it.value());
+        }
+    };
     for (const QJsonValue& mv : json.value(QStringLiteral("meshes")).toArray()) {
         for (const QJsonValue& pv : mv.toObject().value(QStringLiteral("primitives")).toArray()) {
             const QJsonObject prim = pv.toObject();
@@ -373,6 +413,11 @@ QHash<int, int> accessorReferences(const QJsonObject& json)
             addAll(prim.value(QStringLiteral("attributes")).toObject());
             for (const QJsonValue& t : prim.value(QStringLiteral("targets")).toArray())
                 addAll(t.toObject());
+            const QJsonObject exts = prim.value(QStringLiteral("extensions")).toObject();
+            for (auto it = exts.begin(); it != exts.end(); ++it)
+                if (it.key() != QLatin1String("KHR_draco_mesh_compression")
+                    && it.key() != QLatin1String("KHR_materials_variants"))
+                    addExtensionRefs(it.value());
         }
     }
     for (const QJsonValue& s : json.value(QStringLiteral("skins")).toArray())
@@ -438,8 +483,16 @@ std::vector<char> viewsReferencedOutsideAccessors(const QJsonObject& json, int n
 // the bytes it changes belong to nobody else. Accessor-ID reference counts
 // are not enough: two accessors (or two views) may address the same bytes.
 struct Storage {
+    struct Entry {
+        Range range;
+        int accessor = -1;   // -1: the entry is a bufferView's range
+    };
+    struct BufferRanges {
+        std::vector<Entry> entries;        // sorted by start
+        std::vector<qint64> maxEndSoFar;   // max end over entries[0..i]
+    };
     QHash<int, Range> accessors;
-    QList<Range> views;
+    QHash<int, BufferRanges> byBuffer;
     std::vector<char> outsideRefs;
 };
 
@@ -454,7 +507,7 @@ Storage storageMap(const Doc& d)
         r.view = v;
         r.start = o.value(QStringLiteral("byteOffset")).toInt(0);
         r.end = r.start + o.value(QStringLiteral("byteLength")).toInt(0);
-        st.views.append(r);
+        st.byBuffer[r.buffer].entries.push_back({r, -1});
     }
     const int nAcc = d.json.value(QStringLiteral("accessors")).toArray().size();
     for (int i = 0; i < nAcc; ++i) {
@@ -462,7 +515,19 @@ Storage storageMap(const Doc& d)
         QString err;
         if (!accessor(d, i, a, err))
             continue;
-        st.accessors.insert(i, {a.buffer, a.view, a.base, a.base + qint64(a.count - 1) * a.stride + a.elem});
+        const Range r{a.buffer, a.view, a.base, a.base + qint64(a.count - 1) * a.stride + a.elem};
+        st.accessors.insert(i, r);
+        st.byBuffer[r.buffer].entries.push_back({r, i});
+    }
+    for (auto it = st.byBuffer.begin(); it != st.byBuffer.end(); ++it) {
+        auto& e = it.value().entries;
+        std::sort(e.begin(), e.end(),
+                  [](const Storage::Entry& x, const Storage::Entry& y) { return x.range.start < y.range.start; });
+        auto& maxEnd = it.value().maxEndSoFar;
+        maxEnd.resize(e.size());
+        qint64 m = std::numeric_limits<qint64>::min();
+        for (size_t i = 0; i < e.size(); ++i)
+            maxEnd[i] = m = std::max(m, e[i].range.end);
     }
     st.outsideRefs = viewsReferencedOutsideAccessors(d.json, int(views.size()));
     return st;
@@ -479,15 +544,25 @@ bool privateStorage(const Storage& st, const QSet<int>& own, const Acc& a, QStri
     QSet<int> ownViews;
     for (int i : own)
         ownViews.insert(st.accessors.value(i).view);
-    for (auto it = st.accessors.begin(); it != st.accessors.end(); ++it) {
-        if (!own.contains(it.key()) && overlaps(mine, it.value())) {
-            why = QStringLiteral("its bytes overlap accessor %1").arg(it.key());
+    const auto bit = st.byBuffer.constFind(mine.buffer);
+    if (bit == st.byBuffer.constEnd())
+        return true;
+    const auto& entries = bit.value().entries;
+    const auto& maxEnd = bit.value().maxEndSoFar;
+    // Only entries starting before `mine` ends can overlap it; walk them
+    // back while some earlier entry still reaches past `mine`'s start.
+    const auto first = std::lower_bound(entries.begin(), entries.end(), mine.end,
+                                        [](const Storage::Entry& e, qint64 v) { return e.range.start < v; });
+    for (auto i = std::distance(entries.begin(), first) - 1; i >= 0 && maxEnd[size_t(i)] > mine.start; --i) {
+        const Storage::Entry& e = entries[size_t(i)];
+        if (!overlaps(mine, e.range))
+            continue;
+        if (e.accessor >= 0 && !own.contains(e.accessor)) {
+            why = QStringLiteral("its bytes overlap accessor %1").arg(e.accessor);
             return false;
         }
-    }
-    for (const Range& v : st.views) {
-        if (!ownViews.contains(v.view) && overlaps(mine, v)) {
-            why = QStringLiteral("its bytes overlap bufferView %1").arg(v.view);
+        if (e.accessor < 0 && !ownViews.contains(e.range.view)) {
+            why = QStringLiteral("its bytes overlap bufferView %1").arg(e.range.view);
             return false;
         }
     }
@@ -793,7 +868,7 @@ void compactBuffers(Doc& d)
     const std::vector<char> pinned = buffersAddressedByExtensions(views, d.buffers.size());
     QJsonArray buffers = d.json.value(QStringLiteral("buffers")).toArray();
     for (int b = 0; b < d.buffers.size(); ++b) {
-        if (pinned[size_t(b)] || !repackBuffer(d, b, views, newLength))
+        if (pinned[size_t(b)] || d.placeholderBuffers.contains(b) || !repackBuffer(d, b, views, newLength))
             continue;
         QJsonObject bo = buffers.at(b).toObject();
         bo.insert(QStringLiteral("byteLength"), d.buffers.at(b).size());
@@ -843,6 +918,8 @@ QList<QPair<QString, QByteArray>> serialise(Doc& d)
     QList<QPair<QString, QByteArray>> files;
     QJsonArray buffers = d.json.value(QStringLiteral("buffers")).toArray();
     for (int b = 0; b < d.buffers.size(); ++b) {
+        if (d.placeholderBuffers.contains(b))
+            continue;   // its byteLength describes the decoded data
         QJsonObject bo = buffers.at(b).toObject();
         if (!d.externalPaths.at(b).isEmpty()) {
             files.append({d.externalPaths.at(b), d.buffers.at(b)});
@@ -863,23 +940,43 @@ QList<QPair<QString, QByteArray>> serialise(Doc& d)
     return files;
 }
 
-QString stagingPath(const QString& path) { return path + QStringLiteral(".qtmesh_tmp"); }
-QString backupPath(const QString& path) { return path + QStringLiteral(".qtmesh_bak"); }
+// A sibling of `path` that does not exist yet: staging and backup files are
+// never pre-existing ones (a stray `mesh.glb.qtmesh_tmp` is not ours to
+// truncate or delete).
+QString freshSibling(const QString& path, const QString& tag)
+{
+    for (int attempt = 0; attempt < 64; ++attempt) {
+        const QString candidate = QStringLiteral("%1.%2.%3").arg(
+            path, QUuid::createUuid().toString(QUuid::Id128).left(12), tag);
+        const QFileInfo fi(candidate);
+        if (!fi.exists() && !fi.isSymLink())
+            return candidate;
+    }
+    return QString();
+}
 
 // Publish `files` as one unit: stage every file next to its destination,
 // then swap them in (in order: buffers, then the main document). A failed
 // swap restores every file already replaced, so the asset is never left
-// with new offsets pointing into old buffer bytes.
+// with new offsets pointing into old buffer bytes. If a restore itself
+// fails, the error names the file and keeps its backup.
 bool writeAll(const QList<QPair<QString, QByteArray>>& files, QString& err)
 {
-    auto removeStaged = [&files]() {
-        for (const auto& f : files)
-            QFile::remove(stagingPath(f.first));
+    QStringList staged;   // parallel to `files`; only paths this call created
+    auto removeStaged = [&staged]() {
+        for (const QString& s : staged)
+            QFile::remove(s);
     };
     for (const auto& [path, bytes] : files) {
-        QFile f(stagingPath(path));
-        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate) || f.write(bytes) != bytes.size()
-            || !f.flush()) {
+        const QString stage = freshSibling(path, QStringLiteral("qtmesh_tmp"));
+        QFile f(stage);
+        if (stage.isEmpty() || !f.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+            err = QStringLiteral("cannot create a staging file next to %1").arg(path);
+            removeStaged();
+            return false;
+        }
+        staged << stage;
+        if (f.write(bytes) != bytes.size() || !f.flush()) {
             err = QStringLiteral("cannot write %1").arg(path);
             f.close();
             removeStaged();
@@ -887,32 +984,45 @@ bool writeAll(const QList<QPair<QString, QByteArray>>& files, QString& err)
         }
     }
 
-    QList<QString> swapped;   // destinations replaced so far (backups exist)
+    struct Swapped {
+        QString path;
+        QString backup;   // empty: the destination did not exist before
+    };
+    QList<Swapped> swapped;
     auto rollback = [&]() {
+        QStringList unrestored;
         for (auto it = swapped.rbegin(); it != swapped.rend(); ++it) {
-            QFile::remove(*it);
-            QFile::rename(backupPath(*it), *it);
+            QFile::remove(it->path);
+            if (!it->backup.isEmpty() && !QFile::rename(it->backup, it->path))
+                unrestored << QStringLiteral("%1 (original kept at %2)").arg(it->path, it->backup);
         }
         removeStaged();
+        if (!unrestored.isEmpty())
+            err += QStringLiteral("; could not restore %1").arg(unrestored.join(QStringLiteral(", ")));
     };
-    for (const auto& f : files) {
-        const QString& path = f.first;
-        QFile::remove(backupPath(path));
-        if (QFile::exists(path) && !QFile::rename(path, backupPath(path))) {
+    for (int i = 0; i < files.size(); ++i) {
+        const QString& path = files.at(i).first;
+        Swapped sw{path, QString()};
+        if (QFile::exists(path)) {
+            sw.backup = freshSibling(path, QStringLiteral("qtmesh_bak"));
+            if (sw.backup.isEmpty() || !QFile::rename(path, sw.backup)) {
+                err = QStringLiteral("cannot replace %1").arg(path);
+                rollback();
+                return false;
+            }
+        }
+        if (!QFile::rename(staged.at(i), path)) {
             err = QStringLiteral("cannot replace %1").arg(path);
+            if (!sw.backup.isEmpty() && !QFile::rename(sw.backup, path))
+                err += QStringLiteral(" (original kept at %1)").arg(sw.backup);
             rollback();
             return false;
         }
-        if (!QFile::rename(stagingPath(path), path)) {
-            QFile::rename(backupPath(path), path);
-            err = QStringLiteral("cannot replace %1").arg(path);
-            rollback();
-            return false;
-        }
-        swapped.append(path);
+        swapped.append(sw);
     }
-    for (const QString& path : swapped)
-        QFile::remove(backupPath(path));
+    for (const Swapped& sw : swapped)
+        if (!sw.backup.isEmpty())
+            QFile::remove(sw.backup);
     return true;
 }
 

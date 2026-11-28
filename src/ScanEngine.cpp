@@ -1829,17 +1829,32 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
         && asset.degenerateTrianglesOf > 0) {
         const double pct = 100.0 * double(asset.degenerateTriangles) / double(asset.degenerateTrianglesOf);
         if (pct >= config.detectDegenerateTrisPct) {
+            // The count uses a relative height (slivers included); the
+            // lossless fix only removes exactly flat triangles, and on a
+            // skinned/morphed primitive only repeated-corner ones (a flat
+            // base-pose triangle can open up when it deforms).
             bool fixable = false;
             QString blocker;
             for (const MeshQualityEntry& e : asset.meshQuality) {
                 if (e.metrics.degenerateTriangles == 0)
                     continue;
-                fixable = fixable || e.indexFixable;
-                if (!e.indexFixable && blocker.isEmpty())
+                const size_t removable = e.deformable ? e.metrics.repeatedCornerTriangles
+                                                      : e.metrics.zeroAreaTriangles;
+                fixable = fixable || (e.indexFixable && removable > 0);
+                if (!blocker.isEmpty())
+                    continue;
+                if (!e.indexFixable)
                     blocker = e.note;
+                else if (removable == 0)
+                    blocker = e.deformable
+                        ? QStringLiteral("they are flat only in the base pose of a skinned or morphed mesh, "
+                                         "where deformation can open them up")
+                        : QStringLiteral("they are thin slivers, not exactly flat, so removing them would "
+                                         "change the surface");
             }
-            QString msg = QStringLiteral("%1 of %2 triangles (%3%) are degenerate (zero area or a repeated "
-                                         "corner): they cost index and vertex work and draw nothing.")
+            QString msg = QStringLiteral("%1 of %2 triangles (%3%) are degenerate (zero or near-zero area, or a "
+                                         "repeated corner): they cost index and vertex work and draw "
+                                         "(almost) nothing.")
                               .arg(asset.degenerateTriangles).arg(asset.degenerateTrianglesOf)
                               .arg(formatPct(pct));
             if (fixable)
@@ -1941,7 +1956,11 @@ void appendMeshQualityFindings(const AssetInfo& asset, const ScanConfig& config,
         const OrderingTotals t = orderingTotals(
             asset, minTris, Rewrite::VertexBuffer, [](const MeshQuality::Metrics& m) { return m.overfetch; },
             [](const MeshQuality::Metrics& m) { return m.overfetchOptimized; },
-            [](const MeshQuality::Metrics& m) { return double(m.vertices); });
+            // overfetch = fetched bytes / referenced vertex bytes, so this
+            // weight makes the sums total fetched bytes.
+            [](const MeshQuality::Metrics& m) {
+                return double(m.referencedVertices()) * double(m.vertexBytes);
+            });
         if (t.gainPct() >= config.detectVertexFetchGainPct)
             appendOrderingFinding(findings, asset, kRuleFetch,
                 QStringLiteral("Vertex fetch: the GPU reads %1x the vertex buffer; %2x after the vertex "
@@ -2531,6 +2550,16 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
         for (const Finding& f : ScanEngine::evaluateRules(asset, globalConfig))
             stillFiring.insert(f.rule);
 
+    if (!remeasured) {
+        // Written, but not verified: the rule may still fire.
+        for (Finding* f : applied)
+            f->message += QStringLiteral(" [written (%1), but the rewritten file could not be re-measured, "
+                                         "so the fix is not verified]").arg(summary);
+        if (!rep.notes.isEmpty())
+            applied.first()->message += QStringLiteral(" (%1)").arg(rep.notes.join(QStringLiteral("; ")));
+        return;
+    }
+
     bool firstFixed = true;
     for (Finding* f : applied) {
         if (stillFiring.contains(f->rule)) {
@@ -2539,8 +2568,7 @@ static void applyMeshQualityFixes(const ScanConfig& globalConfig, const QString&
         }
         f->fixed = true;
         f->severity = Severity::Info;
-        f->message += QStringLiteral(" [fixed: %1%2]")
-                          .arg(summary, remeasured ? QString() : QStringLiteral("; not re-measured"));
+        f->message += QStringLiteral(" [fixed: %1]").arg(summary);
         if (firstFixed)
             f->bytesSaved = std::max<qint64>(0, rep.bytesBefore - rep.bytesAfter);
         firstFixed = false;
@@ -3070,6 +3098,8 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
                     po["triangles"] = static_cast<qint64>(m.triangles);
                     po["vertices"] = static_cast<qint64>(m.vertices);
                     po["degenerateTriangles"] = static_cast<qint64>(m.degenerateTriangles);
+                    po["removableDegenerateTriangles"] = static_cast<qint64>(
+                        e.deformable ? m.repeatedCornerTriangles : m.zeroAreaTriangles);
                     po["redundantVertices"] = static_cast<qint64>(m.redundantVertices);
                     po["unreferencedVertices"] = static_cast<qint64>(m.unreferencedVertices);
                     po["acmr"] = round3(m.acmr);
@@ -3078,8 +3108,10 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
                         po["overdraw"] = round3(m.overdraw);
                         po["overdrawOptimized"] = round3(m.overdrawOptimized);
                     }
-                    po["overfetch"] = round3(m.overfetch);
-                    po["overfetchOptimized"] = round3(m.overfetchOptimized);
+                    if (m.vertexBytes > 0) {
+                        po["overfetch"] = round3(m.overfetch);
+                        po["overfetchOptimized"] = round3(m.overfetchOptimized);
+                    }
                     po["indexFixable"] = e.indexFixable;
                     po["vertexFixable"] = e.vertexFixable;
                     po["orderFixable"] = e.orderFixable;
